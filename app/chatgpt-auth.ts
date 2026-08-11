@@ -1,5 +1,7 @@
+import { env } from "cloudflare:workers";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { isLocalRequestHeaders } from "../lib/server/request-origin";
 
 export type ChatGPTUser = {
   userId: string;
@@ -18,11 +20,29 @@ const SIGN_IN_PATH = "/signin-with-chatgpt";
 const SIGN_OUT_PATH = "/signout-with-chatgpt";
 const CALLBACK_PATH = "/callback";
 
+type BlogAuthEnvironment = {
+  BLOG_ALLOW_LOCAL_WRITES?: string;
+  BLOG_AUTHOR_EMAILS?: string;
+  BLOG_AUTHOR_USER_IDS?: string;
+};
+
+function blogAuthEnvironment(): BlogAuthEnvironment {
+  return env as unknown as BlogAuthEnvironment;
+}
+
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   const requestHeaders = await headers();
   const userId = requestHeaders.get(USER_ID_HEADER);
   const email = requestHeaders.get(USER_EMAIL_HEADER);
-  if (!userId || !email) return null;
+  if (!userId || !email) {
+    if (blogAuthEnvironment().BLOG_ALLOW_LOCAL_WRITES !== "true" || !isLocalRequestHeaders(requestHeaders)) return null;
+    return {
+      userId: "local-development-author",
+      displayName: "Local author",
+      email: "local-author@localhost",
+      fullName: "Local author",
+    };
+  }
 
   const encodedFullName = requestHeaders.get(USER_FULL_NAME_HEADER);
   const fullName =
@@ -46,6 +66,29 @@ export async function requireChatGPTUser(
   if (user) return user;
 
   redirect(chatGPTSignInPath(returnTo));
+}
+
+export async function requireBlogAuthor(returnTo: string): Promise<ChatGPTUser> {
+  const user = await requireChatGPTUser(returnTo);
+  const authEnv = blogAuthEnvironment();
+  const requestHeaders = await headers();
+  if (authEnv.BLOG_ALLOW_LOCAL_WRITES === "true" && isLocalRequestHeaders(requestHeaders)) return user;
+
+  const allowedUserIds = new Set(
+    (authEnv.BLOG_AUTHOR_USER_IDS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  const allowedEmails = new Set(
+    (authEnv.BLOG_AUTHOR_EMAILS ?? "")
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  if (allowedUserIds.has(user.userId) || allowedEmails.has(user.email.trim().toLowerCase())) return user;
+
+  redirect("/unauthorized");
 }
 
 export function chatGPTSignInPath(returnTo: string): string {

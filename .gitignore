@@ -22,6 +22,9 @@ out/
 outputs/
 work/
 
+# Local source-art library (not used by the deployed site)
+/leon_workflow-assets/
+
 # Tests, coverage, and tooling caches
 coverage/
 .eslintcache

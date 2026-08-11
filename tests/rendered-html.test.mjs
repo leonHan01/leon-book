@@ -3,13 +3,22 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render(pathname = "/") {
+  globalThis.__CLOUDFLARE_TEST_ENV__ = {
+    BLOG_AUTHOR_USER_IDS: "test-author",
+  };
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
     new Request(`http://localhost${pathname}`, {
-      headers: { accept: "text/html" },
+      headers: {
+        accept: "text/html",
+        "oai-authenticated-user-email": "author@example.com",
+        "oai-authenticated-user-id": "test-author",
+        "x-forwarded-host": "localhost",
+        "x-forwarded-proto": "http",
+      },
     }),
     {
       ASSETS: {
@@ -38,48 +47,51 @@ test("server-renders the Notebook 36 homepage", async () => {
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
-test("keeps the starter preview removed from the finished site", async () => {
-  const [page, layout, css, packageJson, settingsPage, settingsData, writePage, storageServer] = await Promise.all([
+test("keeps durable data, protected management, and rendering behind their intended seams", async () => {
+  const [page, homeClient, layout, css, packageJson, settingsPage, settingsClient, settingsData, writePage, writeClient, articlePage, articleTypes, blogClient] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/home-client.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../app/settings/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/settings/settings-client.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/site-settings.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/write/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../scripts/local-storage-server.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../app/write/write-client.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/article/[slug]/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/article-types.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/blog-client.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /Notebook 36/);
-  assert.doesNotMatch(page, /modal-backdrop|composerOpen/);
-  assert.match(writePage, /editor-dropzone/);
-  assert.match(writePage, /inline-media-block/);
-  assert.match(writePage, /serializeBlocks/);
-  assert.match(writePage, /editor-tabs/);
-  assert.match(writePage, /insertMarkdown/);
-  assert.match(writePage, /renderMarkdown/);
-  assert.match(writePage, /renderInlineMarkdown/);
-  assert.match(writePage, /Insert code block/);
-  assert.match(writePage, /saveDraftNow/);
-  assert.match(writePage, /publishArticle/);
-  assert.match(writePage, /status,/);
-  assert.match(writePage, /editor-checklist/);
-  assert.match(writePage, /STORAGE_URL/);
-  assert.match(page, /siteSettings/);
-  assert.match(settingsPage, /settings-language/);
-  assert.match(settingsData, /SETTINGS_STORAGE_KEY/);
-  assert.match(settingsPage, /article-library/);
-  assert.match(settingsPage, /method: "DELETE"/);
-  assert.match(page, /publishedEntries/);
-  assert.match(page, /status === "published"/);
-  assert.match(storageServer, /async function deleteArticle/);
-  assert.match(storageServer, /request.method === "DELETE"/);
-  assert.match(layout, /Notebook 36/);
-  assert.doesNotMatch(page, /SkeletonPreview|codex-preview|_sites-preview/);
+  assert.match(page, /createD1BlogRepository/);
+  assert.match(page, /initialArticles/);
+  assert.match(homeClient, /homeCopy\.brandName/);
+  assert.doesNotMatch(homeClient, /localhost:8787|STORAGE_URL/);
+  assert.match(settingsPage, /requireBlogAuthor/);
+  assert.match(writePage, /requireBlogAuthor/);
+  assert.match(settingsClient, /listArticles\(\{ includeDrafts: true \}\)/);
+  assert.doesNotMatch(settingsClient, /localhost:8787|STORAGE_URL/);
+  assert.match(writeClient, /editor-dropzone/);
+  assert.match(writeClient, /uploadMedia/);
+  assert.match(writeClient, /saveQueue/);
+  assert.match(writeClient, /renderMarkdown/);
+  assert.doesNotMatch(writeClient, /function renderInlineMarkdown|localhost:8787|STORAGE_URL/);
+  assert.match(blogClient, /\/api\/articles/);
+  assert.match(blogClient, /\/api\/site-settings/);
+  assert.match(css, /\.editor-canvas-body \.block-textarea:not\(\.primary\) \{ min-height: 68px;/);
+  assert.match(articlePage, /renderArticleBody/);
+  assert.match(articlePage, /generateMetadata/);
+  assert.match(articlePage, /renderMarkdown/);
+  assert.match(articleTypes, /export type ArticleBanner/);
+  assert.match(settingsData, /normalizeSiteSettings/);
+  assert.match(layout, /generateMetadata/);
+  assert.match(layout, /og-notebook36\.jpg/);
+  assert.doesNotMatch(homeClient, /SkeletonPreview|codex-preview|_sites-preview/);
   assert.doesNotMatch(layout, /Starter Project|codex-preview|_sites-preview/);
   assert.doesNotMatch(css, /sites-skeleton|react-loading-skeleton/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
-  assert.match(packageJson, /scripts\/dev-with-storage\.mjs/);
+  assert.match(packageJson, /"typecheck": "tsc --noEmit"/);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
 });
 
@@ -97,6 +109,82 @@ test("server-renders the dedicated writing page", async () => {
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /Write something down|写下此刻的想法/);
-  assert.match(html, /Drop images or videos at the cursor|将图片或视频插入光标位置/);
+  assert.match(html, /Choose banner image|选择 Banner 图片/);
+  assert.match(html, /Drop media or paste images at the cursor|拖入媒体，或在光标位置直接粘贴图片/);
   assert.doesNotMatch(html, /modal-backdrop/);
+});
+
+test("server-renders the imaging upload page", async () => {
+  const response = await render("/upload");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /上传影像/);
+  assert.match(html, /新建影像批次/);
+  assert.match(html, /image\/jpeg,image\/png,image\/webp,image\/gif,image\/avif/);
+  assert.match(html, /上传前请检查隐私信息/);
+});
+
+test("stores imaging uploads in object storage", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `upload-${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+  const stored = [];
+
+  const response = await worker.fetch(
+    new Request("http://localhost/api/imaging", {
+      body: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+      headers: {
+        "content-type": "image/png",
+        "x-file-name": encodeURIComponent("检查影像.png"),
+      },
+      method: "POST",
+    }),
+    {
+      BLOG_ALLOW_LOCAL_WRITES: "true",
+      DB: {
+        prepare() {
+          return {
+            bind() { return this; },
+            async first() { return { object_key: "recorded-upload" }; },
+            async run() { return { success: true, results: [], meta: {} }; },
+          };
+        },
+      },
+      UPLOADS: {
+        async put(key, body, options) {
+          stored.push({ body, key, options });
+        },
+      },
+    },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.match(result.key, /^imaging\/\d{4}-\d{2}-\d{2}\/[\w-]+\.png$/);
+  assert.match(result.url, /^http:\/\/localhost\/uploads\/imaging\//);
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].options.httpMetadata.contentType, "image/png");
+  assert.equal(stored[0].options.customMetadata.originalName, "检查影像.png");
+});
+
+test("server-renders the article detail route", async () => {
+  const response = await render("/article/example");
+  assert.equal(response.status, 404);
+});
+
+test("serves crawler rules and a sitemap without exposing management routes", async () => {
+  const [robots, sitemap] = await Promise.all([
+    render("/robots.txt"),
+    render("/sitemap.xml"),
+  ]);
+  assert.equal(robots.status, 200);
+  const robotsText = await robots.text();
+  assert.match(robotsText, /Disallow: \/settings/);
+  assert.match(robotsText, /Sitemap: http:\/\/localhost\/sitemap\.xml/);
+
+  assert.equal(sitemap.status, 200);
+  const sitemapText = await sitemap.text();
+  assert.match(sitemapText, /<loc>http:\/\/localhost\/?<\/loc>/);
+  assert.doesNotMatch(sitemapText, /\/write|\/settings|\/upload/);
 });
