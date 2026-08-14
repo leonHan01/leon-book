@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="/Volumes/T7Shield/myproject/leonWeb"
-WORK_DIR="/Volumes/T7Shield/myblog"
+WORK_DIR="${HOME}/Library/Application Support/Notebook 36"
 RUN_DIR="$WORK_DIR/.run"
 LOG_FILE="$RUN_DIR/blog.log"
 SCREEN_SESSION="leonblog"
@@ -69,7 +69,7 @@ start_service() {
   : > "$LOG_FILE"
   printf '[INFO] 启动博客服务\n'
   local launch_command
-  launch_command="cd \"$PROJECT_DIR\" && exec env BLOG_STORAGE_HOST=:: BLOG_STORAGE_PORT=$BLOG_STORAGE_PORT BLOG_WORKDIR=\"$WORK_DIR\" /opt/homebrew/bin/npm run dev -- --host 0.0.0.0 --port $FRONTEND_PORT"
+  launch_command="cd \"$PROJECT_DIR\" && exec env BLOG_STORAGE_HOST=127.0.0.1 BLOG_STORAGE_PORT=$BLOG_STORAGE_PORT BLOG_WORKDIR=\"$WORK_DIR\" /opt/homebrew/bin/npm run dev -- --hostname 127.0.0.1 --port $FRONTEND_PORT"
   screen -dmS "$SCREEN_SESSION" /bin/zsh -lc "$launch_command >> \"$LOG_FILE\" 2>&1"
   sleep 1
   if ! screen_running; then

@@ -91,7 +91,7 @@ const settingsCopy = {
     deleteConfirm: "Delete this article and its media files? This cannot be undone.",
     articleLoadError: "Could not load saved articles.",
     data: "Durable site data",
-    dataHint: "Site settings and articles are stored durably in D1; uploaded media is stored in R2.",
+    dataHint: "Site settings, articles, images, and videos stay in this Mac's local Notebook 36 folder.",
     reset: "Reset to defaults",
     saved: "Settings saved to the site",
     back: "Back to notebook",
@@ -133,7 +133,7 @@ const settingsCopy = {
     deleteConfirm: "确定删除这篇文章及其媒体文件吗？此操作无法撤销。",
     articleLoadError: "无法读取已保存的文章。",
     data: "持久站点数据",
-    dataHint: "站点设置和文章持久保存在 D1，上传的图片与视频保存在 R2。",
+    dataHint: "站点设置、文章、图片和视频只保存在这台 Mac 的 Notebook 36 本地目录中。",
     reset: "恢复默认设置",
     saved: "设置已保存到站点",
     back: "返回日志",
@@ -857,7 +857,7 @@ export default function SettingsClient() {
               <span className="settings-note-mark">36</span>
               <p className="eyebrow">{copy.data}</p>
               <p>{copy.dataHint}</p>
-              <code>D1 · site_settings</code>
+              <code>LOCAL · site-settings.json</code>
             </div>
           </aside>
         </div>

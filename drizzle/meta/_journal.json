@@ -8,6 +8,13 @@
       "when": 1786473050178,
       "tag": "0000_blog_storage",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1786709954027,
+      "tag": "0001_amazing_frightful_four",
+      "breakpoints": true
     }
   ]
 }

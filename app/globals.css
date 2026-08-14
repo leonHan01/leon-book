@@ -267,6 +267,22 @@ h2 { font-family: var(--serif); font-weight: 500; letter-spacing: -.05em; font-s
 .note-card-content p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; }
 .mini-link { display: flex; align-items: center; gap: 10px; margin-top: auto; padding-top: 22px; font-size: 11px; }
 .empty-state { color: var(--muted); padding: 45px 0; }
+.activity-section { padding: calc(112px * var(--home-space-scale, 1)) 0 calc(118px * var(--home-space-scale, 1)); }
+.activity-heading { align-items: end; }
+.activity-card { border: 1px solid var(--line); border-radius: var(--home-radius); background: var(--theme-panel); padding: 25px 26px 18px; box-shadow: var(--theme-card-shadow); }
+.activity-calendar-scroll { display: grid; grid-template-columns: 25px max-content; gap: 8px; max-width: 100%; overflow-x: auto; padding-bottom: 7px; scrollbar-color: var(--line) transparent; }
+.activity-weekdays, .activity-calendar { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px; }
+.activity-weekdays { color: var(--muted); font-family: var(--mono); font-size: 8px; line-height: 12px; text-align: right; }
+.activity-calendar { grid-auto-columns: 12px; grid-auto-flow: column; width: max-content; }
+.activity-day { display: block; width: 12px; height: 12px; border-radius: 2px; background: color-mix(in srgb, var(--line) 65%, transparent); }
+.activity-day.level-1 { background: color-mix(in srgb, var(--coral) 35%, var(--paper)); }
+.activity-day.level-2 { background: color-mix(in srgb, var(--coral) 55%, var(--paper)); }
+.activity-day.level-3 { background: color-mix(in srgb, var(--coral) 75%, var(--paper)); }
+.activity-day.level-4 { background: var(--coral); }
+.activity-day.outside-range { visibility: hidden; }
+.activity-legend { display: flex; align-items: center; justify-content: flex-end; gap: 5px; margin-top: 12px; color: var(--muted); font-family: var(--mono); font-size: 8px; }
+.activity-legend > span:first-child { margin-right: 2px; }
+.activity-legend > span:last-child { margin-left: 2px; }
 .frames-section { background: var(--ink); color: var(--paper); padding: calc(118px * var(--home-space-scale, 1)) 0 calc(135px * var(--home-space-scale, 1)); }
 .frames-section .section-heading { border-color: #4a4b45; }
 .frames-section .eyebrow, .frames-section .section-note { color: #aaa9a0; }
@@ -653,6 +669,8 @@ html[data-theme="eink"] .feature-footer { border-color: var(--line); }
   .notes-grid { grid-template-columns: 1fr; }
   .note-card { min-height: auto; }
   .note-image, .note-color { height: 190px; }
+  .activity-section { padding: 80px 0; }
+  .activity-card { padding: 20px 16px 14px; }
   .frames-section { padding: 82px 0 90px; }
   .frames-grid { grid-template-columns: 1fr 1fr; grid-template-rows: 220px 170px 230px; }
   .frame-large { grid-column: span 2; grid-row: auto; }

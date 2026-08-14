@@ -1,8 +1,7 @@
-import { env } from "cloudflare:workers";
 import type { MetadataRoute } from "next";
 import { headers } from "next/headers";
-import { createD1BlogRepository } from "../lib/server/blog-api";
-import { isLocalRequestHeaders, requestOrigin } from "../lib/server/request-origin";
+import { listLocalArticles } from "../lib/server/local-storage";
+import { requestOrigin } from "../lib/server/request-origin";
 
 export const dynamic = "force-dynamic";
 
@@ -16,9 +15,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }];
 
   try {
-    const articles = await createD1BlogRepository(env.DB, {
-      ensureSchema: env.BLOG_ALLOW_LOCAL_WRITES === "true" && isLocalRequestHeaders(requestHeaders),
-    }).listArticles("published");
+    const articles = await listLocalArticles("published");
     routes.push(...articles.map((article) => ({
       url: new URL(`/article/${encodeURIComponent(article.slug)}`, origin).href,
       lastModified: article.updatedAt,

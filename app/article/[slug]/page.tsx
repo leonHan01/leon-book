@@ -1,12 +1,9 @@
-import { env } from "cloudflare:workers";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { cache, type ReactNode } from "react";
 import { ContentImage } from "../../content-image";
-import { createD1BlogRepository } from "../../../lib/server/blog-api";
-import { isLocalRequestHeaders } from "../../../lib/server/request-origin";
+import { getLocalArticle, getLocalSiteSettings } from "../../../lib/server/local-storage";
 import type { StoredArticle } from "../../article-types";
 import { renderMarkdown } from "../../markdown-renderer";
 import { normalizeSiteSettings, type SiteLanguage } from "../../site-settings";
@@ -18,20 +15,12 @@ type ArticlePageProps = {
 };
 
 const loadArticle = cache(async (slug: string) => {
-  const requestHeaders = await headers();
-  const repository = createD1BlogRepository(env.DB, {
-    ensureSchema: env.BLOG_ALLOW_LOCAL_WRITES === "true" && isLocalRequestHeaders(requestHeaders),
-  });
-  return repository.getArticle(slug, false);
+  return getLocalArticle(slug, false);
 });
 
 const loadLanguage = cache(async (): Promise<SiteLanguage> => {
   try {
-    const requestHeaders = await headers();
-    const repository = createD1BlogRepository(env.DB, {
-      ensureSchema: env.BLOG_ALLOW_LOCAL_WRITES === "true" && isLocalRequestHeaders(requestHeaders),
-    });
-    return normalizeSiteSettings(await repository.getSiteSettings()).language;
+    return normalizeSiteSettings(await getLocalSiteSettings()).language;
   } catch {
     return "en";
   }

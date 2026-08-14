@@ -1,8 +1,7 @@
-import { env } from "cloudflare:workers";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import { createD1BlogRepository } from "../lib/server/blog-api";
-import { isLocalRequestHeaders, requestOrigin } from "../lib/server/request-origin";
+import { getLocalSiteSettings } from "../lib/server/local-storage";
+import { requestOrigin } from "../lib/server/request-origin";
 import { DEFAULT_SITE_SETTINGS, normalizeSiteSettings } from "./site-settings";
 import "./globals.css";
 
@@ -33,11 +32,7 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   let siteSettings = DEFAULT_SITE_SETTINGS;
   try {
-    const requestHeaders = await headers();
-    const repository = createD1BlogRepository(env.DB, {
-      ensureSchema: env.BLOG_ALLOW_LOCAL_WRITES === "true" && isLocalRequestHeaders(requestHeaders),
-    });
-    siteSettings = normalizeSiteSettings(await repository.getSiteSettings());
+    siteSettings = normalizeSiteSettings(await getLocalSiteSettings());
   } catch {
     // The default language keeps build probes and first-run local rendering usable.
   }

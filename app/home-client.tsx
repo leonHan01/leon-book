@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { ArticleSummary } from "./article-types";
+import type { ActivityDay } from "./activity-types";
+import ActivityHeatmap from "./activity-heatmap";
 import {
   DEFAULT_SITE_SETTINGS,
   applySiteTheme,
@@ -104,12 +106,13 @@ function articleToEntry(article: ArticleSummary, language: "en" | "zh"): Entry {
 }
 
 type HomeClientProps = {
+  activity: ActivityDay[];
   contentUnavailable?: boolean;
   initialArticles: ArticleSummary[];
   initialSettings: SiteSettings;
 };
 
-export default function HomeClient({ contentUnavailable = false, initialArticles, initialSettings }: HomeClientProps) {
+export default function HomeClient({ activity, contentUnavailable = false, initialArticles, initialSettings }: HomeClientProps) {
   const [filter, setFilter] = useState("All");
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -343,6 +346,8 @@ export default function HomeClient({ contentUnavailable = false, initialArticles
         </div>
         {!recentEntries.length && <p className="empty-state">{homeCopy.recentEmpty}</p>}
       </section>}
+
+      <ActivityHeatmap activity={activity} language={siteSettings.language} />
 
       {homeStyle.showFrames && <section className="frames-section" id="frames">
         <div className="wrap">

@@ -1,3 +1,5 @@
+import type { ActivityDay } from "../../app/activity-types";
+
 export type BlogApiEnvironment = {
   BLOG_ALLOW_LOCAL_WRITES?: string;
   BLOG_AUTHOR_EMAILS?: string;
@@ -103,6 +105,7 @@ export type BlogRepository = {
   completeArticleDeletion(slug: string): Promise<void>;
   getArticle(slug: string, includeDraft: boolean): Promise<StoredArticle | null>;
   getSiteSettings(): Promise<Record<string, unknown> | null>;
+  listActivity(since: string): Promise<ActivityDay[]>;
   listArticles(scope: ArticleScope): Promise<ArticleSummary[]>;
   recordUpload(upload: UploadRecord): Promise<void>;
   saveArticle(article: ArticleInput, authorUserId: string): Promise<StoredArticle>;
@@ -140,6 +143,8 @@ const SITE_SETTINGS_UPDATED_AT = Symbol("site-settings-updated-at");
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+const ACTIVITY_WINDOW_DAYS = 365;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/avif": ".avif",
@@ -154,6 +159,11 @@ const VIDEO_EXTENSIONS: Record<string, string> = {
   "video/quicktime": ".mov",
   "video/webm": ".webm",
 };
+
+export function activityWindowStart(now = new Date()): string {
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return new Date(today - (ACTIVITY_WINDOW_DAYS - 1) * DAY_MS).toISOString();
+}
 
 export class ArticleConflictError extends Error {
   readonly slug: string;
@@ -608,6 +618,11 @@ type ArticleSummaryRow = {
   word_count: number;
 };
 
+type ActivityDayRow = {
+  count: number;
+  date: string;
+};
+
 const ARTICLE_DETAIL_COLUMNS = `
   slug, title, body, excerpt, category, tags_json, media_json, banner_json,
   status, updated_at, published_at
@@ -629,6 +644,14 @@ const LIST_ALL_ARTICLES_SQL = `
   SELECT ${ARTICLE_SUMMARY_COLUMNS}
   FROM articles
   ORDER BY updated_at DESC
+`;
+
+const LIST_ACTIVITY_SQL = `
+  SELECT substr(created_at, 1, 10) AS date, COUNT(*) AS count
+  FROM activity_events
+  WHERE created_at >= ?
+  GROUP BY substr(created_at, 1, 10)
+  ORDER BY date ASC
 `;
 
 const GET_PUBLISHED_ARTICLE_SQL = `
@@ -761,6 +784,11 @@ const RECORD_UPLOAD_SQL = `
   RETURNING object_key
 `;
 
+const RECORD_ACTIVITY_SQL = `
+  INSERT INTO activity_events (event_type, author_user_id, created_at)
+  VALUES (?, ?, ?)
+`;
+
 const BLOG_SCHEMA_SQL = [
   `CREATE TABLE IF NOT EXISTS articles (
     slug TEXT PRIMARY KEY NOT NULL,
@@ -801,6 +829,14 @@ const BLOG_SCHEMA_SQL = [
   )`,
   `CREATE INDEX IF NOT EXISTS uploads_article_slug_idx
     ON uploads (article_slug, created_at)`,
+  `CREATE TABLE IF NOT EXISTS activity_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL CHECK(event_type IN ('article_published', 'article_edited', 'image_published')),
+    author_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS activity_events_created_at_idx
+    ON activity_events (created_at)`,
   `CREATE TABLE IF NOT EXISTS deletion_queue (
     object_key TEXT PRIMARY KEY NOT NULL,
     article_slug TEXT NOT NULL,
@@ -991,6 +1027,9 @@ export function createD1BlogRepository(
   const ready = () => options.ensureSchema === true
     ? ensureBlogSchema(database)
     : Promise.resolve();
+  const recordActivity = (eventType: "article_published" | "article_edited" | "image_published", authorUserId: string, createdAt: string) => (
+    database.prepare(RECORD_ACTIVITY_SQL).bind(eventType, authorUserId, createdAt).run()
+  );
 
   return {
     async beginArticleDeletion(slug, expectedUpdatedAt) {
@@ -1046,6 +1085,17 @@ export function createD1BlogRepository(
         : null;
     },
 
+    async listActivity(since) {
+      await ready();
+      const result = await database.prepare(LIST_ACTIVITY_SQL).bind(since).all<ActivityDayRow>();
+      return (result.results ?? []).flatMap((row): ActivityDay[] => {
+        const count = Math.max(0, Number(row.count) || 0);
+        return /^\d{4}-\d{2}-\d{2}$/.test(row.date) && count > 0
+          ? [{ date: row.date, count }]
+          : [];
+      });
+    },
+
     async listArticles(scope) {
       await ready();
       const result = await database
@@ -1070,6 +1120,9 @@ export function createD1BlogRepository(
       ).first<{ object_key: string }>();
       if (!row) {
         throw new HttpError(409, "Article deletion is pending; use another slug");
+      }
+      if (upload.kind === "image") {
+        await recordActivity("image_published", upload.authorUserId, now());
       }
     },
 
@@ -1118,6 +1171,12 @@ export function createD1BlogRepository(
             article.slug,
           ).first<ArticleRow>();
       if (!row) throw new ArticleConflictError(article.slug);
+      const activityType = article.status === "published" && row.published_at === updatedAt
+        ? "article_published"
+        : expectedUpdatedAt
+          ? "article_edited"
+          : null;
+      if (activityType) await recordActivity(activityType, authorUserId, updatedAt);
       return articleFromRow(row);
     },
 
@@ -1192,6 +1251,10 @@ export function createBlogApiHandler({ env, repository }: BlogApiDependencies) {
         if (authError) return authError;
       }
       return json(await blogRepository.listArticles(scope));
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/activity") {
+      return json(await blogRepository.listActivity(activityWindowStart()));
     }
 
     if (request.method === "GET" && url.pathname.startsWith("/api/articles/")) {

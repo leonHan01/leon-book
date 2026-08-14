@@ -202,7 +202,7 @@ export default function UploadClient() {
               <p className="imaging-kicker">New batch</p>
               <h2 id="batch-title">新建影像批次</h2>
             </div>
-            <p><span className="imaging-live-dot" /> 对象存储已连接</p>
+            <p><span className="imaging-live-dot" /> 本机媒体目录已连接</p>
           </div>
 
           <div

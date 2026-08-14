@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 const WORK_DIR = path.resolve(
-  process.env.BLOG_WORKDIR ?? "/Volumes/T7Shield/myblog",
+  process.env.BLOG_WORKDIR
+    ?? path.join(os.homedir(), "Library", "Application Support", "Notebook 36"),
 );
 const PORT = Number(process.env.BLOG_STORAGE_PORT ?? 8787);
 const HOST = process.env.BLOG_STORAGE_HOST ?? "127.0.0.1";
@@ -16,6 +18,8 @@ const MAX_MEDIA_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
 ];
 
 const contentTypes = {
@@ -112,10 +116,11 @@ function normalizeBanner(value) {
 
 function normalizeArticle(article) {
   const source = article && typeof article === "object" ? article : {};
+  const body = String(source.body ?? "");
   return {
     ...source,
     banner: normalizeBanner(source.banner),
-    body: String(source.body ?? ""),
+    body,
     category: cleanMetadataText(source.category, "Uncategorized", 80),
     excerpt: String(source.excerpt ?? ""),
     media: Array.isArray(source.media) ? source.media : [],
@@ -125,7 +130,23 @@ function normalizeArticle(article) {
     tags: normalizeTags(source.tags),
     title: String(source.title ?? "Untitled note").trim() || "Untitled note",
     updatedAt: String(source.updatedAt ?? new Date().toISOString()),
+    wordCount: body.trim() ? body.trim().split(/\s+/).length : 0,
   };
+}
+
+function nextTimestamp(previous) {
+  const current = new Date().toISOString();
+  if (typeof previous !== "string" || current > previous) return current;
+  const previousTime = Date.parse(previous);
+  return Number.isFinite(previousTime)
+    ? new Date(previousTime + 1).toISOString()
+    : current;
+}
+
+function parseEntityTag(value) {
+  if (typeof value !== "string" || !/^"[^"\\]+"$/.test(value.trim())) return undefined;
+  const version = value.trim().slice(1, -1);
+  return version === "0" ? null : version;
 }
 
 function normalizeOrigin(value) {
@@ -334,8 +355,8 @@ function parseRange(value, size) {
   return { end, start };
 }
 
-function mediaUrl(origin, slug, filename) {
-  return `${origin}/media/${encodeURIComponent(slug)}/${encodeURIComponent(filename)}`;
+function mediaUrl(slug, filename) {
+  return `/media/${encodeURIComponent(slug)}/${encodeURIComponent(filename)}`;
 }
 
 export function createBlogStorageServer(options = {}) {
@@ -343,6 +364,10 @@ export function createBlogStorageServer(options = {}) {
   const articlesDir = path.join(workDir, "articles");
   const mediaDir = path.join(workDir, "media");
   const draftsDir = path.join(workDir, "drafts");
+  const settingsDir = path.join(workDir, "settings");
+  const activityDir = path.join(workDir, "activity");
+  const settingsPath = path.join(settingsDir, "site-settings.json");
+  const activityPath = path.join(activityDir, "events.json");
   const port = options.port ?? PORT;
   const host = options.host ?? HOST;
   const maxJsonBytes = options.maxJsonBytes ?? MAX_JSON_BYTES;
@@ -350,12 +375,6 @@ export function createBlogStorageServer(options = {}) {
   const allowedOrigins = parseAllowedOrigins(
     options.allowedOrigins ?? process.env.BLOG_ALLOWED_ORIGINS,
   );
-  const configuredPublicOrigin = options.publicOrigin
-    ?? process.env.BLOG_STORAGE_PUBLIC_ORIGIN
-    ?? (port === 0 ? null : `http://localhost:${port}`);
-  const publicOrigin = configuredPublicOrigin === null
-    ? null
-    : normalizeOrigin(configuredPublicOrigin);
   const logger = options.logger ?? console;
   let mutationQueue = Promise.resolve();
 
@@ -368,10 +387,6 @@ export function createBlogStorageServer(options = {}) {
   if (!Number.isSafeInteger(maxMediaBytes) || maxMediaBytes <= 0) {
     throw new Error("maxMediaBytes must be a positive safe integer");
   }
-  if (configuredPublicOrigin !== null && !publicOrigin) {
-    throw new Error("BLOG_STORAGE_PUBLIC_ORIGIN must be an HTTP(S) origin");
-  }
-
   function serializeMutation(operation) {
     const result = mutationQueue.then(operation, operation);
     mutationQueue = result.then(() => undefined, () => undefined);
@@ -429,7 +444,34 @@ export function createBlogStorageServer(options = {}) {
       mkdir(articlesDir, { recursive: true }),
       mkdir(mediaDir, { recursive: true }),
       mkdir(draftsDir, { recursive: true }),
+      mkdir(settingsDir, { recursive: true }),
+      mkdir(activityDir, { recursive: true }),
     ]);
+  }
+
+  async function recordActivity(type, createdAt) {
+    const stored = await readStoredJson(activityPath, []);
+    if (!Array.isArray(stored)) throw new Error("Stored activity data is invalid");
+    const cutoff = Date.now() - 366 * 24 * 60 * 60 * 1000;
+    const events = [...stored, { type, createdAt }]
+      .filter((event) => Date.parse(String(event?.createdAt ?? "")) >= cutoff)
+      .slice(-10000);
+    await atomicWriteFile(activityPath, JSON.stringify(events, null, 2));
+  }
+
+  async function listActivity(since) {
+    const stored = await readStoredJson(activityPath, []);
+    if (!Array.isArray(stored)) throw new Error("Stored activity data is invalid");
+    const counts = new Map();
+    for (const event of stored) {
+      const createdAt = String(event?.createdAt ?? "");
+      if (createdAt < since) continue;
+      const date = createdAt.slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) counts.set(date, (counts.get(date) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([date, count]) => ({ date, count }));
   }
 
   async function saveArticleUnserialized(payload) {
@@ -445,9 +487,18 @@ export function createBlogStorageServer(options = {}) {
     const media = Array.isArray(payload.media) ? payload.media : [];
     const banner = normalizeBanner(payload.banner);
     const status = payload.status === "published" ? "published" : "draft";
-    const updatedAt = new Date().toISOString();
     const articleJsonPath = path.join(articlesDir, `${slug}.json`);
     const previousArticle = await readStoredJson(articleJsonPath, null);
+    const expectedUpdatedAt = typeof payload.expectedUpdatedAt === "string"
+      ? payload.expectedUpdatedAt.trim() || null
+      : null;
+    if (
+      (expectedUpdatedAt && previousArticle?.updatedAt !== expectedUpdatedAt)
+      || (!expectedUpdatedAt && previousArticle)
+    ) {
+      throw new HttpError(409, "Article changed since it was loaded");
+    }
+    const updatedAt = nextTimestamp(previousArticle?.updatedAt);
     const publishedAt = status === "published"
       ? previousArticle?.publishedAt ?? updatedAt
       : previousArticle?.publishedAt;
@@ -484,12 +535,14 @@ export function createBlogStorageServer(options = {}) {
     );
     await atomicWriteFile(path.join(articlesDir, "index.json"), JSON.stringify(index, null, 2));
 
-    return {
-      articlePath: path.join(articlesDir, `${slug}.md`),
-      jsonPath: articleJsonPath,
-      slug,
-      updatedAt,
-    };
+    const activityType = status === "published" && previousArticle?.status !== "published"
+      ? "article_published"
+      : expectedUpdatedAt
+        ? "article_edited"
+        : null;
+    if (activityType) await recordActivity(activityType, updatedAt);
+
+    return normalizeArticle(article);
   }
 
   async function saveArticle(payload) {
@@ -519,13 +572,6 @@ export function createBlogStorageServer(options = {}) {
     return serializeMutation(() => deleteArticleUnserialized(value));
   }
 
-  function currentMediaOrigin() {
-    if (publicOrigin) return publicOrigin;
-    const address = server.address();
-    const boundPort = address && typeof address === "object" ? address.port : port;
-    return `http://localhost:${boundPort}`;
-  }
-
   async function saveMedia(request, url) {
     const slugValue = url.searchParams.get("slug");
     const slug = slugValue === null ? "inbox" : requireSafeSegment(slugValue, "Media slug");
@@ -552,13 +598,16 @@ export function createBlogStorageServer(options = {}) {
     try {
       const size = await writeRequestToFile(request, temporaryPath, maxMediaBytes);
       await rename(temporaryPath, targetPath);
-      return {
+      const result = {
+        key: `${slug}/${filename}`,
         kind,
         name: originalName,
         path: targetPath,
         size,
-        url: mediaUrl(currentMediaOrigin(), slug, filename),
+        url: mediaUrl(slug, filename),
       };
+      if (kind === "image") await recordActivity("image_published", new Date().toISOString());
+      return result;
     } catch (error) {
       await rm(temporaryPath, { force: true }).catch(() => {});
       await rm(targetPath, { force: true }).catch(() => {});
@@ -628,8 +677,8 @@ export function createBlogStorageServer(options = {}) {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
     if (request.method === "OPTIONS") {
       respondEmpty(request, response, 204, {
-        "Access-Control-Allow-Headers": "Content-Type, X-File-Name, X-Media-Kind, X-Article-Slug",
-        "Access-Control-Allow-Methods": "DELETE, GET, HEAD, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, If-Match, X-File-Name, X-Media-Kind, X-Article-Slug",
+        "Access-Control-Allow-Methods": "DELETE, GET, HEAD, POST, PUT, OPTIONS",
         "Access-Control-Max-Age": "600",
       });
       return;
@@ -650,8 +699,41 @@ export function createBlogStorageServer(options = {}) {
       });
       return;
     }
+    if (request.method === "GET" && url.pathname === "/api/activity") {
+      const since = url.searchParams.get("since") ?? "";
+      respondJson(request, response, 200, await listActivity(since));
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/site-settings") {
+      const stored = await readStoredJson(settingsPath, null);
+      respondJson(request, response, 200, stored?.settings ?? null, {
+        ETag: `"${stored?.updatedAt ?? "0"}"`,
+      });
+      return;
+    }
+    if (request.method === "PUT" && url.pathname === "/api/site-settings") {
+      const expectedUpdatedAt = parseEntityTag(request.headers["if-match"]);
+      if (expectedUpdatedAt === undefined) throw new HttpError(428, "If-Match is required");
+      const saved = await serializeMutation(async () => {
+        const stored = await readStoredJson(settingsPath, null);
+        if ((stored?.updatedAt ?? null) !== expectedUpdatedAt) {
+          throw new HttpError(409, "Settings changed since they were loaded");
+        }
+        const settings = await readJson(request, maxJsonBytes);
+        const updatedAt = nextTimestamp(stored?.updatedAt);
+        await atomicWriteFile(settingsPath, JSON.stringify({ settings, updatedAt }, null, 2));
+        return { settings, updatedAt };
+      });
+      respondJson(request, response, 200, saved.settings, { ETag: `"${saved.updatedAt}"` });
+      return;
+    }
     if (request.method === "DELETE" && url.pathname.startsWith("/api/articles/")) {
       const slug = decodePathSegment(url.pathname.slice("/api/articles/".length));
+      const expectedUpdatedAt = url.searchParams.get("expectedUpdatedAt")?.trim();
+      if (!expectedUpdatedAt) throw new HttpError(428, "expectedUpdatedAt is required");
+      const article = await readStoredJson(path.join(articlesDir, `${slug}.json`), null);
+      if (!article) throw new HttpError(404, "Article not found");
+      if (article.updatedAt !== expectedUpdatedAt) throw new HttpError(409, "Article changed since it was loaded");
       respondJson(request, response, 200, await deleteArticle(slug));
       return;
     }
@@ -661,22 +743,27 @@ export function createBlogStorageServer(options = {}) {
         "Article slug",
       );
       const article = await readStoredJson(path.join(articlesDir, `${slug}.json`), null);
-      if (article === null) throw new HttpError(404, "Article not found");
+      if (article === null || (article.status !== "published" && url.searchParams.get("includeDraft") !== "1")) {
+        throw new HttpError(404, "Article not found");
+      }
       respondJson(request, response, 200, normalizeArticle(article));
       return;
     }
     if (request.method === "GET" && url.pathname === "/api/articles") {
       const articles = await readStoredJson(path.join(articlesDir, "index.json"), []);
       if (!Array.isArray(articles)) throw new Error("Stored article index is invalid");
-      respondJson(request, response, 200, articles.map(normalizeArticle));
+      const includeDrafts = url.searchParams.get("scope") === "all";
+      respondJson(request, response, 200, articles
+        .filter((article) => includeDrafts || article?.status === "published")
+        .map(normalizeArticle));
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/articles") {
       respondJson(request, response, 200, await saveArticle(await readJson(request, maxJsonBytes)));
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/media") {
-      respondJson(request, response, 200, await saveMedia(request, url));
+    if (request.method === "POST" && (url.pathname === "/api/media" || url.pathname === "/api/imaging")) {
+      respondJson(request, response, 200, await serializeMutation(() => saveMedia(request, url)));
       return;
     }
     if (url.pathname === "/api/status") {
@@ -687,8 +774,12 @@ export function createBlogStorageServer(options = {}) {
       respondJson(request, response, 405, { error: "Method not allowed" }, { Allow: "DELETE, GET, POST, OPTIONS" });
       return;
     }
-    if (url.pathname === "/api/media") {
+    if (url.pathname === "/api/media" || url.pathname === "/api/imaging") {
       respondJson(request, response, 405, { error: "Method not allowed" }, { Allow: "POST, OPTIONS" });
+      return;
+    }
+    if (url.pathname === "/api/activity" || url.pathname === "/api/site-settings") {
+      respondJson(request, response, 405, { error: "Method not allowed" }, { Allow: "GET, PUT, OPTIONS" });
       return;
     }
     respondJson(request, response, 404, { error: "Not found" });
@@ -756,7 +847,7 @@ if (isMainModule) {
   try {
     const address = await storage.start();
     const boundPort = address && typeof address === "object" ? address.port : PORT;
-    console.log(`[blog-storage] saving articles and media to ${WORK_DIR}`);
+    console.log(`[blog-storage] saving all blog data to ${WORK_DIR}`);
     console.log(`[blog-storage] local API: http://localhost:${boundPort}`);
   } catch (error) {
     console.error("[blog-storage] failed to start", error);

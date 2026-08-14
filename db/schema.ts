@@ -48,6 +48,21 @@ export const uploads = sqliteTable("uploads", {
   index("uploads_article_slug_idx").on(table.articleSlug, table.createdAt),
 ]);
 
+export const activityEvents = sqliteTable("activity_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  eventType: text("event_type", {
+    enum: ["article_published", "article_edited", "image_published"],
+  }).notNull(),
+  authorUserId: text("author_user_id").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  check(
+    "activity_events_type_check",
+    sql`${table.eventType} IN ('article_published', 'article_edited', 'image_published')`,
+  ),
+  index("activity_events_created_at_idx").on(table.createdAt),
+]);
+
 export const deletionQueue = sqliteTable("deletion_queue", {
   objectKey: text("object_key").primaryKey(),
   articleSlug: text("article_slug").notNull(),

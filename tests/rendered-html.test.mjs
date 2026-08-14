@@ -41,6 +41,7 @@ test("server-renders the Notebook 36 homepage", async () => {
   assert.match(html, /<title>Notebook 36 — Alex Rivera<\/title>/i);
   assert.match(html, /Notes on making/);
   assert.match(html, /Recent notes/);
+  assert.match(html, /Creative activity/);
   assert.match(html, /Visual archive/);
   assert.match(html, /<video/);
   assert.match(html, /Write/);

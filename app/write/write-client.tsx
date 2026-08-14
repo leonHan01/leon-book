@@ -146,7 +146,7 @@ function writeRecoveryDraft(draft: RecoveryDraft) {
   try {
     localStorage.setItem(recoveryKey(draft.requestedSlug), JSON.stringify(draft));
   } catch {
-    // Recovery is best-effort; D1 remains the authoritative store.
+    // Recovery is best-effort; the local files remain the authoritative store.
   }
 }
 
@@ -709,7 +709,7 @@ function WriteEditor() {
         <div className="editor-path" aria-live="polite">
           <span className={`save-dot ${saveState}`} aria-hidden="true" />
           <span>{saveState === "saving" && text.editor.saving}{saveState === "publishing" && text.editor.publishing}{saveState === "saved" && text.editor.saved}{saveState === "published" && text.editor.published}{saveState === "offline" && text.editor.offline}{saveState === "conflict" && text.editor.conflict}{saveState === "dirty" && text.editor.dirty}{saveState === "idle" && text.editor.ready}</span>
-          <code>D1 · R2</code>
+          <code>LOCAL · FILES</code>
         </div>
         <div className="editor-stats" aria-label="Draft statistics">
           <span>{wordCount} {text.editor.words}</span><span>·</span><span>{readingTime} {text.editor.read}</span><span>·</span><span>{mediaBlocks.length} {mediaBlocks.length === 1 ? text.editor.attachment : text.editor.attachments}</span>

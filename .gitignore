@@ -29,6 +29,9 @@ work/
 coverage/
 .eslintcache
 *.tsbuildinfo
+macos/.build*/
+macos/.swiftpm-*/
+macos/dist/
 
 # Environment files and local secrets
 .env

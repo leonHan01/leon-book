@@ -43,6 +43,7 @@ function isBlogApiPath(pathname: string): boolean {
   return (
     pathname === "/api/articles" ||
     pathname.startsWith("/api/articles/") ||
+    pathname === "/api/activity" ||
     pathname === "/api/site-settings" ||
     pathname === "/api/media" ||
     pathname === "/api/imaging"

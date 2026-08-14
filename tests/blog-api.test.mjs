@@ -198,6 +198,27 @@ test("public readers only see published articles while an allowed author can req
   ]);
 });
 
+test("creative activity is publicly readable as daily totals", async () => {
+  const activity = [{ count: 3, date: "2026-08-12" }];
+  const repository = {
+    async listActivity(since) {
+      assert.match(since, /^\d{4}-\d{2}-\d{2}T/);
+      return activity;
+    },
+  };
+  const handle = createBlogApiHandler({
+    env: {
+      DB: { prepare: () => assert.fail("the injected repository should be used") },
+      UPLOADS: {},
+    },
+    repository,
+  });
+
+  const response = await handle(new Request("https://blog.example/api/activity"));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), activity);
+});
+
 test("a draft detail is hidden by default and only exposed to an allowed author", async () => {
   const repository = {
     async getArticle(slug, includeDraft) {
@@ -734,6 +755,93 @@ test("the D1 repository maps persisted JSON fields and prepares one statement at
   }
 });
 
+test("the D1 repository records publishing, editing, and image activity", async () => {
+  const prepared = [];
+  const db = {
+    prepare(sql) {
+      const statement = {
+        bindings: [],
+        bind(...values) {
+          this.bindings = values;
+          return this;
+        },
+        async first() {
+          if (sql.includes("INSERT INTO articles")) {
+            return {
+              banner_json: null,
+              body: "Published body",
+              category: "Notes",
+              excerpt: "",
+              media_json: "[]",
+              published_at: "2026-08-12T10:00:00.000Z",
+              slug: "published-note",
+              status: "published",
+              tags_json: "[]",
+              title: "Published note",
+              updated_at: "2026-08-12T10:00:00.000Z",
+            };
+          }
+          if (sql.includes("UPDATE articles SET")) {
+            return {
+              banner_json: null,
+              body: "Edited body",
+              category: "Notes",
+              excerpt: "",
+              media_json: "[]",
+              published_at: "2026-08-11T10:00:00.000Z",
+              slug: "published-note",
+              status: "published",
+              tags_json: "[]",
+              title: "Published note",
+              updated_at: "2026-08-12T10:00:00.001Z",
+            };
+          }
+          if (sql.includes("INSERT INTO uploads")) return { object_key: "media/image.png" };
+          return null;
+        },
+        async run() { return { success: true }; },
+        sql,
+      };
+      prepared.push(statement);
+      return statement;
+    },
+  };
+  const repository = createD1BlogRepository(db, {
+    ensureSchema: false,
+    now: () => "2026-08-12T10:00:00.000Z",
+  });
+
+  await repository.saveArticle({
+    body: "Published body",
+    slug: "published-note",
+    status: "published",
+    title: "Published note",
+  }, "author-1");
+  await repository.saveArticle({
+    body: "Edited body",
+    expectedUpdatedAt: "2026-08-12T10:00:00.000Z",
+    slug: "published-note",
+    status: "published",
+    title: "Published note",
+  }, "author-1");
+  await repository.recordUpload({
+    articleSlug: null,
+    authorUserId: "author-1",
+    contentType: "image/png",
+    key: "media/image.png",
+    kind: "image",
+    originalName: "image.png",
+    size: 12,
+  });
+
+  const activityStatements = prepared.filter((statement) => statement.sql.includes("INSERT INTO activity_events"));
+  assert.deepEqual(activityStatements.map((statement) => statement.bindings), [
+    ["article_published", "author-1", "2026-08-12T10:00:00.000Z"],
+    ["article_edited", "author-1", "2026-08-12T10:00:00.001Z"],
+    ["image_published", "author-1", "2026-08-12T10:00:00.000Z"],
+  ]);
+});
+
 test("the D1 settings repository conditionally advances its updated-at version", async () => {
   const prepared = [];
   const outcomes = [
@@ -814,24 +922,25 @@ test("an empty local D1 is initialized once per isolate with single-statement pr
   await Promise.all([ensureBlogSchema(db), ensureBlogSchema(db)]);
   assert.equal(batches, 1);
   assert.match(prepared.map((statement) => statement.sql).join("\n"), /deletion_queue/);
+  assert.match(prepared.map((statement) => statement.sql).join("\n"), /activity_events/);
   for (const statement of prepared) {
     assert.ok(statement.sql.trim().split(";").filter(Boolean).length <= 1);
   }
 });
 
-test("the production migration parses in SQLite and includes the deletion outbox", async () => {
-  const migration = await readFile(
-    new URL("../drizzle/0000_blog_storage.sql", import.meta.url),
-    "utf8",
-  );
+test("the production migrations parse in SQLite and include the activity history", async () => {
+  const migrations = await Promise.all([
+    readFile(new URL("../drizzle/0000_blog_storage.sql", import.meta.url), "utf8"),
+    readFile(new URL("../drizzle/0001_amazing_frightful_four.sql", import.meta.url), "utf8"),
+  ]);
   const database = new DatabaseSync(":memory:");
   try {
-    database.exec(migration.replaceAll("--> statement-breakpoint", ""));
+    database.exec(migrations.join("\n").replaceAll("--> statement-breakpoint", ""));
     const tables = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
       .all()
       .map((row) => row.name);
-    assert.deepEqual(tables, ["articles", "deletion_queue", "site_settings", "uploads"]);
+    assert.deepEqual(tables, ["activity_events", "articles", "deletion_queue", "site_settings", "uploads"]);
     const articleColumns = database
       .prepare("PRAGMA table_info(articles)")
       .all()
