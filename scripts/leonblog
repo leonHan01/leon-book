@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="/Volumes/T7Shield/myproject/leonWeb"
-WORK_DIR="${HOME}/Library/Application Support/Notebook 36"
+WORK_DIR="/Volumes/T7Shield/myblog"
 RUN_DIR="$WORK_DIR/.run"
 LOG_FILE="$RUN_DIR/blog.log"
 SCREEN_SESSION="leonblog"

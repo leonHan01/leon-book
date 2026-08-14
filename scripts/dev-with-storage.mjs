@@ -16,19 +16,27 @@ const childEnv = {
   BLOG_STORAGE_URL: storageURL,
 };
 
-const storage = spawn(process.execPath, [storageScript], {
-  cwd: projectRoot,
-  env: childEnv,
-  stdio: "inherit",
-});
-
+let storage;
 let frontend;
 let shuttingDown = false;
+
+async function storageIsReady() {
+  try {
+    const response = await fetch(new URL("/api/status", storageURL), {
+      signal: AbortSignal.timeout(500),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 async function waitForStorage() {
   const statusURL = new URL("/api/status", storageURL);
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (storage.exitCode !== null) throw new Error("Local storage service stopped before startup");
+    if (storage?.exitCode !== null && storage?.exitCode !== undefined) {
+      throw new Error("Local storage service stopped before startup");
+    }
     try {
       const response = await fetch(statusURL, { signal: AbortSignal.timeout(500) });
       if (response.ok) return;
@@ -44,13 +52,20 @@ function shutdown(signal = "SIGTERM") {
   if (shuttingDown) return;
   shuttingDown = true;
   frontend?.kill(signal);
-  storage.kill(signal);
+  storage?.kill(signal);
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 try {
+  if (!(await storageIsReady())) {
+    storage = spawn(process.execPath, [storageScript], {
+      cwd: projectRoot,
+      env: childEnv,
+      stdio: "inherit",
+    });
+  }
   await waitForStorage();
   frontend = spawn(nextExecutable, [production ? "start" : "dev", ...forwardedArguments], {
     cwd: projectRoot,
@@ -58,7 +73,7 @@ try {
     stdio: "inherit",
   });
   frontend.on("exit", (code, signal) => {
-    if (!shuttingDown) storage.kill("SIGTERM");
+    if (!shuttingDown) storage?.kill("SIGTERM");
     process.exit(signal ? 1 : code ?? 0);
   });
 } catch (error) {
@@ -67,7 +82,7 @@ try {
   process.exitCode = 1;
 }
 
-storage.on("exit", (code) => {
+storage?.on("exit", (code) => {
   if (code && !shuttingDown) {
     console.error(`[blog-storage] exited with code ${code}`);
     frontend?.kill("SIGTERM");

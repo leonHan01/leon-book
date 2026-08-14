@@ -192,7 +192,7 @@ test("media is served with HEAD and byte ranges", async () => {
     });
     assert.equal(upload.status, 200);
     const media = await upload.json();
-    const mediaPath = new URL(media.url).pathname;
+    const mediaPath = new URL(media.url, baseUrl).pathname;
     assert.match(path.basename(mediaPath), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.png$/i);
     assert.equal(media.size, contents.length);
 
@@ -232,5 +232,72 @@ test("malformed JSON is reported as a client error", async () => {
     });
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), { error: "Request body must be valid JSON" });
+  });
+});
+
+test("articles remain local, hide drafts publicly, and reject stale saves", async () => {
+  await withServer({}, async ({ baseUrl, workDir }) => {
+    const createdResponse = await fetch(`${baseUrl}/api/articles`, {
+      body: JSON.stringify({ body: "One two three", slug: "local-note", status: "draft", title: "Local note" }),
+      headers: { "Content-Type": "application/json", Origin: allowedOrigin },
+      method: "POST",
+    });
+    assert.equal(createdResponse.status, 200);
+    const created = await createdResponse.json();
+    assert.equal(created.wordCount, 3);
+
+    const publicArticles = await fetch(`${baseUrl}/api/articles`, { headers: { Origin: allowedOrigin } }).then((response) => response.json());
+    assert.deepEqual(publicArticles, []);
+    const allArticles = await fetch(`${baseUrl}/api/articles?scope=all`, { headers: { Origin: allowedOrigin } }).then((response) => response.json());
+    assert.equal(allArticles.length, 1);
+
+    const stale = await fetch(`${baseUrl}/api/articles`, {
+      body: JSON.stringify({ body: "Stale", slug: "local-note", status: "published", title: "Local note" }),
+      headers: { "Content-Type": "application/json", Origin: allowedOrigin },
+      method: "POST",
+    });
+    assert.equal(stale.status, 409);
+
+    const updated = await fetch(`${baseUrl}/api/articles`, {
+      body: JSON.stringify({
+        body: "Published locally",
+        expectedUpdatedAt: created.updatedAt,
+        slug: "local-note",
+        status: "published",
+        title: "Local note",
+      }),
+      headers: { "Content-Type": "application/json", Origin: allowedOrigin },
+      method: "POST",
+    });
+    assert.equal(updated.status, 200);
+    assert.ok(await readFile(path.join(workDir, "articles", "local-note.json"), "utf8"));
+
+    const activity = await fetch(`${baseUrl}/api/activity`, { headers: { Origin: allowedOrigin } }).then((response) => response.json());
+    assert.equal(activity.reduce((total, day) => total + day.count, 0), 1);
+  });
+});
+
+test("site settings use a local version file for conflict protection", async () => {
+  await withServer({}, async ({ baseUrl, workDir }) => {
+    const initial = await fetch(`${baseUrl}/api/site-settings`, { headers: { Origin: allowedOrigin } });
+    assert.equal(initial.headers.get("etag"), '"0"');
+    assert.equal(await initial.json(), null);
+
+    const saved = await fetch(`${baseUrl}/api/site-settings`, {
+      body: JSON.stringify({ language: "zh", theme: "paper" }),
+      headers: { "Content-Type": "application/json", "If-Match": '"0"', Origin: allowedOrigin },
+      method: "PUT",
+    });
+    assert.equal(saved.status, 200);
+    const version = saved.headers.get("etag");
+    assert.match(version ?? "", /^".+"$/);
+
+    const stale = await fetch(`${baseUrl}/api/site-settings`, {
+      body: JSON.stringify({ language: "en", theme: "night" }),
+      headers: { "Content-Type": "application/json", "If-Match": '"0"', Origin: allowedOrigin },
+      method: "PUT",
+    });
+    assert.equal(stale.status, 409);
+    assert.ok(await readFile(path.join(workDir, "settings", "site-settings.json"), "utf8"));
   });
 });

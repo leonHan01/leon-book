@@ -11,13 +11,10 @@ func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
 }
 
 expect(
-    AppConfiguration.normalizedSiteURL("blog.example.com")?.absoluteString == "https://blog.example.com",
-    "Hosted domains should default to HTTPS"
-)
-expect(
     AppConfiguration.normalizedSiteURL("localhost:3000")?.absoluteString == "http://localhost:3000",
     "localhost should default to HTTP"
 )
+expect(AppConfiguration.normalizedSiteURL("https://blog.example.com") == nil, "Remote sites should be rejected")
 expect(
     AppConfiguration.normalizedSiteURL("javascript:alert(1)") == nil,
     "Unsafe URL schemes should be rejected"

@@ -4,7 +4,7 @@
 
 ## 数据位置
 
-默认数据目录：
+这台 Mac 已有数据时继续使用 `/Volumes/T7Shield/myblog`。如果该目录不存在，则使用：
 
 ```text
 ~/Library/Application Support/Notebook 36/

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -7,10 +7,11 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
-const WORK_DIR = path.resolve(
-  process.env.BLOG_WORKDIR
-    ?? path.join(os.homedir(), "Library", "Application Support", "Notebook 36"),
-);
+const LEGACY_WORK_DIR = "/Volumes/T7Shield/myblog";
+const WORK_DIR = path.resolve(process.env.BLOG_WORKDIR
+  ?? (existsSync(LEGACY_WORK_DIR)
+    ? LEGACY_WORK_DIR
+    : path.join(os.homedir(), "Library", "Application Support", "Notebook 36")));
 const PORT = Number(process.env.BLOG_STORAGE_PORT ?? 8787);
 const HOST = process.env.BLOG_STORAGE_HOST ?? "127.0.0.1";
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
@@ -103,7 +104,7 @@ function normalizeTags(value) {
 
 function normalizeBanner(value) {
   if (!value || typeof value !== "object") return undefined;
-  const url = String(value.url ?? "").trim();
+  const url = normalizeLocalMediaURL(value.url);
   if (!url) return undefined;
   const name = cleanMetadataText(value.name, "banner", 180);
   return {
@@ -114,16 +115,48 @@ function normalizeBanner(value) {
   };
 }
 
+function normalizeLocalMediaURL(value) {
+  const source = String(value ?? "").trim();
+  if (!source) return "";
+  try {
+    const url = new URL(source);
+    if (
+      ["localhost", "127.0.0.1", "::1"].includes(url.hostname)
+      && url.pathname.startsWith("/media/")
+    ) {
+      return `${url.pathname}${url.search}${url.hash}`;
+    }
+  } catch {
+    // Relative media paths are already in the preferred local format.
+  }
+  return source;
+}
+
+function normalizeMedia(value) {
+  if (!value || typeof value !== "object") return null;
+  const url = normalizeLocalMediaURL(value.url);
+  if (!url) return null;
+  return {
+    ...value,
+    kind: value.kind === "video" ? "video" : "image",
+    name: cleanMetadataText(value.name, "media", 180),
+    size: Math.max(0, Number(value.size) || 0),
+    url,
+  };
+}
+
 function normalizeArticle(article) {
   const source = article && typeof article === "object" ? article : {};
-  const body = String(source.body ?? "");
+  const body = String(source.body ?? "")
+    .replaceAll("http://localhost:8787/media/", "/media/")
+    .replaceAll("http://127.0.0.1:8787/media/", "/media/");
   return {
     ...source,
     banner: normalizeBanner(source.banner),
     body,
     category: cleanMetadataText(source.category, "Uncategorized", 80),
     excerpt: String(source.excerpt ?? ""),
-    media: Array.isArray(source.media) ? source.media : [],
+    media: Array.isArray(source.media) ? source.media.map(normalizeMedia).filter(Boolean) : [],
     slug: safeSegment(source.slug, `legacy-${Date.now()}`),
     // Articles created before publication support are legacy published content.
     status: source.status === "draft" ? "draft" : "published",

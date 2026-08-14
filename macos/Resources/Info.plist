@@ -33,5 +33,7 @@
     <string>NSApplication</string>
     <key>Notebook36DefaultURL</key>
     <string>http://localhost:3000</string>
+    <key>Notebook36ProjectPath</key>
+    <string></string>
 </dict>
 </plist>

@@ -33,19 +33,13 @@ public enum AppConfiguration {
         let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
 
-        let candidate: String
-        if value.contains("://") {
-            candidate = value
-        } else if value.hasPrefix("localhost") || value.hasPrefix("127.0.0.1") || value.hasPrefix("[::1]") {
-            candidate = "http://\(value)"
-        } else {
-            candidate = "https://\(value)"
-        }
+        let candidate = value.contains("://") ? value : "http://\(value)"
 
         guard let components = URLComponents(string: candidate),
               let scheme = components.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
+              scheme == "http",
               let host = components.host,
+              ["localhost", "127.0.0.1", "::1"].contains(host.lowercased()),
               !host.isEmpty,
               let url = components.url else {
             return nil

@@ -7,11 +7,11 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            TextField("博客地址", text: $address, prompt: Text("https://blog.example.com"))
+            TextField("本机博客地址", text: $address, prompt: Text("http://localhost:3000"))
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(save)
 
-            Text("应用会保留该站点的登录 Cookie、主题偏好和草稿恢复数据。")
+            Text("只接受 localhost 或 127.0.0.1 地址；文章和媒体不会发送到远程站点。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

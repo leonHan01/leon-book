@@ -7,6 +7,7 @@ struct Notebook36App: App {
     var body: some Scene {
         WindowGroup("Notebook 36") {
             ContentView(model: browser)
+                .onDisappear(perform: browser.stopLocalServer)
         }
         .defaultSize(width: 1280, height: 820)
         .commands {

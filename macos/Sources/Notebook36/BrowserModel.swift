@@ -14,6 +14,7 @@ final class BrowserModel: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private weak var webView: WKWebView?
+    private let localServer = LocalServerController()
 
     init(siteURL: URL = AppConfiguration.initialSiteURL) {
         self.siteURL = siteURL
@@ -25,7 +26,14 @@ final class BrowserModel: ObservableObject {
 
     func attach(_ webView: WKWebView) {
         self.webView = webView
-        loadHome()
+        Task {
+            do {
+                try await localServer.ensureRunning(for: siteURL)
+                loadHome()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     func loadHome() {
@@ -61,7 +69,18 @@ final class BrowserModel: ObservableObject {
 
         siteURL = url
         UserDefaults.standard.set(url.absoluteString, forKey: AppConfiguration.storedSiteURLKey)
-        loadHome()
+        Task {
+            do {
+                try await localServer.ensureRunning(for: url)
+                loadHome()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func stopLocalServer() {
+        localServer.stop()
     }
 
     func navigationStarted() {
@@ -98,7 +117,7 @@ enum SiteAddressError: LocalizedError {
     case invalid
 
     var errorDescription: String? {
-        "请输入有效的 HTTP 或 HTTPS 地址。"
+        "请输入有效的本机 HTTP 地址，例如 http://localhost:3000。"
     }
 }
 
