@@ -1,18 +1,34 @@
 import Foundation
 
-/// Native on-disk store for Notebook 36 JSON, Markdown, and media files.
+/// Native on-disk store for leon-book JSON, Markdown, and media files.
 actor LocalBlogStore {
     static let legacyRootURL = URL(fileURLWithPath: "/Volumes/T7Shield/myblog", isDirectory: true)
 
+    static var legacyApplicationSupportURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Notebook 36", isDirectory: true)
+    }
+
+    static var applicationSupportURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("leon-book", isDirectory: true)
+    }
+
     static var defaultRootURL: URL {
         let fileManager = FileManager.default
+        if let configured = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"],
+           !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: configured, isDirectory: true)
+        }
         if let configured = ProcessInfo.processInfo.environment["NOTEBOOK36_WORKDIR"],
            !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return URL(fileURLWithPath: configured, isDirectory: true)
         }
         if fileManager.fileExists(atPath: legacyRootURL.path) { return legacyRootURL }
-        return fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Notebook 36", isDirectory: true)
+        if fileManager.fileExists(atPath: legacyApplicationSupportURL.path) {
+            return legacyApplicationSupportURL
+        }
+        return applicationSupportURL
     }
 
     let rootURL: URL

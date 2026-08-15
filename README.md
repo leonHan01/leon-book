@@ -1,39 +1,85 @@
-# Notebook 36
+# leon-book
 
-Notebook 36 是一个纯原生的 macOS 写作应用。文章、草稿、图片、视频和创作活动都只保存在本机；项目不包含浏览器界面、Node.js 服务或 HTTP API。
+`leon-book` is a native macOS writing app for managing articles, drafts, images, videos, moments, and creative activity.
 
-## 打开应用
+The app is built with SwiftUI and stores data directly on the local filesystem. It does not depend on a browser, Node.js service, or HTTP API.
+
+## Features
+
+- Read, edit, and publish articles
+- Save drafts locally with independent workspaces for multiple users
+- Manage image and video assets
+- Publish image-and-text moments and browse the timeline
+- View recent edits and yearly creative activity
+- Work offline with full control over local data
+
+## Requirements
+
+- macOS 13 or later
+- Swift 5.10 or later
+
+Full Xcode is not required for local builds and checks.
+
+## Commands
+
+Run the following commands from the project root:
 
 ```bash
-leonblog open
+./scripts/leonblog open
 ```
 
-`leonblog start` 是 `open` 的别名。若尚未构建应用，命令会自动构建后打开。
+`open` builds the app when it is missing or out of date, then opens `leon-book`. Other available commands are:
 
-## 本地数据
+```bash
+./scripts/leonblog start   # Alias for open
+./scripts/leonblog build   # Build the macOS app
+./scripts/leonblog test    # Run native checks
+./scripts/leonblog help    # Show command help
+```
 
-已有 `/Volumes/T7Shield/myblog` 目录时，应用会继续读取其中的文章和媒体。否则使用：
+The built app is located at:
 
 ```text
-~/Library/Application Support/Notebook 36/
-├── users.json          # 本机用户清单（初始用户为 leon）
-├── active-user.json    # 最近使用的用户
-└── workspaces/
-    └── <user-id>/      # 每位用户独立的工作空间
-        ├── articles/   # 文章 JSON、Markdown 与索引
-        ├── drafts/     # 草稿恢复副本
-        ├── media/      # 图片与视频原文件
-        ├── moments/    # 图文微博与瀑布流索引
-        └── activity/   # 最近一年的创作活动
+macos/dist/leon-book.app
 ```
 
-首次升级时，根目录中已有的文章、草稿、媒体、微博和活动记录会自动迁入 `leon` 的工作空间。可通过 `NOTEBOOK36_WORKDIR` 指定其他数据目录。删除应用不会删除这些内容；请按普通本地文件备份。
+## Local data
 
-## 原生开发与检查
+By default, data is stored at:
+
+```text
+~/Library/Application Support/leon-book/
+├── users.json          # Local user registry
+├── active-user.json    # Most recently used user
+└── workspaces/
+    └── <user-id>/      # Per-user workspace
+        ├── articles/   # Article JSON, Markdown, and indexes
+        ├── drafts/     # Draft recovery copies
+        ├── media/      # Original image and video files
+        ├── moments/    # Moment data and feed index
+        └── activity/   # Creative activity records
+```
+
+The data directory is selected in this order:
+
+1. `LEON_BOOK_WORKDIR`
+2. `NOTEBOOK36_WORKDIR` (legacy compatibility)
+3. `/Volumes/T7Shield/myblog` (when it exists)
+4. `~/Library/Application Support/Notebook 36/` (legacy app-support directory, when it exists)
+5. `~/Library/Application Support/leon-book/`
+
+When the multi-user structure is initialized, existing articles, drafts, media, moments, and activity records in the root directory are automatically moved into the default `leon` workspace. Uninstalling the app does not remove local data; back up the directory like any other local files.
+
+## Development
+
+The native macOS source code, resources, and check scripts are located in [`macos/`](macos/). See [`macos/README.md`](macos/README.md) for additional build, debugging, and data-directory details.
+
+To run the SwiftPM executable directly:
 
 ```bash
-leonblog build
-leonblog test
+swift run --package-path macos Notebook36
 ```
 
-需要 macOS 13+ 与 Swift 5.10+。更多原生构建说明见 [macos/README.md](macos/README.md)。
+## Design principles
+
+`leon-book` prioritizes local availability, transparent data storage, and a responsive interface. Articles and media are stored as ordinary local files that users can manage with Finder, backup tools, or version control.

@@ -73,7 +73,7 @@ struct ContentView: View {
                 .disabled(model.isLoading || model.isSwitchingWorkspace || model.isSaving || model.isPublishingMoment)
             }
 
-            Section("Notebook 36") {
+            Section("leon-book") {
                 sidebarButton(.dashboard, title: "概览", icon: "rectangle.grid.2x2")
                 sidebarButton(.articles, title: "全部文章", icon: "doc.text")
                 sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
@@ -178,7 +178,7 @@ private struct DashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Notebook 36")
+                    Text("leon-book")
                         .font(.system(size: 38, weight: .bold, design: .rounded))
                     Text("你的本地写作空间")
                         .font(.title3)

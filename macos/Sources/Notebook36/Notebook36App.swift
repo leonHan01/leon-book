@@ -5,7 +5,7 @@ struct Notebook36App: App {
     @StateObject private var model = NativeAppModel()
 
     var body: some Scene {
-        WindowGroup("Notebook 36") {
+        WindowGroup("leon-book") {
             ContentView(model: model)
         }
         .defaultSize(width: 1280, height: 820)

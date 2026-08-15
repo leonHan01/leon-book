@@ -205,7 +205,7 @@ private struct MomentCard: View {
             HStack(spacing: 8) {
                 Image(systemName: "person.crop.circle.fill")
                     .foregroundStyle(.tint)
-                Text("NOTEBOOK 36")
+                Text("leon-book")
                     .font(.subheadline.weight(.semibold))
                 Spacer(minLength: 8)
                 Text(moment.createdAt.nativeDateLabel)

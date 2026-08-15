@@ -2,15 +2,15 @@
 set -euo pipefail
 
 PROJECT_DIR="/Volumes/T7Shield/myproject/leonWeb"
-MACOS_APP="$PROJECT_DIR/macos/dist/Notebook 36.app"
+MACOS_APP="$PROJECT_DIR/macos/dist/leon-book.app"
 MACOS_EXECUTABLE="$MACOS_APP/Contents/MacOS/Notebook36"
 
 print_help() {
   cat <<EOF
-leonblog - Notebook 36 原生 macOS 应用管理
+leonblog - leon-book 原生 macOS 应用管理
 
 用法：
-  leonblog open               构建过期版本后打开原生 Notebook 36 应用
+  leonblog open               构建过期版本后打开原生 leon-book 应用
   leonblog start              与 open 相同
   leonblog build              构建原生应用
   leonblog test               运行原生应用检查
@@ -18,7 +18,7 @@ leonblog - Notebook 36 原生 macOS 应用管理
 
 数据位置：
   /Volumes/T7Shield/myblog（存在时）
-  ~/Library/Application Support/Notebook 36（默认）
+  ~/Library/Application Support/leon-book（默认）
 EOF
 }
 
@@ -51,7 +51,7 @@ open_native_app() {
   else
     printf '[INFO] 原生应用已是最新版本，无需构建。\n'
   fi
-  printf '[INFO] 打开原生 Notebook 36 应用\n'
+  printf '[INFO] 打开原生 leon-book 应用\n'
   open "$MACOS_APP"
 }
 
