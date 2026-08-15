@@ -1,7 +1,28 @@
-# Native build output and tooling caches
+# Swift Package Manager and native build output
+.build/
 macos/.build*/
+.swiftpm/
 macos/.swiftpm-*/
 macos/dist/
+DerivedData/
+build/
+
+# Xcode user-specific data
+*.xcuserstate
+*.xcscmblueprint
+xcuserdata/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
 
 # Legacy source-art archive, not used by the native application
 /leon_workflow-assets/
@@ -10,7 +31,17 @@ macos/dist/
 .DS_Store
 ._*
 Thumbs.db
+.AppleDouble
+.LSOverride
 .idea/
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
+*.swp
+*.swo
+
+# JavaScript tooling, if used by local scripts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
