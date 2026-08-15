@@ -11,18 +11,12 @@ let package = Package(
         .executable(name: "Notebook36", targets: ["Notebook36"]),
     ],
     targets: [
-        .target(
-            name: "Notebook36Core",
-            path: "Sources/Notebook36Core"
-        ),
         .executableTarget(
             name: "Notebook36",
-            dependencies: ["Notebook36Core"],
             path: "Sources/Notebook36"
         ),
         .executableTarget(
             name: "Notebook36Checks",
-            dependencies: ["Notebook36Core"],
             path: "Checks/Notebook36Checks"
         ),
     ],

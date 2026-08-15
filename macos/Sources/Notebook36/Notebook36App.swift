@@ -2,34 +2,24 @@ import SwiftUI
 
 @main
 struct Notebook36App: App {
-    @StateObject private var browser = BrowserModel()
+    @StateObject private var model = NativeAppModel()
 
     var body: some Scene {
         WindowGroup("Notebook 36") {
-            ContentView(model: browser)
-                .onDisappear(perform: browser.stopLocalServer)
+            ContentView(model: model)
         }
         .defaultSize(width: 1280, height: 820)
         .commands {
-            CommandMenu("浏览") {
-                Button("后退", action: browser.goBack)
-                    .keyboardShortcut("[", modifiers: .command)
-                    .disabled(!browser.canGoBack)
-                Button("前进", action: browser.goForward)
-                    .keyboardShortcut("]", modifiers: .command)
-                    .disabled(!browser.canGoForward)
-                Divider()
-                Button("刷新", action: browser.reload)
+            CommandMenu("笔记") {
+                Button("新文章", action: model.newArticle)
+                    .keyboardShortcut("n", modifiers: .command)
+                Button("刷新文章", action: { Task { try? await model.reload() } })
                     .keyboardShortcut("r", modifiers: .command)
-                Button("博客首页", action: browser.loadHome)
-                    .keyboardShortcut("h", modifiers: [.command, .shift])
-                Button("在默认浏览器中打开", action: browser.openCurrentPageInBrowser)
-                    .keyboardShortcut("o", modifiers: [.command, .shift])
             }
         }
 
         Settings {
-            SettingsView(model: browser)
+            NativeSettingsView(model: model)
         }
     }
 }
