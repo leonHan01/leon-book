@@ -4,7 +4,6 @@ import SwiftUI
 struct MomentFeedView: View {
     @ObservedObject var model: NativeAppModel
     @State private var imageBrowser: MomentImageBrowserState?
-    @State private var momentPendingDeletion: NativeMoment?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,7 +53,7 @@ struct MomentFeedView: View {
                                     initialIndex: index
                                 )
                             } onDelete: {
-                                momentPendingDeletion = moment
+                                model.deleteMoment(moment)
                             }
                         }
                     }
@@ -71,26 +70,6 @@ struct MomentFeedView: View {
                 initialIndex: browser.initialIndex,
                 store: model.store
             )
-        }
-        .alert(
-            "删除这条微博？",
-            isPresented: Binding(
-                get: { momentPendingDeletion != nil },
-                set: { isPresented in
-                    if !isPresented { momentPendingDeletion = nil }
-                }
-            )
-        ) {
-            Button("取消", role: .cancel) {
-                momentPendingDeletion = nil
-            }
-            Button("删除", role: .destructive) {
-                guard let moment = momentPendingDeletion else { return }
-                momentPendingDeletion = nil
-                model.deleteMoment(moment)
-            }
-        } message: {
-            Text("这会永久移除微博内容，以及只被这条微博使用的本地图片。此操作无法撤销。")
         }
     }
 }
@@ -232,12 +211,6 @@ private struct MomentCard: View {
                 Text(moment.createdAt.nativeDateLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .help("删除这条微博")
-                .accessibilityLabel("删除这条微博")
             }
 
             if !moment.text.isEmpty {
@@ -253,8 +226,35 @@ private struct MomentCard: View {
         .overlay {
             RoundedRectangle(cornerRadius: 15)
                 .strokeBorder(.quaternary)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topTrailing) {
+            Button(action: confirmDeletion) {
+                Label("删除", systemImage: "trash")
+                    .frame(minWidth: 58, minHeight: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .padding(12)
+            .zIndex(1)
+            .help("删除这条微博")
+            .accessibilityLabel("删除这条微博")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func confirmDeletion() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "删除这条微博？"
+        alert.informativeText = "这会永久移除微博内容，以及只被这条微博使用的本地图片。此操作无法撤销。"
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        alert.buttons.first?.hasDestructiveAction = true
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        onDelete()
     }
 }
 
