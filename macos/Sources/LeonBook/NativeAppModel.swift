@@ -12,6 +12,7 @@ final class NativeAppModel: ObservableObject {
     @Published var selectedSlug: String?
     @Published var editor = NativeEditorDraft()
     @Published var momentDraft = NativeMomentDraft()
+    @Published private(set) var editingMomentID: String?
     @Published private(set) var isLoading = true
     @Published private(set) var isPublishingMoment = false
     @Published private(set) var isSaving = false
@@ -125,6 +126,7 @@ final class NativeAppModel: ObservableObject {
         selectedSlug = nil
         editor = NativeEditorDraft()
         momentDraft = NativeMomentDraft()
+        editingMomentID = nil
         searchText = ""
         section = .dashboard
         try await reload()
@@ -283,7 +285,28 @@ final class NativeAppModel: ObservableObject {
         momentDraft.images.removeAll { $0.id == image.id }
     }
 
+    func beginEditingMoment(_ moment: NativeMoment) {
+        guard !isPublishingMoment else { return }
+        editingMomentID = moment.id
+        momentDraft = NativeMomentDraft(
+            text: moment.text,
+            textRuns: moment.textRuns,
+            images: moment.images
+        )
+        errorMessage = nil
+    }
+
+    func cancelMomentEditing() {
+        guard !isPublishingMoment else { return }
+        editingMomentID = nil
+        momentDraft = NativeMomentDraft()
+        errorMessage = nil
+    }
+
     func deleteMoment(_ moment: NativeMoment) {
+        if editingMomentID == moment.id {
+            cancelMomentEditing()
+        }
         Task {
             do {
                 try await store.deleteMoment(id: moment.id)
@@ -346,12 +369,26 @@ final class NativeAppModel: ObservableObject {
         Task {
             defer { isPublishingMoment = false }
             do {
-                let saved = try await store.saveMoment(
-                    text: momentDraft.text,
-                    textRuns: momentDraft.textRuns,
-                    images: momentDraft.images
-                )
-                moments.insert(saved, at: 0)
+                let saved: NativeMoment
+                if let editingMomentID {
+                    saved = try await store.updateMoment(
+                        id: editingMomentID,
+                        text: momentDraft.text,
+                        textRuns: momentDraft.textRuns,
+                        images: momentDraft.images
+                    )
+                    if let index = moments.firstIndex(where: { $0.id == saved.id }) {
+                        moments[index] = saved
+                    }
+                    self.editingMomentID = nil
+                } else {
+                    saved = try await store.saveMoment(
+                        text: momentDraft.text,
+                        textRuns: momentDraft.textRuns,
+                        images: momentDraft.images
+                    )
+                    moments.insert(saved, at: 0)
+                }
                 momentDraft = NativeMomentDraft()
                 try await refreshActivity()
                 errorMessage = nil

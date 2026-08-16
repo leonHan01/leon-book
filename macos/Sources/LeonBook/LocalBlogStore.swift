@@ -113,6 +113,41 @@ actor LocalBlogStore {
         return saved
     }
 
+    func updateMoment(
+        id: String,
+        text: String,
+        textRuns: [NativeMomentTextRun],
+        images: [NativeMedia]
+    ) throws -> NativeMoment {
+        try prepare()
+        let safeID = try requireSafeSegment(id, label: "微博 ID")
+        guard let previous = try moment(withID: safeID) else { throw NativeStoreError.notFound }
+
+        let normalizedText = normalizedMomentText(text, textRuns: textRuns)
+        let normalizedImages = Array(images
+            .filter { !$0.isVideo && !$0.url.isEmpty }
+            .map(normalizeMedia)
+            .prefix(9))
+        guard !normalizedText.text.isEmpty || !normalizedImages.isEmpty else {
+            throw NativeStoreError.invalidMoment
+        }
+
+        let updated = NativeMoment(
+            createdAt: previous.createdAt,
+            id: previous.id,
+            images: normalizedImages,
+            text: normalizedText.text,
+            textRuns: normalizedText.runs,
+            updatedAt: nextTimestamp(after: previous.updatedAt)
+        )
+
+        try insertMoment(updated, into: db())
+        try recordActivity(type: "moment_edited", at: activityDate(from: updated.updatedAt) ?? Date())
+        try rebuildMomentsIndex()
+        try removeUnreferencedMomentImages(previous.images)
+        return updated
+    }
+
     func deleteMoment(id: String) throws {
         try prepare()
         let safeID = try requireSafeSegment(id, label: "微博 ID")
@@ -121,9 +156,13 @@ actor LocalBlogStore {
         try db().execute("DELETE FROM moments WHERE id = ?", values: [.text(safeID)])
         try rebuildMomentsIndex()
 
+        try removeUnreferencedMomentImages(deletedMoment.images)
+    }
+
+    private func removeUnreferencedMomentImages(_ images: [NativeMedia]) throws {
         let referencedImageURLs = Set(try allMoments().flatMap { $0.images.map(\.url) })
         let momentsMediaDirectory = mediaURL.appendingPathComponent("moments", isDirectory: true).standardizedFileURL
-        for image in deletedMoment.images where !referencedImageURLs.contains(image.url) {
+        for image in images where !referencedImageURLs.contains(image.url) {
             let imageURL = mediaURL(for: image.url).standardizedFileURL
             guard imageURL.deletingLastPathComponent().standardizedFileURL == momentsMediaDirectory else { continue }
             try? FileManager.default.removeItem(at: imageURL)

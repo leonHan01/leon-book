@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 struct MomentFeedView: View {
@@ -52,6 +53,8 @@ struct MomentFeedView: View {
                                     images: moment.images,
                                     initialIndex: index
                                 )
+                            } onEdit: {
+                                model.beginEditingMoment(moment)
                             } onDelete: {
                                 model.deleteMoment(moment)
                             }
@@ -81,7 +84,10 @@ private struct MomentComposerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("发布一条微博", systemImage: "square.and.pencil")
+                Label(
+                    model.editingMomentID == nil ? "发布一条微博" : "编辑微博",
+                    systemImage: model.editingMomentID == nil ? "square.and.pencil" : "pencil"
+                )
                     .font(.headline)
                 Spacer()
                 Text("\(model.momentDraft.text.count) / 500")
@@ -141,7 +147,11 @@ private struct MomentComposerView: View {
                     HStack(spacing: 10) {
                         ForEach(model.momentDraft.images) { image in
                             ZStack(alignment: .topTrailing) {
-                                MomentImage(media: image, store: model.store)
+                                MomentImage(
+                                    media: image,
+                                    store: model.store,
+                                    loadMode: .thumbnail(maxPixelSize: 240)
+                                )
                                     .frame(width: 96, height: 96)
                                     .clipShape(RoundedRectangle(cornerRadius: 9))
 
@@ -176,10 +186,22 @@ private struct MomentComposerView: View {
 
                 Spacer()
 
+                if model.editingMomentID != nil {
+                    Button("取消") {
+                        model.cancelMomentEditing()
+                    }
+                    .disabled(model.isPublishingMoment)
+                }
+
                 Button {
                     model.publishMoment()
                 } label: {
-                    Label(model.isPublishingMoment ? "正在发布…" : "发布", systemImage: "paperplane.fill")
+                    Label(
+                        model.isPublishingMoment
+                            ? "正在保存…"
+                            : model.editingMomentID == nil ? "发布" : "保存修改",
+                        systemImage: model.editingMomentID == nil ? "paperplane.fill" : "checkmark"
+                    )
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.momentDraft.isEmpty || model.isPublishingMoment)
@@ -198,6 +220,7 @@ private struct MomentCard: View {
     let moment: NativeMoment
     let store: LocalBlogStore
     let onOpenImage: (Int) -> Void
+    let onEdit: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -229,17 +252,29 @@ private struct MomentCard: View {
                 .allowsHitTesting(false)
         }
         .overlay(alignment: .topTrailing) {
-            Button(action: confirmDeletion) {
-                Label("删除", systemImage: "trash")
-                    .frame(minWidth: 58, minHeight: 28)
-                    .contentShape(Rectangle())
+            HStack(spacing: 8) {
+                Button(action: onEdit) {
+                    Label("编辑", systemImage: "pencil")
+                        .frame(minWidth: 58, minHeight: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.bordered)
+                .help("编辑这条微博")
+                .accessibilityLabel("编辑这条微博")
+
+                Button(action: confirmDeletion) {
+                    Label("删除", systemImage: "trash")
+                        .frame(minWidth: 58, minHeight: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .help("删除这条微博")
+                .accessibilityLabel("删除这条微博")
             }
-            .buttonStyle(.bordered)
-            .tint(.red)
-            .padding(12)
+            .padding(.top, 12)
+            .padding(.trailing, 12)
             .zIndex(1)
-            .help("删除这条微博")
-            .accessibilityLabel("删除这条微博")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -305,7 +340,11 @@ private struct MomentImageGrid: View {
                 Button {
                     onOpenImage(index)
                 } label: {
-                    MomentImage(media: image, store: store)
+                    MomentImage(
+                        media: image,
+                        store: store,
+                        loadMode: .thumbnail(maxPixelSize: 720)
+                    )
                         .frame(height: imageHeight)
                         .clipShape(RoundedRectangle(cornerRadius: 7))
                 }
@@ -317,11 +356,34 @@ private struct MomentImageGrid: View {
     }
 }
 
+private enum MomentImageLoadMode: Equatable {
+    case thumbnail(maxPixelSize: Int)
+    case fullSize
+
+    var cacheKey: String {
+        switch self {
+        case let .thumbnail(maxPixelSize): return "thumbnail-\(maxPixelSize)"
+        case .fullSize: return "full-size"
+        }
+    }
+}
+
 private struct MomentImage: View {
     let media: NativeMedia
     let store: LocalBlogStore
+    let loadMode: MomentImageLoadMode
 
     @State private var image: NSImage?
+
+    init(
+        media: NativeMedia,
+        store: LocalBlogStore,
+        loadMode: MomentImageLoadMode = .thumbnail(maxPixelSize: 480)
+    ) {
+        self.media = media
+        self.store = store
+        self.loadMode = loadMode
+    }
 
     var body: some View {
         ZStack {
@@ -336,11 +398,38 @@ private struct MomentImage: View {
             }
         }
         .clipped()
-        .task(id: media.url) {
+        .task(id: "\(media.url)|\(loadMode.cacheKey)") {
+            image = nil
             let url = await store.mediaURL(for: media.url)
-            image = NSImage(contentsOf: url)
+            image = MomentImageLoader.load(from: url, mode: loadMode)
         }
         .accessibilityLabel(media.name)
+    }
+}
+
+private enum MomentImageLoader {
+    static func load(from url: URL, mode: MomentImageLoadMode) -> NSImage? {
+        if mode == .fullSize {
+            return NSImage(contentsOf: url)
+        }
+
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return nil
+        }
+
+        guard case let .thumbnail(maxPixelSize) = mode else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+        let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+
+        guard let cgImage else { return nil }
+        return NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        )
     }
 }
 
@@ -358,6 +447,7 @@ private struct MomentImageBrowserView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selectedIndex = 0
     @State private var scale: CGFloat = 1
+    @State private var keyboardMonitor: Any?
 
     private var selectedImage: NativeMedia { images[selectedIndex] }
     private var browserSize: CGSize {
@@ -441,7 +531,11 @@ private struct MomentImageBrowserView: View {
                             selectedIndex = index
                             scale = 1
                         } label: {
-                            MomentImage(media: image, store: store)
+                            MomentImage(
+                                media: image,
+                                store: store,
+                                loadMode: .thumbnail(maxPixelSize: 180)
+                            )
                                 .frame(width: 74, height: 74)
                                 .clipShape(RoundedRectangle(cornerRadius: 7))
                                 .overlay {
@@ -465,7 +559,41 @@ private struct MomentImageBrowserView: View {
         .background(Color.black.ignoresSafeArea())
         .onAppear {
             selectedIndex = min(max(0, initialIndex), max(0, images.count - 1))
+            installKeyboardMonitor()
         }
+        .onDisappear {
+            removeKeyboardMonitor()
+        }
+    }
+
+    private func installKeyboardMonitor() {
+        guard keyboardMonitor == nil else { return }
+
+        keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty else {
+                return event
+            }
+
+            switch event.keyCode {
+            case 123:
+                showPreviousImage()
+                return nil
+            case 124:
+                showNextImage()
+                return nil
+            case 53:
+                dismiss()
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeKeyboardMonitor() {
+        guard let keyboardMonitor else { return }
+        NSEvent.removeMonitor(keyboardMonitor)
+        self.keyboardMonitor = nil
     }
 
     private func showPreviousImage() {
@@ -524,7 +652,7 @@ private struct MomentZoomableImage: View {
         .background(Color.black.opacity(0.92), in: RoundedRectangle(cornerRadius: 12))
         .task(id: media.url) {
             let url = await store.mediaURL(for: media.url)
-            image = NSImage(contentsOf: url)
+            image = MomentImageLoader.load(from: url, mode: .fullSize)
         }
         .accessibilityLabel("大图浏览：\(media.name)")
     }

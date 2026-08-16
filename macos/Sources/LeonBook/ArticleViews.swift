@@ -230,7 +230,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.backgroundColor = .textBackgroundColor
         textView.delegate = context.coordinator
-        textView.font = .systemFont(ofSize: 16, weight: .regular)
+        textView.font = .systemFont(ofSize: 18, weight: .regular)
         textView.isHorizontallyResizable = false
         textView.isRichText = false
         textView.isVerticallyResizable = true
@@ -464,7 +464,7 @@ struct ArticleEditorView: View {
                 .foregroundStyle(.tint)
 
             TextField("给这篇文章起个标题", text: $model.editor.title)
-                .font(.system(size: 34, weight: .bold, design: .serif))
+                .font(.system(size: 40, weight: .bold, design: .serif))
                 .textFieldStyle(.plain)
 
             Divider()
@@ -553,6 +553,7 @@ struct ArticleEditorView: View {
             .overlay(alignment: .topLeading) {
                 if model.editor.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text("从这里开始写……")
+                        .font(.system(size: 18))
                         .foregroundStyle(.secondary)
                         .padding(18)
                         .allowsHitTesting(false)

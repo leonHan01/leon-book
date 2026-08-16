@@ -60,7 +60,7 @@ private struct MarkdownBlockView: View {
 
         case let .paragraph(text):
             inlineMarkdownText(text)
-                .font(.system(size: 16, design: .serif))
+                .font(.system(size: 18, design: .serif))
                 .lineSpacing(6)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
