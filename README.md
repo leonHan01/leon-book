@@ -1,5 +1,7 @@
 # leon-book
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 `leon-book` is a native macOS writing app for managing articles, drafts, images, videos, moments, and creative activity.
 
 The app is built with SwiftUI and stores data directly on the local filesystem. It does not depend on a browser, Node.js service, or HTTP API.

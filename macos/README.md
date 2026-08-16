@@ -1,5 +1,7 @@
 # leon-book for macOS
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 This directory contains the native macOS implementation of `leon-book`. It uses SwiftUI for its windows, menus, navigation, reading, writing, and settings interfaces. It does not use Safari, Chrome, or WKWebView.
 
 Articles, drafts, settings, images, and videos are stored on the local filesystem. The app does not start Node.js, a browser, or a local HTTP service.
