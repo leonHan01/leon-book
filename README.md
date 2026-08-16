@@ -51,10 +51,12 @@ By default, data is stored at:
 
 ```text
 ~/Library/Application Support/leon-book/
-├── users.json          # Local user registry
-├── active-user.json    # Most recently used user
+├── leon-book.sqlite    # Primary SQLite database for users and settings
+├── users.json          # Human-readable compatibility export
+├── active-user.json    # Human-readable compatibility export
 └── workspaces/
     └── <user-id>/      # Per-user workspace
+        ├── leon-book.sqlite # Articles, moments, and activity records
         ├── articles/   # Article JSON, Markdown, and indexes
         ├── drafts/     # Draft recovery copies
         ├── media/      # Original image and video files
@@ -65,12 +67,12 @@ By default, data is stored at:
 The data directory is selected in this order:
 
 1. `LEON_BOOK_WORKDIR`
-2. `NOTEBOOK36_WORKDIR` (legacy compatibility)
-3. `/Volumes/T7Shield/myblog` (when it exists)
-4. `~/Library/Application Support/Notebook 36/` (legacy app-support directory, when it exists)
-5. `~/Library/Application Support/leon-book/`
+2. `/Volumes/T7Shield/myblog` (when it exists)
+3. `~/Library/Application Support/leon-book/`
 
 When the multi-user structure is initialized, existing articles, drafts, media, moments, and activity records in the root directory are automatically moved into the default `leon` workspace. Uninstalling the app does not remove local data; back up the directory like any other local files.
+
+SQLite is the source of truth for structured records. JSON and Markdown files are kept as readable local exports and for compatibility with existing workspaces; images and videos remain ordinary local files under `media/`. Existing JSON records are imported into SQLite automatically on first launch.
 
 ## Development
 
@@ -79,7 +81,7 @@ The native macOS source code, resources, and check scripts are located in [`maco
 To run the SwiftPM executable directly:
 
 ```bash
-swift run --package-path macos Notebook36
+swift run --package-path macos LeonBook
 ```
 
 ## Design principles

@@ -3,21 +3,28 @@
 import PackageDescription
 
 let package = Package(
-    name: "Notebook36Mac",
+    name: "LeonBookMac",
     platforms: [
         .macOS(.v13),
     ],
     products: [
-        .executable(name: "Notebook36", targets: ["Notebook36"]),
+        .executable(name: "LeonBook", targets: ["LeonBook"]),
     ],
     targets: [
-        .executableTarget(
-            name: "Notebook36",
-            path: "Sources/Notebook36"
+        .systemLibrary(
+            name: "CSQLite",
+            path: "Sources/CSQLite"
         ),
         .executableTarget(
-            name: "Notebook36Checks",
-            path: "Checks/Notebook36Checks"
+            name: "LeonBook",
+            dependencies: [
+                "CSQLite",
+            ],
+            path: "Sources/LeonBook"
+        ),
+        .executableTarget(
+            name: "LeonBookChecks",
+            path: "Checks/LeonBookChecks"
         ),
     ],
     swiftLanguageVersions: [.v5]

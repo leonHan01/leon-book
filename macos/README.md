@@ -4,7 +4,7 @@
 
 This directory contains the native macOS implementation of `leon-book`. It uses SwiftUI for its windows, menus, navigation, reading, writing, and settings interfaces. It does not use Safari, Chrome, or WKWebView.
 
-Articles, drafts, settings, images, and videos are stored on the local filesystem. The app does not start Node.js, a browser, or a local HTTP service.
+Articles, drafts, settings, images, and videos are stored locally. SQLite is the source of truth for structured records; Markdown/JSON exports and media files remain on the local filesystem. The app does not start Node.js, a browser, or a local HTTP service.
 
 ## Build and run
 
@@ -20,10 +20,10 @@ The built app is located at `macos/dist/leon-book.app` and uses ad-hoc signing f
 To run the SwiftPM executable directly:
 
 ```bash
-swift run --package-path macos Notebook36
+swift run --package-path macos LeonBook
 ```
 
-`Notebook36` is the current internal SwiftPM target name; the user-facing app name is `leon-book`.
+`LeonBook` is the internal SwiftPM target name; the user-facing app name is `leon-book`.
 
 ## Checks
 
@@ -38,14 +38,12 @@ The check script builds and runs native checks without opening the app window.
 The app selects its data directory in this order:
 
 1. `LEON_BOOK_WORKDIR`
-2. `NOTEBOOK36_WORKDIR` (legacy compatibility)
-3. `/Volumes/T7Shield/myblog` (when it exists)
-4. `~/Library/Application Support/Notebook 36/` (legacy directory, when it exists)
-5. `~/Library/Application Support/leon-book/`
+2. `/Volumes/T7Shield/myblog` (when it exists)
+3. `~/Library/Application Support/leon-book/`
 
-The default user is `leon`. Each user has an isolated `workspaces/<user-id>` directory. When upgrading to the multi-user structure, existing articles, drafts, media, moments, and activity records in the root directory are automatically moved into the `leon` workspace.
+The default user is `leon`. Each user has an isolated `workspaces/<user-id>` directory. When upgrading to the multi-user structure, existing articles, drafts, media, moments, and activity records in the root directory are automatically moved into the `leon` workspace. Existing JSON records are imported into the workspace SQLite database on first launch.
 
-If multiple macOS SDKs are installed, use `LEON_BOOK_SDK_PATH` to select the SDK for packaging. `NOTEBOOK36_SDK_PATH` remains supported for legacy configurations:
+If multiple macOS SDKs are installed, use `LEON_BOOK_SDK_PATH` to select the SDK for packaging:
 
 ```bash
 LEON_BOOK_SDK_PATH=/path/to/MacOSX.sdk ./scripts/leonblog build
@@ -55,8 +53,8 @@ LEON_BOOK_SDK_PATH=/path/to/MacOSX.sdk ./scripts/leonblog build
 
 ```text
 macos/
-├── Sources/Notebook36/      # SwiftUI app source
-├── Checks/Notebook36Checks/  # Native checks
+├── Sources/LeonBook/         # SwiftUI app source
+├── Checks/LeonBookChecks/    # Native checks
 ├── Resources/Info.plist     # App metadata
 └── scripts/                 # Build and check scripts
 ```

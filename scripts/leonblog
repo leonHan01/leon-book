@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_DIR="/Volumes/T7Shield/myproject/leonWeb"
 MACOS_APP="$PROJECT_DIR/macos/dist/leon-book.app"
-MACOS_EXECUTABLE="$MACOS_APP/Contents/MacOS/Notebook36"
+MACOS_EXECUTABLE="$MACOS_APP/Contents/MacOS/LeonBook"
 
 print_help() {
   cat <<EOF

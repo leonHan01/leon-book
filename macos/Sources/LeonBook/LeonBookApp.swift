@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct Notebook36App: App {
+struct LeonBookApp: App {
     @StateObject private var model = NativeAppModel()
 
     var body: some Scene {

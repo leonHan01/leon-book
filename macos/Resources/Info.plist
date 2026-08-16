@@ -7,9 +7,11 @@
     <key>CFBundleDisplayName</key>
     <string>leon-book</string>
     <key>CFBundleExecutable</key>
-    <string>Notebook36</string>
+    <string>LeonBook</string>
     <key>CFBundleIdentifier</key>
-    <string>com.notebook36.macos</string>
+    <string>com.leon-book.macos</string>
+    <key>CFBundleIconFile</key>
+    <string>Notes.icns</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

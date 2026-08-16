@@ -51,10 +51,12 @@ macos/dist/leon-book.app
 
 ```text
 ~/Library/Application Support/leon-book/
-├── users.json          # 本机用户清单
-├── active-user.json    # 最近使用的用户
+├── leon-book.sqlite    # 用户和设置的主 SQLite 数据库
+├── users.json          # 可读的兼容性导出
+├── active-user.json    # 可读的兼容性导出
 └── workspaces/
     └── <user-id>/      # 每位用户独立的工作空间
+        ├── leon-book.sqlite # 文章、动态和活动记录数据库
         ├── articles/   # 文章 JSON、Markdown 和索引
         ├── drafts/     # 草稿恢复副本
         ├── media/      # 图片和视频原文件
@@ -65,12 +67,12 @@ macos/dist/leon-book.app
 应用按以下顺序选择数据目录：
 
 1. `LEON_BOOK_WORKDIR`
-2. `NOTEBOOK36_WORKDIR`（旧配置兼容）
-3. `/Volumes/T7Shield/myblog`（目录存在时）
-4. `~/Library/Application Support/Notebook 36/`（旧版应用目录存在时）
-5. `~/Library/Application Support/leon-book/`
+2. `/Volumes/T7Shield/myblog`（目录存在时）
+3. `~/Library/Application Support/leon-book/`
 
 首次初始化多用户结构时，根目录中已有的文章、草稿、媒体、动态和活动记录会自动迁移到默认的 `leon` 工作空间。卸载应用不会删除本地数据，请像备份普通文件一样备份该目录。
+
+SQLite 是结构化数据的主存储。JSON 和 Markdown 继续作为可读的本地导出及旧工作空间兼容层；图片和视频仍以普通本地文件保存在 `media/` 下。首次启动时，已有 JSON 数据会自动导入 SQLite。
 
 ## 开发说明
 
@@ -79,7 +81,7 @@ macOS 原生源码、资源和检查脚本位于 [`macos/`](macos/)。更多构�
 如需直接运行 SwiftPM 可执行文件：
 
 ```bash
-swift run --package-path macos Notebook36
+swift run --package-path macos LeonBook
 ```
 
 ## 设计原则

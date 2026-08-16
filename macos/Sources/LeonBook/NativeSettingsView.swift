@@ -17,12 +17,12 @@ struct NativeSettingsView: View {
                     Label(model.storageReady ? "已连接" : "未连接", systemImage: model.storageReady ? "checkmark.circle.fill" : "xmark.circle.fill")
                         .foregroundStyle(model.storageReady ? .green : .red)
                 }
-                LabeledContent("存储方式") { Text("Swift FileManager") }
+                LabeledContent("存储方式") { Text("SQLite + 本地文件") }
                 LabeledContent("数据目录") { Text(model.dataDirectoryPath).textSelection(.enabled) }
             }
 
             Section("数据") {
-                Text("文章、草稿、媒体和设置直接由 Swift 写入本机文件，不会启动 Node.js、监听端口或上传到云端。")
+                Text("文章、草稿、动态、活动记录和用户设置由 SQLite 管理；Markdown、JSON 和媒体文件同时保存在本机，不会启动 Node.js、监听端口或上传到云端。")
                     .foregroundStyle(.secondary)
                 Button("在 Finder 中打开项目目录") {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: model.dataDirectoryPath)

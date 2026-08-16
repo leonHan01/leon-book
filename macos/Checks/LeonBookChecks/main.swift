@@ -11,15 +11,21 @@ let macosRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
-let sourcePath = { (name: String) in macosRoot.appendingPathComponent("Sources/Notebook36/\(name)").path }
+let sourcePath = { (name: String) in macosRoot.appendingPathComponent("Sources/LeonBook/\(name)").path }
 
 expect(FileManager.default.fileExists(atPath: sourcePath("ContentView.swift")), "native SwiftUI content view should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore.swift")), "native local store should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("SQLiteDatabase.swift")), "SQLite database adapter should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("MarkdownRenderer.swift")), "native Markdown renderer should exist")
 expect(!FileManager.default.fileExists(atPath: sourcePath("LocalServerController.swift")), "HTTP server controller should be removed")
 expect(!FileManager.default.fileExists(atPath: sourcePath("BlogWebView.swift")), "WKWebView wrapper should be removed")
 expect(!FileManager.default.fileExists(atPath: sourcePath("BrowserModel.swift")), "browser model should be removed")
 
 if let articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift"), encoding: .utf8) {
+    expect(
+        !articleViews.contains("ScrollView {\n                        VStack(alignment: .leading, spacing: 24) {\n                            titleSection\n                            writingSection"),
+        "Markdown editor must not be nested inside the outer editor ScrollView"
+    )
     expect(articleViews.contains("if media.isVideo"), "article reader should render videos separately from attachments")
     expect(articleViews.contains("InlineVideoPlayer(media: media, store: model.store)"), "article reader should embed video playback in the article")
     expect(!articleViews.contains("VideoPlayer(player:"), "article reader should avoid SwiftUI VideoPlayer, which aborts on macOS 26.5")
@@ -29,7 +35,7 @@ if let articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("showsFullScreenToggleButton = true"), "embedded video should expose a fullscreen control")
     expect(articleViews.contains("Button(\"添加视频\")"), "article editor should allow selecting video media")
     expect(articleViews.contains("MarkdownArticleBody(body: article.body, store: model.store)"), "article reader should render article Markdown instead of showing its source")
-    expect(articleViews.contains("AttributedString(markdown: markdown)"), "article reader should parse standard Markdown formatting")
+    expect(articleViews.contains("MarkdownDocumentView(markdown: markdown)"), "article reader should render complete Markdown documents")
     expect(articleViews.contains("NativeImageView(url: banner.url, alt: banner.alt, store: model.store)"), "article reader should render a banner image inline")
     expect(articleViews.contains("NativeImageView(url: media.url, alt: media.name, store: model.store)"), "article reader should render attached images inline")
     expect(articleViews.contains("NativeBodyEditor(text: $model.editor.body) { image, placeholder in"), "article editor should use the reliable native multiline input")
@@ -48,6 +54,19 @@ if let articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     failures.append("native article views should be readable")
 }
 
+if let markdownRenderer = try? String(contentsOfFile: sourcePath("MarkdownRenderer.swift"), encoding: .utf8) {
+    expect(markdownRenderer.contains("case list"), "Markdown renderer should support ordered and unordered lists")
+    expect(markdownRenderer.contains("case blockQuote"), "Markdown renderer should support block quotes")
+    expect(markdownRenderer.contains("case codeBlock"), "Markdown renderer should support fenced and indented code blocks")
+    expect(markdownRenderer.contains("case thematicBreak"), "Markdown renderer should support thematic breaks")
+    expect(markdownRenderer.contains("case table"), "Markdown renderer should support GFM tables")
+    expect(markdownRenderer.contains("taskState"), "Markdown renderer should support GFM task lists")
+    expect(markdownRenderer.contains("text.strikethrough()"), "Markdown renderer should support GFM strikethrough")
+    expect(markdownRenderer.contains("AttributedString(markdown: source)"), "Markdown renderer should retain standard inline Markdown styling")
+} else {
+    failures.append("native Markdown renderer should be readable")
+}
+
 if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift"), encoding: .utf8) {
     expect(contentView.contains("ActivityHeatmapView(activity: model.activity)"), "dashboard should display the activity heatmap")
     expect(contentView.contains("过去一年"), "activity heatmap should label its one-year range")
@@ -59,6 +78,9 @@ if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift")
 }
 
 if let localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8) {
+    expect(localStore.contains("leon-book.sqlite"), "structured content should use a local SQLite database")
+    expect(localStore.contains("CREATE TABLE IF NOT EXISTS articles"), "SQLite article schema should exist")
+    expect(localStore.contains("migrateLegacyDataIfNeeded"), "legacy local files should migrate into SQLite")
     expect(localStore.contains("article_published"), "publishing an article should record activity")
     expect(localStore.contains("article_edited"), "editing an article should record activity")
     expect(localStore.contains("image_published"), "uploading an image should record activity")
@@ -85,6 +107,8 @@ if let appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
 }
 
 if let userWorkspaceStore = try? String(contentsOfFile: sourcePath("UserWorkspaceStore.swift"), encoding: .utf8) {
+    expect(userWorkspaceStore.contains("CREATE TABLE IF NOT EXISTS users"), "users should be managed by SQLite")
+    expect(userWorkspaceStore.contains("app_settings"), "active user should be managed by local SQLite settings")
     expect(userWorkspaceStore.contains("NativeUser.leon"), "leon should be the default user")
     expect(userWorkspaceStore.contains("workspaces"), "users should receive isolated workspace directories")
     expect(userWorkspaceStore.contains("migrateLegacyWorkspaceIfNeeded"), "existing local data should migrate into leon's workspace")
@@ -131,7 +155,7 @@ if let richTextEditor = try? String(contentsOfFile: sourcePath("MomentRichTextEd
 }
 
 if failures.isEmpty {
-    print("Notebook36 native checks passed")
+    print("LeonBook native checks passed")
 } else {
     for failure in failures { fputs("Check failed: \(failure)\n", stderr) }
     exit(1)
