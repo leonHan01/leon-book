@@ -78,6 +78,7 @@ struct ContentView: View {
                 sidebarButton(.articles, title: "全部文章", icon: "doc.text")
                 sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
                 sidebarButton(.editor, title: "写作", icon: "square.and.pencil")
+                sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
             }
 
             Section("状态") {
@@ -121,6 +122,7 @@ struct ContentView: View {
         case .moments: MomentFeedView(model: model)
         case .reader: ArticleReaderView(model: model)
         case .editor: ArticleEditorView(model: model)
+        case .trash: TrashView(model: model)
         case .settings: NativeSettingsView(model: model)
         }
     }

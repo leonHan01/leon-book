@@ -2,6 +2,8 @@ import Foundation
 
 /// Local SQLite store for structured data, with Markdown/JSON exports and file-based media.
 actor LocalBlogStore {
+    private static let trashRetentionDays = 30
+
     static let legacyRootURL = URL(fileURLWithPath: "/Volumes/T7Shield/myblog", isDirectory: true)
 
     static var applicationSupportURL: URL {
@@ -50,6 +52,7 @@ actor LocalBlogStore {
                 database = nextDatabase
                 try migrateLegacyDataIfNeeded()
             }
+            try purgeExpiredTrash()
         } catch let error as NativeStoreError {
             throw error
         } catch {
@@ -63,7 +66,8 @@ actor LocalBlogStore {
         SELECT slug, title, body, category, excerpt, banner_json, media_json, status,
                tags_json, updated_at, published_at, word_count
         FROM articles
-        \(includeDrafts ? "" : "WHERE status = 'published'")
+        WHERE deleted_at IS NULL
+        \(includeDrafts ? "" : "AND status = 'published'")
         ORDER BY updated_at DESC
         """
         var articles: [NativeArticleSummary] = []
@@ -151,16 +155,22 @@ actor LocalBlogStore {
     func deleteMoment(id: String) throws {
         try prepare()
         let safeID = try requireSafeSegment(id, label: "微博 ID")
-        guard let deletedMoment = try moment(withID: safeID) else { throw NativeStoreError.notFound }
+        guard try moment(withID: safeID) != nil else { throw NativeStoreError.notFound }
 
-        try db().execute("DELETE FROM moments WHERE id = ?", values: [.text(safeID)])
+        let deletedAt = timestamp(from: Date())
+        let expiresAt = timestamp(afterDays: Self.trashRetentionDays)
+        try db().execute(
+            "UPDATE moments SET deleted_at = ?, delete_expires_at = ? WHERE id = ?",
+            values: [.text(deletedAt), .text(expiresAt), .text(safeID)]
+        )
         try rebuildMomentsIndex()
-
-        try removeUnreferencedMomentImages(deletedMoment.images)
     }
 
-    private func removeUnreferencedMomentImages(_ images: [NativeMedia]) throws {
-        let referencedImageURLs = Set(try allMoments().flatMap { $0.images.map(\.url) })
+    private func removeUnreferencedMomentImages(
+        _ images: [NativeMedia],
+        includingDeleted: Bool = false
+    ) throws {
+        let referencedImageURLs = Set(try allMoments(includingDeleted: includingDeleted).flatMap { $0.images.map(\.url) })
         let momentsMediaDirectory = mediaURL.appendingPathComponent("moments", isDirectory: true).standardizedFileURL
         for image in images where !referencedImageURLs.contains(image.url) {
             let imageURL = mediaURL(for: image.url).standardizedFileURL
@@ -201,6 +211,8 @@ actor LocalBlogStore {
         if let expected = article.expectedUpdatedAt {
             guard previous?.updatedAt == expected else { throw NativeStoreError.conflict }
         } else if previous != nil {
+            throw NativeStoreError.conflict
+        } else if try storedArticle(withSlug: slug, includingDeleted: true) != nil {
             throw NativeStoreError.conflict
         }
 
@@ -250,14 +262,185 @@ actor LocalBlogStore {
         let article = try getArticle(slug: slug)
         guard article.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
         let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
-        try db().execute("DELETE FROM articles WHERE slug = ?", values: [.text(safeSlug)])
-
-        let fileManager = FileManager.default
-        try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(safeSlug).json"))
-        try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(safeSlug).md"))
-        try? fileManager.removeItem(at: draftsURL.appendingPathComponent("\(safeSlug).json"))
-        try? fileManager.removeItem(at: mediaURL.appendingPathComponent(safeSlug, isDirectory: true))
+        let deletedAt = timestamp(from: Date())
+        let expiresAt = timestamp(afterDays: Self.trashRetentionDays)
+        try db().execute(
+            "UPDATE articles SET deleted_at = ?, delete_expires_at = ? WHERE slug = ?",
+            values: [.text(deletedAt), .text(expiresAt), .text(safeSlug)]
+        )
         try rebuildIndex()
+    }
+
+    func listTrash() throws -> [NativeTrashItem] {
+        try prepare()
+        var items: [NativeTrashItem] = []
+
+        try db().query("""
+        SELECT slug, title, excerpt, deleted_at, delete_expires_at
+        FROM articles
+        WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL
+        """) { row in
+            guard let slug = row.text(at: 0),
+                  let title = row.text(at: 1),
+                  let excerpt = row.text(at: 2),
+                  let deletedAt = row.text(at: 3),
+                  let expiresAt = row.text(at: 4) else {
+                throw NativeStoreError.fileSystem("SQLite：回收站文章记录不完整")
+            }
+            items.append(NativeTrashItem(
+                kind: .article,
+                key: slug,
+                title: title,
+                preview: excerpt,
+                deletedAt: deletedAt,
+                expiresAt: expiresAt
+            ))
+        }
+
+        try db().query("""
+        SELECT id, text, images_json, deleted_at, delete_expires_at
+        FROM moments
+        WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL
+        """) { row in
+            guard let id = row.text(at: 0),
+                  let text = row.text(at: 1),
+                  let imagesJSON = row.text(at: 2),
+                  let deletedAt = row.text(at: 3),
+                  let expiresAt = row.text(at: 4) else {
+                throw NativeStoreError.fileSystem("SQLite：回收站微博记录不完整")
+            }
+            let images: [NativeMedia] = try decode(imagesJSON)
+            let preview = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "\(images.count) 张图片"
+                : text
+            items.append(NativeTrashItem(
+                kind: .moment,
+                key: id,
+                title: "微博",
+                preview: preview,
+                deletedAt: deletedAt,
+                expiresAt: expiresAt
+            ))
+        }
+
+        return items.sorted { $0.deletedAt > $1.deletedAt }
+    }
+
+    func restoreTrash(_ item: NativeTrashItem) throws {
+        try prepare()
+        let safeKey = try requireSafeSegment(item.key, label: item.kind == .article ? "文章 slug" : "微博 ID")
+        switch item.kind {
+        case .article:
+            guard try storedArticle(withSlug: safeKey, includingDeleted: true) != nil else {
+                throw NativeStoreError.notFound
+            }
+            try db().execute(
+                "UPDATE articles SET deleted_at = NULL, delete_expires_at = NULL WHERE slug = ? AND deleted_at IS NOT NULL",
+                values: [.text(safeKey)]
+            )
+            try rebuildIndex()
+        case .moment:
+            guard try moment(withID: safeKey, includingDeleted: true) != nil else {
+                throw NativeStoreError.notFound
+            }
+            try db().execute(
+                "UPDATE moments SET deleted_at = NULL, delete_expires_at = NULL WHERE id = ? AND deleted_at IS NOT NULL",
+                values: [.text(safeKey)]
+            )
+            try rebuildMomentsIndex()
+        }
+    }
+
+    func permanentlyDeleteTrash(_ item: NativeTrashItem) throws {
+        try prepare()
+        let safeKey = try requireSafeSegment(item.key, label: item.kind == .article ? "文章 slug" : "微博 ID")
+        switch item.kind {
+        case .article:
+            guard try storedArticle(withSlug: safeKey, includingDeleted: true) != nil,
+                  try db().text("SELECT deleted_at FROM articles WHERE slug = ?", values: [.text(safeKey)]) != nil else {
+                throw NativeStoreError.notFound
+            }
+            try db().execute("DELETE FROM articles WHERE slug = ? AND deleted_at IS NOT NULL", values: [.text(safeKey)])
+            removeArticleFiles(for: safeKey)
+            try rebuildIndex()
+        case .moment:
+            guard let moment = try moment(withID: safeKey, includingDeleted: true),
+                  try db().text("SELECT deleted_at FROM moments WHERE id = ?", values: [.text(safeKey)]) != nil else {
+                throw NativeStoreError.notFound
+            }
+            try db().execute("DELETE FROM moments WHERE id = ? AND deleted_at IS NOT NULL", values: [.text(safeKey)])
+            try removeUnreferencedMomentImages(moment.images, includingDeleted: true)
+            try rebuildMomentsIndex()
+        }
+    }
+
+    func emptyTrash() throws {
+        try prepare()
+        var articleSlugs: [String] = []
+        var momentsToDelete: [(id: String, images: [NativeMedia])] = []
+
+        try db().query("SELECT slug FROM articles WHERE deleted_at IS NOT NULL") { row in
+            if let slug = row.text(at: 0) { articleSlugs.append(slug) }
+        }
+        try db().query("SELECT id, images_json FROM moments WHERE deleted_at IS NOT NULL") { row in
+            guard let id = row.text(at: 0), let imagesJSON = row.text(at: 1) else { return }
+            momentsToDelete.append((id: id, images: try decode(imagesJSON)))
+        }
+
+        try db().transaction {
+            try db().execute("DELETE FROM articles WHERE deleted_at IS NOT NULL")
+            try db().execute("DELETE FROM moments WHERE deleted_at IS NOT NULL")
+        }
+        for slug in articleSlugs { removeArticleFiles(for: slug) }
+        for moment in momentsToDelete { try removeUnreferencedMomentImages(moment.images, includingDeleted: true) }
+        try rebuildIndex()
+        try rebuildMomentsIndex()
+    }
+
+    private func purgeExpiredTrash() throws {
+        let now = timestamp(from: Date())
+        var articleSlugs: [String] = []
+        var momentsToDelete: [(id: String, images: [NativeMedia])] = []
+
+        try db().query(
+            "SELECT slug FROM articles WHERE deleted_at IS NOT NULL AND delete_expires_at <= ?",
+            values: [.text(now)]
+        ) { row in
+            if let slug = row.text(at: 0) { articleSlugs.append(slug) }
+        }
+        try db().query(
+            "SELECT id, images_json FROM moments WHERE deleted_at IS NOT NULL AND delete_expires_at <= ?",
+            values: [.text(now)]
+        ) { row in
+            guard let id = row.text(at: 0), let imagesJSON = row.text(at: 1) else { return }
+            momentsToDelete.append((id: id, images: try decode(imagesJSON)))
+        }
+        guard !articleSlugs.isEmpty || !momentsToDelete.isEmpty else { return }
+
+        try db().transaction {
+            try db().execute(
+                "DELETE FROM articles WHERE deleted_at IS NOT NULL AND delete_expires_at <= ?",
+                values: [.text(now)]
+            )
+            try db().execute(
+                "DELETE FROM moments WHERE deleted_at IS NOT NULL AND delete_expires_at <= ?",
+                values: [.text(now)]
+            )
+        }
+        for slug in articleSlugs { removeArticleFiles(for: slug) }
+        for moment in momentsToDelete {
+            try removeUnreferencedMomentImages(moment.images, includingDeleted: true)
+        }
+        try rebuildIndex()
+        try rebuildMomentsIndex()
+    }
+
+    private func removeArticleFiles(for slug: String) {
+        let fileManager = FileManager.default
+        try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(slug).json"))
+        try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(slug).md"))
+        try? fileManager.removeItem(at: draftsURL.appendingPathComponent("\(slug).json"))
+        try? fileManager.removeItem(at: mediaURL.appendingPathComponent(slug, isDirectory: true))
     }
 
     func uploadMedia(fileURL: URL, kind: String, slug: String? = nil) throws -> NativeUploadedMedia {
@@ -323,7 +506,9 @@ actor LocalBlogStore {
             tags_json TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             published_at TEXT,
-            word_count INTEGER NOT NULL
+            word_count INTEGER NOT NULL,
+            deleted_at TEXT,
+            delete_expires_at TEXT
         );
         CREATE INDEX IF NOT EXISTS articles_updated_at_idx ON articles(updated_at DESC);
         CREATE TABLE IF NOT EXISTS moments (
@@ -332,7 +517,9 @@ actor LocalBlogStore {
             updated_at TEXT NOT NULL,
             text TEXT NOT NULL,
             text_runs_json TEXT NOT NULL,
-            images_json TEXT NOT NULL
+            images_json TEXT NOT NULL,
+            deleted_at TEXT,
+            delete_expires_at TEXT
         );
         CREATE INDEX IF NOT EXISTS moments_created_at_idx ON moments(created_at DESC);
         CREATE TABLE IF NOT EXISTS activity_events (
@@ -342,6 +529,24 @@ actor LocalBlogStore {
         );
         CREATE INDEX IF NOT EXISTS activity_created_at_idx ON activity_events(created_at);
         """)
+        try ensureColumn("deleted_at", in: "articles", database: database)
+        try ensureColumn("delete_expires_at", in: "articles", database: database)
+        try ensureColumn("deleted_at", in: "moments", database: database)
+        try ensureColumn("delete_expires_at", in: "moments", database: database)
+        try database.execute("""
+        CREATE INDEX IF NOT EXISTS articles_trash_expiry_idx ON articles(delete_expires_at);
+        CREATE INDEX IF NOT EXISTS moments_trash_expiry_idx ON moments(delete_expires_at);
+        """)
+    }
+
+    private func ensureColumn(_ column: String, in table: String, database: SQLiteDatabase) throws {
+        var exists = false
+        try database.query("PRAGMA table_info(\(table))") { row in
+            if row.text(at: 1) == column { exists = true }
+        }
+        if !exists {
+            try database.execute("ALTER TABLE \(table) ADD COLUMN \(column) TEXT")
+        }
     }
 
     private func migrateLegacyDataIfNeeded() throws {
@@ -381,9 +586,10 @@ actor LocalBlogStore {
         try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('legacy_migration_v1', 'done')")
     }
 
-    private func storedArticle(withSlug slug: String) throws -> NativeArticle? {
+    private func storedArticle(withSlug slug: String, includingDeleted: Bool = false) throws -> NativeArticle? {
         var result: NativeArticle?
-        try db().query(articleSelect + " WHERE slug = ?", values: [.text(slug)]) { row in
+        let whereClause = includingDeleted ? "slug = ?" : "deleted_at IS NULL AND slug = ?"
+        try db().query(articleSelect + " WHERE \(whereClause)", values: [.text(slug)]) { row in
             result = try decodeArticle(row)
         }
         return result
@@ -391,7 +597,7 @@ actor LocalBlogStore {
 
     private func allArticles() throws -> [NativeArticle] {
         var articles: [NativeArticle] = []
-        try db().query(articleSelect + " ORDER BY updated_at DESC") { row in
+        try db().query(articleSelect + " WHERE deleted_at IS NULL ORDER BY updated_at DESC") { row in
             articles.append(try decodeArticle(row))
         }
         return articles
@@ -407,8 +613,8 @@ actor LocalBlogStore {
         try database.execute("""
         INSERT OR REPLACE INTO articles(
             slug, title, body, category, excerpt, banner_json, media_json, status,
-            tags_json, updated_at, published_at, word_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            tags_json, updated_at, published_at, word_count, deleted_at, delete_expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
         """, values: [
             .text(article.slug),
             .text(article.title),
@@ -454,10 +660,11 @@ actor LocalBlogStore {
         )
     }
 
-    private func moment(withID id: String) throws -> NativeMoment? {
+    private func moment(withID id: String, includingDeleted: Bool = false) throws -> NativeMoment? {
         var result: NativeMoment?
+        let whereClause = includingDeleted ? "id = ?" : "deleted_at IS NULL AND id = ?"
         try db().query(
-            "SELECT id, created_at, updated_at, text, text_runs_json, images_json FROM moments WHERE id = ?",
+            "SELECT id, created_at, updated_at, text, text_runs_json, images_json FROM moments WHERE \(whereClause)",
             values: [.text(id)]
         ) { row in
             result = try decodeMoment(row)
@@ -465,11 +672,12 @@ actor LocalBlogStore {
         return result
     }
 
-    private func allMoments() throws -> [NativeMoment] {
+    private func allMoments(includingDeleted: Bool = false) throws -> [NativeMoment] {
         var moments: [NativeMoment] = []
+        let whereClause = includingDeleted ? "" : "WHERE deleted_at IS NULL"
         try db().query("""
         SELECT id, created_at, updated_at, text, text_runs_json, images_json
-        FROM moments ORDER BY created_at DESC, id DESC
+        FROM moments \(whereClause) ORDER BY created_at DESC, id DESC
         """) { row in
             moments.append(try decodeMoment(row))
         }
@@ -478,8 +686,8 @@ actor LocalBlogStore {
 
     private func insertMoment(_ moment: NativeMoment, into database: SQLiteDatabase) throws {
         try database.execute("""
-        INSERT OR REPLACE INTO moments(id, created_at, updated_at, text, text_runs_json, images_json)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, deleted_at, delete_expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
         """, values: [
             .text(moment.id),
             .text(moment.createdAt),
@@ -775,9 +983,17 @@ actor LocalBlogStore {
     private func nextTimestamp(after previous: String?) -> String {
         let now = Date()
         if let previous, let date = ISO8601DateFormatter().date(from: previous), date >= now {
-            return ISO8601DateFormatter().string(from: date.addingTimeInterval(0.001))
+            return timestamp(from: date.addingTimeInterval(0.001))
         }
-        return ISO8601DateFormatter().string(from: now)
+        return timestamp(from: now)
+    }
+
+    private func timestamp(from date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    private func timestamp(afterDays days: Int) -> String {
+        timestamp(from: Date().addingTimeInterval(TimeInterval(days) * 24 * 60 * 60))
     }
 
     private func requireSafeSegment(_ value: String, label: String) throws -> String {

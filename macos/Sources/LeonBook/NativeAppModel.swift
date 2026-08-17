@@ -8,6 +8,7 @@ final class NativeAppModel: ObservableObject {
     @Published private(set) var articles: [NativeArticleSummary] = []
     @Published private(set) var activity: [NativeActivityDay] = []
     @Published private(set) var moments: [NativeMoment] = []
+    @Published private(set) var trashItems: [NativeTrashItem] = []
     @Published private(set) var selectedArticle: NativeArticle?
     @Published var selectedSlug: String?
     @Published var editor = NativeEditorDraft()
@@ -26,12 +27,17 @@ final class NativeAppModel: ObservableObject {
 
     private let userWorkspaces: UserWorkspaceStore
     private(set) var store: LocalBlogStore
+    private var trashCleanupTask: Task<Void, Never>?
 
     init() {
         let rootURL = LocalBlogStore.defaultRootURL
         userWorkspaces = UserWorkspaceStore(rootURL: rootURL)
         store = LocalBlogStore(rootURL: rootURL)
         Task { await start() }
+    }
+
+    deinit {
+        trashCleanupTask?.cancel()
     }
 
     var publishedArticles: [NativeArticleSummary] {
@@ -58,6 +64,7 @@ final class NativeAppModel: ObservableObject {
             let workspace = try await userWorkspaces.prepare()
             try await loadWorkspace(workspace)
             storageReady = true
+            startTrashCleanupLoop()
         } catch {
             storageReady = false
             errorMessage = error.localizedDescription
@@ -106,6 +113,7 @@ final class NativeAppModel: ObservableObject {
     func reload() async throws {
         articles = try await store.listArticles()
         moments = try await store.listMoments()
+        trashItems = try await store.listTrash()
         try await refreshActivity()
         if let selectedSlug, let selected = articles.first(where: { $0.slug == selectedSlug }) {
             try await select(selected)
@@ -121,6 +129,7 @@ final class NativeAppModel: ObservableObject {
         dataDirectoryPath = workspace.workspaceURL.path
         articles = []
         moments = []
+        trashItems = []
         activity = []
         selectedArticle = nil
         selectedSlug = nil
@@ -229,6 +238,42 @@ final class NativeAppModel: ObservableObject {
         }
     }
 
+    func restoreTrash(_ item: NativeTrashItem) {
+        Task {
+            do {
+                try await store.restoreTrash(item)
+                try await reload()
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func permanentlyDeleteTrash(_ item: NativeTrashItem) {
+        Task {
+            do {
+                try await store.permanentlyDeleteTrash(item)
+                try await reload()
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func emptyTrash() {
+        Task {
+            do {
+                try await store.emptyTrash()
+                try await reload()
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func chooseAndUpload(kind: String, forArticle slug: String? = nil, banner: Bool = false) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
@@ -311,6 +356,7 @@ final class NativeAppModel: ObservableObject {
             do {
                 try await store.deleteMoment(id: moment.id)
                 moments.removeAll { $0.id == moment.id }
+                trashItems = try await store.listTrash()
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -447,6 +493,21 @@ final class NativeAppModel: ObservableObject {
         calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
         let today = calendar.startOfDay(for: now)
         return calendar.date(byAdding: .day, value: -364, to: today) ?? today
+    }
+
+    private func startTrashCleanupLoop() {
+        guard trashCleanupTask == nil else { return }
+        trashCleanupTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60 * 60 * 1_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                try? await self.refreshTrash()
+            }
+        }
+    }
+
+    private func refreshTrash() async throws {
+        trashItems = try await store.listTrash()
     }
 }
 

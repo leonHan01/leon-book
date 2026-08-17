@@ -228,6 +228,38 @@ struct NativeMoment: Codable, Hashable, Identifiable {
     }
 }
 
+enum NativeTrashKind: String, Hashable, Identifiable {
+    case article
+    case moment
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .article: return "文章"
+        case .moment: return "微博"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .article: return "doc.text.fill"
+        case .moment: return "rectangle.3.group.fill"
+        }
+    }
+}
+
+struct NativeTrashItem: Hashable, Identifiable {
+    let kind: NativeTrashKind
+    let key: String
+    let title: String
+    let preview: String
+    let deletedAt: String
+    let expiresAt: String
+
+    var id: String { "\(kind.rawValue):\(key)" }
+}
+
 struct NativeMomentDraft: Equatable {
     var text = ""
     var textRuns: [NativeMomentTextRun] = []
@@ -259,6 +291,7 @@ enum NativeSection: Hashable {
     case moments
     case reader
     case editor
+    case trash
     case settings
 }
 

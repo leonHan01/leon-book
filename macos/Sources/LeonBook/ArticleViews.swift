@@ -15,7 +15,7 @@ struct ArticleReaderView: View {
                                 .foregroundStyle(article.status == .published ? .green : .orange)
                             Spacer()
                             Button("编辑") { model.editSelected() }
-                            Button("删除", role: .destructive) { Task { await model.deleteSelected() } }
+                            Button("移入回收站", role: .destructive) { Task { await model.deleteSelected() } }
                         }
 
                         Text(article.title)

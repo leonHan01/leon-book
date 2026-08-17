@@ -225,17 +225,39 @@ private struct MomentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "person.crop.circle.fill")
                     .foregroundStyle(.tint)
                 Text("leon-book")
                     .font(.subheadline.weight(.semibold))
                 Spacer(minLength: 8)
-                Text(moment.createdAt.nativeDateLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                HStack(alignment: .center, spacing: 8) {
+                    Text(moment.createdAt.nativeDateLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
+                    HStack(spacing: 8) {
+                        Button(action: onEdit) {
+                            Label("编辑", systemImage: "pencil")
+                                .frame(minWidth: 58, minHeight: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.bordered)
+                        .help("编辑这条微博")
+                        .accessibilityLabel("编辑这条微博")
+
+                        Button(action: confirmDeletion) {
+                            Label("删除", systemImage: "trash")
+                                .frame(minWidth: 58, minHeight: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                        .help("删除这条微博")
+                        .accessibilityLabel("删除这条微博")
+                    }
+                }
+            }
             if !moment.text.isEmpty {
                 MomentStyledText(text: moment.text, runs: moment.textRuns)
             }
@@ -251,40 +273,15 @@ private struct MomentCard: View {
                 .strokeBorder(.quaternary)
                 .allowsHitTesting(false)
         }
-        .overlay(alignment: .topTrailing) {
-            HStack(spacing: 8) {
-                Button(action: onEdit) {
-                    Label("编辑", systemImage: "pencil")
-                        .frame(minWidth: 58, minHeight: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.bordered)
-                .help("编辑这条微博")
-                .accessibilityLabel("编辑这条微博")
-
-                Button(action: confirmDeletion) {
-                    Label("删除", systemImage: "trash")
-                        .frame(minWidth: 58, minHeight: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .help("删除这条微博")
-                .accessibilityLabel("删除这条微博")
-            }
-            .padding(.top, 12)
-            .padding(.trailing, 12)
-            .zIndex(1)
-        }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func confirmDeletion() {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "删除这条微博？"
-        alert.informativeText = "这会永久移除微博内容，以及只被这条微博使用的本地图片。此操作无法撤销。"
-        alert.addButton(withTitle: "删除")
+        alert.messageText = "将这条微博移入回收站？"
+        alert.informativeText = "微博和图片会保留 30 天，可在回收站中恢复，之后自动永久删除。"
+        alert.addButton(withTitle: "移入回收站")
         alert.addButton(withTitle: "取消")
         alert.buttons.first?.hasDestructiveAction = true
 
@@ -387,11 +384,11 @@ private struct MomentImage: View {
 
     var body: some View {
         ZStack {
-            Color(nsColor: .controlBackgroundColor)
+            Color.clear
             if let image {
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .aspectRatio(contentMode: .fit)
             } else {
                 ProgressView()
                     .controlSize(.small)
@@ -556,7 +553,7 @@ private struct MomentImageBrowserView: View {
             .frame(height: 104)
         }
         .frame(width: browserSize.width, height: browserSize.height)
-        .background(Color.black.ignoresSafeArea())
+        .background(Color.gray.opacity(0.72).ignoresSafeArea())
         .onAppear {
             selectedIndex = min(max(0, initialIndex), max(0, images.count - 1))
             installKeyboardMonitor()
@@ -570,7 +567,8 @@ private struct MomentImageBrowserView: View {
         guard keyboardMonitor == nil else { return }
 
         keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty else {
+            let navigationModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+            guard event.modifierFlags.intersection(navigationModifiers).isEmpty else {
                 return event
             }
 
@@ -649,7 +647,7 @@ private struct MomentZoomableImage: View {
                     }
             )
         }
-        .background(Color.black.opacity(0.92), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.gray.opacity(0.48), in: RoundedRectangle(cornerRadius: 12))
         .task(id: media.url) {
             let url = await store.mediaURL(for: media.url)
             image = MomentImageLoader.load(from: url, mode: .fullSize)
