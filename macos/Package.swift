@@ -8,14 +8,14 @@ let package = Package(
         .macOS(.v13),
     ],
     products: [
-        .executable(name: "LeonBook", targets: ["LeonBook"]),
+        .executable(name: "LeonBook", targets: ["LeonBookApp"]),
     ],
     targets: [
         .systemLibrary(
             name: "CSQLite",
             path: "Sources/CSQLite"
         ),
-        .executableTarget(
+        .target(
             name: "LeonBook",
             dependencies: [
                 "CSQLite",
@@ -23,8 +23,22 @@ let package = Package(
             path: "Sources/LeonBook"
         ),
         .executableTarget(
+            name: "LeonBookApp",
+            dependencies: [
+                "LeonBook",
+            ],
+            path: "Sources/LeonBookApp"
+        ),
+        .executableTarget(
             name: "LeonBookChecks",
             path: "Checks/LeonBookChecks"
+        ),
+        .executableTarget(
+            name: "LeonBookStoreChecks",
+            dependencies: [
+                "LeonBook",
+            ],
+            path: "Checks/LeonBookStoreChecks"
         ),
     ],
     swiftLanguageVersions: [.v5]

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Local SQLite store for structured data, with Markdown/JSON exports and file-based media.
-actor LocalBlogStore {
+public actor LocalBlogStore {
     private static let trashRetentionDays = 30
 
     static let legacyRootURL = URL(fileURLWithPath: "/Volumes/T7Shield/myblog", isDirectory: true)
@@ -11,7 +11,7 @@ actor LocalBlogStore {
             .appendingPathComponent("leon-book", isDirectory: true)
     }
 
-    static var defaultRootURL: URL {
+    public static var defaultRootURL: URL {
         let fileManager = FileManager.default
         if let configured = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"],
            !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -32,7 +32,7 @@ actor LocalBlogStore {
     private var momentsIndexURL: URL { momentsURL.appendingPathComponent("index.json") }
     private var activityURL: URL { rootURL.appendingPathComponent("activity", isDirectory: true) }
 
-    init(rootURL: URL = LocalBlogStore.defaultRootURL) {
+    public init(rootURL: URL = LocalBlogStore.defaultRootURL) {
         self.rootURL = rootURL.standardizedFileURL
     }
 
@@ -50,8 +50,8 @@ actor LocalBlogStore {
                 let nextDatabase = try SQLiteDatabase(url: databaseURL)
                 try createSchema(in: nextDatabase)
                 database = nextDatabase
-                try migrateLegacyDataIfNeeded()
             }
+            try migrateLegacyDataIfNeeded()
             try purgeExpiredTrash()
         } catch let error as NativeStoreError {
             throw error
@@ -60,7 +60,7 @@ actor LocalBlogStore {
         }
     }
 
-    func listArticles(includeDrafts: Bool = true) throws -> [NativeArticleSummary] {
+    public func listArticles(includeDrafts: Bool = true) throws -> [NativeArticleSummary] {
         try prepare()
         let sql = """
         SELECT slug, title, body, category, excerpt, banner_json, media_json, status,
@@ -77,14 +77,14 @@ actor LocalBlogStore {
         return articles
     }
 
-    func listMoments() throws -> [NativeMoment] {
+    public func listMoments() throws -> [NativeMoment] {
         try prepare()
         return try allMoments().sorted { left, right in
             left.createdAt == right.createdAt ? left.id > right.id : left.createdAt > right.createdAt
         }
     }
 
-    func saveMoment(
+    public func saveMoment(
         text: String,
         textRuns: [NativeMomentTextRun],
         images: [NativeMedia]
@@ -179,7 +179,7 @@ actor LocalBlogStore {
         }
     }
 
-    func listActivity(since: Date) throws -> [NativeActivityDay] {
+    public func listActivity(since: Date) throws -> [NativeActivityDay] {
         try prepare()
         let calendar = utcCalendar()
         let firstDay = calendar.startOfDay(for: since)
@@ -196,7 +196,7 @@ actor LocalBlogStore {
             .sorted { $0.date < $1.date }
     }
 
-    func getArticle(slug: String) throws -> NativeArticle {
+    public func getArticle(slug: String) throws -> NativeArticle {
         try prepare()
         let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
         guard let article = try storedArticle(withSlug: safeSlug) else { throw NativeStoreError.notFound }
@@ -553,37 +553,114 @@ actor LocalBlogStore {
         let database = try db()
         guard try database.text("SELECT value FROM metadata WHERE key = 'legacy_migration_v1'") != "done" else { return }
 
+        let articles = try loadLegacyArticles()
+        let moments = try loadLegacyMoments()
+        let events = try loadLegacyActivityEvents()
+
+        try database.transaction {
+            try importArticles(articles, into: database)
+            try importMoments(moments, into: database)
+            try importActivityEvents(events, into: database)
+            try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('legacy_migration_v1', 'done')")
+        }
+
+        try rebuildArticleExports()
+        try rebuildMomentsIndex()
+        try writeActivityEvents()
+    }
+
+    private func loadLegacyArticles() throws -> [NativeArticle] {
+        var bySlug: [String: NativeArticle] = [:]
+        let files = try FileManager.default.contentsOfDirectory(
+            at: articlesURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        for file in files where file.pathExtension.lowercased() == "json" && file.lastPathComponent != "index.json" {
+            let article = try readArticle(at: file)
+            if !article.slug.isEmpty { bySlug[article.slug] = article }
+        }
+
+        let indexURL = articlesURL.appendingPathComponent("index.json")
+        if FileManager.default.fileExists(atPath: indexURL.path) {
+            do {
+                let indexed = try JSONDecoder().decode([NativeArticle].self, from: Data(contentsOf: indexURL))
+                for article in indexed where !article.slug.isEmpty && bySlug[article.slug] == nil {
+                    bySlug[article.slug] = normalize(article)
+                }
+            } catch {
+                throw NativeStoreError.fileSystem("无法读取 \(indexURL.lastPathComponent)：\(error.localizedDescription)")
+            }
+        }
+        return Array(bySlug.values)
+    }
+
+    private func loadLegacyMoments() throws -> [NativeMoment] {
+        var byID: [String: NativeMoment] = [:]
+        if FileManager.default.fileExists(atPath: momentsIndexURL.path) {
+            do {
+                let indexed = try JSONDecoder().decode([NativeMoment].self, from: Data(contentsOf: momentsIndexURL))
+                for moment in indexed where !moment.id.isEmpty {
+                    byID[moment.id] = moment
+                }
+            } catch {
+                throw NativeStoreError.fileSystem("无法读取 \(momentsIndexURL.lastPathComponent)：\(error.localizedDescription)")
+            }
+        }
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: momentsURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        for file in files where file.pathExtension.lowercased() == "json" && file.lastPathComponent != "index.json" {
+            let moment = try readMoment(at: file)
+            if !moment.id.isEmpty { byID[moment.id] = moment }
+        }
+        return Array(byID.values)
+    }
+
+    private func loadLegacyActivityEvents() throws -> [NativeActivityEvent] {
+        let legacyURL = activityURL.appendingPathComponent("events.json")
+        guard FileManager.default.fileExists(atPath: legacyURL.path) else { return [] }
+        do {
+            return try JSONDecoder().decode([NativeActivityEvent].self, from: Data(contentsOf: legacyURL))
+        } catch {
+            throw NativeStoreError.fileSystem("无法读取 \(legacyURL.lastPathComponent)：\(error.localizedDescription)")
+        }
+    }
+
+    private func importArticles(_ articles: [NativeArticle], into database: SQLiteDatabase) throws {
         if try database.integer("SELECT COUNT(*) FROM articles") == 0 {
-            let files = try FileManager.default.contentsOfDirectory(
-                at: articlesURL,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )
-            for file in files where file.pathExtension.lowercased() == "json" && file.lastPathComponent != "index.json" {
-                try insertArticle(readArticle(at: file), into: database)
-            }
+            for article in articles { try insertArticle(article, into: database) }
+            return
         }
+        for article in articles {
+            let found = try database.integer(
+                "SELECT COUNT(*) FROM articles WHERE slug = ?",
+                values: [.text(article.slug)]
+            ) ?? 0
+            if found == 0 { try insertArticle(article, into: database) }
+        }
+    }
 
+    private func importMoments(_ moments: [NativeMoment], into database: SQLiteDatabase) throws {
         if try database.integer("SELECT COUNT(*) FROM moments") == 0 {
-            let files = try FileManager.default.contentsOfDirectory(
-                at: momentsURL,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )
-            for file in files where file.pathExtension.lowercased() == "json" && file.lastPathComponent != "index.json" {
-                try insertMoment(readMoment(at: file), into: database)
-            }
+            for moment in moments { try insertMoment(moment, into: database) }
+            return
         }
-
-        if try database.integer("SELECT COUNT(*) FROM activity_events") == 0 {
-            let legacyURL = activityURL.appendingPathComponent("events.json")
-            if FileManager.default.fileExists(atPath: legacyURL.path) {
-                let events = try JSONDecoder().decode([NativeActivityEvent].self, from: Data(contentsOf: legacyURL))
-                for event in events { try insertActivity(event, into: database) }
-            }
+        for moment in moments {
+            let found = try database.integer(
+                "SELECT COUNT(*) FROM moments WHERE id = ?",
+                values: [.text(moment.id)]
+            ) ?? 0
+            if found == 0 { try insertMoment(moment, into: database) }
         }
+    }
 
-        try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('legacy_migration_v1', 'done')")
+    private func importActivityEvents(_ events: [NativeActivityEvent], into database: SQLiteDatabase) throws {
+        guard try database.integer("SELECT COUNT(*) FROM activity_events") == 0 else { return }
+        for event in events { try insertActivity(event, into: database) }
     }
 
     private func storedArticle(withSlug slug: String, includingDeleted: Bool = false) throws -> NativeArticle? {
@@ -749,6 +826,20 @@ actor LocalBlogStore {
         DELETE FROM activity_events
         WHERE id NOT IN (SELECT id FROM activity_events ORDER BY id DESC LIMIT 10000)
         """)
+        try writeActivityEvents()
+    }
+
+    private func writeActivityEvents() throws {
+        try writeJSON(try allActivityEvents(), to: activityURL.appendingPathComponent("events.json"))
+    }
+
+    private func rebuildArticleExports() throws {
+        for article in try allArticles() {
+            try writeJSON(article, to: articlesURL.appendingPathComponent("\(article.slug).json"))
+            try writeJSON(article, to: draftsURL.appendingPathComponent("\(article.slug).json"))
+            try writeMarkdown(article, to: articlesURL.appendingPathComponent("\(article.slug).md"))
+        }
+        try rebuildIndex()
     }
 
     private func rebuildIndex() throws {

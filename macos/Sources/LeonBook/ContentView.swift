@@ -1,10 +1,14 @@
 import SwiftUI
 
-struct ContentView: View {
+public struct ContentView: View {
     @ObservedObject var model: NativeAppModel
     @State private var isPresentingNewUser = false
 
-    var body: some View {
+    public init(model: NativeAppModel) {
+        self.model = model
+    }
+
+    public var body: some View {
         NavigationSplitView {
             sidebar
         } detail: {

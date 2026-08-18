@@ -14,11 +14,11 @@ struct NativeUser: Codable, Hashable, Identifiable {
     }
 }
 
-enum NativeArticleStatus: String, Codable, CaseIterable, Identifiable {
+public enum NativeArticleStatus: String, Codable, CaseIterable, Identifiable {
     case draft
     case published
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
     var label: String {
         switch self {
@@ -28,24 +28,24 @@ enum NativeArticleStatus: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct NativeMedia: Codable, Hashable, Identifiable {
-    let kind: String
-    let name: String
-    let size: Int
-    let url: String
+public struct NativeMedia: Codable, Hashable, Identifiable {
+    public let kind: String
+    public let name: String
+    public let size: Int
+    public let url: String
 
-    var id: String { url }
+    public var id: String { url }
 
-    var isVideo: Bool { kind == "video" }
+    public var isVideo: Bool { kind == "video" }
 
-    init(kind: String, name: String, size: Int, url: String) {
+    public init(kind: String, name: String, size: Int, url: String) {
         self.kind = kind
         self.name = name
         self.size = size
         self.url = url
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "image"
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "media"
@@ -54,52 +54,59 @@ struct NativeMedia: Codable, Hashable, Identifiable {
     }
 }
 
-struct NativeBanner: Codable, Hashable {
-    let alt: String
-    let name: String
-    let size: Int
-    let url: String
+public struct NativeBanner: Codable, Hashable {
+    public let alt: String
+    public let name: String
+    public let size: Int
+    public let url: String
+
+    public init(alt: String, name: String, size: Int, url: String) {
+        self.alt = alt
+        self.name = name
+        self.size = size
+        self.url = url
+    }
 }
 
-struct NativeArticleSummary: Codable, Hashable, Identifiable {
-    let banner: NativeBanner?
-    let category: String
-    let excerpt: String
-    let publishedAt: String?
-    let slug: String
-    let status: NativeArticleStatus
-    let tags: [String]
-    let title: String
-    let updatedAt: String
-    let wordCount: Int
+public struct NativeArticleSummary: Codable, Hashable, Identifiable {
+    public let banner: NativeBanner?
+    public let category: String
+    public let excerpt: String
+    public let publishedAt: String?
+    public let slug: String
+    public let status: NativeArticleStatus
+    public let tags: [String]
+    public let title: String
+    public let updatedAt: String
+    public let wordCount: Int
 
-    var id: String { slug }
+    public var id: String { slug }
 }
 
-struct NativeActivityDay: Hashable, Identifiable {
-    let date: String
-    let count: Int
+public struct NativeActivityDay: Hashable, Identifiable {
+    public let date: String
+    public let count: Int
 
-    var id: String { date }
+    public var id: String { date }
 }
 
-struct NativeArticle: Codable, Hashable, Identifiable {
-    let banner: NativeBanner?
-    let body: String
-    let category: String
-    let excerpt: String
-    let media: [NativeMedia]
-    let slug: String
-    let status: NativeArticleStatus
-    let tags: [String]
-    let title: String
-    let updatedAt: String
-    let publishedAt: String?
-    let wordCount: Int?
+public struct NativeArticle: Codable, Hashable, Identifiable {
+    public let banner: NativeBanner?
+    public let body: String
+    public let category: String
+    public let excerpt: String
+    public let media: [NativeMedia]
+    public let slug: String
+    public let status: NativeArticleStatus
+    public let tags: [String]
+    public let title: String
+    public let updatedAt: String
+    public let publishedAt: String?
+    public let wordCount: Int?
 
-    var id: String { slug }
+    public var id: String { slug }
 
-    init(
+    public init(
         banner: NativeBanner?,
         body: String,
         category: String,
@@ -127,7 +134,7 @@ struct NativeArticle: Codable, Hashable, Identifiable {
         self.wordCount = wordCount
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         banner = try container.decodeIfPresent(NativeBanner.self, forKey: .banner)
         body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
@@ -165,7 +172,7 @@ struct NativeUploadedMedia: Codable {
     let url: String
 }
 
-enum NativeMomentTextColor: String, Codable, CaseIterable, Hashable, Identifiable {
+public enum NativeMomentTextColor: String, Codable, CaseIterable, Hashable, Identifiable {
     case red
     case orange
     case green
@@ -173,7 +180,7 @@ enum NativeMomentTextColor: String, Codable, CaseIterable, Hashable, Identifiabl
     case purple
     case pink
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
     var label: String {
         switch self {
@@ -187,21 +194,21 @@ enum NativeMomentTextColor: String, Codable, CaseIterable, Hashable, Identifiabl
     }
 }
 
-struct NativeMomentTextRun: Codable, Hashable {
-    let text: String
-    let bold: Bool
-    let color: NativeMomentTextColor?
+public struct NativeMomentTextRun: Codable, Hashable {
+    public let text: String
+    public let bold: Bool
+    public let color: NativeMomentTextColor?
 }
 
-struct NativeMoment: Codable, Hashable, Identifiable {
-    let createdAt: String
-    let id: String
-    let images: [NativeMedia]
-    let text: String
-    let textRuns: [NativeMomentTextRun]
-    let updatedAt: String
+public struct NativeMoment: Codable, Hashable, Identifiable {
+    public let createdAt: String
+    public let id: String
+    public let images: [NativeMedia]
+    public let text: String
+    public let textRuns: [NativeMomentTextRun]
+    public let updatedAt: String
 
-    init(
+    public init(
         createdAt: String,
         id: String,
         images: [NativeMedia],
@@ -217,7 +224,7 @@ struct NativeMoment: Codable, Hashable, Identifiable {
         self.updatedAt = updatedAt
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString.lowercased()

@@ -27,3 +27,4 @@ SWIFT_ARGUMENTS=(
 
 swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}"
 swift run "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" --skip-build LeonBookChecks
+swift run "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" --skip-build LeonBookStoreChecks

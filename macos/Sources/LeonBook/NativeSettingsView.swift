@@ -1,9 +1,13 @@
 import SwiftUI
 
-struct NativeSettingsView: View {
+public struct NativeSettingsView: View {
     @ObservedObject var model: NativeAppModel
 
-    var body: some View {
+    public init(model: NativeAppModel) {
+        self.model = model
+    }
+
+    public var body: some View {
         Form {
             Section("用户与工作空间") {
                 LabeledContent("当前用户") { Text(model.currentUser.name) }

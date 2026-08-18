@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 
 @MainActor
-final class NativeAppModel: ObservableObject {
+public final class NativeAppModel: ObservableObject {
     @Published var section: NativeSection = .dashboard
     @Published private(set) var articles: [NativeArticleSummary] = []
     @Published private(set) var activity: [NativeActivityDay] = []
@@ -29,7 +29,7 @@ final class NativeAppModel: ObservableObject {
     private(set) var store: LocalBlogStore
     private var trashCleanupTask: Task<Void, Never>?
 
-    init() {
+    public init() {
         let rootURL = LocalBlogStore.defaultRootURL
         userWorkspaces = UserWorkspaceStore(rootURL: rootURL)
         store = LocalBlogStore(rootURL: rootURL)
@@ -110,7 +110,7 @@ final class NativeAppModel: ObservableObject {
         }
     }
 
-    func reload() async throws {
+    public func reload() async throws {
         articles = try await store.listArticles()
         moments = try await store.listMoments()
         trashItems = try await store.listTrash()
@@ -160,7 +160,7 @@ final class NativeAppModel: ObservableObject {
         }
     }
 
-    func newArticle() {
+    public func newArticle() {
         selectedSlug = nil
         selectedArticle = nil
         editor = NativeEditorDraft()
