@@ -448,7 +448,7 @@ struct EmptyState: View {
 
 extension String {
     var nativeDateLabel: String {
-        guard let date = ISO8601DateFormatter().date(from: self) else { return self }
+        guard let date = NativeTimestamp.date(from: self) else { return self }
         return date.formatted(date: .abbreviated, time: .omitted)
     }
 }

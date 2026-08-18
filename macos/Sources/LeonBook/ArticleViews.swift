@@ -701,7 +701,7 @@ struct ArticleEditorView: View {
     }
 
     private var wordCount: Int {
-        model.editor.body.trimmingCharacters(in: .whitespacesAndNewlines).count
+        NativeWritingMetrics.characterCount(of: model.editor.body)
     }
 
     private var readingMinutes: Int {

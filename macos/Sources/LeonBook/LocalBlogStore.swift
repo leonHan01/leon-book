@@ -52,6 +52,7 @@ public actor LocalBlogStore {
                 database = nextDatabase
             }
             try migrateLegacyDataIfNeeded()
+            try exportJsonBackupIfNeeded()
             try purgeExpiredTrash()
         } catch let error as NativeStoreError {
             throw error
@@ -563,10 +564,43 @@ public actor LocalBlogStore {
             try importActivityEvents(events, into: database)
             try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('legacy_migration_v1', 'done')")
         }
+    }
+
+    private func exportJsonBackupIfNeeded() throws {
+        let database = try db()
+        let exportMarkedDone = try database.text("SELECT value FROM metadata WHERE key = 'json_export_v1'") == "done"
+        if exportMarkedDone, try jsonBackupIsComplete() { return }
 
         try rebuildArticleExports()
         try rebuildMomentsIndex()
         try writeActivityEvents()
+        try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('json_export_v1', 'done')")
+    }
+
+    private func jsonBackupIsComplete() throws -> Bool {
+        let fileManager = FileManager.default
+        let articles = try allArticles()
+        for article in articles {
+            let jsonURL = articlesURL.appendingPathComponent("\(article.slug).json")
+            if !fileManager.fileExists(atPath: jsonURL.path) { return false }
+        }
+
+        let indexURL = articlesURL.appendingPathComponent("index.json")
+        guard fileManager.fileExists(atPath: indexURL.path),
+              let indexData = try? Data(contentsOf: indexURL),
+              let indexed = try? JSONDecoder().decode([NativeArticle].self, from: indexData),
+              Set(indexed.map(\.slug)) == Set(articles.map(\.slug)) else {
+            return false
+        }
+
+        if !fileManager.fileExists(atPath: activityURL.appendingPathComponent("events.json").path) {
+            return false
+        }
+
+        if !(try allMoments().isEmpty), !fileManager.fileExists(atPath: momentsIndexURL.path) {
+            return false
+        }
+        return true
     }
 
     private func loadLegacyArticles() throws -> [NativeArticle] {
@@ -733,7 +767,7 @@ public actor LocalBlogStore {
             title: title,
             updatedAt: updatedAt,
             publishedAt: row.text(at: 10),
-            wordCount: row.integer(at: 11) ?? wordCount(body)
+            wordCount: wordCount(body)
         )
     }
 
@@ -1027,7 +1061,7 @@ public actor LocalBlogStore {
     }
 
     private func wordCount(_ body: String) -> Int {
-        body.split { $0.isWhitespace || $0.isNewline }.count
+        NativeWritingMetrics.characterCount(of: body)
     }
 
     private func jsonString<T: Encodable>(_ value: T) throws -> String {
@@ -1052,12 +1086,7 @@ public actor LocalBlogStore {
     }
 
     private func activityDate(from timestamp: String) -> Date? {
-        let standardFormatter = ISO8601DateFormatter()
-        if let date = standardFormatter.date(from: timestamp) { return date }
-
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions.insert(.withFractionalSeconds)
-        return fractionalFormatter.date(from: timestamp)
+        NativeTimestamp.date(from: timestamp)
     }
 
     private func utcCalendar() -> Calendar {
@@ -1073,7 +1102,7 @@ public actor LocalBlogStore {
 
     private func nextTimestamp(after previous: String?) -> String {
         let now = Date()
-        if let previous, let date = ISO8601DateFormatter().date(from: previous), date >= now {
+        if let previous, let date = NativeTimestamp.date(from: previous), date >= now {
             return timestamp(from: date.addingTimeInterval(0.001))
         }
         return timestamp(from: now)

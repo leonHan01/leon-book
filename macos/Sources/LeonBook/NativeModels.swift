@@ -1,5 +1,22 @@
 import Foundation
 
+public enum NativeWritingMetrics {
+    public static func characterCount(of body: String) -> Int {
+        body.trimmingCharacters(in: .whitespacesAndNewlines).count
+    }
+}
+
+public enum NativeTimestamp {
+    public static func date(from timestamp: String) -> Date? {
+        let standardFormatter = ISO8601DateFormatter()
+        if let date = standardFormatter.date(from: timestamp) { return date }
+
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions.insert(.withFractionalSeconds)
+        return fractionalFormatter.date(from: timestamp)
+    }
+}
+
 struct NativeUser: Codable, Hashable, Identifiable {
     let id: String
     let name: String

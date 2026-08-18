@@ -382,7 +382,7 @@ public final class NativeAppModel: ObservableObject {
                         throw NativeStoreError.fileSystem("无法读取拖入或粘贴的图片。")
                     }
                     let temporaryURL = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("moment-image-(UUID().uuidString.lowercased()).png")
+                        .appendingPathComponent("moment-image-\(UUID().uuidString.lowercased()).png")
                     try imageData.write(to: temporaryURL, options: .atomic)
                     defer { try? FileManager.default.removeItem(at: temporaryURL) }
 

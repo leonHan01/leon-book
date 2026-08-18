@@ -120,6 +120,74 @@ func testArticlesListedOnlyInIndexJSONAreImported() async throws {
     }
 }
 
+func testAlreadyMigratedWorkspaceBackfillsMissingJSONExports() async throws {
+    try await withWorkspace { workspace in
+        let root = workspace.appendingPathComponent("stale-export", isDirectory: true)
+        let articlesURL = root.appendingPathComponent("articles", isDirectory: true)
+        try FileManager.default.createDirectory(at: articlesURL, withIntermediateDirectories: true)
+        try writeJSON(
+            [
+                article(slug: "morning-note", title: "晨记", body: "今天天气很好"),
+                article(slug: "evening-note", title: "夜记", body: "继续写一段"),
+            ],
+            to: articlesURL.appendingPathComponent("index.json")
+        )
+
+        _ = try await LocalBlogStore(rootURL: root).listArticles()
+
+        try FileManager.default.removeItem(at: articlesURL.appendingPathComponent("evening-note.json"))
+        try writeJSON(
+            [article(slug: "morning-note", title: "晨记", body: "今天天气很好")],
+            to: articlesURL.appendingPathComponent("index.json")
+        )
+        let eventsURL = root.appendingPathComponent("activity/events.json")
+        if FileManager.default.fileExists(atPath: eventsURL.path) {
+            try FileManager.default.removeItem(at: eventsURL)
+        }
+
+        _ = try await LocalBlogStore(rootURL: root).listArticles()
+
+        let backup = workspace.appendingPathComponent("backup", isDirectory: true)
+        try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: articlesURL,
+            to: backup.appendingPathComponent("articles", isDirectory: true)
+        )
+
+        let restored = try await LocalBlogStore(rootURL: backup).listArticles()
+        expect(
+            Set(restored.map(\.slug)) == ["morning-note", "evening-note"],
+            "already-migrated workspaces should rebuild article JSON so a later SQLite loss can restore every article"
+        )
+    }
+}
+
+func testPublishedWordCountCountsChineseCharacters() async throws {
+    try await withWorkspace { workspace in
+        let root = workspace.appendingPathComponent("word-count", isDirectory: true)
+        let articlesURL = root.appendingPathComponent("articles", isDirectory: true)
+        try FileManager.default.createDirectory(at: articlesURL, withIntermediateDirectories: true)
+        try writeJSON(
+            [article(slug: "morning-note", title: "晨记", body: "今天天气很好")],
+            to: articlesURL.appendingPathComponent("index.json")
+        )
+
+        let summaries = try await LocalBlogStore(rootURL: root).listArticles()
+        expect(summaries.first?.wordCount == 6, "Chinese article word count should be character count, not whitespace tokens")
+    }
+}
+
+func testFractionalISO8601TimestampsParse() {
+    expect(
+        NativeTimestamp.date(from: "2026-08-02T17:06:49.910Z") != nil,
+        "timestamps with fractional seconds should parse"
+    )
+    expect(
+        NativeTimestamp.date(from: "2026-08-02T17:06:49Z") != nil,
+        "timestamps without fractional seconds should still parse"
+    )
+}
+
 func testCorruptArticleFileDoesNotFinalizeMigrationOrDropIndexRecords() async throws {
     try await withWorkspace { workspace in
         let root = workspace.appendingPathComponent("partial-import", isDirectory: true)
@@ -164,6 +232,9 @@ let checks: [(String, () async throws -> Void)] = [
     ("activity JSON export restores the heatmap", testActivityJSONExportRestoresHeatmapWhenSQLiteIsMissing),
     ("articles listed only in index.json are imported", testArticlesListedOnlyInIndexJSONAreImported),
     ("corrupt article file does not finalize migration", testCorruptArticleFileDoesNotFinalizeMigrationOrDropIndexRecords),
+    ("already-migrated workspace backfills missing JSON exports", testAlreadyMigratedWorkspaceBackfillsMissingJSONExports),
+    ("published word count counts Chinese characters", testPublishedWordCountCountsChineseCharacters),
+    ("fractional ISO8601 timestamps parse", { testFractionalISO8601TimestampsParse() }),
 ]
 
 for (name, check) in checks {
