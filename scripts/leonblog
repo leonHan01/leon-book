@@ -53,21 +53,6 @@ native_app_needs_build() {
     -type f -newer "$MACOS_EXECUTABLE" -print -quit | /usr/bin/grep -q .
 }
 
-quit_running_app() {
-  local pids
-  pids="$(pgrep -x LeonBook || true)"
-  [[ -z "$pids" ]] && return 0
-
-  printf '[INFO] 正在退出已运行的 leon-book…\n'
-  kill $pids 2>/dev/null || true
-  local attempt
-  for attempt in 1 2 3 4 5 6; do
-    pgrep -x LeonBook >/dev/null || return 0
-    sleep 0.5
-  done
-  kill -9 $pids 2>/dev/null || true
-}
-
 open_native_app() {
   local rebuilt=0
   if native_app_needs_build; then
@@ -78,10 +63,12 @@ open_native_app() {
     printf '[INFO] 原生应用已是最新版本，无需构建。\n'
   fi
 
-  printf '[INFO] 打开原生 leon-book 应用\n'
-  if [[ "$rebuilt" -eq 1 ]]; then
-    quit_running_app
+  if [[ "$rebuilt" -eq 1 ]] && pgrep -x LeonBook >/dev/null; then
+    printf '[WARN] 已构建新版本，但当前 leon-book 仍在运行。请先在应用中保存并手动退出，再重新执行 leonblog open 以载入新版本。\n'
+    return 0
   fi
+
+  printf '[INFO] 打开原生 leon-book 应用\n'
   if [[ -n "${LEON_BOOK_WORKDIR:-}" ]]; then
     open --env "LEON_BOOK_WORKDIR=${LEON_BOOK_WORKDIR}" "$MACOS_APP"
   else

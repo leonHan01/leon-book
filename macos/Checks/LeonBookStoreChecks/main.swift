@@ -198,6 +198,44 @@ func savePayload(
     )
 }
 
+func seedBackup(at root: URL) async throws -> (NativeArticle, NativeMoment) {
+    let store = LocalBlogStore(rootURL: root)
+    let savedArticle = try await store.saveArticle(
+        savePayload(slug: "backup-note", title: "备份文章", body: "数据库中的正确正文")
+    )
+    let savedMoment = try await store.saveMoment(text: "数据库中的正确微博", textRuns: [], images: [])
+    return (savedArticle, savedMoment)
+}
+
+func testDecodableButStaleJSONExportsAreRebuilt() async throws {
+    try await withWorkspace { workspace in
+        let root = workspace.appendingPathComponent("stale-json-export", isDirectory: true)
+        let saved = try await seedBackup(at: root)
+
+        try writeJSON(
+            article(slug: saved.0.slug, title: saved.0.title, body: "过期正文"),
+            to: root.appendingPathComponent("articles/\(saved.0.slug).json")
+        )
+        try writeJSON([NativeMoment](), to: root.appendingPathComponent("moments/index.json"))
+        try writeJSON([[String: String]](), to: root.appendingPathComponent("activity/events.json"))
+
+        let restored = LocalBlogStore(rootURL: root)
+        _ = try await restored.listArticles()
+
+        let articleData = try Data(contentsOf: root.appendingPathComponent("articles/\(saved.0.slug).json"))
+        let exportedArticle = try JSONDecoder().decode(NativeArticle.self, from: articleData)
+        expect(exportedArticle.body == saved.0.body, "stale article JSON should be rebuilt from SQLite")
+
+        let momentData = try Data(contentsOf: root.appendingPathComponent("moments/index.json"))
+        let exportedMoments = try JSONDecoder().decode([NativeMoment].self, from: momentData)
+        expect(exportedMoments == [saved.1], "stale moment JSON should be rebuilt from SQLite")
+
+        let eventData = try Data(contentsOf: root.appendingPathComponent("activity/events.json"))
+        let exportedEvents = try JSONDecoder().decode([[String: String]].self, from: eventData)
+        expect(!exportedEvents.isEmpty, "stale activity JSON should be rebuilt from SQLite")
+    }
+}
+
 func testDefaultDataDirectoryDoesNotProbeT7() {
     let configured = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"]?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -391,12 +429,57 @@ func testCorruptArticleFileDoesNotFinalizeMigrationOrDropIndexRecords() async th
     }
 }
 
+func testLegacyArticleSlugCannotEscapeWorkspace() async throws {
+    try await withWorkspace { workspace in
+        let root = workspace.appendingPathComponent("unsafe-slug", isDirectory: true)
+        let articlesURL = root.appendingPathComponent("articles", isDirectory: true)
+        try FileManager.default.createDirectory(at: articlesURL, withIntermediateDirectories: true)
+        try writeJSON(
+            [article(slug: "../../escaped", title: "不安全", body: "不应导入")],
+            to: articlesURL.appendingPathComponent("index.json")
+        )
+
+        var rejected = false
+        do {
+            _ = try await LocalBlogStore(rootURL: root).listArticles()
+        } catch {
+            rejected = true
+        }
+
+        expect(rejected, "legacy articles with path traversal slugs should be rejected")
+        expect(
+            !FileManager.default.fileExists(atPath: workspace.appendingPathComponent("escaped.json").path),
+            "unsafe legacy slugs must not write outside the workspace"
+        )
+    }
+}
+
+func testInvalidLegacyUserIDIsNotImported() async throws {
+    try await withWorkspace { workspace in
+        try writeJSON(
+            [NativeUser(id: "../invalid", name: "不安全用户", createdAt: "2026-08-01T00:00:00Z")],
+            to: workspace.appendingPathComponent("users.json")
+        )
+
+        let store = UserWorkspaceStore(rootURL: workspace)
+        var rejected = false
+        do {
+            _ = try await store.prepare()
+        } catch {
+            rejected = true
+        }
+
+        expect(rejected, "legacy users with invalid workspace IDs should be rejected")
+    }
+}
+
 let checks: [(String, () async throws -> Void)] = [
     ("published moment can be restored from JSON export", testPublishedMomentCanBeRestoredFromJSONExportAlone),
     ("activity JSON export restores the heatmap", testActivityJSONExportRestoresHeatmapWhenSQLiteIsMissing),
     ("articles listed only in index.json are imported", testArticlesListedOnlyInIndexJSONAreImported),
     ("corrupt article file does not finalize migration", testCorruptArticleFileDoesNotFinalizeMigrationOrDropIndexRecords),
     ("already-migrated workspace backfills missing JSON exports", testAlreadyMigratedWorkspaceBackfillsMissingJSONExports),
+    ("decodable but stale JSON exports are rebuilt", testDecodableButStaleJSONExportsAreRebuilt),
     ("published word count counts Chinese characters", testPublishedWordCountCountsChineseCharacters),
     ("fractional ISO8601 timestamps parse", { testFractionalISO8601TimestampsParse() }),
     ("default data directory does not probe T7", { testDefaultDataDirectoryDoesNotProbeT7() }),
@@ -406,6 +489,8 @@ let checks: [(String, () async throws -> Void)] = [
     ("activity is bucketed in the local time zone", testActivityIsBucketedInLocalTimeZone),
     ("root content database moves into leon workspace", testRootContentDatabaseMovesIntoLeonWorkspace),
     ("trashed article JSON is not imported as live", testTrashedArticleJSONIsNotImportedAsLive),
+    ("legacy article slug cannot escape workspace", testLegacyArticleSlugCannotEscapeWorkspace),
+    ("invalid legacy user ID is not imported", testInvalidLegacyUserIDIsNotImported),
 ]
 
 for (name, check) in checks {

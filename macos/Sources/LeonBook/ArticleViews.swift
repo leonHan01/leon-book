@@ -682,7 +682,7 @@ struct ArticleEditorView: View {
                     VStack(spacing: 8) {
                         ForEach(model.editor.media) { media in
                             EditorAttachmentRow(media: media) {
-                                model.editor.media.removeAll { $0.id == media.id }
+                                model.removeEditorMedia(media)
                             }
                         }
                     }

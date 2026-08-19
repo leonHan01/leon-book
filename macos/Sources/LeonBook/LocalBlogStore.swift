@@ -187,7 +187,7 @@ public actor LocalBlogStore {
 
     private func removeUnreferencedMomentImages(
         _ images: [NativeMedia],
-        includingDeleted: Bool = false
+        includingDeleted: Bool = true
     ) throws {
         let referencedImageURLs = Set(try allMoments(includingDeleted: includingDeleted).flatMap { $0.images.map(\.url) })
         let momentsMediaDirectory = mediaURL.appendingPathComponent("moments", isDirectory: true).standardizedFileURL
@@ -492,22 +492,25 @@ public actor LocalBlogStore {
     }
 
     private func removeArticleExportFiles(for slug: String) {
+        guard let safeSlug = try? requireSafeSegment(slug, label: "文章 slug") else { return }
         let fileManager = FileManager.default
-        try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(slug).json"))
-        try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(slug).md"))
-        try? fileManager.removeItem(at: draftsURL.appendingPathComponent("\(slug).json"))
+        try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(safeSlug).json"))
+        try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(safeSlug).md"))
+        try? fileManager.removeItem(at: draftsURL.appendingPathComponent("\(safeSlug).json"))
     }
 
     private func writeArticleSidecars(_ article: NativeArticle) throws {
-        try writeJSON(article, to: articlesURL.appendingPathComponent("\(article.slug).json"))
-        try writeJSON(article, to: draftsURL.appendingPathComponent("\(article.slug).json"))
-        try writeMarkdown(article, to: articlesURL.appendingPathComponent("\(article.slug).md"))
+        let safeSlug = try requireSafeSegment(article.slug, label: "文章 slug")
+        try writeJSON(article, to: articlesURL.appendingPathComponent("\(safeSlug).json"))
+        try writeJSON(article, to: draftsURL.appendingPathComponent("\(safeSlug).json"))
+        try writeMarkdown(article, to: articlesURL.appendingPathComponent("\(safeSlug).md"))
     }
 
     private func removeArticleFiles(for slug: String) {
-        removeArticleExportFiles(for: slug)
-        guard !Self.reservedMediaDirectories.contains(slug) else { return }
-        try? FileManager.default.removeItem(at: mediaURL.appendingPathComponent(slug, isDirectory: true))
+        guard let safeSlug = try? requireSafeSegment(slug, label: "文章 slug") else { return }
+        removeArticleExportFiles(for: safeSlug)
+        guard !Self.reservedMediaDirectories.contains(safeSlug) else { return }
+        try? FileManager.default.removeItem(at: mediaURL.appendingPathComponent(safeSlug, isDirectory: true))
     }
 
     private func relocateInboxMedia(
@@ -592,6 +595,29 @@ public actor LocalBlogStore {
             return nil
         }
         return mediaURL.appendingPathComponent(slug).appendingPathComponent(filename)
+    }
+
+    func discardUnreferencedMedia(_ media: [NativeMedia]) throws {
+        try prepare()
+        guard !media.isEmpty else { return }
+
+        let articles = try allArticles(includingDeleted: true)
+        let moments = try allMoments(includingDeleted: true)
+        let referencedURLs = Set(
+            articles.flatMap { article in
+                article.media.map(\.url) + (article.banner.map { [$0.url] } ?? [])
+            } + moments.flatMap { $0.images.map(\.url) }
+        )
+
+        for item in media {
+            let normalizedURL = normalizeMediaURL(item.url)
+            guard !referencedURLs.contains(normalizedURL),
+                  !articles.contains(where: { $0.body.contains(normalizedURL) }),
+                  let fileURL = mediaURL(for: normalizedURL) else {
+                continue
+            }
+            try? FileManager.default.removeItem(at: fileURL)
+        }
     }
 
     private func db() throws -> SQLiteDatabase {
@@ -697,24 +723,34 @@ public actor LocalBlogStore {
         let articles = try allArticles()
         for article in articles {
             let jsonURL = articlesURL.appendingPathComponent("\(article.slug).json")
-            if !fileManager.fileExists(atPath: jsonURL.path) { return false }
+            guard let data = try? Data(contentsOf: jsonURL),
+                  let exported = try? JSONDecoder().decode(NativeArticle.self, from: data),
+                  normalize(exported) == article else {
+                return false
+            }
         }
 
         let indexURL = articlesURL.appendingPathComponent("index.json")
         guard fileManager.fileExists(atPath: indexURL.path),
               let indexData = try? Data(contentsOf: indexURL),
               let indexed = try? JSONDecoder().decode([NativeArticle].self, from: indexData),
-              Set(indexed.map(\.slug)) == Set(articles.map(\.slug)) else {
+              indexed.count == articles.count,
+              Set(indexed.map(normalize)) == Set(articles) else {
             return false
         }
 
         let eventsURL = activityURL.appendingPathComponent("events.json")
         guard let eventData = try? Data(contentsOf: eventsURL),
-              (try? JSONDecoder().decode([NativeActivityEvent].self, from: eventData)) != nil else {
+              let exportedEvents = try? JSONDecoder().decode([NativeActivityEvent].self, from: eventData),
+              exportedEvents == (try allActivityEvents()) else {
             return false
         }
 
-        if !(try allMoments().isEmpty), !fileManager.fileExists(atPath: momentsIndexURL.path) {
+        let moments = try allMoments()
+        guard let momentsData = try? Data(contentsOf: momentsIndexURL),
+              let indexedMoments = try? JSONDecoder().decode([NativeMoment].self, from: momentsData),
+              indexedMoments.count == moments.count,
+              Set(indexedMoments) == Set(moments) else {
             return false
         }
         return true
@@ -732,11 +768,17 @@ public actor LocalBlogStore {
 
             var bySlug: [String: NativeArticle] = [:]
             for article in indexed where !article.slug.isEmpty {
-                let file = articlesURL.appendingPathComponent("\(article.slug).json")
+                let slug = try requireSafeSegment(article.slug, label: "文章 slug")
+                let file = articlesURL.appendingPathComponent("\(slug).json")
                 if FileManager.default.fileExists(atPath: file.path) {
-                    bySlug[article.slug] = try readArticle(at: file)
+                    let fromFile = try readArticle(at: file)
+                    let fileSlug = try requireSafeSegment(fromFile.slug, label: "文章 slug")
+                    guard fileSlug == slug else {
+                        throw NativeStoreError.fileSystem("文章 JSON 的 slug 与 index.json 不一致")
+                    }
+                    bySlug[slug] = fromFile
                 } else {
-                    bySlug[article.slug] = normalize(article)
+                    bySlug[slug] = normalize(article)
                 }
             }
             return Array(bySlug.values)
@@ -750,7 +792,10 @@ public actor LocalBlogStore {
         )
         for file in files where file.pathExtension.lowercased() == "json" {
             let article = try readArticle(at: file)
-            if !article.slug.isEmpty { bySlug[article.slug] = article }
+            if !article.slug.isEmpty {
+                let slug = try requireSafeSegment(article.slug, label: "文章 slug")
+                bySlug[slug] = article
+            }
         }
         return Array(bySlug.values)
     }
@@ -761,7 +806,8 @@ public actor LocalBlogStore {
             do {
                 let indexed = try JSONDecoder().decode([NativeMoment].self, from: Data(contentsOf: momentsIndexURL))
                 for moment in indexed where !moment.id.isEmpty {
-                    byID[moment.id] = moment
+                    let id = try requireSafeSegment(moment.id, label: "微博 ID")
+                    byID[id] = moment
                 }
             } catch {
                 throw NativeStoreError.fileSystem("无法读取 \(momentsIndexURL.lastPathComponent)：\(error.localizedDescription)")
@@ -775,7 +821,10 @@ public actor LocalBlogStore {
         )
         for file in files where file.pathExtension.lowercased() == "json" && file.lastPathComponent != "index.json" {
             let moment = try readMoment(at: file)
-            if !moment.id.isEmpty { byID[moment.id] = moment }
+            if !moment.id.isEmpty {
+                let id = try requireSafeSegment(moment.id, label: "微博 ID")
+                byID[id] = moment
+            }
         }
         return Array(byID.values)
     }
@@ -832,9 +881,10 @@ public actor LocalBlogStore {
         return result
     }
 
-    private func allArticles() throws -> [NativeArticle] {
+    private func allArticles(includingDeleted: Bool = false) throws -> [NativeArticle] {
         var articles: [NativeArticle] = []
-        try db().query(articleSelect + " WHERE deleted_at IS NULL ORDER BY updated_at DESC") { row in
+        let whereClause = includingDeleted ? "" : "WHERE deleted_at IS NULL"
+        try db().query(articleSelect + " \(whereClause) ORDER BY updated_at DESC") { row in
             articles.append(try decodeArticle(row))
         }
         return articles
@@ -1262,7 +1312,7 @@ public actor LocalBlogStore {
     }
 }
 
-private struct NativeActivityEvent: Codable {
+private struct NativeActivityEvent: Codable, Equatable {
     let type: String
     let createdAt: String
 }

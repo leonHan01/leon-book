@@ -31,6 +31,7 @@ public final class NativeAppModel: ObservableObject {
     private var trashCleanupTask: Task<Void, Never>?
     private var uploadCount = 0
     private var workspaceGeneration = 0
+    private var pendingEditorMediaCleanup: [NativeMedia] = []
 
     public init() {
         let rootURL = LocalBlogStore.defaultRootURL
@@ -77,7 +78,7 @@ public final class NativeAppModel: ObservableObject {
 
     func selectUser(_ user: NativeUser) {
         guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia else { return }
-        guard confirmDiscardUnsavedWork() else { return }
+        guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return }
         Task {
             isSwitchingWorkspace = true
             isLoading = true
@@ -87,6 +88,8 @@ public final class NativeAppModel: ObservableObject {
             }
             do {
                 let workspace = try await userWorkspaces.selectUser(id: user.id)
+                await discardCurrentMomentDraft()
+                await discardCurrentEditorDraft()
                 try await loadWorkspace(workspace)
                 errorMessage = nil
             } catch {
@@ -97,7 +100,7 @@ public final class NativeAppModel: ObservableObject {
 
     func createUser(named name: String) async -> Bool {
         guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia else { return false }
-        guard confirmDiscardUnsavedWork() else { return false }
+        guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return false }
         isSwitchingWorkspace = true
         isLoading = true
         defer {
@@ -106,6 +109,8 @@ public final class NativeAppModel: ObservableObject {
         }
         do {
             let workspace = try await userWorkspaces.createUser(named: name)
+            await discardCurrentMomentDraft()
+            await discardCurrentEditorDraft()
             try await loadWorkspace(workspace)
             errorMessage = nil
             return true
@@ -140,6 +145,7 @@ public final class NativeAppModel: ObservableObject {
         selectedArticle = nil
         selectedSlug = nil
         editor = NativeEditorDraft()
+        pendingEditorMediaCleanup = []
         momentDraft = NativeMomentDraft()
         editingMomentID = nil
         searchText = ""
@@ -169,9 +175,11 @@ public final class NativeAppModel: ObservableObject {
     public func newArticle() {
         guard !isSaving, !isUploadingMedia else { return }
         guard confirmDiscardUnsavedWork() else { return }
+        discardUnreferencedMedia(editorDraftMedia() + pendingEditorMediaCleanup)
         selectedSlug = nil
         selectedArticle = nil
         editor = NativeEditorDraft()
+        pendingEditorMediaCleanup = []
         section = .editor
         errorMessage = nil
     }
@@ -190,6 +198,7 @@ public final class NativeAppModel: ObservableObject {
             status: article.status,
             updatedAt: article.updatedAt
         )
+        pendingEditorMediaCleanup = []
         section = .editor
     }
 
@@ -226,11 +235,14 @@ public final class NativeAppModel: ObservableObject {
 
         do {
             let saved = try await store.saveArticle(payload)
+            let cleanupCandidates = pendingEditorMediaCleanup
+            pendingEditorMediaCleanup = []
             editor.slug = saved.slug
             editor.status = saved.status
             editor.updatedAt = saved.updatedAt
             selectedSlug = saved.slug
             selectedArticle = saved
+            discardUnreferencedMedia(cleanupCandidates)
             try await reload()
             section = .reader
             errorMessage = nil
@@ -314,7 +326,14 @@ public final class NativeAppModel: ObservableObject {
                 let uploaded = try await store.uploadMedia(fileURL: url, kind: kind, slug: slug)
                 guard generation == workspaceGeneration else { return }
                 if banner {
-                    editor.banner = NativeBanner(alt: url.deletingPathExtension().lastPathComponent, name: uploaded.name, size: uploaded.size, url: uploaded.url)
+                    replaceEditorBanner(
+                        NativeBanner(
+                            alt: url.deletingPathExtension().lastPathComponent,
+                            name: uploaded.name,
+                            size: uploaded.size,
+                            url: uploaded.url
+                        )
+                    )
                 } else {
                     editor.media.append(NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url))
                 }
@@ -363,6 +382,12 @@ public final class NativeAppModel: ObservableObject {
 
     func removeMomentImage(_ image: NativeMedia) {
         momentDraft.images.removeAll { $0.id == image.id }
+        discardUnreferencedMedia([image])
+    }
+
+    func removeEditorMedia(_ media: NativeMedia) {
+        editor.media.removeAll { $0.id == media.id }
+        queueEditorMediaCleanup(media)
     }
 
     func beginEditingMoment(_ moment: NativeMoment) {
@@ -378,8 +403,10 @@ public final class NativeAppModel: ObservableObject {
 
     func cancelMomentEditing() {
         guard !isPublishingMoment else { return }
+        let discardedMedia = momentDraft.images
         editingMomentID = nil
         momentDraft = NativeMomentDraft()
+        discardUnreferencedMedia(discardedMedia)
         errorMessage = nil
     }
 
@@ -547,14 +574,72 @@ public final class NativeAppModel: ObservableObject {
             || editor.status != article.status
     }
 
-    private func confirmDiscardUnsavedWork() -> Bool {
-        guard isEditorDirty else { return true }
+    private var isMomentDraftDirty: Bool {
+        !momentDraft.isEmpty || editingMomentID != nil
+    }
+
+    private func confirmDiscardUnsavedWork(includingMomentDraft: Bool = false) -> Bool {
+        let willDiscardMomentDraft = includingMomentDraft && isMomentDraftDirty
+        guard isEditorDirty || willDiscardMomentDraft else { return true }
         let alert = NSAlert()
         alert.messageText = "放弃未保存的修改？"
-        alert.informativeText = "当前文章还有未保存的标题、正文或附件。"
+        alert.informativeText = isEditorDirty && willDiscardMomentDraft
+            ? "当前文章和微博草稿都有未保存的内容或附件。"
+            : willDiscardMomentDraft
+                ? "当前微博草稿还有未发布的内容或图片。"
+                : "当前文章还有未保存的标题、正文或附件。"
         alert.addButton(withTitle: "放弃")
         alert.addButton(withTitle: "继续编辑")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func editorDraftMedia() -> [NativeMedia] {
+        let banner = editor.banner.map {
+            NativeMedia(kind: "image", name: $0.name, size: $0.size, url: $0.url)
+        }
+        return editor.media + (banner.map { [$0] } ?? [])
+    }
+
+    private func replaceEditorBanner(_ banner: NativeBanner) {
+        if let previous = editor.banner, previous.url != banner.url {
+            queueEditorMediaCleanup(
+                NativeMedia(kind: "image", name: previous.name, size: previous.size, url: previous.url)
+            )
+        }
+        editor.banner = banner
+    }
+
+    private func queueEditorMediaCleanup(_ media: NativeMedia) {
+        guard !pendingEditorMediaCleanup.contains(where: { $0.id == media.id }) else { return }
+        pendingEditorMediaCleanup.append(media)
+        if editor.isNew {
+            discardUnreferencedMedia([media])
+        }
+    }
+
+    private func discardUnreferencedMedia(_ media: [NativeMedia]) {
+        guard !media.isEmpty else { return }
+        let sourceStore = store
+        Task {
+            try? await sourceStore.discardUnreferencedMedia(media)
+        }
+    }
+
+    private func discardCurrentMomentDraft() async {
+        let discardedMedia = momentDraft.images
+        editingMomentID = nil
+        momentDraft = NativeMomentDraft()
+        guard !discardedMedia.isEmpty else { return }
+        let sourceStore = store
+        try? await sourceStore.discardUnreferencedMedia(discardedMedia)
+    }
+
+    private func discardCurrentEditorDraft() async {
+        let discardedMedia = editorDraftMedia() + pendingEditorMediaCleanup
+        pendingEditorMediaCleanup = []
+        guard !discardedMedia.isEmpty else { return }
+        let sourceStore = store
+        try? await sourceStore.discardUnreferencedMedia(discardedMedia)
     }
 
     private func replacePastedImage(_ placeholder: String, with replacement: String) {

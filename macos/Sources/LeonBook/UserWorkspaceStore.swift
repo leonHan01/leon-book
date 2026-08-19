@@ -36,6 +36,11 @@ public actor UserWorkspaceStore {
             try prepareDatabase()
 
             var users = try readUsers()
+            let validUsers = users.filter { isValidUserID($0.id) }
+            if validUsers.count != users.count {
+                users = validUsers
+                try saveUsers(users)
+            }
             if users.isEmpty {
                 users = [NativeUser.leon]
                 try saveUsers(users)
@@ -44,12 +49,11 @@ public actor UserWorkspaceStore {
             let storedActiveUserID = try readActiveUserID()
             let activeUserID = storedActiveUserID ?? users[0].id
             let activeUser = users.first(where: { $0.id == activeUserID }) ?? users[0]
+            let workspaceURL = try workspaceURL(for: activeUser)
+            try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
             if activeUser.id != activeUserID || storedActiveUserID == nil {
                 try saveActiveUserID(activeUser.id)
             }
-
-            let workspaceURL = try workspaceURL(for: activeUser)
-            try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
             return NativeWorkspaceState(activeUser: activeUser, users: users, workspaceURL: workspaceURL)
         } catch let error as NativeStoreError {
             throw error
@@ -63,9 +67,9 @@ public actor UserWorkspaceStore {
         guard let user = state.users.first(where: { $0.id == id }) else {
             throw NativeStoreError.notFound
         }
-        try saveActiveUserID(user.id)
         let workspaceURL = try workspaceURL(for: user)
         try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        try saveActiveUserID(user.id)
         return NativeWorkspaceState(activeUser: user, users: state.users, workspaceURL: workspaceURL)
     }
 
@@ -83,11 +87,10 @@ public actor UserWorkspaceStore {
             createdAt: ISO8601DateFormatter().string(from: Date())
         )
         let users = current.users + [user]
-        try saveUsers(users)
-        try saveActiveUserID(user.id)
-
         let workspaceURL = try workspaceURL(for: user)
         try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        try saveUsers(users)
+        try saveActiveUserID(user.id)
         return NativeWorkspaceState(activeUser: user, users: users, workspaceURL: workspaceURL)
     }
 
@@ -110,7 +113,12 @@ public actor UserWorkspaceStore {
         if try nextDatabase.integer("SELECT COUNT(*) FROM users") == 0,
            FileManager.default.fileExists(atPath: usersURL.path) {
             let legacyUsers = try readUsersFile()
-            for user in legacyUsers { try insertUser(user, into: nextDatabase) }
+            for user in legacyUsers {
+                try requireValidUserID(user.id, source: "users.json")
+            }
+            try nextDatabase.transaction {
+                for user in legacyUsers { try insertUser(user, into: nextDatabase) }
+            }
         }
 
         if try nextDatabase.text("SELECT value FROM app_settings WHERE key = 'active_user_id'") == nil,
@@ -248,10 +256,18 @@ public actor UserWorkspaceStore {
     }
 
     private func workspaceURL(for user: NativeUser) throws -> URL {
-        guard user.id.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil else {
-            throw NativeStoreError.fileSystem("用户工作空间无效")
-        }
+        try requireValidUserID(user.id, source: "用户工作空间")
         return workspacesURL.appendingPathComponent(user.id, isDirectory: true)
+    }
+
+    private func isValidUserID(_ id: String) -> Bool {
+        id.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil
+    }
+
+    private func requireValidUserID(_ id: String, source: String) throws {
+        guard isValidUserID(id) else {
+            throw NativeStoreError.fileSystem("\(source) 中包含无效的用户 ID")
+        }
     }
 
     private func writeJSON<T: Encodable>(_ value: T, to url: URL) throws {
