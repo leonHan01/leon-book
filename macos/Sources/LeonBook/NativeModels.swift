@@ -15,16 +15,22 @@ public enum NativeTimestamp {
         fractionalFormatter.formatOptions.insert(.withFractionalSeconds)
         return fractionalFormatter.date(from: timestamp)
     }
+
+    public static func string(from date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter.string(from: date)
+    }
 }
 
-struct NativeUser: Codable, Hashable, Identifiable {
-    let id: String
-    let name: String
-    let createdAt: String
+public struct NativeUser: Codable, Hashable, Identifiable {
+    public let id: String
+    public let name: String
+    public let createdAt: String
 
-    static let leon = NativeUser(id: "leon", name: "leon", createdAt: "")
+    public static let leon = NativeUser(id: "leon", name: "leon", createdAt: "")
 
-    init(id: String, name: String, createdAt: String) {
+    public init(id: String, name: String, createdAt: String) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
@@ -168,17 +174,41 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
     }
 }
 
-struct NativeSaveArticle: Encodable {
-    let banner: NativeBanner?
-    let body: String
-    let category: String
-    let excerpt: String
-    let media: [NativeMedia]
-    let slug: String
-    let status: NativeArticleStatus
-    let tags: [String]
-    let title: String
-    let expectedUpdatedAt: String?
+public struct NativeSaveArticle: Encodable {
+    public let banner: NativeBanner?
+    public let body: String
+    public let category: String
+    public let excerpt: String
+    public let media: [NativeMedia]
+    public let slug: String
+    public let status: NativeArticleStatus
+    public let tags: [String]
+    public let title: String
+    public let expectedUpdatedAt: String?
+
+    public init(
+        banner: NativeBanner?,
+        body: String,
+        category: String,
+        excerpt: String,
+        media: [NativeMedia],
+        slug: String,
+        status: NativeArticleStatus,
+        tags: [String],
+        title: String,
+        expectedUpdatedAt: String?
+    ) {
+        self.banner = banner
+        self.body = body
+        self.category = category
+        self.excerpt = excerpt
+        self.media = media
+        self.slug = slug
+        self.status = status
+        self.tags = tags
+        self.title = title
+        self.expectedUpdatedAt = expectedUpdatedAt
+    }
 }
 
 struct NativeUploadedMedia: Codable {
@@ -321,6 +351,8 @@ enum NativeSection: Hashable {
 
 enum NativeStoreError: LocalizedError {
     case conflict
+    case reservedSlug
+    case slugTaken
     case invalidArticle
     case invalidMoment
     case invalidUser
@@ -332,6 +364,10 @@ enum NativeStoreError: LocalizedError {
         switch self {
         case .conflict:
             return "这篇文章已在其他窗口中更新，请重新加载后再保存。"
+        case .reservedSlug:
+            return "不能使用 inbox 或 moments 作为文章地址。"
+        case .slugTaken:
+            return "已有相同地址的文章，包括回收站中的文章。"
         case .invalidArticle:
             return "标题和正文不能为空。"
         case .invalidMoment:

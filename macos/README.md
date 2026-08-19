@@ -38,8 +38,9 @@ The check script builds and runs native checks without opening the app window.
 The app selects its data directory in this order:
 
 1. `LEON_BOOK_WORKDIR`
-2. `/Volumes/T7Shield/myblog` (when it exists)
-3. `~/Library/Application Support/leon-book/`
+2. `~/Library/Application Support/leon-book/`
+
+Set `LEON_BOOK_WORKDIR` to keep using an existing external-disk library.
 
 The default user is `leon`. Each user has an isolated `workspaces/<user-id>` directory. When upgrading to the multi-user structure, existing articles, drafts, media, moments, and activity records in the root directory are automatically moved into the `leon` workspace. Existing JSON records are imported into the workspace SQLite database on first launch.
 

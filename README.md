@@ -67,8 +67,13 @@ By default, data is stored at:
 The data directory is selected in this order:
 
 1. `LEON_BOOK_WORKDIR`
-2. `/Volumes/T7Shield/myblog` (when it exists)
-3. `~/Library/Application Support/leon-book/`
+2. `~/Library/Application Support/leon-book/`
+
+To keep using an external disk, set the environment variable before opening the app:
+
+```bash
+LEON_BOOK_WORKDIR=/Volumes/T7Shield/myblog ./scripts/leonblog open
+```
 
 When the multi-user structure is initialized, existing articles, drafts, media, moments, and activity records in the root directory are automatically moved into the default `leon` workspace. Uninstalling the app does not remove local data; back up the directory like any other local files.
 

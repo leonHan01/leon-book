@@ -17,6 +17,7 @@ public final class NativeAppModel: ObservableObject {
     @Published private(set) var isLoading = true
     @Published private(set) var isPublishingMoment = false
     @Published private(set) var isSaving = false
+    @Published private(set) var isUploadingMedia = false
     @Published private(set) var storageReady = false
     @Published private(set) var users: [NativeUser] = []
     @Published private(set) var currentUser = NativeUser.leon
@@ -28,6 +29,8 @@ public final class NativeAppModel: ObservableObject {
     private let userWorkspaces: UserWorkspaceStore
     private(set) var store: LocalBlogStore
     private var trashCleanupTask: Task<Void, Never>?
+    private var uploadCount = 0
+    private var workspaceGeneration = 0
 
     public init() {
         let rootURL = LocalBlogStore.defaultRootURL
@@ -73,7 +76,8 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func selectUser(_ user: NativeUser) {
-        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment else { return }
+        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia else { return }
+        guard confirmDiscardUnsavedWork() else { return }
         Task {
             isSwitchingWorkspace = true
             isLoading = true
@@ -92,7 +96,8 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func createUser(named name: String) async -> Bool {
-        guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment else { return false }
+        guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia else { return false }
+        guard confirmDiscardUnsavedWork() else { return false }
         isSwitchingWorkspace = true
         isLoading = true
         defer {
@@ -123,6 +128,7 @@ public final class NativeAppModel: ObservableObject {
     private func loadWorkspace(_ workspace: NativeWorkspaceState) async throws {
         let nextStore = LocalBlogStore(rootURL: workspace.workspaceURL)
         try await nextStore.prepare()
+        workspaceGeneration += 1
         store = nextStore
         users = workspace.users
         currentUser = workspace.activeUser
@@ -161,6 +167,8 @@ public final class NativeAppModel: ObservableObject {
     }
 
     public func newArticle() {
+        guard !isSaving, !isUploadingMedia else { return }
+        guard confirmDiscardUnsavedWork() else { return }
         selectedSlug = nil
         selectedArticle = nil
         editor = NativeEditorDraft()
@@ -195,7 +203,13 @@ public final class NativeAppModel: ObservableObject {
 
         isSaving = true
         defer { isSaving = false }
-        let slug = editor.slug.isEmpty ? slugify(title) : editor.slug
+        let slug: String
+        do {
+            slug = editor.slug.isEmpty ? try await store.allocateSlug(from: title) : editor.slug
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let tags = editor.tags.split(whereSeparator: { ",，\n".contains($0) }).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "") }.filter { !$0.isEmpty }
         let payload = NativeSaveArticle(
             banner: editor.banner,
@@ -221,12 +235,25 @@ public final class NativeAppModel: ObservableObject {
             section = .reader
             errorMessage = nil
         } catch {
+            if !slug.isEmpty, let latest = try? await store.getArticle(slug: slug) {
+                editor.slug = latest.slug
+                editor.updatedAt = latest.updatedAt
+                selectedArticle = latest
+            }
             errorMessage = error.localizedDescription
         }
     }
 
     func deleteSelected() async {
         guard let article = selectedArticle else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "将这篇文章移入回收站？"
+        alert.informativeText = "文章和关联的本地媒体会保留 30 天，可在回收站中恢复，之后自动永久删除。"
+        alert.addButton(withTitle: "移入回收站")
+        alert.addButton(withTitle: "取消")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             try await store.deleteArticle(slug: article.slug, expectedUpdatedAt: article.updatedAt)
             selectedArticle = nil
@@ -281,8 +308,11 @@ public final class NativeAppModel: ObservableObject {
         panel.allowedContentTypes = kind == "video" ? [.movie] : [.image]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
+            let generation = beginUpload()
+            defer { endUpload() }
             do {
                 let uploaded = try await store.uploadMedia(fileURL: url, kind: kind, slug: slug)
+                guard generation == workspaceGeneration else { return }
                 if banner {
                     editor.banner = NativeBanner(alt: url.deletingPathExtension().lastPathComponent, name: uploaded.name, size: uploaded.size, url: uploaded.url)
                 } else {
@@ -290,6 +320,7 @@ public final class NativeAppModel: ObservableObject {
                 }
                 try await refreshActivity()
             } catch {
+                guard generation == workspaceGeneration else { return }
                 errorMessage = error.localizedDescription
             }
         }
@@ -311,16 +342,20 @@ public final class NativeAppModel: ObservableObject {
         guard !selectedURLs.isEmpty else { return }
 
         Task {
+            let generation = beginUpload()
+            defer { endUpload() }
             do {
                 var uploadedImages: [NativeMedia] = []
                 for fileURL in selectedURLs {
                     let uploaded = try await store.uploadMedia(fileURL: fileURL, kind: "image", slug: "moments")
                     uploadedImages.append(NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url))
                 }
+                guard generation == workspaceGeneration else { return }
                 momentDraft.images.append(contentsOf: uploadedImages)
                 try await refreshActivity()
                 errorMessage = nil
             } catch {
+                guard generation == workspaceGeneration else { return }
                 errorMessage = error.localizedDescription
             }
         }
@@ -375,6 +410,8 @@ public final class NativeAppModel: ObservableObject {
         guard !imagesToUpload.isEmpty else { return }
 
         Task {
+            let generation = beginUpload()
+            defer { endUpload() }
             do {
                 var uploadedImages: [NativeMedia] = []
                 for image in imagesToUpload {
@@ -395,10 +432,12 @@ public final class NativeAppModel: ObservableObject {
                         NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url)
                     )
                 }
+                guard generation == workspaceGeneration else { return }
                 momentDraft.images.append(contentsOf: uploadedImages)
                 try await refreshActivity()
                 errorMessage = nil
             } catch {
+                guard generation == workspaceGeneration else { return }
                 errorMessage = error.localizedDescription
             }
         }
@@ -454,15 +493,19 @@ public final class NativeAppModel: ObservableObject {
         let filename = "pasted-image-\(UUID().uuidString.lowercased()).png"
         let temporaryURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
         Task {
+            let generation = beginUpload()
+            defer { endUpload() }
             do {
                 try imageData.write(to: temporaryURL, options: .atomic)
                 defer { try? FileManager.default.removeItem(at: temporaryURL) }
 
                 let uploaded = try await store.uploadMedia(fileURL: temporaryURL, kind: "image", slug: editor.slug)
+                guard generation == workspaceGeneration else { return }
                 editor.media.append(NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url))
                 replacePastedImage(placeholder, with: "![粘贴的图片](\(uploaded.url))")
                 try await refreshActivity()
             } catch {
+                guard generation == workspaceGeneration else { return }
                 replacePastedImage(placeholder, with: "[图片粘贴失败]")
                 errorMessage = error.localizedDescription
             }
@@ -471,16 +514,47 @@ public final class NativeAppModel: ObservableObject {
 
     func openMedia(_ media: NativeMedia) {
         Task {
-            let url = await store.mediaURL(for: media.url)
+            guard let url = await store.mediaURL(for: media.url) else { return }
             NSWorkspace.shared.open(url)
         }
     }
 
-    private func slugify(_ title: String) -> String {
-        let value = title.folding(options: .diacriticInsensitive, locale: .current).lowercased()
-            .map { $0.isLetter || $0.isNumber ? $0 : "-" }
-        let slug = String(value).split(separator: "-").joined(separator: "-")
-        return slug.isEmpty ? "draft-\(Int(Date().timeIntervalSince1970))" : String(slug.prefix(80))
+    private func beginUpload() -> Int {
+        uploadCount += 1
+        isUploadingMedia = true
+        return workspaceGeneration
+    }
+
+    private func endUpload() {
+        uploadCount = max(0, uploadCount - 1)
+        isUploadingMedia = uploadCount > 0
+    }
+
+    private var isEditorDirty: Bool {
+        if editor.isNew {
+            return !editor.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !editor.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || editor.banner != nil
+                || !editor.media.isEmpty
+        }
+        guard let article = selectedArticle else { return false }
+        return editor.title != article.title
+            || editor.body != article.body
+            || editor.excerpt != article.excerpt
+            || editor.category != article.category
+            || editor.banner != article.banner
+            || editor.media != article.media
+            || editor.status != article.status
+    }
+
+    private func confirmDiscardUnsavedWork() -> Bool {
+        guard isEditorDirty else { return true }
+        let alert = NSAlert()
+        alert.messageText = "放弃未保存的修改？"
+        alert.informativeText = "当前文章还有未保存的标题、正文或附件。"
+        alert.addButton(withTitle: "放弃")
+        alert.addButton(withTitle: "继续编辑")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func replacePastedImage(_ placeholder: String, with replacement: String) {
@@ -489,8 +563,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     private func activityWindowStart(now: Date = Date()) -> Date {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         return calendar.date(byAdding: .day, value: -364, to: today) ?? today
     }

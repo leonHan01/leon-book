@@ -67,8 +67,13 @@ macos/dist/leon-book.app
 应用按以下顺序选择数据目录：
 
 1. `LEON_BOOK_WORKDIR`
-2. `/Volumes/T7Shield/myblog`（目录存在时）
-3. `~/Library/Application Support/leon-book/`
+2. `~/Library/Application Support/leon-book/`
+
+若数据在外置盘，打开前请设置环境变量：
+
+```bash
+LEON_BOOK_WORKDIR=/Volumes/T7Shield/myblog ./scripts/leonblog open
+```
 
 首次初始化多用户结构时，根目录中已有的文章、草稿、媒体、动态和活动记录会自动迁移到默认的 `leon` 工作空间。卸载应用不会删除本地数据，请像备份普通文件一样备份该目录。
 

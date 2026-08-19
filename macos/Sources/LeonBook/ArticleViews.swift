@@ -152,7 +152,10 @@ private struct NativeImageView: View {
             }
         }
         .task(id: url) {
-            let fileURL = await store.mediaURL(for: url)
+            guard let fileURL = await store.mediaURL(for: url) else {
+                failedToLoad = true
+                return
+            }
             image = NSImage(contentsOf: fileURL)
             failedToLoad = image == nil
         }
@@ -164,6 +167,7 @@ private struct InlineVideoPlayer: View {
     let store: LocalBlogStore
 
     @State private var player: AVPlayer?
+    @State private var failedToLoad = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -172,6 +176,10 @@ private struct InlineVideoPlayer: View {
                     .frame(minHeight: 320)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                     .accessibilityLabel(media.name)
+            } else if failedToLoad {
+                Label("无法加载视频：\(media.name)", systemImage: "video.slash")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 320)
             } else {
                 ProgressView("正在加载视频…")
                     .frame(maxWidth: .infinity, minHeight: 320)
@@ -183,7 +191,12 @@ private struct InlineVideoPlayer: View {
                 .foregroundStyle(.secondary)
         }
         .task(id: media.url) {
-            player = AVPlayer(url: await store.mediaURL(for: media.url))
+            guard let url = await store.mediaURL(for: media.url),
+                  FileManager.default.fileExists(atPath: url.path) else {
+                failedToLoad = true
+                return
+            }
+            player = AVPlayer(url: url)
         }
         .onDisappear { player?.pause() }
     }

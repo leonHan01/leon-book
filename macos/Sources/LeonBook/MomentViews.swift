@@ -371,6 +371,7 @@ private struct MomentImage: View {
     let loadMode: MomentImageLoadMode
 
     @State private var image: NSImage?
+    @State private var failedToLoad = false
 
     init(
         media: NativeMedia,
@@ -389,6 +390,9 @@ private struct MomentImage: View {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
+            } else if failedToLoad {
+                Image(systemName: "photo.badge.exclamationmark")
+                    .foregroundStyle(.secondary)
             } else {
                 ProgressView()
                     .controlSize(.small)
@@ -397,8 +401,13 @@ private struct MomentImage: View {
         .clipped()
         .task(id: "\(media.url)|\(loadMode.cacheKey)") {
             image = nil
-            let url = await store.mediaURL(for: media.url)
+            failedToLoad = false
+            guard let url = await store.mediaURL(for: media.url) else {
+                failedToLoad = true
+                return
+            }
             image = MomentImageLoader.load(from: url, mode: loadMode)
+            failedToLoad = image == nil
         }
         .accessibilityLabel(media.name)
     }
@@ -613,6 +622,7 @@ private struct MomentZoomableImage: View {
     @Binding var scale: CGFloat
 
     @State private var image: NSImage?
+    @State private var failedToLoad = false
     @State private var gestureStartScale: CGFloat = 1
 
     var body: some View {
@@ -628,6 +638,10 @@ private struct MomentZoomableImage: View {
                                 width: max(proxy.size.width, proxy.size.width * scale),
                                 height: max(proxy.size.height, proxy.size.height * scale)
                             )
+                    } else if failedToLoad {
+                        Image(systemName: "photo.badge.exclamationmark")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
                     } else {
                         ProgressView()
                     }
@@ -649,8 +663,12 @@ private struct MomentZoomableImage: View {
         }
         .background(Color.gray.opacity(0.48), in: RoundedRectangle(cornerRadius: 12))
         .task(id: media.url) {
-            let url = await store.mediaURL(for: media.url)
+            guard let url = await store.mediaURL(for: media.url) else {
+                failedToLoad = true
+                return
+            }
             image = MomentImageLoader.load(from: url, mode: .fullSize)
+            failedToLoad = image == nil
         }
         .accessibilityLabel("大图浏览：\(media.name)")
     }

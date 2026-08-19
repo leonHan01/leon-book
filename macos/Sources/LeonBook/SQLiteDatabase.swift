@@ -1,4 +1,5 @@
 import CSQLite
+import Darwin
 import Foundation
 
 enum SQLiteValue {
@@ -45,17 +46,41 @@ final class SQLiteDatabase {
         handle = openedHandle
         sqlite3_busy_timeout(openedHandle, 5_000)
         do {
-            try execute("PRAGMA journal_mode = WAL")
+            let journalMode = Self.prefersDurableJournal(for: url) ? "DELETE" : "WAL"
+            try execute("PRAGMA journal_mode = \(journalMode)")
             try execute("PRAGMA foreign_keys = ON")
         } catch {
-            sqlite3_close(openedHandle)
+            sqlite3_close_v2(openedHandle)
             handle = nil
             throw error
         }
     }
 
     deinit {
-        if let handle { sqlite3_close(handle) }
+        close()
+    }
+
+    func close() {
+        guard let handle else { return }
+        _ = sqlite3_exec(handle, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil)
+        sqlite3_close_v2(handle)
+        self.handle = nil
+    }
+
+    private static func prefersDurableJournal(for url: URL) -> Bool {
+        let volumeURL = url.deletingLastPathComponent()
+        let values = try? volumeURL.resourceValues(forKeys: [
+            .volumeIsLocalKey,
+            .volumeIsEjectableKey,
+            .volumeIsRemovableKey,
+        ])
+        if values?.volumeIsEjectable == true || values?.volumeIsRemovable == true {
+            return true
+        }
+        if values?.volumeIsLocal == false {
+            return true
+        }
+        return false
     }
 
     func execute(_ sql: String, values: [SQLiteValue] = []) throws {
@@ -157,3 +182,26 @@ final class SQLiteDatabase {
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+final class ExclusiveDirectoryLock {
+    private let handle: FileHandle
+
+    init(directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(".leon-book.lock")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: Data())
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        if flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) != 0 {
+            try? handle.close()
+            throw NativeStoreError.fileSystem("leon-book 已在其他窗口中打开同一资料库。")
+        }
+        self.handle = handle
+    }
+
+    deinit {
+        flock(handle.fileDescriptor, LOCK_UN)
+        try? handle.close()
+    }
+}

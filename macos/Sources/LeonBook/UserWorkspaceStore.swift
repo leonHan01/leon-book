@@ -1,33 +1,37 @@
 import Foundation
 
-struct NativeWorkspaceState {
-    let activeUser: NativeUser
-    let users: [NativeUser]
-    let workspaceURL: URL
+public struct NativeWorkspaceState {
+    public let activeUser: NativeUser
+    public let users: [NativeUser]
+    public let workspaceURL: URL
 }
 
 /// Manages the local SQLite user registry and maps each user to an isolated workspace.
-actor UserWorkspaceStore {
+public actor UserWorkspaceStore {
     private struct ActiveUserSelection: Codable {
         let userID: String
     }
 
     let rootURL: URL
     private var database: SQLiteDatabase?
+    private var directoryLock: ExclusiveDirectoryLock?
 
     private var databaseURL: URL { rootURL.appendingPathComponent("leon-book.sqlite") }
     private var usersURL: URL { rootURL.appendingPathComponent("users.json") }
     private var activeUserURL: URL { rootURL.appendingPathComponent("active-user.json") }
     private var workspacesURL: URL { rootURL.appendingPathComponent("workspaces", isDirectory: true) }
 
-    init(rootURL: URL = LocalBlogStore.defaultRootURL) {
+    public init(rootURL: URL = LocalBlogStore.defaultRootURL) {
         self.rootURL = rootURL.standardizedFileURL
     }
 
-    func prepare() throws -> NativeWorkspaceState {
+    public func prepare() throws -> NativeWorkspaceState {
         do {
             try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: workspacesURL, withIntermediateDirectories: true)
+            if directoryLock == nil {
+                directoryLock = try ExclusiveDirectoryLock(directory: rootURL)
+            }
             try migrateLegacyWorkspaceIfNeeded()
             try prepareDatabase()
 
@@ -185,19 +189,61 @@ actor UserWorkspaceStore {
         let directoriesToMigrate = legacyDirectories.filter {
             fileManager.fileExists(atPath: rootURL.appendingPathComponent($0, isDirectory: true).path)
         }
-        guard !directoriesToMigrate.isEmpty else { return }
 
-        let occupiedDestinations = directoriesToMigrate.filter {
-            fileManager.fileExists(atPath: leonWorkspaceURL.appendingPathComponent($0, isDirectory: true).path)
+        if !directoriesToMigrate.isEmpty {
+            let occupiedDestinations = directoriesToMigrate.filter {
+                fileManager.fileExists(atPath: leonWorkspaceURL.appendingPathComponent($0, isDirectory: true).path)
+            }
+            guard occupiedDestinations.isEmpty else {
+                throw NativeStoreError.fileSystem("检测到未完成的 leon 工作空间迁移，请先检查根目录和 workspaces/leon 中的文件。")
+            }
+
+            try fileManager.createDirectory(at: leonWorkspaceURL, withIntermediateDirectories: true)
+            for directory in directoriesToMigrate {
+                let sourceURL = rootURL.appendingPathComponent(directory)
+                try fileManager.moveItem(at: sourceURL, to: leonWorkspaceURL.appendingPathComponent(directory, isDirectory: true))
+            }
         }
-        guard occupiedDestinations.isEmpty else {
-            throw NativeStoreError.fileSystem("检测到未完成的 leon 工作空间迁移，请先检查根目录和 workspaces/leon 中的文件。")
+
+        try migrateLegacyContentDatabaseIfNeeded(into: leonWorkspaceURL)
+    }
+
+    private func migrateLegacyContentDatabaseIfNeeded(into leonWorkspaceURL: URL) throws {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: databaseURL.path) else { return }
+
+        let probe = try SQLiteDatabase(url: databaseURL)
+        var hasArticles = false
+        var hasUsers = false
+        try probe.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('articles', 'users')") { row in
+            switch row.text(at: 0) {
+            case "articles": hasArticles = true
+            case "users": hasUsers = true
+            default: break
+            }
         }
+        probe.close()
+
+        if hasArticles && hasUsers {
+            throw NativeStoreError.fileSystem("根目录数据库同时包含用户表和文章表，请先手动分离后再打开。")
+        }
+        guard hasArticles else { return }
 
         try fileManager.createDirectory(at: leonWorkspaceURL, withIntermediateDirectories: true)
-        for directory in directoriesToMigrate {
-            let sourceURL = rootURL.appendingPathComponent(directory)
-            try fileManager.moveItem(at: sourceURL, to: leonWorkspaceURL.appendingPathComponent(directory, isDirectory: true))
+        let destination = leonWorkspaceURL.appendingPathComponent("leon-book.sqlite")
+        if fileManager.fileExists(atPath: destination.path) {
+            throw NativeStoreError.fileSystem("workspaces/leon 已有数据库，无法移入根目录中的旧内容库。")
+        }
+        try moveSQLiteDatabase(from: databaseURL, to: destination)
+    }
+
+    private func moveSQLiteDatabase(from source: URL, to destination: URL) throws {
+        let fileManager = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            let from = URL(fileURLWithPath: source.path + suffix)
+            guard fileManager.fileExists(atPath: from.path) else { continue }
+            let to = URL(fileURLWithPath: destination.path + suffix)
+            try fileManager.moveItem(at: from, to: to)
         }
     }
 

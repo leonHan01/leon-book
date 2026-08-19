@@ -177,6 +177,174 @@ func testPublishedWordCountCountsChineseCharacters() async throws {
     }
 }
 
+func savePayload(
+    slug: String,
+    title: String,
+    body: String,
+    media: [NativeMedia] = [],
+    expectedUpdatedAt: String? = nil
+) -> NativeSaveArticle {
+    NativeSaveArticle(
+        banner: nil,
+        body: body,
+        category: "Notes",
+        excerpt: body,
+        media: media,
+        slug: slug,
+        status: .published,
+        tags: [],
+        title: title,
+        expectedUpdatedAt: expectedUpdatedAt
+    )
+}
+
+func testDefaultDataDirectoryDoesNotProbeT7() {
+    let configured = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard configured.isEmpty else { return }
+    expect(
+        LocalBlogStore.defaultRootURL.path != "/Volumes/T7Shield/myblog",
+        "default data directory should not silently use the T7 probe path"
+    )
+    expect(
+        LocalBlogStore.defaultRootURL.path.contains("Application Support/leon-book"),
+        "default data directory should be Application Support"
+    )
+}
+
+func testAllocateSlugReservesInboxAndMomentsAndAvoidsCollisions() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let momentsSlug = try await store.allocateSlug(from: "moments")
+        expect(momentsSlug != "moments", "moments must stay reserved for moment images")
+        let inboxSlug = try await store.allocateSlug(from: "Inbox")
+        expect(inboxSlug != "inbox", "inbox must stay reserved for unsaved uploads")
+
+        let first = try await store.saveArticle(savePayload(slug: "same-title", title: "Same Title", body: "第一篇"))
+        let secondSlug = try await store.allocateSlug(from: "Same Title")
+        expect(secondSlug != first.slug, "a second article with the same title should get a new slug")
+        expect(secondSlug.hasPrefix("same-title"), "derived slugs should keep the title stem")
+    }
+}
+
+func testReservedSlugCannotBeSavedAndInboxMediaMovesOnFirstSave() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        var reservedFailed = false
+        do {
+            _ = try await store.saveArticle(savePayload(slug: "moments", title: "moments", body: "不能占用动态目录"))
+        } catch {
+            reservedFailed = true
+        }
+        expect(reservedFailed, "saving an article as moments should fail")
+
+        let inboxDir = workspace.appendingPathComponent("media/inbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: inboxDir, withIntermediateDirectories: true)
+        let filename = "paste-one.png"
+        try Data("png".utf8).write(to: inboxDir.appendingPathComponent(filename))
+        let inboxURL = "/media/inbox/\(filename)"
+        let saved = try await store.saveArticle(
+            savePayload(
+                slug: "morning-note",
+                title: "晨记",
+                body: "见图 \(inboxURL)",
+                media: [NativeMedia(kind: "image", name: "paste-one.png", size: 3, url: inboxURL)]
+            )
+        )
+        expect(saved.media.first?.url == "/media/morning-note/\(filename)", "first save should move inbox media onto the article slug")
+        expect(saved.body.contains("/media/morning-note/\(filename)"), "article body should rewrite inbox media URLs")
+        expect(
+            FileManager.default.fileExists(atPath: workspace.appendingPathComponent("media/morning-note/\(filename)").path),
+            "inbox file should be moved into media/{slug}"
+        )
+        expect(
+            !FileManager.default.fileExists(atPath: inboxDir.appendingPathComponent(filename).path),
+            "original inbox file should no longer exist after relocate"
+        )
+        expect(saved.updatedAt.contains("."), "saved updatedAt should include fractional seconds")
+    }
+}
+
+func testMediaURLRejectsInvalidPaths() async {
+    let store = LocalBlogStore(rootURL: FileManager.default.temporaryDirectory)
+    let valid = await store.mediaURL(for: "/media/inbox/photo.png")
+    let rejectedAbsolute = await store.mediaURL(for: "/etc/passwd")
+    let rejectedEscape = await store.mediaURL(for: "/media/../secret")
+    expect(valid?.lastPathComponent == "photo.png", "valid media URLs should resolve under media/")
+    expect(rejectedAbsolute == nil, "paths outside /media should be rejected")
+    expect(rejectedEscape == nil, "path escape attempts should be rejected")
+}
+
+func testActivityIsBucketedInLocalTimeZone() async throws {
+    try await withWorkspace { workspace in
+        _ = try await LocalBlogStore(rootURL: workspace).saveMoment(text: "本地日期", textRuns: [], images: [])
+        let days = try await LocalBlogStore(rootURL: workspace).listActivity(
+            since: Date().addingTimeInterval(-24 * 60 * 60)
+        )
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month, .day], from: Date())
+        let today = String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
+        expect(
+            days.contains { $0.date == today && $0.count >= 1 },
+            "activity should land on the local calendar day"
+        )
+    }
+}
+
+func testRootContentDatabaseMovesIntoLeonWorkspace() async throws {
+    try await withWorkspace { workspace in
+        let rootDB = workspace.appendingPathComponent("leon-book.sqlite")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [
+            rootDB.path,
+            "CREATE TABLE articles(slug TEXT PRIMARY KEY NOT NULL); INSERT INTO articles(slug) VALUES('legacy-note');",
+        ]
+        try process.run()
+        process.waitUntilExit()
+        expect(process.terminationStatus == 0, "should create a legacy content sqlite file")
+
+        _ = try await UserWorkspaceStore(rootURL: workspace).prepare()
+
+        let moved = workspace.appendingPathComponent("workspaces/leon/leon-book.sqlite")
+        expect(FileManager.default.fileExists(atPath: moved.path), "content sqlite should move into workspaces/leon")
+
+        let inspect = Process()
+        inspect.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        inspect.arguments = [workspace.appendingPathComponent("leon-book.sqlite").path, "SELECT name FROM sqlite_master WHERE type='table' AND name='articles';"]
+        let pipe = Pipe()
+        inspect.standardOutput = pipe
+        try inspect.run()
+        inspect.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        expect(!output.contains("articles"), "root sqlite should no longer be a content database")
+    }
+}
+
+func testTrashedArticleJSONIsNotImportedAsLive() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let kept = try await store.saveArticle(savePayload(slug: "kept-note", title: "保留", body: "还在"))
+        let trashed = try await store.saveArticle(savePayload(slug: "trashed-note", title: "丢掉", body: "进回收站"))
+        try await store.deleteArticle(slug: trashed.slug, expectedUpdatedAt: trashed.updatedAt)
+
+        expect(
+            !FileManager.default.fileExists(atPath: workspace.appendingPathComponent("articles/trashed-note.json").path),
+            "soft-deleted articles should not keep a live JSON export"
+        )
+
+        let backup = workspace.appendingPathComponent("backup", isDirectory: true)
+        try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: workspace.appendingPathComponent("articles", isDirectory: true),
+            to: backup.appendingPathComponent("articles", isDirectory: true)
+        )
+
+        let restored = try await LocalBlogStore(rootURL: backup).listArticles()
+        expect(Set(restored.map(\.slug)) == [kept.slug], "JSON restore should not resurrect trashed articles")
+    }
+}
+
 func testFractionalISO8601TimestampsParse() {
     expect(
         NativeTimestamp.date(from: "2026-08-02T17:06:49.910Z") != nil,
@@ -200,11 +368,7 @@ func testCorruptArticleFileDoesNotFinalizeMigrationOrDropIndexRecords() async th
             ],
             to: articlesURL.appendingPathComponent("index.json")
         )
-        try writeJSON(
-            article(slug: "kept-note", title: "保留", body: "来自文件的甲"),
-            to: articlesURL.appendingPathComponent("kept-note.json")
-        )
-        try Data("{not-json".utf8).write(to: articlesURL.appendingPathComponent("broken.json"))
+        try Data("{not-json".utf8).write(to: articlesURL.appendingPathComponent("kept-note.json"))
 
         let store = LocalBlogStore(rootURL: root)
         var firstImportFailed = false
@@ -215,7 +379,7 @@ func testCorruptArticleFileDoesNotFinalizeMigrationOrDropIndexRecords() async th
         }
         expect(firstImportFailed, "corrupt article JSON should fail the first import")
 
-        try FileManager.default.removeItem(at: articlesURL.appendingPathComponent("broken.json"))
+        try FileManager.default.removeItem(at: articlesURL.appendingPathComponent("kept-note.json"))
 
         let summaries = try await store.listArticles()
         expect(
@@ -235,6 +399,13 @@ let checks: [(String, () async throws -> Void)] = [
     ("already-migrated workspace backfills missing JSON exports", testAlreadyMigratedWorkspaceBackfillsMissingJSONExports),
     ("published word count counts Chinese characters", testPublishedWordCountCountsChineseCharacters),
     ("fractional ISO8601 timestamps parse", { testFractionalISO8601TimestampsParse() }),
+    ("default data directory does not probe T7", { testDefaultDataDirectoryDoesNotProbeT7() }),
+    ("allocateSlug reserves inbox/moments and avoids collisions", testAllocateSlugReservesInboxAndMomentsAndAvoidsCollisions),
+    ("reserved slug is rejected and inbox media moves on first save", testReservedSlugCannotBeSavedAndInboxMediaMovesOnFirstSave),
+    ("mediaURL rejects invalid paths", { await testMediaURLRejectsInvalidPaths() }),
+    ("activity is bucketed in the local time zone", testActivityIsBucketedInLocalTimeZone),
+    ("root content database moves into leon workspace", testRootContentDatabaseMovesIntoLeonWorkspace),
+    ("trashed article JSON is not imported as live", testTrashedArticleJSONIsNotImportedAsLive),
 ]
 
 for (name, check) in checks {

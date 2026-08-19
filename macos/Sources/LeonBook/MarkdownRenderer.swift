@@ -1,12 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// A local, dependency-free Markdown document renderer.
-///
-/// Image blocks are deliberately handled by `MarkdownArticleBody`: it resolves
-/// `media/...` URLs through the workspace store before presenting them. This
-/// view is responsible for the remaining CommonMark blocks plus the commonly
-/// used GFM tables and task-list syntax.
+/// Renders CommonMark/GFM. Local `/media` URLs are resolved by `MarkdownArticleBody`.
 struct MarkdownDocumentView: View {
     let markdown: String
 

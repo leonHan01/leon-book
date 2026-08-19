@@ -236,10 +236,11 @@ private struct ActivityHeatmapView: View {
     }
 
     private var weeks: [[HeatmapDay]] {
-        let calendar = utcCalendar()
+        let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let firstTrackedDay = calendar.date(byAdding: .day, value: -364, to: today) ?? today
-        let weekdayOffset = calendar.component(.weekday, from: firstTrackedDay) - 1
+        let weekday = calendar.component(.weekday, from: firstTrackedDay)
+        let weekdayOffset = (weekday - calendar.firstWeekday + 7) % 7
         let firstCalendarDay = calendar.date(byAdding: .day, value: -weekdayOffset, to: firstTrackedDay) ?? firstTrackedDay
         var days: [HeatmapDay] = []
         var currentDay = firstCalendarDay
@@ -309,12 +310,22 @@ private struct ActivityHeatmapView: View {
 
     private var weekdayLabels: some View {
         VStack(spacing: cellSpacing) {
-            ForEach(Array(["", "一", "", "三", "", "五", ""].enumerated()), id: \.offset) { _, label in
+            ForEach(Array(heatmapWeekdaySymbols.enumerated()), id: \.offset) { _, label in
                 Text(label)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .frame(width: 18, height: cellSize, alignment: .trailing)
             }
+        }
+    }
+
+    private var heatmapWeekdaySymbols: [String] {
+        let symbols = ["日", "一", "二", "三", "四", "五", "六"]
+        let start = Calendar.current.firstWeekday - 1
+        let shown = Set(["一", "三", "五"])
+        return (0..<7).map { index in
+            let symbol = symbols[(index + start) % 7]
+            return shown.contains(symbol) ? symbol : ""
         }
     }
 
@@ -326,12 +337,6 @@ private struct ActivityHeatmapView: View {
         case 3...4: Color.accentColor.opacity(0.7)
         default: Color.accentColor
         }
-    }
-
-    private func utcCalendar() -> Calendar {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
-        return calendar
     }
 
     private func dateKey(_ date: Date, calendar: Calendar) -> String {
