@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class MomentRichTextController: ObservableObject {
@@ -142,13 +143,30 @@ struct MomentRichTextEditor: NSViewRepresentable {
 private final class MomentTextView: NSTextView {
     var onPasteImages: (([NSImage]) -> Void)?
 
-    override func paste(_ sender: Any?) {
-        let images = images(from: .general)
-        guard !images.isEmpty else {
-            super.paste(sender)
-            return
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        var types = super.readablePasteboardTypes
+        for imageType in [.png, .tiff, .fileURL] as [NSPasteboard.PasteboardType] where !types.contains(imageType) {
+            types.append(imageType)
         }
-        onPasteImages?(images)
+        return types
+    }
+
+    override func paste(_ sender: Any?) {
+        if insertPastedImages(from: .general) { return }
+        super.paste(sender)
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        if insertPastedImages(from: .general) { return }
+        super.pasteAsPlainText(sender)
+    }
+
+    override func readSelection(
+        from pasteboard: NSPasteboard,
+        type: NSPasteboard.PasteboardType
+    ) -> Bool {
+        if insertPastedImages(from: pasteboard) { return true }
+        return super.readSelection(from: pasteboard, type: type)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -160,14 +178,41 @@ private final class MomentTextView: NSTextView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let images = images(from: sender.draggingPasteboard)
-        guard !images.isEmpty else { return super.performDragOperation(sender) }
-        onPasteImages?(images)
+        guard insertPastedImages(from: sender.draggingPasteboard) else {
+            return super.performDragOperation(sender)
+        }
+        return true
+    }
+
+    @discardableResult
+    private func insertPastedImages(from pasteboard: NSPasteboard) -> Bool {
+        let pastedImages = images(from: pasteboard)
+        guard !pastedImages.isEmpty, let onPasteImages else { return false }
+        onPasteImages(pastedImages)
         return true
     }
 
     private func images(from pasteboard: NSPasteboard) -> [NSImage] {
+        if let image = pasteboard
+            .readObjects(forClasses: [NSImage.self])?
+            .compactMap({ $0 as? NSImage })
+            .first {
+            return [image]
+        }
+
         var images: [NSImage] = []
+        for item in pasteboard.pasteboardItems ?? [] {
+            for type in item.types {
+                guard let uniformType = UTType(type.rawValue),
+                      uniformType.conforms(to: .image),
+                      let data = item.data(forType: type),
+                      let image = NSImage(data: data) else { continue }
+                images.append(image)
+                break
+            }
+        }
+        if !images.isEmpty { return images }
+
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
             if let data = pasteboard.data(forType: type), let image = NSImage(data: data) {
                 images.append(image)

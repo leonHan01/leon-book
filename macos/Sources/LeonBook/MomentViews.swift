@@ -158,13 +158,19 @@ private struct MomentComposerView: View {
                                 Button {
                                     model.removeMomentImage(image)
                                 } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.title3)
-                                        .symbolRenderingMode(.hierarchical)
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 22, height: 22)
+                                        .background(.red, in: Circle())
+                                        .overlay {
+                                            Circle().stroke(.white.opacity(0.8), lineWidth: 1)
+                                        }
+                                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
                                 }
                                 .buttonStyle(.plain)
-                                .foregroundStyle(.white, .black.opacity(0.6))
-                                .padding(5)
+                                .padding(6)
+                                .help("移除图片")
                                 .accessibilityLabel("移除图片 \(image.name)")
                             }
                         }

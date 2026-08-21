@@ -319,13 +319,30 @@ private struct NativeBodyEditor: NSViewRepresentable {
 private final class PastingTextView: NSTextView {
     var onPasteImage: ((NSImage, NSRange) -> Void)?
 
-    override func paste(_ sender: Any?) {
-        let pasteboard = NSPasteboard.general
-        guard let image = pastedImage(from: pasteboard) else {
-            super.paste(sender)
-            return
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        var types = super.readablePasteboardTypes
+        for imageType in [.png, .tiff, .fileURL] as [NSPasteboard.PasteboardType] where !types.contains(imageType) {
+            types.append(imageType)
         }
-        onPasteImage?(image, selectedRange())
+        return types
+    }
+
+    override func paste(_ sender: Any?) {
+        if insertPastedImage(from: .general, at: selectedRange()) { return }
+        super.paste(sender)
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        if insertPastedImage(from: .general, at: selectedRange()) { return }
+        super.pasteAsPlainText(sender)
+    }
+
+    override func readSelection(
+        from pasteboard: NSPasteboard,
+        type: NSPasteboard.PasteboardType
+    ) -> Bool {
+        if insertPastedImage(from: pasteboard, at: selectedRange()) { return true }
+        return super.readSelection(from: pasteboard, type: type)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -337,12 +354,21 @@ private final class PastingTextView: NSTextView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let image = pastedImage(from: sender.draggingPasteboard) else {
-            return super.performDragOperation(sender)
-        }
         let dropPoint = convert(sender.draggingLocation, from: nil)
         let location = characterIndexForInsertion(at: dropPoint)
-        onPasteImage?(image, NSRange(location: location, length: 0))
+        guard insertPastedImage(
+            from: sender.draggingPasteboard,
+            at: NSRange(location: location, length: 0)
+        ) else {
+            return super.performDragOperation(sender)
+        }
+        return true
+    }
+
+    @discardableResult
+    private func insertPastedImage(from pasteboard: NSPasteboard, at range: NSRange) -> Bool {
+        guard let image = pastedImage(from: pasteboard), let onPasteImage else { return false }
+        onPasteImage(image, range)
         return true
     }
 
