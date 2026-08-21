@@ -3,6 +3,12 @@ import Foundation
 /// Local SQLite store for structured data, with Markdown/JSON exports and file-based media.
 public actor LocalBlogStore {
     private static let trashRetentionDays = 30
+    private static let savedWorkDirectoryKey = "leonBook.workDirectoryPath"
+
+    public static let defaultWorkDirectoryURL = URL(
+        fileURLWithPath: "/Volumes/T7Shield/myblog",
+        isDirectory: true
+    )
 
     static let reservedMediaDirectories: Set<String> = ["inbox", "moments"]
 
@@ -16,7 +22,22 @@ public actor LocalBlogStore {
            !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return URL(fileURLWithPath: configured, isDirectory: true)
         }
-        return applicationSupportURL
+        if let saved = UserDefaults.standard.string(forKey: savedWorkDirectoryKey),
+           !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: saved, isDirectory: true)
+        }
+        return defaultWorkDirectoryURL
+    }
+
+    public static var needsWorkDirectorySelection: Bool {
+        let hasConfiguredDirectory = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        guard !hasConfiguredDirectory else { return false }
+        return !FileManager.default.fileExists(atPath: defaultRootURL.path)
+    }
+
+    public static func rememberWorkDirectory(_ url: URL) {
+        UserDefaults.standard.set(url.standardizedFileURL.path, forKey: savedWorkDirectoryKey)
     }
 
     let rootURL: URL
@@ -31,6 +52,8 @@ public actor LocalBlogStore {
     private var momentsURL: URL { rootURL.appendingPathComponent("moments", isDirectory: true) }
     private var momentsIndexURL: URL { momentsURL.appendingPathComponent("index.json") }
     private var activityURL: URL { rootURL.appendingPathComponent("activity", isDirectory: true) }
+    private var trashURL: URL { rootURL.appendingPathComponent("trash", isDirectory: true) }
+    private var trashIndexURL: URL { trashURL.appendingPathComponent("index.json") }
 
     public init(rootURL: URL = LocalBlogStore.defaultRootURL) {
         self.rootURL = rootURL.standardizedFileURL
@@ -45,6 +68,7 @@ public actor LocalBlogStore {
             try fileManager.createDirectory(at: mediaURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: momentsURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: activityURL, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: trashURL, withIntermediateDirectories: true)
 
             if directoryLock == nil {
                 directoryLock = try ExclusiveDirectoryLock(directory: rootURL)
@@ -171,7 +195,7 @@ public actor LocalBlogStore {
         return updated
     }
 
-    func deleteMoment(id: String) throws {
+    public func deleteMoment(id: String) throws {
         try prepare()
         let safeID = try requireSafeSegment(id, label: "微博 ID")
         guard try moment(withID: safeID) != nil else { throw NativeStoreError.notFound }
@@ -183,19 +207,14 @@ public actor LocalBlogStore {
             values: [.text(deletedAt), .text(expiresAt), .text(safeID)]
         )
         try rebuildMomentsIndex()
+        try writeTrashBackup()
     }
 
     private func removeUnreferencedMomentImages(
         _ images: [NativeMedia],
         includingDeleted: Bool = true
     ) throws {
-        let referencedImageURLs = Set(try allMoments(includingDeleted: includingDeleted).flatMap { $0.images.map(\.url) })
-        let momentsMediaDirectory = mediaURL.appendingPathComponent("moments", isDirectory: true).standardizedFileURL
-        for image in images where !referencedImageURLs.contains(image.url) {
-            guard let imageURL = mediaURL(for: image.url)?.standardizedFileURL else { continue }
-            guard imageURL.deletingLastPathComponent().standardizedFileURL == momentsMediaDirectory else { continue }
-            try? FileManager.default.removeItem(at: imageURL)
-        }
+        try removeUnreferencedMediaFiles(images, includingDeleted: includingDeleted)
     }
 
     public func listActivity(since: Date) throws -> [NativeActivityDay] {
@@ -320,6 +339,7 @@ public actor LocalBlogStore {
         )
         removeArticleExportFiles(for: safeSlug)
         try rebuildIndex()
+        try writeTrashBackup()
         jsonBackupVerified = false
     }
 
@@ -394,6 +414,7 @@ public actor LocalBlogStore {
                 try? writeArticleSidecars(restored)
             }
             try rebuildIndex()
+            try writeTrashBackup()
             jsonBackupVerified = false
         case .moment:
             guard try moment(withID: safeKey, includingDeleted: true) != nil else {
@@ -404,6 +425,7 @@ public actor LocalBlogStore {
                 values: [.text(safeKey)]
             )
             try rebuildMomentsIndex()
+            try writeTrashBackup()
         }
     }
 
@@ -419,6 +441,7 @@ public actor LocalBlogStore {
             try db().execute("DELETE FROM articles WHERE slug = ? AND deleted_at IS NOT NULL", values: [.text(safeKey)])
             removeArticleFiles(for: safeKey)
             try rebuildIndex()
+            try writeTrashBackup()
         case .moment:
             guard let moment = try moment(withID: safeKey, includingDeleted: true),
                   try db().text("SELECT deleted_at FROM moments WHERE id = ?", values: [.text(safeKey)]) != nil else {
@@ -427,6 +450,7 @@ public actor LocalBlogStore {
             try db().execute("DELETE FROM moments WHERE id = ? AND deleted_at IS NOT NULL", values: [.text(safeKey)])
             try removeUnreferencedMomentImages(moment.images, includingDeleted: true)
             try rebuildMomentsIndex()
+            try writeTrashBackup()
         }
     }
 
@@ -451,6 +475,7 @@ public actor LocalBlogStore {
         for moment in momentsToDelete { try removeUnreferencedMomentImages(moment.images, includingDeleted: true) }
         try rebuildIndex()
         try rebuildMomentsIndex()
+        try writeTrashBackup()
     }
 
     private func purgeExpiredTrash() throws {
@@ -489,6 +514,7 @@ public actor LocalBlogStore {
         }
         try rebuildIndex()
         try rebuildMomentsIndex()
+        try writeTrashBackup()
     }
 
     private func removeArticleExportFiles(for slug: String) {
@@ -510,7 +536,24 @@ public actor LocalBlogStore {
         guard let safeSlug = try? requireSafeSegment(slug, label: "文章 slug") else { return }
         removeArticleExportFiles(for: safeSlug)
         guard !Self.reservedMediaDirectories.contains(safeSlug) else { return }
-        try? FileManager.default.removeItem(at: mediaURL.appendingPathComponent(safeSlug, isDirectory: true))
+        let articleMediaURL = mediaURL.appendingPathComponent(safeSlug, isDirectory: true)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: articleMediaURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        let candidates = files.compactMap { fileURL -> NativeMedia? in
+            guard (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true,
+                  let filename = try? requireSafeSegment(fileURL.lastPathComponent, label: "媒体文件") else {
+                return nil
+            }
+            return NativeMedia(kind: "image", name: filename, size: 0, url: "/media/\(safeSlug)/\(filename)")
+        }
+        try? removeUnreferencedMediaFiles(candidates, includingDeleted: true)
+        if (try? FileManager.default.contentsOfDirectory(atPath: articleMediaURL.path).isEmpty) == true {
+            try? FileManager.default.removeItem(at: articleMediaURL)
+        }
     }
 
     private func relocateInboxMedia(
@@ -601,12 +644,20 @@ public actor LocalBlogStore {
         try prepare()
         guard !media.isEmpty else { return }
 
-        let articles = try allArticles(includingDeleted: true)
-        let moments = try allMoments(includingDeleted: true)
+        try removeUnreferencedMediaFiles(media, includingDeleted: true)
+    }
+
+    private func removeUnreferencedMediaFiles(
+        _ media: [NativeMedia],
+        includingDeleted: Bool
+    ) throws {
+        let articles = try allArticles(includingDeleted: includingDeleted)
+        let moments = try allMoments(includingDeleted: includingDeleted)
         let referencedURLs = Set(
             articles.flatMap { article in
-                article.media.map(\.url) + (article.banner.map { [$0.url] } ?? [])
-            } + moments.flatMap { $0.images.map(\.url) }
+                article.media.map { normalizeMediaURL($0.url) }
+                    + (article.banner.map { [normalizeMediaURL($0.url)] } ?? [])
+            } + moments.flatMap { $0.images.map { normalizeMediaURL($0.url) } }
         )
 
         for item in media {
@@ -693,11 +744,14 @@ public actor LocalBlogStore {
         let articles = try loadLegacyArticles()
         let moments = try loadLegacyMoments()
         let events = try loadLegacyActivityEvents()
+        let trash = try loadLegacyTrashBackup()
 
         try database.transaction {
             try importArticles(articles, into: database)
             try importMoments(moments, into: database)
             try importActivityEvents(events, into: database)
+            try importTrashedArticles(trash.articles, into: database)
+            try importTrashedMoments(trash.moments, into: database)
             try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('legacy_migration_v1', 'done')")
         }
     }
@@ -714,6 +768,7 @@ public actor LocalBlogStore {
         try rebuildArticleExports()
         try rebuildMomentsIndex()
         try writeActivityEvents()
+        try writeTrashBackup()
         try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('json_export_v1', 'done')")
         jsonBackupVerified = true
     }
@@ -751,6 +806,12 @@ public actor LocalBlogStore {
               let indexedMoments = try? JSONDecoder().decode([NativeMoment].self, from: momentsData),
               indexedMoments.count == moments.count,
               Set(indexedMoments) == Set(moments) else {
+            return false
+        }
+
+        guard let trashData = try? Data(contentsOf: trashIndexURL),
+              let exportedTrash = try? JSONDecoder().decode(NativeTrashBackup.self, from: trashData),
+              exportedTrash == (try trashBackup()) else {
             return false
         }
         return true
@@ -839,6 +900,37 @@ public actor LocalBlogStore {
         }
     }
 
+    private func loadLegacyTrashBackup() throws -> NativeTrashBackup {
+        guard FileManager.default.fileExists(atPath: trashIndexURL.path) else {
+            return NativeTrashBackup(articles: [], moments: [])
+        }
+        do {
+            let decoded = try JSONDecoder().decode(NativeTrashBackup.self, from: Data(contentsOf: trashIndexURL))
+            let articles = try decoded.articles.map { entry -> NativeTrashedArticle in
+                let article = normalize(entry.article)
+                _ = try requireSafeSegment(article.slug, label: "回收站文章 slug")
+                guard NativeTimestamp.date(from: entry.deletedAt) != nil,
+                      NativeTimestamp.date(from: entry.expiresAt) != nil else {
+                    throw NativeStoreError.fileSystem("回收站文章的时间戳无效")
+                }
+                return NativeTrashedArticle(article: article, deletedAt: entry.deletedAt, expiresAt: entry.expiresAt)
+            }
+            let moments = try decoded.moments.map { entry -> NativeTrashedMoment in
+                _ = try requireSafeSegment(entry.moment.id, label: "回收站微博 ID")
+                guard NativeTimestamp.date(from: entry.deletedAt) != nil,
+                      NativeTimestamp.date(from: entry.expiresAt) != nil else {
+                    throw NativeStoreError.fileSystem("回收站微博的时间戳无效")
+                }
+                return entry
+            }
+            return NativeTrashBackup(articles: articles, moments: moments)
+        } catch let error as NativeStoreError {
+            throw error
+        } catch {
+            throw NativeStoreError.fileSystem("无法读取 \(trashIndexURL.lastPathComponent)：\(error.localizedDescription)")
+        }
+    }
+
     private func importArticles(_ articles: [NativeArticle], into database: SQLiteDatabase) throws {
         if try database.integer("SELECT COUNT(*) FROM articles") == 0 {
             for article in articles { try insertArticle(article, into: database) }
@@ -872,6 +964,38 @@ public actor LocalBlogStore {
         for event in events { try insertActivity(event, into: database) }
     }
 
+    private func importTrashedArticles(_ articles: [NativeTrashedArticle], into database: SQLiteDatabase) throws {
+        for entry in articles {
+            let found = try database.integer(
+                "SELECT COUNT(*) FROM articles WHERE slug = ?",
+                values: [.text(entry.article.slug)]
+            ) ?? 0
+            guard found == 0 else { continue }
+            try insertArticle(
+                entry.article,
+                deletedAt: entry.deletedAt,
+                deleteExpiresAt: entry.expiresAt,
+                into: database
+            )
+        }
+    }
+
+    private func importTrashedMoments(_ moments: [NativeTrashedMoment], into database: SQLiteDatabase) throws {
+        for entry in moments {
+            let found = try database.integer(
+                "SELECT COUNT(*) FROM moments WHERE id = ?",
+                values: [.text(entry.moment.id)]
+            ) ?? 0
+            guard found == 0 else { continue }
+            try insertMoment(
+                entry.moment,
+                deletedAt: entry.deletedAt,
+                deleteExpiresAt: entry.expiresAt,
+                into: database
+            )
+        }
+    }
+
     private func storedArticle(withSlug slug: String, includingDeleted: Bool = false) throws -> NativeArticle? {
         var result: NativeArticle?
         let whereClause = includingDeleted ? "slug = ?" : "deleted_at IS NULL AND slug = ?"
@@ -890,7 +1014,12 @@ public actor LocalBlogStore {
         return articles
     }
 
-    private func insertArticle(_ article: NativeArticle, into database: SQLiteDatabase) throws {
+    private func insertArticle(
+        _ article: NativeArticle,
+        deletedAt: String? = nil,
+        deleteExpiresAt: String? = nil,
+        into database: SQLiteDatabase
+    ) throws {
         let bannerJSON: SQLiteValue
         if let banner = article.banner {
             bannerJSON = .text(try jsonString(banner))
@@ -901,7 +1030,7 @@ public actor LocalBlogStore {
         INSERT OR REPLACE INTO articles(
             slug, title, body, category, excerpt, banner_json, media_json, status,
             tags_json, updated_at, published_at, word_count, deleted_at, delete_expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, values: [
             .text(article.slug),
             .text(article.title),
@@ -915,6 +1044,8 @@ public actor LocalBlogStore {
             .text(article.updatedAt),
             article.publishedAt.map(SQLiteValue.text) ?? .null,
             .integer(article.wordCount ?? wordCount(article.body)),
+            deletedAt.map(SQLiteValue.text) ?? .null,
+            deleteExpiresAt.map(SQLiteValue.text) ?? .null,
         ])
     }
 
@@ -971,10 +1102,15 @@ public actor LocalBlogStore {
         return moments
     }
 
-    private func insertMoment(_ moment: NativeMoment, into database: SQLiteDatabase) throws {
+    private func insertMoment(
+        _ moment: NativeMoment,
+        deletedAt: String? = nil,
+        deleteExpiresAt: String? = nil,
+        into database: SQLiteDatabase
+    ) throws {
         try database.execute("""
         INSERT OR REPLACE INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, deleted_at, delete_expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, values: [
             .text(moment.id),
             .text(moment.createdAt),
@@ -982,6 +1118,8 @@ public actor LocalBlogStore {
             .text(moment.text),
             .text(try jsonString(moment.textRuns)),
             .text(try jsonString(moment.images)),
+            deletedAt.map(SQLiteValue.text) ?? .null,
+            deleteExpiresAt.map(SQLiteValue.text) ?? .null,
         ])
     }
 
@@ -1002,6 +1140,38 @@ public actor LocalBlogStore {
             textRuns: try decode(textRunsJSON),
             updatedAt: updatedAt
         )
+    }
+
+    private func trashBackup() throws -> NativeTrashBackup {
+        var articles: [NativeTrashedArticle] = []
+        try db().query(articleSelect + " WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL ORDER BY slug") { row in
+            guard let deletedAt = row.text(at: 12), let expiresAt = row.text(at: 13) else {
+                throw NativeStoreError.fileSystem("SQLite：回收站文章记录不完整")
+            }
+            articles.append(NativeTrashedArticle(
+                article: try decodeArticle(row),
+                deletedAt: deletedAt,
+                expiresAt: expiresAt
+            ))
+        }
+
+        var moments: [NativeTrashedMoment] = []
+        try db().query("""
+        SELECT id, created_at, updated_at, text, text_runs_json, images_json, deleted_at, delete_expires_at
+        FROM moments
+        WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL
+        ORDER BY id
+        """) { row in
+            guard let deletedAt = row.text(at: 6), let expiresAt = row.text(at: 7) else {
+                throw NativeStoreError.fileSystem("SQLite：回收站微博记录不完整")
+            }
+            moments.append(NativeTrashedMoment(
+                moment: try decodeMoment(row),
+                deletedAt: deletedAt,
+                expiresAt: expiresAt
+            ))
+        }
+        return NativeTrashBackup(articles: articles, moments: moments)
     }
 
     private func allActivityEvents() throws -> [NativeActivityEvent] {
@@ -1045,6 +1215,10 @@ public actor LocalBlogStore {
 
     private func writeActivityEvents() throws {
         try writeJSON(try allActivityEvents(), to: activityURL.appendingPathComponent("events.json"))
+    }
+
+    private func writeTrashBackup() throws {
+        try writeJSON(try trashBackup(), to: trashIndexURL)
     }
 
     private func rebuildArticleExports() throws {
@@ -1308,11 +1482,28 @@ public actor LocalBlogStore {
     }
 
     private var articleSelect: String {
-        "SELECT slug, title, body, category, excerpt, banner_json, media_json, status, tags_json, updated_at, published_at, word_count FROM articles"
+        "SELECT slug, title, body, category, excerpt, banner_json, media_json, status, tags_json, updated_at, published_at, word_count, deleted_at, delete_expires_at FROM articles"
     }
 }
 
 private struct NativeActivityEvent: Codable, Equatable {
     let type: String
     let createdAt: String
+}
+
+private struct NativeTrashedArticle: Codable, Equatable {
+    let article: NativeArticle
+    let deletedAt: String
+    let expiresAt: String
+}
+
+private struct NativeTrashedMoment: Codable, Equatable {
+    let moment: NativeMoment
+    let deletedAt: String
+    let expiresAt: String
+}
+
+private struct NativeTrashBackup: Codable, Equatable {
+    let articles: [NativeTrashedArticle]
+    let moments: [NativeTrashedMoment]
 }

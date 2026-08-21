@@ -38,9 +38,9 @@ swift run --package-path macos LeonBook
 应用按以下顺序选择数据目录：
 
 1. `LEON_BOOK_WORKDIR`
-2. `~/Library/Application Support/leon-book/`
+2. `/Volumes/T7Shield/myblog/`
 
-若要继续使用外置盘上的现有库，请设置 `LEON_BOOK_WORKDIR`。
+默认使用 `/Volumes/T7Shield/myblog/`；如果该目录不可用，首次进入应用时会要求选择工作目录并记住选择。如需使用其他目录，请设置 `LEON_BOOK_WORKDIR`。
 
 默认用户为 `leon`。每位用户都有独立的 `workspaces/<user-id>` 目录。升级到多用户结构时，根目录中已有的文章、草稿、媒体、动态和活动记录会自动迁移到 `leon` 工作空间。首次启动时，已有 JSON 数据会自动导入工作空间的 SQLite 数据库。
 

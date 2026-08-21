@@ -1,6 +1,8 @@
 import AVKit
 import AppKit
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ArticleReaderView: View {
     @ObservedObject var model: NativeAppModel
@@ -156,9 +158,34 @@ private struct NativeImageView: View {
                 failedToLoad = true
                 return
             }
-            image = NSImage(contentsOf: fileURL)
+            let decoded = await Task.detached(priority: .userInitiated) {
+                NativeImageDecodeResult(
+                    image: NativeImageLoader.thumbnail(from: fileURL, maxPixelSize: 2_400)
+                )
+            }.value
+            guard !Task.isCancelled else { return }
+            image = decoded.image
             failedToLoad = image == nil
         }
+    }
+}
+
+private struct NativeImageDecodeResult: @unchecked Sendable {
+    let image: NSImage?
+}
+
+private enum NativeImageLoader {
+    static func thumbnail(from url: URL, maxPixelSize: Int) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 }
 
@@ -320,6 +347,29 @@ private final class PastingTextView: NSTextView {
     }
 
     private func pastedImage(from pasteboard: NSPasteboard) -> NSImage? {
+        // Some apps expose copied images as an NSImage object instead of
+        // advertising a concrete PNG/TIFF representation.
+        if let image = pasteboard
+            .readObjects(forClasses: [NSImage.self])?
+            .compactMap({ $0 as? NSImage })
+            .first {
+            return image
+        }
+
+        // Prefer the original image representation so JPEG, HEIC, WebP,
+        // and other image formats copied by browsers/design tools work too.
+        for item in pasteboard.pasteboardItems ?? [] {
+            for type in item.types {
+                guard let uniformType = UTType(type.rawValue),
+                      uniformType.conforms(to: .image),
+                      let data = item.data(forType: type),
+                      let image = NSImage(data: data) else { continue }
+                return image
+            }
+        }
+
+        // Keep the explicit AppKit fallbacks for screenshots and older apps
+        // that provide data lazily through these pasteboard types.
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
             if let data = pasteboard.data(forType: type), let image = NSImage(data: data) {
                 return image

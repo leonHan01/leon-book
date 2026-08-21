@@ -38,6 +38,9 @@ public struct ContentView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                     Text(error).lineLimit(2)
                     Spacer()
+                    if model.needsWorkDirectorySelection {
+                        Button("选择工作目录") { model.chooseWorkDirectory() }
+                    }
                     Button("关闭") { model.errorMessage = nil }
                 }
                 .font(.callout)

@@ -325,7 +325,7 @@ private struct MomentImageGrid: View {
     }
 
     private var imageHeight: CGFloat {
-        images.count == 1 ? 250 : images.count == 2 ? 168 : 106
+        images.count == 1 ? 280 : images.count == 2 ? 190 : 128
     }
 
     var body: some View {
@@ -353,7 +353,7 @@ private struct MomentImageGrid: View {
     }
 }
 
-private enum MomentImageLoadMode: Equatable {
+private enum MomentImageLoadMode: Equatable, Sendable {
     case thumbnail(maxPixelSize: Int)
     case fullSize
 
@@ -406,7 +406,11 @@ private struct MomentImage: View {
                 failedToLoad = true
                 return
             }
-            image = MomentImageLoader.load(from: url, mode: loadMode)
+            let decoded = await Task.detached(priority: .userInitiated) {
+                MomentImageDecodeResult(image: MomentImageLoader.load(from: url, mode: loadMode))
+            }.value
+            guard !Task.isCancelled else { return }
+            image = decoded.image
             failedToLoad = image == nil
         }
         .accessibilityLabel(media.name)
@@ -437,6 +441,10 @@ private enum MomentImageLoader {
             size: NSSize(width: cgImage.width, height: cgImage.height)
         )
     }
+}
+
+private struct MomentImageDecodeResult: @unchecked Sendable {
+    let image: NSImage?
 }
 
 private struct MomentImageBrowserState: Identifiable {
@@ -667,7 +675,11 @@ private struct MomentZoomableImage: View {
                 failedToLoad = true
                 return
             }
-            image = MomentImageLoader.load(from: url, mode: .fullSize)
+            let decoded = await Task.detached(priority: .userInitiated) {
+                MomentImageDecodeResult(image: MomentImageLoader.load(from: url, mode: .fullSize))
+            }.value
+            guard !Task.isCancelled else { return }
+            image = decoded.image
             failedToLoad = image == nil
         }
         .accessibilityLabel("大图浏览：\(media.name)")

@@ -19,6 +19,7 @@ public final class NativeAppModel: ObservableObject {
     @Published private(set) var isSaving = false
     @Published private(set) var isUploadingMedia = false
     @Published private(set) var storageReady = false
+    @Published private(set) var needsWorkDirectorySelection = false
     @Published private(set) var users: [NativeUser] = []
     @Published private(set) var currentUser = NativeUser.leon
     @Published private(set) var isSwitchingWorkspace = false
@@ -26,12 +27,13 @@ public final class NativeAppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var searchText = ""
 
-    private let userWorkspaces: UserWorkspaceStore
+    private var userWorkspaces: UserWorkspaceStore
     private(set) var store: LocalBlogStore
     private var trashCleanupTask: Task<Void, Never>?
     private var uploadCount = 0
     private var workspaceGeneration = 0
     private var pendingEditorMediaCleanup: [NativeMedia] = []
+    private var editorOriginalArticle: NativeArticle?
 
     public init() {
         let rootURL = LocalBlogStore.defaultRootURL
@@ -64,16 +66,73 @@ public final class NativeAppModel: ObservableObject {
 
     func start() async {
         isLoading = true
+        defer { isLoading = false }
+        guard let rootURL = workDirectoryForStartup() else {
+            storageReady = false
+            needsWorkDirectorySelection = true
+            errorMessage = "未选择工作目录，应用不会创建空数据库。"
+            return
+        }
         do {
-            let workspace = try await userWorkspaces.prepare()
-            try await loadWorkspace(workspace)
-            storageReady = true
+            try await connect(to: rootURL)
             startTrashCleanupLoop()
         } catch {
             storageReady = false
             errorMessage = error.localizedDescription
         }
-        isLoading = false
+    }
+
+    func chooseWorkDirectory() {
+        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia,
+              let rootURL = presentWorkDirectoryPicker() else { return }
+        LocalBlogStore.rememberWorkDirectory(rootURL)
+        isLoading = true
+        Task {
+            defer { isLoading = false }
+            do {
+                try await connect(to: rootURL)
+                startTrashCleanupLoop()
+                errorMessage = nil
+            } catch {
+                storageReady = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func connect(to rootURL: URL) async throws {
+        userWorkspaces = UserWorkspaceStore(rootURL: rootURL)
+        store = LocalBlogStore(rootURL: rootURL)
+        let workspace = try await userWorkspaces.prepare()
+        try await loadWorkspace(workspace)
+        needsWorkDirectorySelection = false
+        storageReady = true
+    }
+
+    private func workDirectoryForStartup() -> URL? {
+        guard LocalBlogStore.needsWorkDirectorySelection else {
+            return LocalBlogStore.defaultRootURL
+        }
+        guard let selected = presentWorkDirectoryPicker() else { return nil }
+        LocalBlogStore.rememberWorkDirectory(selected)
+        return selected
+    }
+
+    private func presentWorkDirectoryPicker() -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "选择工作目录"
+        panel.message = "默认工作目录 /Volumes/T7Shield/myblog 不可用，请选择一个用于保存博客数据的文件夹。"
+        panel.prompt = "使用此目录"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        let volumesURL = URL(fileURLWithPath: "/Volumes", isDirectory: true)
+        if FileManager.default.fileExists(atPath: volumesURL.path) {
+            panel.directoryURL = volumesURL
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.standardizedFileURL
     }
 
     func selectUser(_ user: NativeUser) {
@@ -146,6 +205,7 @@ public final class NativeAppModel: ObservableObject {
         selectedSlug = nil
         editor = NativeEditorDraft()
         pendingEditorMediaCleanup = []
+        editorOriginalArticle = nil
         momentDraft = NativeMomentDraft()
         editingMomentID = nil
         searchText = ""
@@ -180,12 +240,18 @@ public final class NativeAppModel: ObservableObject {
         selectedArticle = nil
         editor = NativeEditorDraft()
         pendingEditorMediaCleanup = []
+        editorOriginalArticle = nil
         section = .editor
         errorMessage = nil
     }
 
     func editSelected() {
         guard let article = selectedArticle else { return }
+        guard !isSaving, !isUploadingMedia else { return }
+        if isEditorDirty {
+            guard confirmDiscardUnsavedWork() else { return }
+            discardUnreferencedMedia(editorDraftMedia() + pendingEditorMediaCleanup)
+        }
         editor = NativeEditorDraft(
             slug: article.slug,
             title: article.title,
@@ -199,6 +265,7 @@ public final class NativeAppModel: ObservableObject {
             updatedAt: article.updatedAt
         )
         pendingEditorMediaCleanup = []
+        editorOriginalArticle = article
         section = .editor
     }
 
@@ -242,6 +309,7 @@ public final class NativeAppModel: ObservableObject {
             editor.updatedAt = saved.updatedAt
             selectedSlug = saved.slug
             selectedArticle = saved
+            editorOriginalArticle = saved
             discardUnreferencedMedia(cleanupCandidates)
             try await reload()
             section = .reader
@@ -251,6 +319,7 @@ public final class NativeAppModel: ObservableObject {
                 editor.slug = latest.slug
                 editor.updatedAt = latest.updatedAt
                 selectedArticle = latest
+                editorOriginalArticle = latest
             }
             errorMessage = error.localizedDescription
         }
@@ -392,6 +461,10 @@ public final class NativeAppModel: ObservableObject {
 
     func beginEditingMoment(_ moment: NativeMoment) {
         guard !isPublishingMoment else { return }
+        if isMomentDraftDirty {
+            guard confirmDiscardMomentDraft() else { return }
+            discardUnreferencedMedia(momentDraft.images)
+        }
         editingMomentID = moment.id
         momentDraft = NativeMomentDraft(
             text: moment.text,
@@ -564,14 +637,15 @@ public final class NativeAppModel: ObservableObject {
                 || editor.banner != nil
                 || !editor.media.isEmpty
         }
-        guard let article = selectedArticle else { return false }
-        return editor.title != article.title
-            || editor.body != article.body
-            || editor.excerpt != article.excerpt
-            || editor.category != article.category
-            || editor.banner != article.banner
-            || editor.media != article.media
-            || editor.status != article.status
+        guard let original = editorOriginalArticle else { return false }
+        return editor.title != original.title
+            || editor.body != original.body
+            || editor.excerpt != original.excerpt
+            || editor.category != original.category
+            || editor.tags != original.tags.joined(separator: ", ")
+            || editor.banner != original.banner
+            || editor.media != original.media
+            || editor.status != original.status
     }
 
     private var isMomentDraftDirty: Bool {
@@ -589,6 +663,16 @@ public final class NativeAppModel: ObservableObject {
                 ? "当前微博草稿还有未发布的内容或图片。"
                 : "当前文章还有未保存的标题、正文或附件。"
         alert.addButton(withTitle: "放弃")
+        alert.addButton(withTitle: "继续编辑")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func confirmDiscardMomentDraft() -> Bool {
+        guard isMomentDraftDirty else { return true }
+        let alert = NSAlert()
+        alert.messageText = "放弃未发布的微博？"
+        alert.informativeText = "当前微博草稿中的文字和图片将被放弃。"
+        alert.addButton(withTitle: "放弃并编辑")
         alert.addButton(withTitle: "继续编辑")
         return alert.runModal() == .alertFirstButtonReturn
     }

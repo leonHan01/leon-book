@@ -50,7 +50,7 @@ macos/dist/leon-book.app
 By default, data is stored at:
 
 ```text
-~/Library/Application Support/leon-book/
+/Volumes/T7Shield/myblog/
 ├── leon-book.sqlite    # Primary SQLite database for users and settings
 ├── users.json          # Human-readable compatibility export
 ├── active-user.json    # Human-readable compatibility export
@@ -67,9 +67,9 @@ By default, data is stored at:
 The data directory is selected in this order:
 
 1. `LEON_BOOK_WORKDIR`
-2. `~/Library/Application Support/leon-book/`
+2. `/Volumes/T7Shield/myblog/`
 
-To keep using an external disk, set the environment variable before opening the app:
+The default data directory is `/Volumes/T7Shield/myblog/`. If it is unavailable, the app asks you to choose a work directory on first launch and remembers your choice. To use another directory, set the environment variable before opening the app:
 
 ```bash
 LEON_BOOK_WORKDIR=/Volumes/T7Shield/myblog ./scripts/leonblog open

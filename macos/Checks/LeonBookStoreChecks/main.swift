@@ -236,17 +236,13 @@ func testDecodableButStaleJSONExportsAreRebuilt() async throws {
     }
 }
 
-func testDefaultDataDirectoryDoesNotProbeT7() {
+func testDefaultDataDirectoryUsesT7() {
     let configured = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"]?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     guard configured.isEmpty else { return }
     expect(
-        LocalBlogStore.defaultRootURL.path != "/Volumes/T7Shield/myblog",
-        "default data directory should not silently use the T7 probe path"
-    )
-    expect(
-        LocalBlogStore.defaultRootURL.path.contains("Application Support/leon-book"),
-        "default data directory should be Application Support"
+        LocalBlogStore.defaultRootURL.path == "/Volumes/T7Shield/myblog",
+        "default data directory should use the T7 workspace"
     )
 }
 
@@ -383,6 +379,81 @@ func testTrashedArticleJSONIsNotImportedAsLive() async throws {
     }
 }
 
+func testTrashJSONBackupSurvivesSQLiteRecovery() async throws {
+    try await withWorkspace { workspace in
+        let source = workspace.appendingPathComponent("source", isDirectory: true)
+        let backup = workspace.appendingPathComponent("backup", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+
+        let store = LocalBlogStore(rootURL: source)
+        let article = try await store.saveArticle(
+            savePayload(slug: "trashed-backup", title: "回收站文章", body: "稍后恢复")
+        )
+        let moment = try await store.saveMoment(text: "回收站微博", textRuns: [], images: [])
+        try await store.deleteArticle(slug: article.slug, expectedUpdatedAt: article.updatedAt)
+        try await store.deleteMoment(id: moment.id)
+
+        let trashIndex = source.appendingPathComponent("trash/index.json")
+        let sourceTrash = try JSONSerialization.jsonObject(with: Data(contentsOf: trashIndex)) as? [String: Any]
+        expect((sourceTrash?["articles"] as? [[String: Any]])?.count == 1, "trash backup should include deleted articles")
+        expect((sourceTrash?["moments"] as? [[String: Any]])?.count == 1, "trash backup should include deleted moments")
+
+        try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+        for directory in ["articles", "moments", "activity", "trash"] {
+            try FileManager.default.copyItem(
+                at: source.appendingPathComponent(directory, isDirectory: true),
+                to: backup.appendingPathComponent(directory, isDirectory: true)
+            )
+        }
+
+        _ = try await LocalBlogStore(rootURL: backup).listArticles()
+        let recoveredTrash = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: backup.appendingPathComponent("trash/index.json"))
+        ) as? [String: Any]
+        expect((recoveredTrash?["articles"] as? [[String: Any]])?.count == 1, "SQLite recovery should preserve deleted articles in the recycle bin")
+        expect((recoveredTrash?["moments"] as? [[String: Any]])?.count == 1, "SQLite recovery should preserve deleted moments in the recycle bin")
+    }
+}
+
+func testPurgingArticleKeepsMediaReferencedByAnotherArticle() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let sharedURL = "/media/original/shared.png"
+        let sharedFile = workspace.appendingPathComponent("media/original/shared.png")
+        try FileManager.default.createDirectory(at: sharedFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("shared image".utf8).write(to: sharedFile)
+
+        let original = try await store.saveArticle(
+            savePayload(
+                slug: "original",
+                title: "原始文章",
+                body: "原图",
+                media: [NativeMedia(kind: "image", name: "shared.png", size: 12, url: sharedURL)]
+            )
+        )
+        _ = try await store.saveArticle(
+            savePayload(slug: "reference", title: "引用文章", body: "![共享图片](\(sharedURL))")
+        )
+        try await store.deleteArticle(slug: original.slug, expectedUpdatedAt: original.updatedAt)
+
+        let expire = Process()
+        expire.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        expire.arguments = [
+            workspace.appendingPathComponent("leon-book.sqlite").path,
+            "UPDATE articles SET delete_expires_at = '2000-01-01T00:00:00.000Z' WHERE slug = 'original';",
+        ]
+        try expire.run()
+        expire.waitUntilExit()
+        expect(expire.terminationStatus == 0, "should expire the original article for media cleanup coverage")
+
+        _ = try await store.listArticles()
+        expect(
+            FileManager.default.fileExists(atPath: sharedFile.path),
+            "purging an article must retain media still referenced by another article body"
+        )
+    }
+}
+
 func testFractionalISO8601TimestampsParse() {
     expect(
         NativeTimestamp.date(from: "2026-08-02T17:06:49.910Z") != nil,
@@ -482,13 +553,15 @@ let checks: [(String, () async throws -> Void)] = [
     ("decodable but stale JSON exports are rebuilt", testDecodableButStaleJSONExportsAreRebuilt),
     ("published word count counts Chinese characters", testPublishedWordCountCountsChineseCharacters),
     ("fractional ISO8601 timestamps parse", { testFractionalISO8601TimestampsParse() }),
-    ("default data directory does not probe T7", { testDefaultDataDirectoryDoesNotProbeT7() }),
+    ("default data directory uses T7", { testDefaultDataDirectoryUsesT7() }),
     ("allocateSlug reserves inbox/moments and avoids collisions", testAllocateSlugReservesInboxAndMomentsAndAvoidsCollisions),
     ("reserved slug is rejected and inbox media moves on first save", testReservedSlugCannotBeSavedAndInboxMediaMovesOnFirstSave),
     ("mediaURL rejects invalid paths", { await testMediaURLRejectsInvalidPaths() }),
     ("activity is bucketed in the local time zone", testActivityIsBucketedInLocalTimeZone),
     ("root content database moves into leon workspace", testRootContentDatabaseMovesIntoLeonWorkspace),
     ("trashed article JSON is not imported as live", testTrashedArticleJSONIsNotImportedAsLive),
+    ("trash JSON backup survives SQLite recovery", testTrashJSONBackupSurvivesSQLiteRecovery),
+    ("purging an article keeps media referenced by another article", testPurgingArticleKeepsMediaReferencedByAnotherArticle),
     ("legacy article slug cannot escape workspace", testLegacyArticleSlugCannotEscapeWorkspace),
     ("invalid legacy user ID is not imported", testInvalidLegacyUserIDIsNotImported),
 ]

@@ -24,9 +24,9 @@ leonblog - leon-book 原生 macOS 应用管理
 
 数据位置：
   \$LEON_BOOK_WORKDIR（若已设置）
-  ~/Library/Application Support/leon-book（默认）
+  /Volumes/T7Shield/myblog（默认）
 
-若数据在外置盘，打开前请设置：
+若要使用其他目录，打开前请设置：
   LEON_BOOK_WORKDIR=/Volumes/T7Shield/myblog ./scripts/leonblog open
 EOF
 }

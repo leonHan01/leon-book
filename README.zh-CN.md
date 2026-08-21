@@ -50,7 +50,7 @@ macos/dist/leon-book.app
 默认数据目录为：
 
 ```text
-~/Library/Application Support/leon-book/
+/Volumes/T7Shield/myblog/
 ├── leon-book.sqlite    # 用户和设置的主 SQLite 数据库
 ├── users.json          # 可读的兼容性导出
 ├── active-user.json    # 可读的兼容性导出
@@ -67,9 +67,9 @@ macos/dist/leon-book.app
 应用按以下顺序选择数据目录：
 
 1. `LEON_BOOK_WORKDIR`
-2. `~/Library/Application Support/leon-book/`
+2. `/Volumes/T7Shield/myblog/`
 
-若数据在外置盘，打开前请设置环境变量：
+默认数据目录为 `/Volumes/T7Shield/myblog/`。如果该目录不可用，首次进入应用时会要求选择一个工作目录；之后会记住你的选择。如需使用其他目录，也可以设置环境变量：
 
 ```bash
 LEON_BOOK_WORKDIR=/Volumes/T7Shield/myblog ./scripts/leonblog open
