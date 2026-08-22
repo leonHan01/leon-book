@@ -4,6 +4,7 @@ import Foundation
 public actor LocalBlogStore {
     private static let trashRetentionDays = 30
     private static let savedWorkDirectoryKey = "leonBook.workDirectoryPath"
+    private static let savedBackupDirectoryKey = "leonBook.backupDirectoryPath"
 
     public static let defaultWorkDirectoryURL = URL(
         fileURLWithPath: "/Volumes/T7Shield/myblog",
@@ -40,6 +41,22 @@ public actor LocalBlogStore {
         UserDefaults.standard.set(url.standardizedFileURL.path, forKey: savedWorkDirectoryKey)
     }
 
+    public static var savedBackupDirectoryURL: URL? {
+        guard let saved = UserDefaults.standard.string(forKey: savedBackupDirectoryKey),
+              !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: saved, isDirectory: true)
+    }
+
+    public static func rememberBackupDirectory(_ url: URL) {
+        UserDefaults.standard.set(url.standardizedFileURL.path, forKey: savedBackupDirectoryKey)
+    }
+
+    public static func clearBackupDirectory() {
+        UserDefaults.standard.removeObject(forKey: savedBackupDirectoryKey)
+    }
+
     let rootURL: URL
     private var database: SQLiteDatabase?
     private var jsonBackupVerified = false
@@ -57,6 +74,12 @@ public actor LocalBlogStore {
 
     public init(rootURL: URL = LocalBlogStore.defaultRootURL) {
         self.rootURL = rootURL.standardizedFileURL
+    }
+
+    public func prepareForBackup() throws {
+        try prepare()
+        try db().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        try exportJsonBackupIfNeeded()
     }
 
     func prepare() throws {
@@ -119,7 +142,11 @@ public actor LocalBlogStore {
         images: [NativeMedia]
     ) throws -> NativeMoment {
         try prepare()
-        let normalizedText = normalizedMomentText(text, textRuns: textRuns)
+        let normalizedInput = normalizedMomentText(text, textRuns: textRuns)
+        let normalizedText = NativeMomentTag.content(
+            from: normalizedInput.text,
+            textRuns: normalizedInput.runs
+        )
         let normalizedImages = Array(images
             .filter { !$0.isVideo && !$0.url.isEmpty }
             .map(normalizeMedia)
@@ -135,6 +162,8 @@ public actor LocalBlogStore {
             createdAt: createdAt,
             id: id,
             images: normalizedImages,
+            isFavorite: false,
+            tags: normalizedText.tags,
             text: normalizedText.text,
             textRuns: normalizedText.runs,
             updatedAt: createdAt
@@ -153,7 +182,7 @@ public actor LocalBlogStore {
         return saved
     }
 
-    func updateMoment(
+    public func updateMoment(
         id: String,
         text: String,
         textRuns: [NativeMomentTextRun],
@@ -163,7 +192,11 @@ public actor LocalBlogStore {
         let safeID = try requireSafeSegment(id, label: "微博 ID")
         guard let previous = try moment(withID: safeID) else { throw NativeStoreError.notFound }
 
-        let normalizedText = normalizedMomentText(text, textRuns: textRuns)
+        let normalizedInput = normalizedMomentText(text, textRuns: textRuns)
+        let normalizedText = NativeMomentTag.content(
+            from: normalizedInput.text,
+            textRuns: normalizedInput.runs
+        )
         let normalizedImages = Array(images
             .filter { !$0.isVideo && !$0.url.isEmpty }
             .map(normalizeMedia)
@@ -176,6 +209,8 @@ public actor LocalBlogStore {
             createdAt: previous.createdAt,
             id: previous.id,
             images: normalizedImages,
+            isFavorite: previous.isFavorite,
+            tags: normalizedText.tags,
             text: normalizedText.text,
             textRuns: normalizedText.runs,
             updatedAt: nextTimestamp(after: previous.updatedAt)
@@ -192,6 +227,33 @@ public actor LocalBlogStore {
             jsonBackupVerified = false
         }
         try removeUnreferencedMomentImages(previous.images)
+        return updated
+    }
+
+    public func setMomentFavorite(id: String, isFavorite: Bool) throws -> NativeMoment {
+        try prepare()
+        let safeID = try requireSafeSegment(id, label: "微博 ID")
+        guard let previous = try moment(withID: safeID) else { throw NativeStoreError.notFound }
+
+        try db().execute(
+            "UPDATE moments SET is_favorite = ? WHERE id = ?",
+            values: [.integer(isFavorite ? 1 : 0), .text(safeID)]
+        )
+        let updated = NativeMoment(
+            createdAt: previous.createdAt,
+            id: previous.id,
+            images: previous.images,
+            isFavorite: isFavorite,
+            tags: previous.tags,
+            text: previous.text,
+            textRuns: previous.textRuns,
+            updatedAt: previous.updatedAt
+        )
+        do {
+            try rebuildMomentsIndex()
+        } catch {
+            jsonBackupVerified = false
+        }
         return updated
     }
 
@@ -706,6 +768,8 @@ public actor LocalBlogStore {
             text TEXT NOT NULL,
             text_runs_json TEXT NOT NULL,
             images_json TEXT NOT NULL,
+            tags_json TEXT NOT NULL,
+            is_favorite INTEGER NOT NULL DEFAULT 0,
             deleted_at TEXT,
             delete_expires_at TEXT
         );
@@ -721,19 +785,26 @@ public actor LocalBlogStore {
         try ensureColumn("delete_expires_at", in: "articles", database: database)
         try ensureColumn("deleted_at", in: "moments", database: database)
         try ensureColumn("delete_expires_at", in: "moments", database: database)
+        try ensureColumn("tags_json", in: "moments", database: database)
+        try ensureColumn("is_favorite", in: "moments", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
         try database.execute("""
         CREATE INDEX IF NOT EXISTS articles_trash_expiry_idx ON articles(delete_expires_at);
         CREATE INDEX IF NOT EXISTS moments_trash_expiry_idx ON moments(delete_expires_at);
         """)
     }
 
-    private func ensureColumn(_ column: String, in table: String, database: SQLiteDatabase) throws {
+    private func ensureColumn(
+        _ column: String,
+        in table: String,
+        database: SQLiteDatabase,
+        definition: String = "TEXT"
+    ) throws {
         var exists = false
         try database.query("PRAGMA table_info(\(table))") { row in
             if row.text(at: 1) == column { exists = true }
         }
         if !exists {
-            try database.execute("ALTER TABLE \(table) ADD COLUMN \(column) TEXT")
+            try database.execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
         }
     }
 
@@ -1082,7 +1153,7 @@ public actor LocalBlogStore {
         var result: NativeMoment?
         let whereClause = includingDeleted ? "id = ?" : "deleted_at IS NULL AND id = ?"
         try db().query(
-            "SELECT id, created_at, updated_at, text, text_runs_json, images_json FROM moments WHERE \(whereClause)",
+            "SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite FROM moments WHERE \(whereClause)",
             values: [.text(id)]
         ) { row in
             result = try decodeMoment(row)
@@ -1094,7 +1165,7 @@ public actor LocalBlogStore {
         var moments: [NativeMoment] = []
         let whereClause = includingDeleted ? "" : "WHERE deleted_at IS NULL"
         try db().query("""
-        SELECT id, created_at, updated_at, text, text_runs_json, images_json
+        SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite
         FROM moments \(whereClause) ORDER BY created_at DESC, id DESC
         """) { row in
             moments.append(try decodeMoment(row))
@@ -1109,8 +1180,8 @@ public actor LocalBlogStore {
         into database: SQLiteDatabase
     ) throws {
         try database.execute("""
-        INSERT OR REPLACE INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, deleted_at, delete_expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, values: [
             .text(moment.id),
             .text(moment.createdAt),
@@ -1118,6 +1189,8 @@ public actor LocalBlogStore {
             .text(moment.text),
             .text(try jsonString(moment.textRuns)),
             .text(try jsonString(moment.images)),
+            .text(try jsonString(moment.tags)),
+            .integer(moment.isFavorite ? 1 : 0),
             deletedAt.map(SQLiteValue.text) ?? .null,
             deleteExpiresAt.map(SQLiteValue.text) ?? .null,
         ])
@@ -1132,10 +1205,19 @@ public actor LocalBlogStore {
               let imagesJSON = row.text(at: 5) else {
             throw NativeStoreError.fileSystem("SQLite：动态记录不完整")
         }
+        let tags: [String]
+        if let tagsJSON = row.text(at: 6) {
+            tags = try decode(tagsJSON)
+        } else {
+            tags = NativeMomentTag.extract(from: text)
+        }
+        let isFavorite = row.integer(at: 7) == 1
         return NativeMoment(
             createdAt: createdAt,
             id: id,
             images: try decode(imagesJSON),
+            isFavorite: isFavorite,
+            tags: tags,
             text: text,
             textRuns: try decode(textRunsJSON),
             updatedAt: updatedAt
@@ -1157,12 +1239,12 @@ public actor LocalBlogStore {
 
         var moments: [NativeTrashedMoment] = []
         try db().query("""
-        SELECT id, created_at, updated_at, text, text_runs_json, images_json, deleted_at, delete_expires_at
+        SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at
         FROM moments
         WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL
         ORDER BY id
         """) { row in
-            guard let deletedAt = row.text(at: 6), let expiresAt = row.text(at: 7) else {
+            guard let deletedAt = row.text(at: 8), let expiresAt = row.text(at: 9) else {
                 throw NativeStoreError.fileSystem("SQLite：回收站微博记录不完整")
             }
             moments.append(NativeTrashedMoment(

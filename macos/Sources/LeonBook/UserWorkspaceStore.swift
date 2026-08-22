@@ -25,6 +25,11 @@ public actor UserWorkspaceStore {
         self.rootURL = rootURL.standardizedFileURL
     }
 
+    public func prepareForBackup() throws {
+        _ = try prepare()
+        try db().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    }
+
     public func prepare() throws -> NativeWorkspaceState {
         do {
             try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)

@@ -2,6 +2,21 @@ import AppKit
 import Foundation
 import SwiftUI
 
+struct NativeMomentTimelineGroup: Identifiable {
+    let id: String
+    let label: String
+    var moments: [NativeMoment]
+}
+
+struct NativeMomentTagFilter: Identifiable, Hashable {
+    let tag: String
+    let count: Int
+
+    var id: String {
+        tag.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+}
+
 @MainActor
 public final class NativeAppModel: ObservableObject {
     @Published var section: NativeSection = .dashboard
@@ -14,6 +29,9 @@ public final class NativeAppModel: ObservableObject {
     @Published var editor = NativeEditorDraft()
     @Published var momentDraft = NativeMomentDraft()
     @Published private(set) var editingMomentID: String?
+    @Published private(set) var selectedMomentTags: Set<String> = []
+    @Published private(set) var momentDateFilter: NativeMomentDateFilter = .all
+    @Published private(set) var showsOnlyFavoriteMoments = false
     @Published private(set) var isLoading = true
     @Published private(set) var isPublishingMoment = false
     @Published private(set) var isSaving = false
@@ -24,8 +42,14 @@ public final class NativeAppModel: ObservableObject {
     @Published private(set) var currentUser = NativeUser.leon
     @Published private(set) var isSwitchingWorkspace = false
     @Published private(set) var dataDirectoryPath = LocalBlogStore.defaultRootURL.path
+    @Published private(set) var dataRootDirectoryPath = LocalBlogStore.defaultRootURL.path
+    @Published private(set) var backupDirectoryPath = LocalBlogStore.savedBackupDirectoryURL?.path ?? ""
+    @Published private(set) var lastBackupPath = ""
+    @Published private(set) var backupStatus = "尚未生成备份"
+    @Published private(set) var isBackingUp = false
     @Published var errorMessage: String?
     @Published var searchText = ""
+    @Published var momentSearchText = ""
 
     private var userWorkspaces: UserWorkspaceStore
     private(set) var store: LocalBlogStore
@@ -34,6 +58,7 @@ public final class NativeAppModel: ObservableObject {
     private var workspaceGeneration = 0
     private var pendingEditorMediaCleanup: [NativeMedia] = []
     private var editorOriginalArticle: NativeArticle?
+    private var backupTask: Task<Void, Never>?
 
     public init() {
         let rootURL = LocalBlogStore.defaultRootURL
@@ -44,6 +69,11 @@ public final class NativeAppModel: ObservableObject {
 
     deinit {
         trashCleanupTask?.cancel()
+        backupTask?.cancel()
+    }
+
+    private func momentTagIdentifier(_ tag: String) -> String {
+        tag.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
     var publishedArticles: [NativeArticleSummary] {
@@ -64,6 +94,102 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
+    var availableMomentTagFilters: [NativeMomentTagFilter] {
+        var filters: [String: NativeMomentTagFilter] = [:]
+
+        for moment in moments {
+            var countedTags = Set<String>()
+            for tag in moment.tags {
+                let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                let identifier = momentTagIdentifier(normalized)
+                guard !normalized.isEmpty, countedTags.insert(identifier).inserted else { continue }
+
+                if let existing = filters[identifier] {
+                    filters[identifier] = NativeMomentTagFilter(tag: existing.tag, count: existing.count + 1)
+                } else {
+                    filters[identifier] = NativeMomentTagFilter(tag: normalized, count: 1)
+                }
+            }
+        }
+
+        return filters.values.sorted {
+            if $0.count != $1.count { return $0.count > $1.count }
+            return $0.tag.localizedCaseInsensitiveCompare($1.tag) == .orderedAscending
+        }
+    }
+
+    var availableMomentTags: [String] {
+        availableMomentTagFilters.map(\.tag)
+    }
+
+    var filteredMoments: [NativeMoment] {
+        let query = momentSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return moments.filter { moment in
+            let matchesSelectedTags = selectedMomentTags.isEmpty || moment.tags.contains { tag in
+                selectedMomentTags.contains { selectedTag in
+                    selectedTag.caseInsensitiveCompare(tag) == .orderedSame
+                }
+            }
+            return matchesSelectedTags
+                && (!showsOnlyFavoriteMoments || moment.isFavorite)
+                && momentDateFilter.includes(timestamp: moment.createdAt)
+                && moment.matches(search: query)
+        }
+    }
+
+    var isFilteringMoments: Bool {
+        !selectedMomentTags.isEmpty
+            || momentDateFilter != .all
+            || showsOnlyFavoriteMoments
+            || !momentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var availableMomentMonths: [NativeMomentMonth] {
+        var months = Set<NativeMomentMonth>()
+        for moment in moments {
+            guard let date = NativeTimestamp.date(from: moment.createdAt) else { continue }
+            let components = Calendar.current.dateComponents([.year, .month], from: date)
+            guard let year = components.year, let month = components.month else { continue }
+            months.insert(NativeMomentMonth(year: year, month: month))
+        }
+        return months.sorted {
+            $0.year == $1.year ? $0.month > $1.month : $0.year > $1.year
+        }
+    }
+
+    var availableMomentYears: [Int] {
+        Set(availableMomentMonths.map(\.year)).sorted(by: >)
+    }
+
+    var momentTimeline: [NativeMomentTimelineGroup] {
+        let calendar = Calendar.current
+        var groups: [NativeMomentTimelineGroup] = []
+
+        for moment in filteredMoments {
+            guard let date = NativeTimestamp.date(from: moment.createdAt) else {
+                groups.append(NativeMomentTimelineGroup(
+                    id: "unknown-\(moment.id)",
+                    label: moment.createdAt.isEmpty ? "未知日期" : moment.createdAt,
+                    moments: [moment]
+                ))
+                continue
+            }
+
+            let day = calendar.startOfDay(for: date)
+            let id = NativeTimestamp.string(from: day)
+            if let lastIndex = groups.indices.last, groups[lastIndex].id == id {
+                groups[lastIndex].moments.append(moment)
+            } else {
+                groups.append(NativeMomentTimelineGroup(
+                    id: id,
+                    label: timelineDateLabel(for: day, calendar: calendar),
+                    moments: [moment]
+                ))
+            }
+        }
+        return groups
+    }
+
     func start() async {
         isLoading = true
         defer { isLoading = false }
@@ -76,6 +202,7 @@ public final class NativeAppModel: ObservableObject {
         do {
             try await connect(to: rootURL)
             startTrashCleanupLoop()
+            scheduleBackup()
         } catch {
             storageReady = false
             errorMessage = error.localizedDescription
@@ -83,7 +210,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func chooseWorkDirectory() {
-        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia,
+        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia, !isBackingUp,
               let rootURL = presentWorkDirectoryPicker() else { return }
         LocalBlogStore.rememberWorkDirectory(rootURL)
         isLoading = true
@@ -92,6 +219,7 @@ public final class NativeAppModel: ObservableObject {
             do {
                 try await connect(to: rootURL)
                 startTrashCleanupLoop()
+                scheduleBackup()
                 errorMessage = nil
             } catch {
                 storageReady = false
@@ -103,10 +231,101 @@ public final class NativeAppModel: ObservableObject {
     private func connect(to rootURL: URL) async throws {
         userWorkspaces = UserWorkspaceStore(rootURL: rootURL)
         store = LocalBlogStore(rootURL: rootURL)
+        dataRootDirectoryPath = rootURL.standardizedFileURL.path
         let workspace = try await userWorkspaces.prepare()
         try await loadWorkspace(workspace)
         needsWorkDirectorySelection = false
         storageReady = true
+    }
+
+    func chooseBackupDirectory() {
+        guard !isBackingUp else { return }
+        let panel = NSOpenPanel()
+        panel.title = "选择备份目录"
+        panel.message = "应用会在此目录中创建带时间戳的完整快照。请优先选择另一块磁盘或启用 FileVault 的磁盘。"
+        panel.prompt = "使用此目录"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = backupDirectoryPath.isEmpty
+            ? URL(fileURLWithPath: "/Volumes", isDirectory: true)
+            : URL(fileURLWithPath: backupDirectoryPath, isDirectory: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try LocalBackupManager.validateDestination(
+                source: URL(fileURLWithPath: dataRootDirectoryPath, isDirectory: true),
+                destination: url
+            )
+            LocalBlogStore.rememberBackupDirectory(url)
+            backupDirectoryPath = url.standardizedFileURL.path
+            backupStatus = "正在创建首次备份…"
+            backupNow()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func clearBackupDirectory() {
+        guard !isBackingUp else { return }
+        backupTask?.cancel()
+        LocalBlogStore.clearBackupDirectory()
+        backupDirectoryPath = ""
+        lastBackupPath = ""
+        backupStatus = "未设置备份目录"
+    }
+
+    func openBackupDirectory() {
+        guard !backupDirectoryPath.isEmpty else { return }
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: backupDirectoryPath)
+    }
+
+    func backupNow() {
+        backupTask?.cancel()
+        backupTask = Task { [weak self] in
+            await self?.performBackup()
+        }
+    }
+
+    private func scheduleBackup() {
+        guard !backupDirectoryPath.isEmpty else { return }
+        backupTask?.cancel()
+        backupTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.performBackup()
+        }
+    }
+
+    private func performBackup() async {
+        guard storageReady, !backupDirectoryPath.isEmpty else { return }
+        guard !isBackingUp else { return }
+        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia else {
+            backupStatus = "等待当前操作完成后备份…"
+            scheduleBackup()
+            return
+        }
+
+        let sourceURL = URL(fileURLWithPath: dataRootDirectoryPath, isDirectory: true)
+        let destinationURL = URL(fileURLWithPath: backupDirectoryPath, isDirectory: true)
+        isBackingUp = true
+        backupStatus = "正在创建备份…"
+        defer { isBackingUp = false }
+
+        do {
+            try await store.prepareForBackup()
+            try await userWorkspaces.prepareForBackup()
+            let snapshotPath = try await Task.detached(priority: .utility) {
+                try LocalBackupManager.createSnapshot(source: sourceURL, destination: destinationURL).path
+            }.value
+            lastBackupPath = snapshotPath
+            backupStatus = "备份完成：\(URL(fileURLWithPath: snapshotPath).lastPathComponent)"
+            errorMessage = nil
+        } catch {
+            backupStatus = "备份失败"
+            errorMessage = "自动备份失败：\(error.localizedDescription)"
+        }
     }
 
     private func workDirectoryForStartup() -> URL? {
@@ -136,7 +355,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func selectUser(_ user: NativeUser) {
-        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia else { return }
+        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia, !isBackingUp else { return }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return }
         Task {
             isSwitchingWorkspace = true
@@ -150,6 +369,7 @@ public final class NativeAppModel: ObservableObject {
                 await discardCurrentMomentDraft()
                 await discardCurrentEditorDraft()
                 try await loadWorkspace(workspace)
+                scheduleBackup()
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -158,7 +378,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func createUser(named name: String) async -> Bool {
-        guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia else { return false }
+        guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia, !isBackingUp else { return false }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return false }
         isSwitchingWorkspace = true
         isLoading = true
@@ -171,6 +391,7 @@ public final class NativeAppModel: ObservableObject {
             await discardCurrentMomentDraft()
             await discardCurrentEditorDraft()
             try await loadWorkspace(workspace)
+            scheduleBackup()
             errorMessage = nil
             return true
         } catch {
@@ -209,6 +430,10 @@ public final class NativeAppModel: ObservableObject {
         momentDraft = NativeMomentDraft()
         editingMomentID = nil
         searchText = ""
+        momentSearchText = ""
+        selectedMomentTags = []
+        momentDateFilter = .all
+        showsOnlyFavoriteMoments = false
         section = .dashboard
         try await reload()
     }
@@ -233,7 +458,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     public func newArticle() {
-        guard !isSaving, !isUploadingMedia else { return }
+        guard !isSaving, !isUploadingMedia, !isBackingUp else { return }
         guard confirmDiscardUnsavedWork() else { return }
         discardUnreferencedMedia(editorDraftMedia() + pendingEditorMediaCleanup)
         selectedSlug = nil
@@ -247,7 +472,7 @@ public final class NativeAppModel: ObservableObject {
 
     func editSelected() {
         guard let article = selectedArticle else { return }
-        guard !isSaving, !isUploadingMedia else { return }
+        guard !isSaving, !isUploadingMedia, !isBackingUp else { return }
         if isEditorDirty {
             guard confirmDiscardUnsavedWork() else { return }
             discardUnreferencedMedia(editorDraftMedia() + pendingEditorMediaCleanup)
@@ -270,6 +495,10 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func saveEditor(as status: NativeArticleStatus) async {
+        guard !isBackingUp else {
+            errorMessage = "备份进行中，请稍后再保存。"
+            return
+        }
         let title = editor.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = editor.body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, !body.isEmpty else {
@@ -312,6 +541,7 @@ public final class NativeAppModel: ObservableObject {
             editorOriginalArticle = saved
             discardUnreferencedMedia(cleanupCandidates)
             try await reload()
+            scheduleBackup()
             section = .reader
             errorMessage = nil
         } catch {
@@ -326,6 +556,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func deleteSelected() async {
+        guard !isBackingUp else { return }
         guard let article = selectedArticle else { return }
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -341,16 +572,19 @@ public final class NativeAppModel: ObservableObject {
             selectedSlug = nil
             section = .articles
             try await reload()
+            scheduleBackup()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     func restoreTrash(_ item: NativeTrashItem) {
+        guard !isBackingUp else { return }
         Task {
             do {
                 try await store.restoreTrash(item)
                 try await reload()
+                scheduleBackup()
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -359,10 +593,12 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func permanentlyDeleteTrash(_ item: NativeTrashItem) {
+        guard !isBackingUp else { return }
         Task {
             do {
                 try await store.permanentlyDeleteTrash(item)
                 try await reload()
+                scheduleBackup()
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -371,10 +607,12 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func emptyTrash() {
+        guard !isBackingUp else { return }
         Task {
             do {
                 try await store.emptyTrash()
                 try await reload()
+                scheduleBackup()
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -383,6 +621,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func chooseAndUpload(kind: String, forArticle slug: String? = nil, banner: Bool = false) {
+        guard !isBackingUp else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -407,6 +646,7 @@ public final class NativeAppModel: ObservableObject {
                     editor.media.append(NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url))
                 }
                 try await refreshActivity()
+                scheduleBackup()
             } catch {
                 guard generation == workspaceGeneration else { return }
                 errorMessage = error.localizedDescription
@@ -415,6 +655,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func chooseMomentImages() {
+        guard !isBackingUp else { return }
         let remaining = max(0, 9 - momentDraft.images.count)
         guard remaining > 0 else {
             errorMessage = "每条微博最多添加 9 张图片。"
@@ -441,6 +682,7 @@ public final class NativeAppModel: ObservableObject {
                 guard generation == workspaceGeneration else { return }
                 momentDraft.images.append(contentsOf: uploadedImages)
                 try await refreshActivity()
+                scheduleBackup()
                 errorMessage = nil
             } catch {
                 guard generation == workspaceGeneration else { return }
@@ -466,12 +708,58 @@ public final class NativeAppModel: ObservableObject {
             discardUnreferencedMedia(momentDraft.images)
         }
         editingMomentID = moment.id
-        momentDraft = NativeMomentDraft(
-            text: moment.text,
-            textRuns: moment.textRuns,
-            images: moment.images
-        )
+        momentDraft = editableMomentDraft(from: moment)
         errorMessage = nil
+    }
+
+    func toggleMomentTagFilter(_ tag: String) {
+        let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+
+        if let selectedTag = selectedMomentTags.first(where: {
+            $0.caseInsensitiveCompare(normalized) == .orderedSame
+        }) {
+            selectedMomentTags.remove(selectedTag)
+        } else {
+            selectedMomentTags.insert(normalized)
+        }
+    }
+
+    func isMomentTagSelected(_ tag: String) -> Bool {
+        selectedMomentTags.contains {
+            $0.caseInsensitiveCompare(tag) == .orderedSame
+        }
+    }
+
+    func selectMomentDateFilter(_ filter: NativeMomentDateFilter) {
+        momentDateFilter = filter
+    }
+
+    func toggleFavoriteMomentFilter() {
+        showsOnlyFavoriteMoments.toggle()
+    }
+
+    func toggleMomentFavorite(_ moment: NativeMoment) {
+        guard !isBackingUp else { return }
+        Task {
+            do {
+                let updated = try await store.setMomentFavorite(id: moment.id, isFavorite: !moment.isFavorite)
+                if let index = moments.firstIndex(where: { $0.id == updated.id }) {
+                    moments[index] = updated
+                }
+                scheduleBackup()
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func clearMomentFilters() {
+        momentSearchText = ""
+        selectedMomentTags = []
+        momentDateFilter = .all
+        showsOnlyFavoriteMoments = false
     }
 
     func cancelMomentEditing() {
@@ -484,6 +772,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func deleteMoment(_ moment: NativeMoment) {
+        guard !isBackingUp else { return }
         if editingMomentID == moment.id {
             cancelMomentEditing()
         }
@@ -492,6 +781,7 @@ public final class NativeAppModel: ObservableObject {
                 try await store.deleteMoment(id: moment.id)
                 moments.removeAll { $0.id == moment.id }
                 trashItems = try await store.listTrash()
+                scheduleBackup()
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -500,6 +790,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func uploadMomentPastedImages(_ images: [NSImage]) {
+        guard !isBackingUp else { return }
         let remaining = max(0, 9 - momentDraft.images.count)
         guard remaining > 0 else {
             errorMessage = "每条微博最多添加 9 张图片。"
@@ -535,6 +826,7 @@ public final class NativeAppModel: ObservableObject {
                 guard generation == workspaceGeneration else { return }
                 momentDraft.images.append(contentsOf: uploadedImages)
                 try await refreshActivity()
+                scheduleBackup()
                 errorMessage = nil
             } catch {
                 guard generation == workspaceGeneration else { return }
@@ -544,6 +836,10 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func publishMoment() {
+        guard !isBackingUp else {
+            errorMessage = "备份进行中，请稍后再发布。"
+            return
+        }
         guard !momentDraft.isEmpty else {
             errorMessage = NativeStoreError.invalidMoment.localizedDescription
             return
@@ -576,6 +872,7 @@ public final class NativeAppModel: ObservableObject {
                 }
                 momentDraft = NativeMomentDraft()
                 try await refreshActivity()
+                scheduleBackup()
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -584,6 +881,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func uploadPastedImage(_ image: NSImage, placeholder: String) {
+        guard !isBackingUp else { return }
         guard let imageData = image.pngData else {
             replacePastedImage(placeholder, with: "[图片粘贴失败]")
             errorMessage = "无法读取剪贴板中的图片。"
@@ -604,6 +902,7 @@ public final class NativeAppModel: ObservableObject {
                 editor.media.append(NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url))
                 replacePastedImage(placeholder, with: "![粘贴的图片](\(uploaded.url))")
                 try await refreshActivity()
+                scheduleBackup()
             } catch {
                 guard generation == workspaceGeneration else { return }
                 replacePastedImage(placeholder, with: "[图片粘贴失败]")
@@ -707,6 +1006,29 @@ public final class NativeAppModel: ObservableObject {
         Task {
             try? await sourceStore.discardUnreferencedMedia(media)
         }
+    }
+
+    private func timelineDateLabel(for date: Date, calendar: Calendar) -> String {
+        if calendar.isDateInToday(date) { return "今天" }
+        if calendar.isDateInYesterday(date) { return "昨天" }
+        return date.formatted(date: .long, time: .omitted)
+    }
+
+    private func editableMomentDraft(from moment: NativeMoment) -> NativeMomentDraft {
+        let content = moment.displayContent
+        let tagsText = moment.tags.map { "#\($0)" }.joined(separator: " ")
+        guard !tagsText.isEmpty else {
+            return NativeMomentDraft(text: content.text, textRuns: content.runs, images: moment.images)
+        }
+
+        let separator = content.text.isEmpty ? "" : " "
+        return NativeMomentDraft(
+            text: content.text + separator + tagsText,
+            textRuns: content.runs + [
+                NativeMomentTextRun(text: separator + tagsText, bold: false, color: nil),
+            ],
+            images: moment.images
+        )
     }
 
     private func discardCurrentMomentDraft() async {

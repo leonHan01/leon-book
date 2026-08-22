@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 @MainActor
 final class MomentRichTextController: ObservableObject {
     private weak var textView: NSTextView?
+    @Published private(set) var activeTagQuery: String?
 
     func attach(to textView: NSTextView) {
         self.textView = textView
@@ -52,6 +53,66 @@ final class MomentRichTextController: ObservableObject {
 
         textView.textStorage?.addAttribute(.foregroundColor, value: nsColor, range: range)
         textView.didChangeText()
+    }
+
+    func completeTagSuggestion(_ tag: String) {
+        guard let textView,
+              let context = tagContext(in: textView.string, selectedRange: textView.selectedRange()) else {
+            return
+        }
+
+        let replacement = "#\(tag) "
+        let currentLength = (textView.string as NSString).length
+        guard currentLength - context.range.length + (replacement as NSString).length <= 500 else { return }
+
+        let attributes: [NSAttributedString.Key: Any]
+        if let storage = textView.textStorage, storage.length > 0 {
+            attributes = storage.attributes(at: min(context.range.location, storage.length - 1), effectiveRange: nil)
+        } else {
+            attributes = textView.typingAttributes
+        }
+
+        guard textView.shouldChangeText(in: context.range, replacementString: replacement) else { return }
+        textView.textStorage?.replaceCharacters(
+            in: context.range,
+            with: NSAttributedString(string: replacement, attributes: attributes)
+        )
+        let cursor = context.range.location + (replacement as NSString).length
+        textView.setSelectedRange(NSRange(location: cursor, length: 0))
+        textView.didChangeText()
+        activeTagQuery = nil
+        textView.window?.makeFirstResponder(textView)
+    }
+
+    func dismissTagSuggestions() {
+        activeTagQuery = nil
+    }
+
+    fileprivate func updateTagQuery(from textView: NSTextView) {
+        activeTagQuery = tagContext(in: textView.string, selectedRange: textView.selectedRange())?.query
+    }
+
+    private func tagContext(in text: String, selectedRange: NSRange) -> (range: NSRange, query: String)? {
+        guard selectedRange.length == 0 else { return nil }
+        let source = text as NSString
+        guard selectedRange.location <= source.length else { return nil }
+        let prefix = source.substring(to: selectedRange.location) as NSString
+        let hashLocations = [
+            prefix.range(of: "#", options: .backwards).location,
+            prefix.range(of: "＃", options: .backwards).location,
+        ].filter { $0 != NSNotFound }
+        guard let hashLocation = hashLocations.max() else { return nil }
+
+        let query = source.substring(
+            with: NSRange(location: hashLocation + 1, length: selectedRange.location - hashLocation - 1)
+        )
+        guard !query.contains(where: { $0.isWhitespace || isTagTerminator($0) }) else { return nil }
+        return (NSRange(location: hashLocation, length: selectedRange.location - hashLocation), query)
+    }
+
+    private func isTagTerminator(_ character: Character) -> Bool {
+        let terminators = CharacterSet(charactersIn: ",，.。!！?？;；:：、()（）[]【】{}<>《》\"“”'‘’")
+        return character.unicodeScalars.allSatisfy(terminators.contains)
     }
 
     private func convertedFont(_ font: NSFont, bold: Bool) -> NSFont {
@@ -126,6 +187,12 @@ struct MomentRichTextEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
             parent.textRuns = MomentTextRuns.runs(from: textView.attributedString())
+            parent.controller.updateTagQuery(from: textView)
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.controller.updateTagQuery(from: textView)
         }
 
         func textView(

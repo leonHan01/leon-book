@@ -16,6 +16,7 @@ let sourcePath = { (name: String) in macosRoot.appendingPathComponent("Sources/L
 expect(FileManager.default.fileExists(atPath: sourcePath("ContentView.swift")), "native SwiftUI content view should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore.swift")), "native local store should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("SQLiteDatabase.swift")), "SQLite database adapter should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("LocalBackupManager.swift")), "local backup manager should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("MarkdownRenderer.swift")), "native Markdown renderer should exist")
 expect(!FileManager.default.fileExists(atPath: sourcePath("LocalServerController.swift")), "HTTP server controller should be removed")
 expect(!FileManager.default.fileExists(atPath: sourcePath("BlogWebView.swift")), "WKWebView wrapper should be removed")
@@ -102,6 +103,23 @@ if let localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift
     failures.append("native local store should be readable")
 }
 
+if let backupManager = try? String(contentsOfFile: sourcePath("LocalBackupManager.swift"), encoding: .utf8) {
+    expect(backupManager.contains("createSnapshot"), "backup manager should create snapshots")
+    expect(backupManager.contains("isSameOrDescendant"), "backup manager should reject recursive backup paths")
+    expect(backupManager.contains(".leon-book.lock"), "backup manager should exclude the active lock file")
+    expect(backupManager.contains("backup-manifest.json"), "backup snapshots should include a manifest")
+} else {
+    failures.append("local backup manager should be readable")
+}
+
+if let settingsView = try? String(contentsOfFile: sourcePath("NativeSettingsView.swift"), encoding: .utf8) {
+    expect(settingsView.contains("设置备份路径"), "settings should expose backup path selection")
+    expect(settingsView.contains("立即备份"), "settings should expose manual backup")
+    expect(settingsView.contains("FileVault"), "settings should explain encrypted backup storage")
+} else {
+    failures.append("native settings view should be readable")
+}
+
 if let appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift"), encoding: .utf8) {
     expect(appModel.contains("func uploadPastedImage"), "pasted images should be saved as local media")
     expect(appModel.contains("![粘贴的图片]"), "pasted images should be inserted as Markdown image links")
@@ -119,6 +137,10 @@ if let appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
     expect(appModel.contains("slug: \"moments\""), "Moment images should be stored in the moments media directory")
     expect(appModel.contains("func createUser(named name: String)"), "app model should create users")
     expect(appModel.contains("func selectUser(_ user: NativeUser)"), "app model should switch users")
+    expect(appModel.contains("selectedMomentTags: Set<String>"), "Moment tag filters should support selecting multiple tags")
+    expect(appModel.contains("availableMomentTagFilters"), "Moment tags should include their post counts")
+    expect(appModel.contains("if $0.count != $1.count { return $0.count > $1.count }"), "Moment tags should be sorted by post count")
+    expect(appModel.contains("func toggleMomentTagFilter(_ tag: String)"), "Moment tags should be toggled independently")
 } else {
     failures.append("native app model should be readable")
 }
@@ -157,6 +179,19 @@ if let momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("Button(action: onEdit)"), "Moment cards should expose an edit control")
     expect(momentViews.contains("编辑微博"), "Moment composer should identify edit mode")
     expect(momentViews.contains("保存修改"), "Moment composer should save edits")
+    expect(momentViews.contains("collapsedTimelineDays"), "Moment timeline should track collapsed days")
+    expect(momentViews.contains("toggleTimelineDay"), "Moment timeline days should be independently collapsible")
+    expect(momentViews.contains("已折叠"), "Collapsed moment days should show their hidden post count")
+    expect(momentViews.contains("MomentTagSuggestionMenu"), "Moments should show matching tag suggestions while typing")
+    expect(momentViews.contains("tagSuggestions"), "Moments should filter existing tags into suggestions")
+    expect(momentViews.contains("availableMomentTagFilters"), "Moment tags should be shown as a filter tile collection")
+    expect(momentViews.contains("可多选 · 任一匹配"), "Moment tag filters should explain multi-select matching")
+    expect(momentViews.contains("@AppStorage(\"momentFeedLayout\")"), "Moment feed layout selection should persist")
+    expect(momentViews.contains("doubleColumnWaterfall"), "Moment feed should offer a double-column waterfall layout")
+    expect(momentViews.contains("threeColumnWaterfall"), "Moment feed should offer a three-column waterfall layout")
+    expect(momentViews.contains("fourColumnWaterfall"), "Moment feed should offer a four-column waterfall layout")
+    expect(momentViews.contains("MomentMasonryLayout(columns: momentFeedLayout.columnCount"), "Multi-column moment feed should use the masonry layout")
+    expect(momentViews.contains("momentFeedMaximumWidth: CGFloat = 1_440"), "Moment feed should use the expanded page width")
     expect(momentViews.contains("NSEvent.addLocalMonitorForEvents(matching: .keyDown)"), "Image browser should capture keyboard navigation")
     expect(momentViews.contains("navigationModifiers"), "Image browser should allow unmodified arrow keys")
     expect(momentViews.contains("case 123:"), "Left arrow should show the previous image")
@@ -193,6 +228,8 @@ if let richTextEditor = try? String(contentsOfFile: sourcePath("MomentRichTextEd
     expect(richTextEditor.contains("func toggleBold()"), "Moment editor should change selected text to bold")
     expect(richTextEditor.contains("func apply(color:"), "Moment editor should change selected text color")
     expect(richTextEditor.contains("registerForDraggedTypes([.fileURL, .png, .tiff])"), "Moment editor should register image drag types")
+    expect(richTextEditor.contains("activeTagQuery"), "Moment editor should detect a tag query at the cursor")
+    expect(richTextEditor.contains("completeTagSuggestion"), "Moment editor should insert a selected tag suggestion")
 } else {
     failures.append("native rich text moment editor should be readable")
 }

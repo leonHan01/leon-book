@@ -245,12 +245,153 @@ public struct NativeMomentTextRun: Codable, Hashable {
     public let text: String
     public let bold: Bool
     public let color: NativeMomentTextColor?
+
+    public init(text: String, bold: Bool, color: NativeMomentTextColor?) {
+        self.text = text
+        self.bold = bold
+        self.color = color
+    }
+}
+
+public enum NativeMomentTag {
+    public static func extract(from text: String) -> [String] {
+        parsedTags(in: Array(text)).tags
+    }
+
+    public static func content(
+        from text: String,
+        textRuns: [NativeMomentTextRun]
+    ) -> (text: String, tags: [String], runs: [NativeMomentTextRun]) {
+        let characters = Array(text)
+        let parsed = parsedTags(in: characters)
+        guard !parsed.removedCharacterIndexes.isEmpty else {
+            return (text, parsed.tags, resolvedRuns(text: text, runs: textRuns))
+        }
+
+        var retainedIndexes = characters.indices.filter { !parsed.removedCharacterIndexes.contains($0) }
+        while let first = retainedIndexes.first, characters[first].isWhitespace {
+            retainedIndexes.removeFirst()
+        }
+        while let last = retainedIndexes.last, characters[last].isWhitespace {
+            retainedIndexes.removeLast()
+        }
+
+        let retainedIndexSet = Set(retainedIndexes)
+        let body = String(retainedIndexes.map { characters[$0] })
+        let sourceRuns = resolvedRuns(text: text, runs: textRuns)
+        guard sourceRuns.map(\.text).joined() == text else {
+            return body.isEmpty
+                ? (body, parsed.tags, [])
+                : (body, parsed.tags, [NativeMomentTextRun(text: body, bold: false, color: nil)])
+        }
+
+        var position = 0
+        var bodyRuns: [NativeMomentTextRun] = []
+        for run in sourceRuns {
+            for character in run.text {
+                if retainedIndexSet.contains(position) {
+                    append(
+                        character,
+                        bold: run.bold,
+                        color: run.color,
+                        to: &bodyRuns
+                    )
+                }
+                position += 1
+            }
+        }
+
+        return bodyRuns.map(\.text).joined() == body
+            ? (body, parsed.tags, bodyRuns)
+            : (body, parsed.tags, body.isEmpty ? [] : [
+                NativeMomentTextRun(text: body, bold: false, color: nil),
+            ])
+    }
+
+    private static func parsedTags(in characters: [Character]) -> (tags: [String], removedCharacterIndexes: Set<Int>) {
+        var tags: [String] = []
+        var removedCharacterIndexes = Set<Int>()
+        var index = 0
+
+        func appendTag(_ tag: String) {
+            guard !tag.isEmpty,
+                  !tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) else {
+                return
+            }
+            tags.append(tag)
+        }
+
+        while index < characters.count {
+            guard isTagMarker(characters[index]) else {
+                index += 1
+                continue
+            }
+
+            var tagEnd = index + 1
+            while tagEnd < characters.count,
+                  !isTagMarker(characters[tagEnd]),
+                  !characters[tagEnd].isWhitespace,
+                  !isTagTerminator(characters[tagEnd]) {
+                tagEnd += 1
+            }
+
+            let tag = String(characters[(index + 1)..<tagEnd])
+            if !tag.isEmpty {
+                appendTag(tag)
+                var removalStart = index
+                if removalStart > 0,
+                   characters[removalStart - 1] == " " || characters[removalStart - 1] == "\t" {
+                    removalStart -= 1
+                }
+                removedCharacterIndexes.formUnion(removalStart..<tagEnd)
+            }
+            index = max(tagEnd, index + 1)
+        }
+        return (tags, removedCharacterIndexes)
+    }
+
+    private static func resolvedRuns(text: String, runs: [NativeMomentTextRun]) -> [NativeMomentTextRun] {
+        guard !text.isEmpty else { return [] }
+        return runs.map(\.text).joined() == text && !runs.isEmpty
+            ? runs
+            : [NativeMomentTextRun(text: text, bold: false, color: nil)]
+    }
+
+    private static func append(
+        _ character: Character,
+        bold: Bool,
+        color: NativeMomentTextColor?,
+        to runs: inout [NativeMomentTextRun]
+    ) {
+        guard let previous = runs.last,
+              previous.bold == bold,
+              previous.color == color else {
+            runs.append(NativeMomentTextRun(text: String(character), bold: bold, color: color))
+            return
+        }
+        runs[runs.count - 1] = NativeMomentTextRun(
+            text: previous.text + String(character),
+            bold: bold,
+            color: color
+        )
+    }
+
+    private static func isTagMarker(_ character: Character) -> Bool {
+        character == "#" || character == "＃"
+    }
+
+    private static func isTagTerminator(_ character: Character) -> Bool {
+        let terminators = CharacterSet(charactersIn: ",，.。!！?？;；:：、()（）[]【】{}<>《》\"“”'‘’")
+        return character.unicodeScalars.allSatisfy(terminators.contains)
+    }
 }
 
 public struct NativeMoment: Codable, Hashable, Identifiable {
     public let createdAt: String
     public let id: String
     public let images: [NativeMedia]
+    public let isFavorite: Bool
+    public let tags: [String]
     public let text: String
     public let textRuns: [NativeMomentTextRun]
     public let updatedAt: String
@@ -259,6 +400,8 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         createdAt: String,
         id: String,
         images: [NativeMedia],
+        isFavorite: Bool = false,
+        tags: [String] = [],
         text: String,
         textRuns: [NativeMomentTextRun],
         updatedAt: String
@@ -266,6 +409,8 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         self.createdAt = createdAt
         self.id = id
         self.images = images
+        self.isFavorite = isFavorite
+        self.tags = tags
         self.text = text
         self.textRuns = textRuns
         self.updatedAt = updatedAt
@@ -276,10 +421,96 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString.lowercased()
         images = try container.decodeIfPresent([NativeMedia].self, forKey: .images) ?? []
+        isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
         text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
+        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? NativeMomentTag.extract(from: text)
         textRuns = try container.decodeIfPresent([NativeMomentTextRun].self, forKey: .textRuns) ?? []
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? createdAt
     }
+
+    public var displayContent: (text: String, runs: [NativeMomentTextRun]) {
+        let content = NativeMomentTag.content(from: text, textRuns: textRuns)
+        return (content.text, content.runs)
+    }
+
+    public func matches(search query: String) -> Bool {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedQuery.isEmpty else { return true }
+
+        let searchableValues = [displayContent.text, tags.joined(separator: " "), createdAt] + searchableDateLabels
+        return searchableValues.contains { value in
+            value.range(
+                of: normalizedQuery,
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            ) != nil
+        }
+    }
+
+    private var searchableDateLabels: [String] {
+        guard let date = NativeTimestamp.date(from: createdAt) else { return [] }
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        guard let year = components.year, let month = components.month, let day = components.day else {
+            return [date.formatted(date: .abbreviated, time: .omitted)]
+        }
+        return [
+            String(format: "%04d-%02d-%02d", year, month, day),
+            "\(year)-\(month)-\(day)",
+            "\(year)/\(month)/\(day)",
+            "\(year)年\(month)月\(day)日",
+            date.formatted(date: .abbreviated, time: .omitted),
+        ]
+    }
+}
+
+public enum NativeMomentDateFilter: Equatable {
+    case all
+    case today
+    case thisWeek
+    case month(year: Int, month: Int)
+    case year(Int)
+
+    var label: String {
+        switch self {
+        case .all: return "全部时间"
+        case .today: return "今天"
+        case .thisWeek: return "本周"
+        case let .month(year, month): return "\(year)年\(month)月"
+        case let .year(year): return "\(year)年"
+        }
+    }
+
+    public func includes(
+        timestamp: String,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Bool {
+        guard self != .all, let date = NativeTimestamp.date(from: timestamp) else {
+            return self == .all
+        }
+
+        switch self {
+        case .all:
+            return true
+        case .today:
+            return calendar.isDate(date, inSameDayAs: now)
+        case .thisWeek:
+            return calendar.dateInterval(of: .weekOfYear, for: now)?.contains(date) ?? false
+        case let .month(year, month):
+            let components = calendar.dateComponents([.year, .month], from: date)
+            return components.year == year && components.month == month
+        case let .year(year):
+            return calendar.component(.year, from: date) == year
+        }
+    }
+}
+
+struct NativeMomentMonth: Hashable, Identifiable {
+    let year: Int
+    let month: Int
+
+    var id: String { "\(year)-\(month)" }
+    var label: String { "\(year)年\(month)月" }
 }
 
 enum NativeTrashKind: String, Hashable, Identifiable {
@@ -320,7 +551,9 @@ struct NativeMomentDraft: Equatable {
     var images: [NativeMedia] = []
 
     var isEmpty: Bool {
-        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty
+        NativeMomentTag.content(from: text, textRuns: textRuns).text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty && images.isEmpty
     }
 }
 

@@ -544,6 +544,163 @@ func testInvalidLegacyUserIDIsNotImported() async throws {
     }
 }
 
+func testBackupSnapshotCopiesCompleteDataAndSkipsLock() async throws {
+    try await withWorkspace { workspace in
+        let source = workspace.appendingPathComponent("source", isDirectory: true)
+        let destination = workspace.appendingPathComponent("backups", isDirectory: true)
+        let store = LocalBlogStore(rootURL: source)
+        _ = try await store.saveMoment(text: "备份内容", textRuns: [], images: [])
+        try await store.prepareForBackup()
+        let nestedWorkspace = source.appendingPathComponent("workspaces/user", isDirectory: true)
+        try FileManager.default.createDirectory(at: nestedWorkspace, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: nestedWorkspace.appendingPathComponent(".leon-book.lock").path,
+            contents: Data()
+        )
+
+        let snapshot = try LocalBackupManager.createSnapshot(source: source, destination: destination)
+        expect(FileManager.default.fileExists(atPath: snapshot.appendingPathComponent("moments/index.json").path), "snapshot should include JSON exports")
+        expect(FileManager.default.fileExists(atPath: snapshot.appendingPathComponent("leon-book.sqlite").path), "snapshot should include SQLite")
+        expect(FileManager.default.fileExists(atPath: snapshot.appendingPathComponent("backup-manifest.json").path), "snapshot should include a manifest")
+        expect(!FileManager.default.fileExists(atPath: snapshot.appendingPathComponent(".leon-book.lock").path), "snapshot should not include the active lock")
+        expect(!FileManager.default.fileExists(atPath: snapshot.appendingPathComponent("workspaces/user/.leon-book.lock").path), "snapshot should not include nested locks")
+    }
+}
+
+func testBackupDestinationCannotBeInsideSource() async throws {
+    try await withWorkspace { workspace in
+        let source = workspace.appendingPathComponent("source", isDirectory: true)
+        let destination = source.appendingPathComponent("backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        var rejected = false
+        do {
+            try LocalBackupManager.validateDestination(source: source, destination: destination)
+        } catch {
+            rejected = true
+        }
+        expect(rejected, "backup destination inside source should be rejected")
+    }
+}
+
+func testMomentHashtagTagsArePersistedAndUpdated() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let saved = try await store.saveMoment(
+            text: "今天 #旅行#SwiftUI，#旅行",
+            textRuns: [],
+            images: []
+        )
+        expect(saved.tags == ["旅行", "SwiftUI"], "hashtags should become unique moment tags in order")
+        expect(!saved.text.contains("#"), "hashtag markup should not be saved in the moment body")
+
+        let restored = try await store.listMoments()
+        expect(restored.first?.tags == ["旅行", "SwiftUI"], "moment tags should persist in SQLite and JSON exports")
+        expect(!restored.first!.text.contains("#"), "restored moment bodies should not contain hashtag markup")
+
+        let updated = try await store.updateMoment(
+            id: saved.id,
+            text: "换成 #读书 和 #SwiftUI",
+            textRuns: [],
+            images: []
+        )
+        expect(updated.tags == ["读书", "SwiftUI"], "editing hashtag text should update moment tags")
+        expect(!updated.text.contains("#"), "editing should continue to keep hashtag markup out of the body")
+    }
+}
+
+func testMomentTagRemovalPreservesTextRunStyles() {
+    let content = NativeMomentTag.content(
+        from: "重点 #新闻 正文",
+        textRuns: [
+            NativeMomentTextRun(text: "重点 ", bold: true, color: .red),
+            NativeMomentTextRun(text: "#新闻", bold: false, color: .blue),
+            NativeMomentTextRun(text: " 正文", bold: false, color: .green),
+        ]
+    )
+    expect(content.text == "重点 正文", "removing hashtag markup should keep the remaining body text")
+    expect(content.tags == ["新闻"], "removing hashtag markup should retain the tag")
+    expect(
+        content.runs == [
+            NativeMomentTextRun(text: "重点", bold: true, color: .red),
+            NativeMomentTextRun(text: " 正文", bold: false, color: .green),
+        ],
+        "removing hashtag markup should preserve the styles of surrounding text"
+    )
+}
+
+func testMomentSearchMatchesTextTagsAndDates() {
+    let moment = NativeMoment(
+        createdAt: "2026-08-22T09:30:00Z",
+        id: "moment-search",
+        images: [],
+        tags: ["散步", "SwiftUI"],
+        text: "傍晚在河边散步，顺手记下界面灵感。",
+        textRuns: [],
+        updatedAt: "2026-08-22T09:30:00Z"
+    )
+
+    expect(moment.matches(search: "河边"), "moment search should match text")
+    expect(moment.matches(search: "swiftui"), "moment search should match tags case-insensitively")
+    expect(moment.matches(search: "2026-08-22"), "moment search should match ISO dates")
+    expect(moment.matches(search: "2026年8月22日"), "moment search should match localized dates")
+    expect(!moment.matches(search: "不存在的词"), "moment search should exclude non-matches")
+}
+
+func testMomentDateFilters() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let now = NativeTimestamp.date(from: "2026-08-22T12:00:00Z")!
+    let timestamp = "2026-08-22T09:30:00Z"
+
+    expect(
+        NativeMomentDateFilter.today.includes(timestamp: timestamp, now: now, calendar: calendar),
+        "today filter should include moments from today"
+    )
+    expect(
+        NativeMomentDateFilter.thisWeek.includes(timestamp: timestamp, now: now, calendar: calendar),
+        "this-week filter should include moments from this week"
+    )
+    expect(
+        NativeMomentDateFilter.month(year: 2026, month: 8).includes(timestamp: timestamp, now: now, calendar: calendar),
+        "month filter should include moments from the selected month"
+    )
+    expect(
+        NativeMomentDateFilter.year(2026).includes(timestamp: timestamp, now: now, calendar: calendar),
+        "year filter should include moments from the selected year"
+    )
+    expect(
+        !NativeMomentDateFilter.month(year: 2026, month: 7).includes(timestamp: timestamp, now: now, calendar: calendar),
+        "month filter should exclude moments outside the selected month"
+    )
+}
+
+func testMomentFavoriteCanBeToggledAndPersists() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let saved = try await store.saveMoment(text: "想留着回看的记录", textRuns: [], images: [])
+        expect(!saved.isFavorite, "new moments should not be favorites by default")
+
+        let favorited = try await store.setMomentFavorite(id: saved.id, isFavorite: true)
+        expect(favorited.isFavorite, "favoriting a moment should update its state")
+        let reloaded = try await store.listMoments()
+        expect(
+            reloaded.first?.isFavorite == true,
+            "favorite state should persist after reloading moments"
+        )
+
+        let edited = try await store.updateMoment(
+            id: saved.id,
+            text: "编辑后仍然想留着回看",
+            textRuns: [],
+            images: []
+        )
+        expect(edited.isFavorite, "editing a moment should keep its favorite state")
+
+        let unfavorited = try await store.setMomentFavorite(id: saved.id, isFavorite: false)
+        expect(!unfavorited.isFavorite, "unfavoriting a moment should update its state")
+    }
+}
+
 let checks: [(String, () async throws -> Void)] = [
     ("published moment can be restored from JSON export", testPublishedMomentCanBeRestoredFromJSONExportAlone),
     ("activity JSON export restores the heatmap", testActivityJSONExportRestoresHeatmapWhenSQLiteIsMissing),
@@ -561,6 +718,13 @@ let checks: [(String, () async throws -> Void)] = [
     ("root content database moves into leon workspace", testRootContentDatabaseMovesIntoLeonWorkspace),
     ("trashed article JSON is not imported as live", testTrashedArticleJSONIsNotImportedAsLive),
     ("trash JSON backup survives SQLite recovery", testTrashJSONBackupSurvivesSQLiteRecovery),
+    ("backup snapshot copies complete data and skips lock", testBackupSnapshotCopiesCompleteDataAndSkipsLock),
+    ("backup destination cannot be inside source", testBackupDestinationCannotBeInsideSource),
+    ("moment hashtags persist and update", testMomentHashtagTagsArePersistedAndUpdated),
+    ("removing hashtags preserves moment text styling", { testMomentTagRemovalPreservesTextRunStyles() }),
+    ("moment search matches text, tags, and dates", { testMomentSearchMatchesTextTagsAndDates() }),
+    ("moment date filters select the expected ranges", { testMomentDateFilters() }),
+    ("moment favorites can be toggled and persist", testMomentFavoriteCanBeToggledAndPersists),
     ("purging an article keeps media referenced by another article", testPurgingArticleKeepsMediaReferencedByAnotherArticle),
     ("legacy article slug cannot escape workspace", testLegacyArticleSlugCannotEscapeWorkspace),
     ("invalid legacy user ID is not imported", testInvalidLegacyUserIDIsNotImported),
