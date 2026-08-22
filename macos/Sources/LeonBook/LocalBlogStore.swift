@@ -68,6 +68,7 @@ public actor LocalBlogStore {
     private var mediaURL: URL { rootURL.appendingPathComponent("media", isDirectory: true) }
     private var momentsURL: URL { rootURL.appendingPathComponent("moments", isDirectory: true) }
     private var momentsIndexURL: URL { momentsURL.appendingPathComponent("index.json") }
+    private var momentSidecarsMarkerURL: URL { momentsURL.appendingPathComponent(".sidecars-v1") }
     private var activityURL: URL { rootURL.appendingPathComponent("activity", isDirectory: true) }
     private var trashURL: URL { rootURL.appendingPathComponent("trash", isDirectory: true) }
     private var trashIndexURL: URL { trashURL.appendingPathComponent("index.json") }
@@ -103,6 +104,7 @@ public actor LocalBlogStore {
                 database = nextDatabase
             }
             try migrateLegacyDataIfNeeded()
+            try migrateMomentTagsIfNeeded()
             try exportJsonBackupIfNeeded()
             try purgeExpiredTrash()
         } catch let error as NativeStoreError {
@@ -131,9 +133,84 @@ public actor LocalBlogStore {
 
     public func listMoments() throws -> [NativeMoment] {
         try prepare()
-        return try allMoments().sorted { left, right in
-            left.createdAt == right.createdAt ? left.id > right.id : left.createdAt > right.createdAt
+        return try allMoments()
+    }
+
+    public func listMomentPage(
+        matching filter: NativeMomentFilter = .all,
+        before cursor: NativeMomentCursor? = nil,
+        limit: Int = 40
+    ) throws -> NativeMomentPage {
+        try prepare()
+        let pageSize = min(max(limit, 1), 100)
+        let batchSize = max(pageSize * 2, 64)
+        var scanCursor = cursor
+        var matches: [NativeMoment] = []
+
+        while matches.count <= pageSize {
+            let batch = try momentCandidates(
+                matching: filter,
+                before: scanCursor,
+                limit: batchSize
+            )
+            guard !batch.isEmpty else { break }
+
+            for moment in batch {
+                if filter.matches(moment) {
+                    matches.append(moment)
+                    if matches.count > pageSize { break }
+                }
+                scanCursor = NativeMomentCursor(createdAt: moment.createdAt, id: moment.id)
+            }
+
+            if matches.count > pageSize || batch.count < batchSize { break }
         }
+
+        let hasMore = matches.count > pageSize
+        let page = Array(matches.prefix(pageSize))
+        return NativeMomentPage(
+            moments: page,
+            nextCursor: hasMore ? page.last.map { NativeMomentCursor(createdAt: $0.createdAt, id: $0.id) } : nil
+        )
+    }
+
+    public func countMoments(matching filter: NativeMomentFilter = .all) throws -> Int {
+        try prepare()
+        if filter.searchText.isEmpty {
+            return try momentCandidateCount(matching: filter)
+        }
+
+        var cursor: NativeMomentCursor?
+        var count = 0
+        while true {
+            let batch = try momentCandidates(matching: filter, before: cursor, limit: 200)
+            guard !batch.isEmpty else { return count }
+            count += batch.filter(filter.matches).count
+            guard batch.count == 200, let last = batch.last else { return count }
+            cursor = NativeMomentCursor(createdAt: last.createdAt, id: last.id)
+        }
+    }
+
+    public func listMomentFacetRecords() throws -> [NativeMomentFacetRecord] {
+        try prepare()
+        var records: [NativeMomentFacetRecord] = []
+        try db().query("""
+        SELECT created_at, text, tags_json
+        FROM moments
+        WHERE deleted_at IS NULL
+        """) { row in
+            guard let createdAt = row.text(at: 0), let text = row.text(at: 1) else {
+                throw NativeStoreError.fileSystem("SQLite：微博筛选记录不完整")
+            }
+            let tags: [String]
+            if let tagsJSON = row.text(at: 2) {
+                tags = try decode(tagsJSON)
+            } else {
+                tags = NativeMomentTag.extract(from: text)
+            }
+            records.append(NativeMomentFacetRecord(createdAt: createdAt, tags: tags))
+        }
+        return records
     }
 
     public func saveMoment(
@@ -155,7 +232,7 @@ public actor LocalBlogStore {
             throw NativeStoreError.invalidMoment
         }
 
-        let latestCreatedAt = try allMoments().map(\.createdAt).max()
+        let latestCreatedAt = try latestMomentCreatedAt()
         let createdAt = nextTimestamp(after: latestCreatedAt)
         let id = "moment-\(Int(Date().timeIntervalSince1970 * 1_000))-\(UUID().uuidString.lowercased().prefix(8))"
         let saved = NativeMoment(
@@ -174,10 +251,10 @@ public actor LocalBlogStore {
             try recordActivityEvent(type: "moment_published", at: activityDate(from: createdAt) ?? Date())
         }
         do {
-            try rebuildMomentsIndex()
+            try writeMomentSidecar(saved)
             try writeActivityEvents()
         } catch {
-            jsonBackupVerified = false
+            markJSONBackupNeedsRebuild()
         }
         return saved
     }
@@ -221,10 +298,10 @@ public actor LocalBlogStore {
             try recordActivityEvent(type: "moment_edited", at: activityDate(from: updated.updatedAt) ?? Date())
         }
         do {
-            try rebuildMomentsIndex()
+            try writeMomentSidecar(updated)
             try writeActivityEvents()
         } catch {
-            jsonBackupVerified = false
+            markJSONBackupNeedsRebuild()
         }
         try removeUnreferencedMomentImages(previous.images)
         return updated
@@ -250,9 +327,9 @@ public actor LocalBlogStore {
             updatedAt: previous.updatedAt
         )
         do {
-            try rebuildMomentsIndex()
+            try writeMomentSidecar(updated)
         } catch {
-            jsonBackupVerified = false
+            markJSONBackupNeedsRebuild()
         }
         return updated
     }
@@ -268,7 +345,7 @@ public actor LocalBlogStore {
             "UPDATE moments SET deleted_at = ?, delete_expires_at = ? WHERE id = ?",
             values: [.text(deletedAt), .text(expiresAt), .text(safeID)]
         )
-        try rebuildMomentsIndex()
+        removeMomentSidecar(id: safeID)
         try writeTrashBackup()
     }
 
@@ -384,7 +461,7 @@ public actor LocalBlogStore {
             try rebuildIndex()
             try writeActivityEvents()
         } catch {
-            jsonBackupVerified = false
+            markJSONBackupNeedsRebuild()
         }
         return saved
     }
@@ -402,7 +479,7 @@ public actor LocalBlogStore {
         removeArticleExportFiles(for: safeSlug)
         try rebuildIndex()
         try writeTrashBackup()
-        jsonBackupVerified = false
+        markJSONBackupNeedsRebuild()
     }
 
     func listTrash() throws -> [NativeTrashItem] {
@@ -477,7 +554,7 @@ public actor LocalBlogStore {
             }
             try rebuildIndex()
             try writeTrashBackup()
-            jsonBackupVerified = false
+            markJSONBackupNeedsRebuild()
         case .moment:
             guard try moment(withID: safeKey, includingDeleted: true) != nil else {
                 throw NativeStoreError.notFound
@@ -486,7 +563,9 @@ public actor LocalBlogStore {
                 "UPDATE moments SET deleted_at = NULL, delete_expires_at = NULL WHERE id = ? AND deleted_at IS NOT NULL",
                 values: [.text(safeKey)]
             )
-            try rebuildMomentsIndex()
+            if let restored = try moment(withID: safeKey) {
+                try writeMomentSidecar(restored)
+            }
             try writeTrashBackup()
         }
     }
@@ -511,7 +590,7 @@ public actor LocalBlogStore {
             }
             try db().execute("DELETE FROM moments WHERE id = ? AND deleted_at IS NOT NULL", values: [.text(safeKey)])
             try removeUnreferencedMomentImages(moment.images, includingDeleted: true)
-            try rebuildMomentsIndex()
+            removeMomentSidecar(id: safeKey)
             try writeTrashBackup()
         }
     }
@@ -534,9 +613,11 @@ public actor LocalBlogStore {
             try db().execute("DELETE FROM moments WHERE deleted_at IS NOT NULL")
         }
         for slug in articleSlugs { removeArticleFiles(for: slug) }
-        for moment in momentsToDelete { try removeUnreferencedMomentImages(moment.images, includingDeleted: true) }
+        for moment in momentsToDelete {
+            try removeUnreferencedMomentImages(moment.images, includingDeleted: true)
+            removeMomentSidecar(id: moment.id)
+        }
         try rebuildIndex()
-        try rebuildMomentsIndex()
         try writeTrashBackup()
     }
 
@@ -573,9 +654,9 @@ public actor LocalBlogStore {
         for slug in articleSlugs { removeArticleFiles(for: slug) }
         for moment in momentsToDelete {
             try removeUnreferencedMomentImages(moment.images, includingDeleted: true)
+            removeMomentSidecar(id: moment.id)
         }
         try rebuildIndex()
-        try rebuildMomentsIndex()
         try writeTrashBackup()
     }
 
@@ -738,6 +819,11 @@ public actor LocalBlogStore {
         return database
     }
 
+    private func markJSONBackupNeedsRebuild() {
+        jsonBackupVerified = false
+        try? database?.execute("DELETE FROM metadata WHERE key = 'json_export_v2'")
+    }
+
     private func createSchema(in database: SQLiteDatabase) throws {
         try database.execute("""
         CREATE TABLE IF NOT EXISTS metadata (
@@ -774,6 +860,8 @@ public actor LocalBlogStore {
             delete_expires_at TEXT
         );
         CREATE INDEX IF NOT EXISTS moments_created_at_idx ON moments(created_at DESC);
+        CREATE INDEX IF NOT EXISTS moments_feed_active_idx ON moments(created_at DESC, id DESC)
+            WHERE deleted_at IS NULL;
         CREATE TABLE IF NOT EXISTS activity_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             type TEXT NOT NULL,
@@ -827,10 +915,38 @@ public actor LocalBlogStore {
         }
     }
 
+    private func migrateMomentTagsIfNeeded() throws {
+        let database = try db()
+        guard try database.text("SELECT value FROM metadata WHERE key = 'moment_tags_v1'") != "done" else {
+            return
+        }
+
+        var legacyMoments: [(id: String, text: String)] = []
+        try database.query("SELECT id, text FROM moments WHERE tags_json IS NULL") { row in
+            guard let id = row.text(at: 0), let text = row.text(at: 1) else {
+                throw NativeStoreError.fileSystem("SQLite：微博记录不完整")
+            }
+            legacyMoments.append((id, text))
+        }
+
+        try database.transaction {
+            for moment in legacyMoments {
+                try database.execute(
+                    "UPDATE moments SET tags_json = ? WHERE id = ?",
+                    values: [
+                        .text(try jsonString(NativeMomentTag.extract(from: moment.text))),
+                        .text(moment.id),
+                    ]
+                )
+            }
+            try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('moment_tags_v1', 'done')")
+        }
+    }
+
     private func exportJsonBackupIfNeeded() throws {
         if jsonBackupVerified { return }
         let database = try db()
-        let exportMarkedDone = try database.text("SELECT value FROM metadata WHERE key = 'json_export_v1'") == "done"
+        let exportMarkedDone = try database.text("SELECT value FROM metadata WHERE key = 'json_export_v2'") == "done"
         if exportMarkedDone, try jsonBackupIsComplete() {
             jsonBackupVerified = true
             return
@@ -841,6 +957,7 @@ public actor LocalBlogStore {
         try writeActivityEvents()
         try writeTrashBackup()
         try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('json_export_v1', 'done')")
+        try database.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES('json_export_v2', 'done')")
         jsonBackupVerified = true
     }
 
@@ -872,12 +989,14 @@ public actor LocalBlogStore {
             return false
         }
 
-        let moments = try allMoments()
-        guard let momentsData = try? Data(contentsOf: momentsIndexURL),
-              let indexedMoments = try? JSONDecoder().decode([NativeMoment].self, from: momentsData),
-              indexedMoments.count == moments.count,
-              Set(indexedMoments) == Set(moments) else {
-            return false
+        if !fileManager.fileExists(atPath: momentSidecarsMarkerURL.path) {
+            let moments = try allMoments()
+            guard let momentsData = try? Data(contentsOf: momentsIndexURL),
+                  let indexedMoments = try? JSONDecoder().decode([NativeMoment].self, from: momentsData),
+                  indexedMoments.count == moments.count,
+                  Set(indexedMoments) == Set(moments) else {
+                return false
+            }
         }
 
         guard let trashData = try? Data(contentsOf: trashIndexURL),
@@ -934,7 +1053,8 @@ public actor LocalBlogStore {
 
     private func loadLegacyMoments() throws -> [NativeMoment] {
         var byID: [String: NativeMoment] = [:]
-        if FileManager.default.fileExists(atPath: momentsIndexURL.path) {
+        let usesSidecars = FileManager.default.fileExists(atPath: momentSidecarsMarkerURL.path)
+        if !usesSidecars, FileManager.default.fileExists(atPath: momentsIndexURL.path) {
             do {
                 let indexed = try JSONDecoder().decode([NativeMoment].self, from: Data(contentsOf: momentsIndexURL))
                 for moment in indexed where !moment.id.isEmpty {
@@ -1173,6 +1293,106 @@ public actor LocalBlogStore {
         return moments
     }
 
+    private func latestMomentCreatedAt() throws -> String? {
+        try db().text("SELECT MAX(created_at) FROM moments WHERE deleted_at IS NULL")
+    }
+
+    private func momentCandidates(
+        matching filter: NativeMomentFilter,
+        before cursor: NativeMomentCursor?,
+        limit: Int
+    ) throws -> [NativeMoment] {
+        let query = momentCandidateQuery(matching: filter, before: cursor)
+        var moments: [NativeMoment] = []
+        var values = query.values
+        values.append(.integer(limit))
+        try db().query(
+            """
+            SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite
+            FROM moments
+            WHERE \(query.whereClause)
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            values: values
+        ) { row in
+            moments.append(try decodeMoment(row))
+        }
+        return moments
+    }
+
+    private func momentCandidateCount(matching filter: NativeMomentFilter) throws -> Int {
+        let query = momentCandidateQuery(matching: filter, before: nil)
+        return try db().integer(
+            "SELECT COUNT(*) FROM moments WHERE \(query.whereClause)",
+            values: query.values
+        ) ?? 0
+    }
+
+    private func momentCandidateQuery(
+        matching filter: NativeMomentFilter,
+        before cursor: NativeMomentCursor?
+    ) -> (whereClause: String, values: [SQLiteValue]) {
+        var predicates = ["deleted_at IS NULL"]
+        var values: [SQLiteValue] = []
+
+        if filter.favoritesOnly {
+            predicates.append("is_favorite = 1")
+        }
+
+        if let interval = momentDateInterval(for: filter.dateFilter) {
+            predicates.append("created_at >= ?")
+            values.append(.text(NativeTimestamp.string(from: interval.start)))
+            predicates.append("created_at < ?")
+            values.append(.text(NativeTimestamp.string(from: interval.end)))
+        }
+
+        if !filter.tags.isEmpty {
+            let tagPredicates = filter.tags.map { _ in "instr(lower(tags_json), ?) > 0" }
+            predicates.append("(\(tagPredicates.joined(separator: " OR ")))")
+            values.append(contentsOf: filter.tags.map { tag in
+                .text("\"\(tag.lowercased())\"")
+            })
+        }
+
+        if let cursor {
+            predicates.append("(created_at < ? OR (created_at = ? AND id < ?))")
+            values.append(.text(cursor.createdAt))
+            values.append(.text(cursor.createdAt))
+            values.append(.text(cursor.id))
+        }
+
+        return (predicates.joined(separator: " AND "), values)
+    }
+
+    private func momentDateInterval(for filter: NativeMomentDateFilter) -> DateInterval? {
+        let calendar = Calendar.current
+        let now = Date()
+        switch filter {
+        case .all:
+            return nil
+        case .today:
+            guard let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) else {
+                return nil
+            }
+            return DateInterval(start: calendar.startOfDay(for: now), end: end)
+        case .thisWeek:
+            return calendar.dateInterval(of: .weekOfYear, for: now)
+        case let .month(year, month):
+            guard let start = calendar.date(from: DateComponents(year: year, month: month)),
+                  let end = calendar.date(byAdding: .month, value: 1, to: start) else {
+                return nil
+            }
+            return DateInterval(start: start, end: end)
+        case let .year(year):
+            guard let start = calendar.date(from: DateComponents(year: year, month: 1, day: 1)),
+                  let end = calendar.date(byAdding: .year, value: 1, to: start) else {
+                return nil
+            }
+            return DateInterval(start: start, end: end)
+        }
+    }
+
     private func insertMoment(
         _ moment: NativeMoment,
         deletedAt: String? = nil,
@@ -1315,7 +1535,25 @@ public actor LocalBlogStore {
     }
 
     private func rebuildMomentsIndex() throws {
-        try writeJSON(try allMoments(), to: momentsIndexURL)
+        let moments = try allMoments()
+        for moment in moments {
+            try writeMomentSidecar(moment)
+        }
+        try Data().write(to: momentSidecarsMarkerURL, options: .atomic)
+        try writeJSON(moments, to: momentsIndexURL)
+    }
+
+    private func writeMomentSidecar(_ moment: NativeMoment) throws {
+        let safeID = try requireSafeSegment(moment.id, label: "微博 ID")
+        try writeJSON(moment, to: momentsURL.appendingPathComponent("\(safeID).json"))
+        if !FileManager.default.fileExists(atPath: momentSidecarsMarkerURL.path) {
+            try Data().write(to: momentSidecarsMarkerURL, options: .atomic)
+        }
+    }
+
+    private func removeMomentSidecar(id: String) {
+        guard let safeID = try? requireSafeSegment(id, label: "微博 ID") else { return }
+        try? FileManager.default.removeItem(at: momentsURL.appendingPathComponent("\(safeID).json"))
     }
 
     private func readArticle(at url: URL) throws -> NativeArticle {

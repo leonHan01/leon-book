@@ -95,7 +95,7 @@ public struct ContentView: View {
                     Image(systemName: model.storageReady ? "checkmark.circle.fill" : "circle.dotted")
                         .foregroundStyle(model.storageReady ? .green : .secondary)
                 }
-                Text("\(model.publishedArticles.count) 篇已发布 · \(model.draftArticles.count) 篇草稿 · \(model.moments.count) 条微博")
+                Text("\(model.publishedArticles.count) 篇已发布 · \(model.draftArticles.count) 篇草稿 · \(model.totalMomentCount) 条微博")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -198,7 +198,7 @@ private struct DashboardView: View {
                     StatCard(title: "已发布", value: "\(model.publishedArticles.count)", color: .blue)
                     StatCard(title: "草稿", value: "\(model.draftArticles.count)", color: .orange)
                     StatCard(title: "全部文章", value: "\(model.articles.count)", color: .purple)
-                    StatCard(title: "微博", value: "\(model.moments.count)", color: .pink)
+                    StatCard(title: "微博", value: "\(model.totalMomentCount)", color: .pink)
                 }
 
                 ActivityHeatmapView(activity: model.activity)

@@ -463,6 +463,73 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
     }
 }
 
+public struct NativeMomentCursor: Codable, Equatable {
+    public let createdAt: String
+    public let id: String
+
+    public init(createdAt: String, id: String) {
+        self.createdAt = createdAt
+        self.id = id
+    }
+}
+
+public struct NativeMomentFilter: Equatable {
+    public let searchText: String
+    public let tags: [String]
+    public let dateFilter: NativeMomentDateFilter
+    public let favoritesOnly: Bool
+
+    public static let all = NativeMomentFilter()
+
+    public init(
+        searchText: String = "",
+        tags: [String] = [],
+        dateFilter: NativeMomentDateFilter = .all,
+        favoritesOnly: Bool = false
+    ) {
+        self.searchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.tags = tags
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        self.dateFilter = dateFilter
+        self.favoritesOnly = favoritesOnly
+    }
+
+    public var isEmpty: Bool {
+        searchText.isEmpty && tags.isEmpty && dateFilter == .all && !favoritesOnly
+    }
+
+    public func matches(_ moment: NativeMoment) -> Bool {
+        let matchesTags = tags.isEmpty || moment.tags.contains { tag in
+            tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+        }
+        return matchesTags
+            && (!favoritesOnly || moment.isFavorite)
+            && dateFilter.includes(timestamp: moment.createdAt)
+            && moment.matches(search: searchText)
+    }
+}
+
+public struct NativeMomentPage: Equatable {
+    public let moments: [NativeMoment]
+    public let nextCursor: NativeMomentCursor?
+
+    public init(moments: [NativeMoment], nextCursor: NativeMomentCursor?) {
+        self.moments = moments
+        self.nextCursor = nextCursor
+    }
+}
+
+public struct NativeMomentFacetRecord: Hashable {
+    public let createdAt: String
+    public let tags: [String]
+
+    public init(createdAt: String, tags: [String]) {
+        self.createdAt = createdAt
+        self.tags = tags
+    }
+}
+
 public enum NativeMomentDateFilter: Equatable {
     case all
     case today
@@ -505,11 +572,16 @@ public enum NativeMomentDateFilter: Equatable {
     }
 }
 
-struct NativeMomentMonth: Hashable, Identifiable {
-    let year: Int
-    let month: Int
+public struct NativeMomentMonth: Hashable, Identifiable {
+    public let year: Int
+    public let month: Int
 
-    var id: String { "\(year)-\(month)" }
+    public init(year: Int, month: Int) {
+        self.year = year
+        self.month = month
+    }
+
+    public var id: String { "\(year)-\(month)" }
     var label: String { "\(year)年\(month)月" }
 }
 

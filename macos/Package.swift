@@ -37,6 +37,7 @@ let package = Package(
             name: "LeonBookStoreChecks",
             dependencies: [
                 "LeonBook",
+                "CSQLite",
             ],
             path: "Checks/LeonBookStoreChecks"
         ),

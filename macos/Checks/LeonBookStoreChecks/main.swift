@@ -1,3 +1,4 @@
+import CSQLite
 import Foundation
 import LeonBook
 
@@ -42,6 +43,58 @@ func withWorkspace(_ body: (URL) async throws -> Void) async throws {
     try await body(workspace)
 }
 
+func createLegacyMomentsDatabase(at url: URL) throws {
+    var database: OpaquePointer?
+    let result = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE, nil)
+    guard result == SQLITE_OK, let database else {
+        let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unable to open test database"
+        if let database { sqlite3_close(database) }
+        throw NSError(domain: "LeonBookStoreChecks", code: Int(result), userInfo: [NSLocalizedDescriptionKey: message])
+    }
+    defer { sqlite3_close(database) }
+
+    let sql = """
+    CREATE TABLE moments (
+        id TEXT PRIMARY KEY NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        text TEXT NOT NULL,
+        text_runs_json TEXT NOT NULL,
+        images_json TEXT NOT NULL,
+        deleted_at TEXT,
+        delete_expires_at TEXT
+    );
+    INSERT INTO moments(id, created_at, updated_at, text, text_runs_json, images_json)
+    VALUES ('legacy-moment', '2026-08-20T10:00:00Z', '2026-08-20T10:00:00Z', '旧记录 #旧标签', '[]', '[]');
+    """
+    var errorMessage: UnsafeMutablePointer<CChar>?
+    let executionResult = sqlite3_exec(database, sql, nil, nil, &errorMessage)
+    guard executionResult == SQLITE_OK else {
+        let message = errorMessage.map { String(cString: $0) } ?? String(cString: sqlite3_errmsg(database))
+        if let errorMessage { sqlite3_free(errorMessage) }
+        throw NSError(domain: "LeonBookStoreChecks", code: Int(executionResult), userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}
+
+func testLegacyMomentWithoutTagsLoadsFacets() async throws {
+    try await withWorkspace { workspace in
+        let root = workspace.appendingPathComponent("legacy-moment-tags", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try createLegacyMomentsDatabase(at: root.appendingPathComponent("leon-book.sqlite"))
+
+        let store = LocalBlogStore(rootURL: root)
+        let facets = try await store.listMomentFacetRecords()
+        expect(facets.count == 1, "legacy moment should appear in the filter facets")
+        expect(facets.first?.tags == ["旧标签"], "legacy facet tags should be derived from the moment text")
+
+        let tagged = try await store.listMomentPage(
+            matching: NativeMomentFilter(tags: ["旧标签"]),
+            limit: 20
+        )
+        expect(tagged.moments.map(\.id) == ["legacy-moment"], "legacy tags should be backfilled for tag filtering")
+    }
+}
+
 func testPublishedMomentCanBeRestoredFromJSONExportAlone() async throws {
     try await withWorkspace { workspace in
         let source = workspace.appendingPathComponent("source", isDirectory: true)
@@ -63,6 +116,70 @@ func testPublishedMomentCanBeRestoredFromJSONExportAlone() async throws {
         let moments = try await LocalBlogStore(rootURL: backup).listMoments()
         expect(moments.map(\.id) == [saved.id], "moment JSON export should restore the published moment id")
         expect(moments.first?.text == "午后的一段记录", "moment JSON export should restore the published moment text")
+    }
+}
+
+func testMomentPagesUseStableCursors() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        var savedIDs: [String] = []
+        for index in 1...5 {
+            let saved = try await store.saveMoment(text: "分页记录 \(index)", textRuns: [], images: [])
+            savedIDs.append(saved.id)
+        }
+
+        let first = try await store.listMomentPage(limit: 2)
+        let second = try await store.listMomentPage(before: first.nextCursor, limit: 2)
+        let third = try await store.listMomentPage(before: second.nextCursor, limit: 2)
+        let listedIDs = first.moments.map(\.id) + second.moments.map(\.id) + third.moments.map(\.id)
+
+        expect(first.moments.count == 2, "the first moment page should respect its limit")
+        expect(second.moments.count == 2, "the second moment page should respect its limit")
+        expect(third.moments.count == 1, "the final moment page should contain the remaining record")
+        expect(Set(listedIDs).count == savedIDs.count, "moment cursor pages should not duplicate records")
+        expect(Set(listedIDs) == Set(savedIDs), "moment cursor pages should not skip records")
+        let count = try await store.countMoments()
+        expect(count == savedIDs.count, "moment count should use the same active-record scope as pagination")
+    }
+}
+
+func testMomentSidecarsTrackChangesWithoutRebuildingTheIndex() async throws {
+    try await withWorkspace { workspace in
+        let source = workspace.appendingPathComponent("source", isDirectory: true)
+        let backup = workspace.appendingPathComponent("backup", isDirectory: true)
+        let store = LocalBlogStore(rootURL: source)
+        let removed = try await store.saveMoment(text: "将被删除", textRuns: [], images: [])
+        let retained = try await store.saveMoment(text: "应被保留", textRuns: [], images: [])
+        try await store.deleteMoment(id: removed.id)
+
+        try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: source.appendingPathComponent("moments", isDirectory: true),
+            to: backup.appendingPathComponent("moments", isDirectory: true)
+        )
+
+        let restored = try await LocalBlogStore(rootURL: backup).listMoments()
+        expect(restored.map(\.id) == [retained.id], "moment sidecars should restore only active records after a deletion")
+    }
+}
+
+func testMomentPageAppliesFiltersBeforeRendering() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let matching = try await store.saveMoment(text: "保留 #工作", textRuns: [], images: [])
+        _ = try await store.saveMoment(text: "保留 #生活", textRuns: [], images: [])
+        _ = try await store.setMomentFavorite(id: matching.id, isFavorite: true)
+
+        let filter = NativeMomentFilter(
+            searchText: "保留",
+            tags: ["工作"],
+            favoritesOnly: true
+        )
+        let page = try await store.listMomentPage(matching: filter, limit: 20)
+        let count = try await store.countMoments(matching: filter)
+
+        expect(page.moments.map(\.id) == [matching.id], "moment page should apply text, tag, and favorite filters")
+        expect(count == 1, "filtered moment count should match the filtered page scope")
     }
 }
 
@@ -702,7 +819,11 @@ func testMomentFavoriteCanBeToggledAndPersists() async throws {
 }
 
 let checks: [(String, () async throws -> Void)] = [
+    ("legacy moment without tags loads facets", testLegacyMomentWithoutTagsLoadsFacets),
     ("published moment can be restored from JSON export", testPublishedMomentCanBeRestoredFromJSONExportAlone),
+    ("moment pages use stable cursors", testMomentPagesUseStableCursors),
+    ("moment sidecars track changes", testMomentSidecarsTrackChangesWithoutRebuildingTheIndex),
+    ("moment pages apply filters before rendering", testMomentPageAppliesFiltersBeforeRendering),
     ("activity JSON export restores the heatmap", testActivityJSONExportRestoresHeatmapWhenSQLiteIsMissing),
     ("articles listed only in index.json are imported", testArticlesListedOnlyInIndexJSONAreImported),
     ("corrupt article file does not finalize migration", testCorruptArticleFileDoesNotFinalizeMigrationOrDropIndexRecords),

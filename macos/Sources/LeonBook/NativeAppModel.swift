@@ -23,6 +23,8 @@ public final class NativeAppModel: ObservableObject {
     @Published private(set) var articles: [NativeArticleSummary] = []
     @Published private(set) var activity: [NativeActivityDay] = []
     @Published private(set) var moments: [NativeMoment] = []
+    @Published private(set) var totalMomentCount = 0
+    @Published private(set) var filteredMomentCount = 0
     @Published private(set) var trashItems: [NativeTrashItem] = []
     @Published private(set) var selectedArticle: NativeArticle?
     @Published var selectedSlug: String?
@@ -34,6 +36,8 @@ public final class NativeAppModel: ObservableObject {
     @Published private(set) var showsOnlyFavoriteMoments = false
     @Published private(set) var isLoading = true
     @Published private(set) var isPublishingMoment = false
+    @Published private(set) var isLoadingMoreMoments = false
+    @Published private(set) var hasMoreMoments = false
     @Published private(set) var isSaving = false
     @Published private(set) var isUploadingMedia = false
     @Published private(set) var storageReady = false
@@ -59,6 +63,11 @@ public final class NativeAppModel: ObservableObject {
     private var pendingEditorMediaCleanup: [NativeMedia] = []
     private var editorOriginalArticle: NativeArticle?
     private var backupTask: Task<Void, Never>?
+    private var momentFacetRecords: [NativeMomentFacetRecord] = []
+    private var nextMomentCursor: NativeMomentCursor?
+    private var momentFeedGeneration = 0
+    private var momentSearchTask: Task<Void, Never>?
+    private let momentPageSize = 40
 
     public init() {
         let rootURL = LocalBlogStore.defaultRootURL
@@ -70,6 +79,7 @@ public final class NativeAppModel: ObservableObject {
     deinit {
         trashCleanupTask?.cancel()
         backupTask?.cancel()
+        momentSearchTask?.cancel()
     }
 
     private func momentTagIdentifier(_ tag: String) -> String {
@@ -97,9 +107,9 @@ public final class NativeAppModel: ObservableObject {
     var availableMomentTagFilters: [NativeMomentTagFilter] {
         var filters: [String: NativeMomentTagFilter] = [:]
 
-        for moment in moments {
+        for record in momentFacetRecords {
             var countedTags = Set<String>()
-            for tag in moment.tags {
+            for tag in record.tags {
                 let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
                 let identifier = momentTagIdentifier(normalized)
                 guard !normalized.isEmpty, countedTags.insert(identifier).inserted else { continue }
@@ -123,18 +133,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     var filteredMoments: [NativeMoment] {
-        let query = momentSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return moments.filter { moment in
-            let matchesSelectedTags = selectedMomentTags.isEmpty || moment.tags.contains { tag in
-                selectedMomentTags.contains { selectedTag in
-                    selectedTag.caseInsensitiveCompare(tag) == .orderedSame
-                }
-            }
-            return matchesSelectedTags
-                && (!showsOnlyFavoriteMoments || moment.isFavorite)
-                && momentDateFilter.includes(timestamp: moment.createdAt)
-                && moment.matches(search: query)
-        }
+        moments
     }
 
     var isFilteringMoments: Bool {
@@ -146,8 +145,8 @@ public final class NativeAppModel: ObservableObject {
 
     var availableMomentMonths: [NativeMomentMonth] {
         var months = Set<NativeMomentMonth>()
-        for moment in moments {
-            guard let date = NativeTimestamp.date(from: moment.createdAt) else { continue }
+        for record in momentFacetRecords {
+            guard let date = NativeTimestamp.date(from: record.createdAt) else { continue }
             let components = Calendar.current.dateComponents([.year, .month], from: date)
             guard let year = components.year, let month = components.month else { continue }
             months.insert(NativeMomentMonth(year: year, month: month))
@@ -402,7 +401,7 @@ public final class NativeAppModel: ObservableObject {
 
     public func reload() async throws {
         articles = try await store.listArticles()
-        moments = try await store.listMoments()
+        try await reloadMomentFeed()
         trashItems = try await store.listTrash()
         try await refreshActivity()
         if let selectedSlug, let selected = articles.first(where: { $0.slug == selectedSlug }) {
@@ -420,6 +419,11 @@ public final class NativeAppModel: ObservableObject {
         dataDirectoryPath = workspace.workspaceURL.path
         articles = []
         moments = []
+        totalMomentCount = 0
+        filteredMomentCount = 0
+        momentFacetRecords = []
+        nextMomentCursor = nil
+        hasMoreMoments = false
         trashItems = []
         activity = []
         selectedArticle = nil
@@ -436,6 +440,76 @@ public final class NativeAppModel: ObservableObject {
         showsOnlyFavoriteMoments = false
         section = .dashboard
         try await reload()
+    }
+
+    private var currentMomentFilter: NativeMomentFilter {
+        NativeMomentFilter(
+            searchText: momentSearchText,
+            tags: Array(selectedMomentTags),
+            dateFilter: momentDateFilter,
+            favoritesOnly: showsOnlyFavoriteMoments
+        )
+    }
+
+    private func reloadMomentFeed() async throws {
+        momentFeedGeneration += 1
+        let generation = momentFeedGeneration
+        isLoadingMoreMoments = true
+        defer { isLoadingMoreMoments = false }
+
+        let filter = currentMomentFilter
+        let facets = try await store.listMomentFacetRecords()
+        let total = facets.count
+        let filteredTotal = try await store.countMoments(matching: filter)
+        let page = try await store.listMomentPage(matching: filter, limit: momentPageSize)
+        guard generation == momentFeedGeneration else { return }
+
+        momentFacetRecords = facets
+        totalMomentCount = total
+        filteredMomentCount = filteredTotal
+        moments = page.moments
+        nextMomentCursor = page.nextCursor
+        hasMoreMoments = page.nextCursor != nil
+    }
+
+    func loadMoreMoments() {
+        guard hasMoreMoments, !isLoadingMoreMoments, let cursor = nextMomentCursor else { return }
+        let generation = momentFeedGeneration
+        let filter = currentMomentFilter
+        isLoadingMoreMoments = true
+
+        Task {
+            defer { isLoadingMoreMoments = false }
+            do {
+                let page = try await store.listMomentPage(
+                    matching: filter,
+                    before: cursor,
+                    limit: momentPageSize
+                )
+                guard generation == momentFeedGeneration, filter == currentMomentFilter else { return }
+                moments.append(contentsOf: page.moments)
+                nextMomentCursor = page.nextCursor
+                hasMoreMoments = page.nextCursor != nil
+            } catch {
+                guard generation == momentFeedGeneration else { return }
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func refreshMomentFeed(after delay: TimeInterval = 0) {
+        momentSearchTask?.cancel()
+        momentSearchTask = Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard !Task.isCancelled, let self else { return }
+            do {
+                try await self.reloadMomentFeed()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func refreshActivity() async throws {
@@ -723,6 +797,7 @@ public final class NativeAppModel: ObservableObject {
         } else {
             selectedMomentTags.insert(normalized)
         }
+        refreshMomentFeed()
     }
 
     func isMomentTagSelected(_ tag: String) -> Bool {
@@ -732,11 +807,14 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func selectMomentDateFilter(_ filter: NativeMomentDateFilter) {
+        guard momentDateFilter != filter else { return }
         momentDateFilter = filter
+        refreshMomentFeed()
     }
 
     func toggleFavoriteMomentFilter() {
         showsOnlyFavoriteMoments.toggle()
+        refreshMomentFeed()
     }
 
     func toggleMomentFavorite(_ moment: NativeMoment) {
@@ -747,6 +825,7 @@ public final class NativeAppModel: ObservableObject {
                 if let index = moments.firstIndex(where: { $0.id == updated.id }) {
                     moments[index] = updated
                 }
+                try await reloadMomentFeed()
                 scheduleBackup()
                 errorMessage = nil
             } catch {
@@ -760,6 +839,7 @@ public final class NativeAppModel: ObservableObject {
         selectedMomentTags = []
         momentDateFilter = .all
         showsOnlyFavoriteMoments = false
+        refreshMomentFeed()
     }
 
     func cancelMomentEditing() {
@@ -779,7 +859,7 @@ public final class NativeAppModel: ObservableObject {
         Task {
             do {
                 try await store.deleteMoment(id: moment.id)
-                moments.removeAll { $0.id == moment.id }
+                try await reloadMomentFeed()
                 trashItems = try await store.listTrash()
                 scheduleBackup()
                 errorMessage = nil
@@ -871,6 +951,7 @@ public final class NativeAppModel: ObservableObject {
                     moments.insert(saved, at: 0)
                 }
                 momentDraft = NativeMomentDraft()
+                try await reloadMomentFeed()
                 try await refreshActivity()
                 scheduleBackup()
                 errorMessage = nil

@@ -39,8 +39,8 @@ struct MomentFeedView: View {
                         .font(.title2.weight(.bold))
                     Text(
                         !model.isFilteringMoments
-                            ? "\(model.moments.count) 条"
-                            : "\(model.filteredMoments.count) / \(model.moments.count) 条"
+                            ? "\(model.totalMomentCount) 条"
+                            : "已加载 \(model.moments.count) / \(model.filteredMomentCount) 条"
                     )
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -67,6 +67,9 @@ struct MomentFeedView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 240)
                         .help("可搜索正文、#标签、2026-08-22 或 2026年8月22日")
+                        .onChange(of: model.momentSearchText) { _ in
+                            model.refreshMomentFeed(after: 0.25)
+                        }
 
                     Menu {
                         Button {
@@ -330,6 +333,26 @@ struct MomentFeedView: View {
                                     }
                                 }
                             }
+                        }
+
+                        if model.hasMoreMoments {
+                            HStack {
+                                Spacer()
+                                Button {
+                                    model.loadMoreMoments()
+                                } label: {
+                                    if model.isLoadingMoreMoments {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                        Text("正在加载…")
+                                    } else {
+                                        Label("加载更多历史微博", systemImage: "arrow.down.circle")
+                                    }
+                                }
+                                .disabled(model.isLoadingMoreMoments)
+                                Spacer()
+                            }
+                            .padding(.vertical, 8)
                         }
                     }
                     .frame(maxWidth: momentFeedMaximumWidth, alignment: .leading)
@@ -884,18 +907,32 @@ private struct MomentImageGrid: View {
     let store: LocalBlogStore
     let onOpenImage: (Int) -> Void
 
+    private let spacing: CGFloat = 6
+
     private var columns: Int {
         images.count == 1 ? 1 : images.count == 2 ? 2 : 3
     }
 
+    private var imageTileSize: CGFloat {
+        images.count == 1 ? 320 : images.count == 2 ? 176 : 128
+    }
+
     private var imageHeight: CGFloat {
-        images.count == 1 ? 280 : images.count == 2 ? 190 : 128
+        images.count == 1 ? 240 : imageTileSize
+    }
+
+    private var gridColumns: [GridItem] {
+        Array(
+            repeating: GridItem(.fixed(imageTileSize), spacing: spacing),
+            count: columns
+        )
     }
 
     var body: some View {
         LazyVGrid(
-            columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: columns),
-            spacing: 3
+            columns: gridColumns,
+            alignment: .leading,
+            spacing: spacing
         ) {
             ForEach(Array(images.enumerated()), id: \.element.id) { index, image in
                 Button {
@@ -906,8 +943,14 @@ private struct MomentImageGrid: View {
                         store: store,
                         loadMode: .thumbnail(maxPixelSize: 720)
                     )
-                        .frame(height: imageHeight)
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                        .frame(width: imageTileSize, height: imageHeight)
+                        .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(.primary.opacity(0.18), lineWidth: 1)
+                                .allowsHitTesting(false)
+                        }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("放大浏览图片 \(image.name)")
@@ -970,9 +1013,7 @@ private struct MomentImage: View {
                 failedToLoad = true
                 return
             }
-            let decoded = await Task.detached(priority: .userInitiated) {
-                MomentImageDecodeResult(image: MomentImageLoader.load(from: url, mode: loadMode))
-            }.value
+            let decoded = await MomentImageLoader.shared.image(from: url, mode: loadMode)
             guard !Task.isCancelled else { return }
             image = decoded.image
             failedToLoad = image == nil
@@ -981,7 +1022,71 @@ private struct MomentImage: View {
     }
 }
 
-private enum MomentImageLoader {
+private actor MomentImageLoader {
+    static let shared = MomentImageLoader()
+
+    private let cache = NSCache<NSString, NSImage>()
+    private let maximumConcurrentDecodes = 4
+    private var activeDecodeCount = 0
+    private var decodeWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init() {
+        cache.countLimit = 512
+        cache.totalCostLimit = 160 * 1_024 * 1_024
+    }
+
+    func image(from url: URL, mode: MomentImageLoadMode) async -> MomentImageDecodeResult {
+        let key = "\(url.path)|\(mode.cacheKey)" as NSString
+        if mode != .fullSize, let cached = cache.object(forKey: key) {
+            return MomentImageDecodeResult(image: cached)
+        }
+
+        await acquireDecodeSlot()
+        defer { releaseDecodeSlot() }
+
+        guard !Task.isCancelled else { return MomentImageDecodeResult(image: nil) }
+        if mode != .fullSize, let cached = cache.object(forKey: key) {
+            return MomentImageDecodeResult(image: cached)
+        }
+
+        let decoded = await Task.detached(priority: .userInitiated) {
+            MomentImageDecodeResult(image: MomentImageDecoder.load(from: url, mode: mode))
+        }.value
+
+        if mode != .fullSize, let image = decoded.image {
+            cache.setObject(image, forKey: key, cost: imageCost(image))
+        }
+        return decoded
+    }
+
+    private func acquireDecodeSlot() async {
+        if activeDecodeCount < maximumConcurrentDecodes {
+            activeDecodeCount += 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            decodeWaiters.append(continuation)
+        }
+    }
+
+    private func releaseDecodeSlot() {
+        if let waiter = decodeWaiters.first {
+            decodeWaiters.removeFirst()
+            waiter.resume()
+        } else {
+            activeDecodeCount = max(0, activeDecodeCount - 1)
+        }
+    }
+
+    private func imageCost(_ image: NSImage) -> Int {
+        let representation = image.representations.first
+        let width = representation?.pixelsWide ?? Int(image.size.width)
+        let height = representation?.pixelsHigh ?? Int(image.size.height)
+        return max(1, width * height * 4)
+    }
+}
+
+private enum MomentImageDecoder {
     static func load(from url: URL, mode: MomentImageLoadMode) -> NSImage? {
         if mode == .fullSize {
             return NSImage(contentsOf: url)
@@ -1239,9 +1344,7 @@ private struct MomentZoomableImage: View {
                 failedToLoad = true
                 return
             }
-            let decoded = await Task.detached(priority: .userInitiated) {
-                MomentImageDecodeResult(image: MomentImageLoader.load(from: url, mode: .fullSize))
-            }.value
+            let decoded = await MomentImageLoader.shared.image(from: url, mode: .fullSize)
             guard !Task.isCancelled else { return }
             image = decoded.image
             failedToLoad = image == nil
