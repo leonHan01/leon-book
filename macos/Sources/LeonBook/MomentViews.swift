@@ -2,7 +2,7 @@ import AppKit
 import ImageIO
 import SwiftUI
 
-private let momentFeedMaximumWidth: CGFloat = 1_440
+private let momentFeedMaximumWidth: CGFloat = 1_760
 
 struct MomentFeedView: View {
     @ObservedObject var model: NativeAppModel
@@ -32,7 +32,7 @@ struct MomentFeedView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                MomentComposerView(model: model)
+                MomentComposerSection(model: model)
 
                 HStack(alignment: .firstTextBaseline) {
                     Text("历史微博")
@@ -508,6 +508,68 @@ private struct MomentMasonryLayout: Layout {
             frames: frames,
             size: CGSize(width: resolvedWidth, height: columnHeights.max() ?? 0)
         )
+    }
+}
+
+private struct MomentComposerSection: View {
+    @ObservedObject var model: NativeAppModel
+    @State private var isExpanded = false
+
+    private var isEditing: Bool { model.editingMomentID != nil }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Label(
+                        isEditing ? "编辑微博" : "发布微博",
+                        systemImage: isEditing ? "pencil" : "square.and.pencil"
+                    )
+                    .font(.headline)
+
+                    Spacer()
+
+                    Text(isExpanded ? "收起" : "展开")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(.quaternary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isEditing ? "编辑微博" : "发布微博")
+            .accessibilityValue(isExpanded ? "已展开" : "已折叠")
+
+            if isExpanded {
+                MomentComposerView(model: model)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .onAppear {
+            // Do not hide an unsaved draft or an edit session when returning to this page.
+            isExpanded = isEditing || !model.momentDraft.isEmpty
+        }
+        .onChange(of: model.editingMomentID) { editingMomentID in
+            if editingMomentID != nil {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isExpanded = true
+                }
+            }
+        }
     }
 }
 

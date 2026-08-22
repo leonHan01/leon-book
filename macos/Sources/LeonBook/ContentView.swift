@@ -11,10 +11,11 @@ public struct ContentView: View {
     public var body: some View {
         NavigationSplitView {
             sidebar
+                .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 320)
         } detail: {
             detail
         }
-        .frame(minWidth: 980, minHeight: 680)
+        .frame(minWidth: 1_080, minHeight: 680)
         .toolbar {
             ToolbarItemGroup {
                 Button { Task { try? await model.reload() } } label: {

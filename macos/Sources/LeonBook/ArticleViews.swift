@@ -4,6 +4,11 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum ArticleEditorLayout {
+    static let contentInset: CGFloat = 20
+    static let titleVerticalInset: CGFloat = 24
+}
+
 struct ArticleReaderView: View {
     @ObservedObject var model: NativeAppModel
 
@@ -277,7 +282,10 @@ private struct NativeBodyEditor: NSViewRepresentable {
         textView.string = text
         textView.textColor = .labelColor
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.lineFragmentPadding = 16
+        // The editor itself has a 10-point outer inset and its placeholder has
+        // an 18-point inset. Keep the editable glyphs (and therefore caret)
+        // on that same 18-point leading edge.
+        textView.textContainer?.lineFragmentPadding = 8
         textView.textContainer?.widthTracksTextView = true
         textView.registerForDraggedTypes([.fileURL, .png, .tiff])
         textView.onPasteImage = { [weak textView, weak coordinator = context.coordinator] image, selectedRange in
@@ -444,6 +452,7 @@ private struct MarkdownPreview: View {
             .padding(16)
             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
         }
+        .padding(ArticleEditorLayout.contentInset)
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
@@ -457,26 +466,25 @@ struct ArticleEditorView: View {
             Divider()
 
             GeometryReader { proxy in
+                let settingsWidth = min(max(proxy.size.width * 0.22, 260), 340)
+
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 0) {
-                        ScrollView {
-                            titleSection
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 30)
-                        }
-                        .frame(maxHeight: 260)
+                        titleSection
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, ArticleEditorLayout.titleVerticalInset)
 
                         writingSection
                     }
-                    .frame(width: proxy.size.width * 0.8)
+                    .frame(width: proxy.size.width - settingsWidth - 1, alignment: .leading)
 
                     Divider()
 
                     ScrollView {
                         editorSidebar
-                            .padding(20)
+                            .padding(ArticleEditorLayout.contentInset)
                     }
-                    .frame(width: proxy.size.width * 0.2)
+                    .frame(width: settingsWidth)
                     .background(Color(nsColor: .controlBackgroundColor).opacity(0.34))
                 }
             }
@@ -542,7 +550,7 @@ struct ArticleEditorView: View {
             .disabled(model.isSaving)
         }
         .controlSize(.large)
-        .padding(.horizontal, 24)
+        .padding(.horizontal, ArticleEditorLayout.contentInset)
         .padding(.vertical, 14)
     }
 
@@ -564,7 +572,7 @@ struct ArticleEditorView: View {
                 .textFieldStyle(.plain)
                 .lineLimit(2...4)
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, ArticleEditorLayout.contentInset)
     }
 
     private var writingSection: some View {
@@ -587,7 +595,7 @@ struct ArticleEditorView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, ArticleEditorLayout.contentInset)
             .padding(.vertical, 14)
 
             Divider()
@@ -609,7 +617,7 @@ struct ArticleEditorView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, ArticleEditorLayout.contentInset)
             .padding(.vertical, 11)
         }
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.48), in: RoundedRectangle(cornerRadius: 16))
@@ -649,7 +657,7 @@ struct ArticleEditorView: View {
                 }
             }
         }
-        .padding(16)
+        .padding(ArticleEditorLayout.contentInset)
     }
 
     private var editorSidebar: some View {
