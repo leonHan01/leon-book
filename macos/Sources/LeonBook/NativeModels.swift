@@ -106,6 +106,101 @@ public struct NativeArticleSummary: Codable, Hashable, Identifiable {
     public var id: String { slug }
 }
 
+public enum NativeArticleLink {
+    public static func references(in text: String) -> [String] {
+        let expression = try! NSRegularExpression(pattern: #"\[\[([^\[\]\r\n]+)\]\]"#)
+        let searchRange = NSRange(text.startIndex..., in: text)
+        return expression.matches(in: text, range: searchRange).compactMap { match in
+            guard let range = Range(match.range(at: 1), in: text) else { return nil }
+            let reference = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return reference.isEmpty ? nil : reference
+        }
+    }
+
+    public static func resolve(
+        _ reference: String,
+        in articles: [NativeArticleSummary]
+    ) -> NativeArticleSummary? {
+        let normalized = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+
+        return articles.first {
+            $0.title.caseInsensitiveCompare(normalized) == .orderedSame
+        } ?? articles.first {
+            $0.slug.caseInsensitiveCompare(normalized) == .orderedSame
+        }
+    }
+}
+
+public enum NativeArticleTag {
+    public static func parse(_ input: String) -> [String] {
+        var tags: [String] = []
+
+        for segment in input.split(whereSeparator: { ",，\n".contains($0) }) {
+            let value = String(segment).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { continue }
+
+            if value.contains(where: isTagMarker) {
+                appendHashtags(from: value, to: &tags)
+            } else {
+                append(value, to: &tags)
+            }
+        }
+
+        return Array(tags.prefix(12))
+    }
+
+    public static func normalized(_ tags: [String]) -> [String] {
+        var normalized: [String] = []
+        for tag in tags {
+            for parsed in parse(tag) {
+                append(parsed, to: &normalized)
+            }
+        }
+        return Array(normalized.prefix(12))
+    }
+
+    private static func appendHashtags(from value: String, to tags: inout [String]) {
+        let characters = Array(value)
+        var index = 0
+
+        while index < characters.count {
+            guard isTagMarker(characters[index]) else {
+                index += 1
+                continue
+            }
+
+            var end = index + 1
+            while end < characters.count,
+                  !isTagMarker(characters[end]),
+                  !characters[end].isWhitespace,
+                  !isTagTerminator(characters[end]) {
+                end += 1
+            }
+            append(String(characters[(index + 1)..<end]), to: &tags)
+            index = max(end, index + 1)
+        }
+    }
+
+    private static func append(_ value: String, to tags: inout [String]) {
+        let tag = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tag.isEmpty,
+              !tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) else {
+            return
+        }
+        tags.append(tag)
+    }
+
+    private static func isTagMarker(_ character: Character) -> Bool {
+        character == "#" || character == "＃"
+    }
+
+    private static func isTagTerminator(_ character: Character) -> Bool {
+        let terminators = CharacterSet(charactersIn: ",，.。!！?？;；:：、()（）[]【】{}<>《》\"“”'‘’")
+        return character.unicodeScalars.allSatisfy(terminators.contains)
+    }
+}
+
 public struct NativeActivityDay: Hashable, Identifiable {
     public let date: String
     public let count: Int
@@ -150,7 +245,7 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
         self.media = media
         self.slug = slug
         self.status = status
-        self.tags = tags
+        self.tags = NativeArticleTag.normalized(tags)
         self.title = title
         self.updatedAt = updatedAt
         self.publishedAt = publishedAt
@@ -166,7 +261,7 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
         media = try container.decodeIfPresent([NativeMedia].self, forKey: .media) ?? []
         slug = try container.decodeIfPresent(String.self, forKey: .slug) ?? ""
         status = try container.decodeIfPresent(NativeArticleStatus.self, forKey: .status) ?? .published
-        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
+        tags = NativeArticleTag.normalized(try container.decodeIfPresent([String].self, forKey: .tags) ?? [])
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Untitled note"
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
         publishedAt = try container.decodeIfPresent(String.self, forKey: .publishedAt)

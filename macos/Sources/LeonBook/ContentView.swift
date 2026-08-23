@@ -384,8 +384,18 @@ struct ArticleListView: View {
                 TextField("搜索标题、分类或标签", text: $model.searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 260)
+                if model.isFilteringArticles {
+                    Button("清除筛选") { model.clearArticleFilters() }
+                        .buttonStyle(.bordered)
+                }
             }
             .padding(22)
+
+            if !model.availableArticleTagFilters.isEmpty {
+                ArticleTagFilterBar(model: model)
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 14)
+            }
             Divider()
 
             if model.filteredArticles.isEmpty {
@@ -399,6 +409,47 @@ struct ArticleListView: View {
                 .listStyle(.plain)
             }
         }
+    }
+}
+
+private struct ArticleTagFilterBar: View {
+    @ObservedObject var model: NativeAppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("标签筛选", systemImage: "tag")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(model.availableArticleTagFilters) { tagFilter in
+                        let isSelected = model.isArticleTagSelected(tagFilter.tag)
+                        Button {
+                            model.toggleArticleTagFilter(tagFilter.tag)
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: isSelected ? "checkmark.circle.fill" : "tag")
+                                Text("#\(tagFilter.tag)")
+                                Text("\(tagFilter.count)")
+                                    .foregroundStyle(isSelected ? .primary : .secondary)
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 6)
+                            .background(
+                                isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .help("筛选标签 #\(tagFilter.tag)：\(tagFilter.count) 篇文章")
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("文章标签筛选，可多选，任一匹配")
     }
 }
 
@@ -422,6 +473,12 @@ private struct ArticleRow: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if !article.tags.isEmpty {
+                        Text(article.tags.map { "#\($0)" }.joined(separator: "  "))
+                            .font(.caption)
+                            .foregroundStyle(.tint)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {

@@ -4,6 +4,8 @@ import SwiftUI
 /// Renders CommonMark/GFM. Local `/media` URLs are resolved by `MarkdownArticleBody`.
 struct MarkdownDocumentView: View {
     let markdown: String
+    let articleLinks: [NativeArticleSummary]
+    let onOpenArticle: (String) -> Void
 
     private var blocks: [MarkdownBlock] {
         MarkdownParser.parse(markdown)
@@ -12,11 +14,142 @@ struct MarkdownDocumentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                MarkdownBlockView(block: block)
+                MarkdownBlockView(
+                    block: block,
+                    articleLinks: articleLinks,
+                    onOpenArticle: onOpenArticle
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
+        .environment(\.openURL, OpenURLAction { url in
+            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  components.scheme == "leonbook",
+                  components.host == "article",
+                  let slug = components.queryItems?.first(where: { $0.name == "slug" })?.value else {
+                return .systemAction
+            }
+            onOpenArticle(slug)
+            return .handled
+        })
+    }
+}
+
+struct MarkdownWebEmbed: Hashable {
+    let url: URL
+    let title: String
+    let height: CGFloat
+}
+
+struct MarkdownHTMLComponent: Hashable {
+    static let defaultHeight: CGFloat = 360
+
+    let html: String
+    let height: CGFloat
+}
+
+enum MarkdownHTMLComponentParser {
+    static func fromFence(_ source: String, infoString: String?) -> MarkdownHTMLComponent? {
+        let options = infoString?
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init) ?? []
+        guard options.first?.lowercased() == "html-render",
+              !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+
+        let requestedHeight = options
+            .first(where: { $0.lowercased().hasPrefix("height=") })?
+            .split(separator: "=", maxSplits: 1)
+            .last
+            .flatMap { Double($0) }
+            .map { CGFloat($0) } ?? MarkdownHTMLComponent.defaultHeight
+
+        return MarkdownHTMLComponent(
+            html: source,
+            height: min(max(requestedHeight, 160), 1_200)
+        )
+    }
+}
+
+enum MarkdownWebEmbedParser {
+    static func fromURL(_ source: String, title: String = "网页嵌入", height: CGFloat = 480) -> MarkdownWebEmbed? {
+        let value = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty,
+              let components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              components.host != nil,
+              let url = components.url else { return nil }
+
+        let safeHeight = min(max(height, 240), 800)
+        let safeTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return MarkdownWebEmbed(
+            url: url,
+            title: safeTitle.isEmpty ? "网页嵌入" : safeTitle,
+            height: safeHeight
+        )
+    }
+
+    static func fromFence(_ source: String) -> MarkdownWebEmbed? {
+        let content = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        if content.range(of: #"(?is)^<iframe\b"#, options: .regularExpression) != nil {
+            return fromHTML(content)
+        }
+
+        guard let urlLine = content.components(separatedBy: .newlines)
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty }) else { return nil }
+        return fromURL(urlLine)
+    }
+
+    static func fromHTML(_ source: String) -> MarkdownWebEmbed? {
+        guard source.range(of: #"(?is)^<iframe\b"#, options: .regularExpression) != nil else {
+            return nil
+        }
+
+        let closingTag = source.range(of: #"</iframe\s*>"#, options: [.regularExpression, .caseInsensitive])
+        let selfClosing = source.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("/>")
+        guard closingTag != nil || selfClosing else { return nil }
+
+        if let closingTag,
+           !source[closingTag.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return nil
+        }
+
+        guard let sourceURL = attribute(named: "src", in: source) else { return nil }
+        let title = attribute(named: "title", in: source)
+            ?? attribute(named: "aria-label", in: source)
+            ?? "网页嵌入"
+        let height = attribute(named: "height", in: source)
+            .flatMap { Double($0.replacingOccurrences(of: "px", with: "", options: .caseInsensitive)) }
+            .map { CGFloat($0) } ?? 480
+        return fromURL(sourceURL, title: title, height: height)
+    }
+
+    static func block(in lines: [String], from start: Int) -> (embed: MarkdownWebEmbed, nextIndex: Int)? {
+        guard start < lines.count,
+              lines[start].trimmingCharacters(in: .whitespacesAndNewlines)
+                .range(of: #"(?is)^<iframe\b"#, options: .regularExpression) != nil else { return nil }
+
+        var source = lines[start].trimmingCharacters(in: .whitespacesAndNewlines)
+        var index = start
+        while index + 1 < lines.count,
+              source.range(of: #"</iframe\s*>"#, options: [.regularExpression, .caseInsensitive]) == nil,
+              !source.hasSuffix("/>") {
+            index += 1
+            source += " " + lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard let embed = fromHTML(source) else { return nil }
+        return (embed, index + 1)
+    }
+
+    private static func attribute(named name: String, in source: String) -> String? {
+        let pattern = #"\b"# + NSRegularExpression.escapedPattern(for: name) + #"\s*=\s*["']([^"']+)["']"#
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let match = expression.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)),
+              let valueRange = Range(match.range(at: 1), in: source) else { return nil }
+        return String(source[valueRange]).replacingOccurrences(of: "&amp;", with: "&")
     }
 }
 
@@ -26,6 +159,8 @@ private enum MarkdownBlock {
     case list([MarkdownListItem])
     case blockQuote(String)
     case codeBlock(language: String?, code: String)
+    case htmlComponent(MarkdownHTMLComponent)
+    case webEmbed(MarkdownWebEmbed)
     case thematicBreak
     case table(headers: [String], alignments: [MarkdownTableAlignment], rows: [[String]])
 }
@@ -45,29 +180,35 @@ private enum MarkdownTableAlignment {
 
 private struct MarkdownBlockView: View {
     let block: MarkdownBlock
+    let articleLinks: [NativeArticleSummary]
+    let onOpenArticle: (String) -> Void
 
     var body: some View {
         switch block {
         case let .heading(level, text):
-            inlineMarkdownText(text)
+            inlineMarkdownText(text, articleLinks: articleLinks)
                 .font(headingFont(for: level))
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case let .paragraph(text):
-            inlineMarkdownText(text)
+            inlineMarkdownText(text, articleLinks: articleLinks)
                 .font(.system(size: 18, design: .serif))
                 .lineSpacing(6)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case let .list(items):
-            MarkdownListView(items: items)
+            MarkdownListView(items: items, articleLinks: articleLinks)
 
         case let .blockQuote(source):
             HStack(alignment: .top, spacing: 12) {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Color.accentColor.opacity(0.72))
                     .frame(width: 4)
-                MarkdownDocumentView(markdown: source)
+                MarkdownDocumentView(
+                    markdown: source,
+                    articleLinks: articleLinks,
+                    onOpenArticle: onOpenArticle
+                )
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, 3)
@@ -93,11 +234,22 @@ private struct MarkdownBlockView: View {
                     .stroke(Color.secondary.opacity(0.2))
             }
 
+        case let .htmlComponent(component):
+            MarkdownHTMLComponentView(component: component)
+
+        case let .webEmbed(embed):
+            MarkdownWebEmbedView(embed: embed)
+
         case .thematicBreak:
             Divider().padding(.vertical, 5)
 
         case let .table(headers, alignments, rows):
-            MarkdownTableView(headers: headers, alignments: alignments, rows: rows)
+            MarkdownTableView(
+                headers: headers,
+                alignments: alignments,
+                rows: rows,
+                articleLinks: articleLinks
+            )
         }
     }
 
@@ -115,6 +267,7 @@ private struct MarkdownBlockView: View {
 
 private struct MarkdownListView: View {
     let items: [MarkdownListItem]
+    let articleLinks: [NativeArticleSummary]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -131,7 +284,7 @@ private struct MarkdownListView: View {
                     }
                     .frame(width: 24, alignment: .trailing)
 
-                    inlineMarkdownText(item.text)
+                    inlineMarkdownText(item.text, articleLinks: articleLinks)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.leading, CGFloat(item.depth) * 22)
@@ -145,6 +298,7 @@ private struct MarkdownTableView: View {
     let headers: [String]
     let alignments: [MarkdownTableAlignment]
     let rows: [[String]]
+    let articleLinks: [NativeArticleSummary]
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
@@ -174,9 +328,12 @@ private struct MarkdownTableView: View {
 
     @ViewBuilder
     private func tableCell(_ value: String, index: Int, isHeader: Bool) -> some View {
-        inlineMarkdownText(value)
+        inlineMarkdownText(value, articleLinks: articleLinks)
             .font(isHeader ? .body.weight(.semibold) : .body)
-            .frame(minWidth: 110, alignment: cellAlignment(at: index))
+            // Grid assigns every cell in a column the same width. Expanding into
+            // that assigned width keeps each cell's fill and borders continuous
+            // when another row contains longer text.
+            .frame(minWidth: 110, maxWidth: .infinity, alignment: cellAlignment(at: index))
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(isHeader ? Color.secondary.opacity(0.1) : Color.clear)
@@ -210,9 +367,25 @@ private enum MarkdownParser {
                 continue
             }
 
+            if let result = MarkdownWebEmbedParser.block(in: lines, from: index) {
+                blocks.append(.webEmbed(result.embed))
+                index = result.nextIndex
+                continue
+            }
+
             if let fence = fencedCodeOpening(in: lines[index]) {
                 let result = consumeFencedCode(lines, from: index, fence: fence)
-                blocks.append(.codeBlock(language: fence.language, code: result.code))
+                if let component = MarkdownHTMLComponentParser.fromFence(
+                    result.code,
+                    infoString: fence.language
+                ) {
+                    blocks.append(.htmlComponent(component))
+                } else if fence.language?.lowercased() == "embed",
+                   let embed = MarkdownWebEmbedParser.fromFence(result.code) {
+                    blocks.append(.webEmbed(embed))
+                } else {
+                    blocks.append(.codeBlock(language: fence.language, code: result.code))
+                }
                 index = result.nextIndex
                 continue
             }
@@ -489,29 +662,73 @@ private enum MarkdownParser {
             isThematicBreak(lines[index]) ||
             isBlockQuote(lines[index]) ||
             listItem(in: lines[index]) != nil ||
+            MarkdownWebEmbedParser.block(in: lines, from: index) != nil ||
             table(at: index, in: lines) != nil
     }
 }
 
-private func inlineMarkdownText(_ source: String) -> Text {
+private func inlineMarkdownText(_ source: String, articleLinks: [NativeArticleSummary]) -> Text {
     let fragments = source.components(separatedBy: "~~")
     let delimiterCount = fragments.count - 1
 
     // Strikethrough is a GFM extension. Parse it explicitly so that its
     // presentation does not depend on the system Markdown parser version.
     guard delimiterCount >= 2, delimiterCount.isMultiple(of: 2) else {
-        return markdownInlineFragment(source)
+        return markdownInlineFragment(source, articleLinks: articleLinks)
     }
 
     return fragments.enumerated().reduce(Text("")) { rendered, fragment in
-        let text = markdownInlineFragment(fragment.element)
+        let text = markdownInlineFragment(fragment.element, articleLinks: articleLinks)
         return rendered + (fragment.offset.isMultiple(of: 2) ? text : text.strikethrough())
     }
 }
 
-private func markdownInlineFragment(_ source: String) -> Text {
-    if let attributed = try? AttributedString(markdown: source) {
+private func markdownInlineFragment(_ source: String, articleLinks: [NativeArticleSummary]) -> Text {
+    let resolvedSource = MarkdownArticleLinkRenderer.markdown(from: source, articleLinks: articleLinks)
+    if let attributed = try? AttributedString(markdown: resolvedSource) {
         return Text(attributed)
     }
-    return Text(source)
+    return Text(resolvedSource)
+}
+
+private enum MarkdownArticleLinkRenderer {
+    static func markdown(from source: String, articleLinks: [NativeArticleSummary]) -> String {
+        let expression = try! NSRegularExpression(pattern: #"\[\[([^\[\]\r\n]+)\]\]"#)
+        let searchRange = NSRange(source.startIndex..., in: source)
+        let matches = expression.matches(in: source, range: searchRange)
+        guard !matches.isEmpty else { return source }
+
+        var rendered = ""
+        var cursor = source.startIndex
+        for match in matches {
+            guard let matchRange = Range(match.range, in: source),
+                  let referenceRange = Range(match.range(at: 1), in: source),
+                  let article = NativeArticleLink.resolve(String(source[referenceRange]), in: articleLinks),
+                  let url = internalURL(slug: article.slug) else {
+                continue
+            }
+
+            rendered += source[cursor..<matchRange.lowerBound]
+            let label = String(source[referenceRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            rendered += "[\(escapedLabel(label))](\(url))"
+            cursor = matchRange.upperBound
+        }
+        rendered += source[cursor...]
+        return rendered
+    }
+
+    private static func internalURL(slug: String) -> String? {
+        var components = URLComponents()
+        components.scheme = "leonbook"
+        components.host = "article"
+        components.queryItems = [URLQueryItem(name: "slug", value: slug)]
+        return components.string
+    }
+
+    private static func escapedLabel(_ label: String) -> String {
+        label
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
+    }
 }

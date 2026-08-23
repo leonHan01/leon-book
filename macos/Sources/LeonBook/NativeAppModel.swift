@@ -17,6 +17,15 @@ struct NativeMomentTagFilter: Identifiable, Hashable {
     }
 }
 
+struct NativeArticleTagFilter: Identifiable, Hashable {
+    let tag: String
+    let count: Int
+
+    var id: String {
+        tag.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+}
+
 @MainActor
 public final class NativeAppModel: ObservableObject {
     @Published var section: NativeSection = .dashboard
@@ -31,6 +40,7 @@ public final class NativeAppModel: ObservableObject {
     @Published var editor = NativeEditorDraft()
     @Published var momentDraft = NativeMomentDraft()
     @Published private(set) var editingMomentID: String?
+    @Published private(set) var selectedArticleTags: Set<String> = []
     @Published private(set) var selectedMomentTags: Set<String> = []
     @Published private(set) var momentDateFilter: NativeMomentDateFilter = .all
     @Published private(set) var showsOnlyFavoriteMoments = false
@@ -82,7 +92,7 @@ public final class NativeAppModel: ObservableObject {
         momentSearchTask?.cancel()
     }
 
-    private func momentTagIdentifier(_ tag: String) -> String {
+    private func tagIdentifier(_ tag: String) -> String {
         tag.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }
 
@@ -96,12 +106,49 @@ public final class NativeAppModel: ObservableObject {
 
     var filteredArticles: [NativeArticleSummary] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return articles }
         return articles.filter {
-            $0.title.lowercased().contains(query)
+            let matchesSearch = query.isEmpty
+                || $0.title.lowercased().contains(query)
                 || $0.category.lowercased().contains(query)
                 || $0.tags.joined(separator: " ").lowercased().contains(query)
+            let matchesTags = selectedArticleTags.isEmpty || $0.tags.contains { tag in
+                selectedArticleTags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+            }
+            return matchesSearch && matchesTags
         }
+    }
+
+    var availableArticleTagFilters: [NativeArticleTagFilter] {
+        var filters: [String: NativeArticleTagFilter] = [:]
+
+        for article in articles {
+            var countedTags = Set<String>()
+            for tag in article.tags {
+                let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                let identifier = tagIdentifier(normalized)
+                guard !normalized.isEmpty, countedTags.insert(identifier).inserted else { continue }
+
+                if let existing = filters[identifier] {
+                    filters[identifier] = NativeArticleTagFilter(tag: existing.tag, count: existing.count + 1)
+                } else {
+                    filters[identifier] = NativeArticleTagFilter(tag: normalized, count: 1)
+                }
+            }
+        }
+
+        return filters.values.sorted {
+            if $0.count != $1.count { return $0.count > $1.count }
+            return $0.tag.localizedCaseInsensitiveCompare($1.tag) == .orderedAscending
+        }
+    }
+
+    var availableArticleTags: [String] {
+        availableArticleTagFilters.map(\.tag)
+    }
+
+    var isFilteringArticles: Bool {
+        !selectedArticleTags.isEmpty
+            || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var availableMomentTagFilters: [NativeMomentTagFilter] {
@@ -111,7 +158,7 @@ public final class NativeAppModel: ObservableObject {
             var countedTags = Set<String>()
             for tag in record.tags {
                 let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-                let identifier = momentTagIdentifier(normalized)
+                let identifier = tagIdentifier(normalized)
                 guard !normalized.isEmpty, countedTags.insert(identifier).inserted else { continue }
 
                 if let existing = filters[identifier] {
@@ -435,6 +482,7 @@ public final class NativeAppModel: ObservableObject {
         editingMomentID = nil
         searchText = ""
         momentSearchText = ""
+        selectedArticleTags = []
         selectedMomentTags = []
         momentDateFilter = .all
         showsOnlyFavoriteMoments = false
@@ -531,6 +579,17 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
+    func openArticleLink(_ slug: String) {
+        guard let summary = articles.first(where: { $0.slug == slug }) else {
+            errorMessage = "关联的文章已不存在。"
+            return
+        }
+        Task {
+            do { try await select(summary) }
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     public func newArticle() {
         guard !isSaving, !isUploadingMedia, !isBackingUp else { return }
         guard confirmDiscardUnsavedWork() else { return }
@@ -556,7 +615,7 @@ public final class NativeAppModel: ObservableObject {
             title: article.title,
             category: article.category,
             excerpt: article.excerpt,
-            tags: article.tags.joined(separator: ", "),
+            tags: articleTagText(article.tags),
             body: article.body,
             banner: article.banner,
             media: article.media,
@@ -589,7 +648,7 @@ public final class NativeAppModel: ObservableObject {
             errorMessage = error.localizedDescription
             return
         }
-        let tags = editor.tags.split(whereSeparator: { ",，\n".contains($0) }).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "") }.filter { !$0.isEmpty }
+        let tags = NativeArticleTag.parse(editor.tags)
         let payload = NativeSaveArticle(
             banner: editor.banner,
             body: editor.body,
@@ -598,7 +657,7 @@ public final class NativeAppModel: ObservableObject {
             media: editor.media,
             slug: slug,
             status: status,
-            tags: Array(Array(Set(tags)).prefix(12)),
+            tags: tags,
             title: title,
             expectedUpdatedAt: editor.updatedAt
         )
@@ -804,6 +863,37 @@ public final class NativeAppModel: ObservableObject {
         selectedMomentTags.contains {
             $0.caseInsensitiveCompare(tag) == .orderedSame
         }
+    }
+
+    func toggleArticleTagFilter(_ tag: String) {
+        let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+
+        if let selectedTag = selectedArticleTags.first(where: {
+            $0.caseInsensitiveCompare(normalized) == .orderedSame
+        }) {
+            selectedArticleTags.remove(selectedTag)
+        } else {
+            selectedArticleTags.insert(normalized)
+        }
+    }
+
+    func isArticleTagSelected(_ tag: String) -> Bool {
+        selectedArticleTags.contains {
+            $0.caseInsensitiveCompare(tag) == .orderedSame
+        }
+    }
+
+    func showArticles(tag: String) {
+        let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+        selectedArticleTags = [normalized]
+        section = .articles
+    }
+
+    func clearArticleFilters() {
+        searchText = ""
+        selectedArticleTags = []
     }
 
     func selectMomentDateFilter(_ filter: NativeMomentDateFilter) {
@@ -1022,7 +1112,7 @@ public final class NativeAppModel: ObservableObject {
             || editor.body != original.body
             || editor.excerpt != original.excerpt
             || editor.category != original.category
-            || editor.tags != original.tags.joined(separator: ", ")
+            || !articleTagsEqual(NativeArticleTag.parse(editor.tags), original.tags)
             || editor.banner != original.banner
             || editor.media != original.media
             || editor.status != original.status
@@ -1030,6 +1120,15 @@ public final class NativeAppModel: ObservableObject {
 
     private var isMomentDraftDirty: Bool {
         !momentDraft.isEmpty || editingMomentID != nil
+    }
+
+    private func articleTagText(_ tags: [String]) -> String {
+        NativeArticleTag.normalized(tags).map { "#\($0)" }.joined(separator: " ")
+    }
+
+    private func articleTagsEqual(_ lhs: [String], _ rhs: [String]) -> Bool {
+        NativeArticleTag.normalized(lhs).map(tagIdentifier)
+            == NativeArticleTag.normalized(rhs).map(tagIdentifier)
     }
 
     private func confirmDiscardUnsavedWork(includingMomentDraft: Bool = false) -> Bool {

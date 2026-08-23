@@ -41,6 +41,13 @@ let package = Package(
             ],
             path: "Checks/LeonBookStoreChecks"
         ),
+        .executableTarget(
+            name: "LeonBookTests",
+            dependencies: [
+                "LeonBook",
+            ],
+            path: "Tests/LeonBookTests"
+        ),
     ],
     swiftLanguageVersions: [.v5]
 )

@@ -3,6 +3,7 @@ import AppKit
 import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
+import WebKit
 
 private enum ArticleEditorLayout {
     static let contentInset: CGFloat = 20
@@ -36,6 +37,23 @@ struct ArticleReaderView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
 
+                        if !article.tags.isEmpty {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: "tag.fill")
+                                    .foregroundStyle(.tint)
+                                ForEach(article.tags, id: \.self) { tag in
+                                    Button {
+                                        model.showArticles(tag: tag)
+                                    } label: {
+                                        Text("#\(tag)")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .help("查看标签 #\(tag) 的文章")
+                                }
+                            }
+                        }
+
                         if !article.excerpt.isEmpty {
                             Text(article.excerpt)
                                 .font(.title3)
@@ -47,7 +65,12 @@ struct ArticleReaderView: View {
                         }
 
                         Divider()
-                        MarkdownArticleBody(body: article.body, store: model.store)
+                        MarkdownArticleBody(
+                            body: article.body,
+                            store: model.store,
+                            articleLinks: model.articles,
+                            onOpenArticle: model.openArticleLink
+                        )
 
                         let attachmentMedia = article.media.filter {
                             !MarkdownArticleBody.imageURLs(in: article.body).contains($0.url)
@@ -82,10 +105,19 @@ private enum MarkdownArticleBlock {
 private struct MarkdownArticleBody: View {
     let markdown: String
     let store: LocalBlogStore
+    let articleLinks: [NativeArticleSummary]
+    let onOpenArticle: (String) -> Void
 
-    init(body: String, store: LocalBlogStore) {
+    init(
+        body: String,
+        store: LocalBlogStore,
+        articleLinks: [NativeArticleSummary] = [],
+        onOpenArticle: @escaping (String) -> Void = { _ in }
+    ) {
         markdown = body
         self.store = store
+        self.articleLinks = articleLinks
+        self.onOpenArticle = onOpenArticle
     }
 
     private var blocks: [MarkdownArticleBlock] { Self.markdownBlocks(in: markdown) }
@@ -97,7 +129,11 @@ private struct MarkdownArticleBody: View {
                 case let .image(url, alt):
                     NativeImageView(url: url, alt: alt, store: store)
                 case let .text(markdown):
-                    MarkdownDocumentView(markdown: markdown)
+                    MarkdownDocumentView(
+                        markdown: markdown,
+                        articleLinks: articleLinks,
+                        onOpenArticle: onOpenArticle
+                    )
                 }
             }
         }
@@ -131,6 +167,215 @@ private struct MarkdownArticleBody: View {
         let trailingText = String(markdown[cursor...]).trimmingCharacters(in: .whitespacesAndNewlines)
         if !trailingText.isEmpty { blocks.append(.text(trailingText)) }
         return blocks
+    }
+}
+
+struct MarkdownWebEmbedView: View {
+    let embed: MarkdownWebEmbed
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Label(embed.title, systemImage: "safari")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button {
+                    NSWorkspace.shared.open(embed.url)
+                } label: {
+                    Label("在浏览器中打开", systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(Color.secondary.opacity(0.08))
+
+            MarkdownEmbeddedWebView(url: embed.url)
+                .frame(maxWidth: .infinity, minHeight: embed.height, maxHeight: embed.height)
+        }
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.secondary.opacity(0.24))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+struct MarkdownHTMLComponentView: View {
+    let component: MarkdownHTMLComponent
+
+    var body: some View {
+        MarkdownHTMLWebView(html: component.html)
+            .frame(maxWidth: .infinity, minHeight: component.height, maxHeight: component.height)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.secondary.opacity(0.2))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .accessibilityLabel("HTML 组件")
+    }
+}
+
+private struct MarkdownHTMLWebView: NSViewRepresentable {
+    let html: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
+        webView.allowsBackForwardNavigationGestures = false
+        loadHTML(in: webView, coordinator: context.coordinator)
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        loadHTML(in: webView, coordinator: context.coordinator)
+    }
+
+    private func loadHTML(in webView: WKWebView, coordinator: Coordinator) {
+        let document = Self.document(containing: html)
+        guard coordinator.loadedDocument != document else { return }
+        coordinator.loadedDocument = document
+        webView.loadHTMLString(document, baseURL: nil)
+    }
+
+    private static func document(containing html: String) -> String {
+        """
+        <!doctype html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+            :root { color-scheme: light dark; }
+            *, *::before, *::after { box-sizing: border-box; }
+            html, body { min-height: 100%; }
+            body {
+              margin: 0;
+              padding: 16px;
+              overflow: auto;
+              color: CanvasText;
+              background: Canvas;
+              font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            }
+            img, video, canvas, svg { max-width: 100%; }
+          </style>
+        </head>
+        <body>
+        \(html)
+        </body>
+        </html>
+        """
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+        var loadedDocument: String?
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            guard let url = navigationAction.request.url else {
+                decisionHandler(.cancel)
+                return
+            }
+
+            if navigationAction.navigationType == .linkActivated {
+                if Self.isHTTPURL(url) { NSWorkspace.shared.open(url) }
+                decisionHandler(.cancel)
+                return
+            }
+
+            decisionHandler(url.scheme?.lowercased() == "about" ? .allow : .cancel)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url,
+               Self.isHTTPURL(url) {
+                NSWorkspace.shared.open(url)
+            }
+            return nil
+        }
+
+        private static func isHTTPURL(_ url: URL) -> Bool {
+            guard let scheme = url.scheme?.lowercased() else { return false }
+            return ["http", "https"].contains(scheme)
+        }
+    }
+}
+
+private struct MarkdownEmbeddedWebView: NSViewRepresentable {
+    let url: URL
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = WKWebView(frame: .zero)
+        webView.navigationDelegate = context.coordinator
+        webView.allowsBackForwardNavigationGestures = true
+        webView.load(URLRequest(url: url))
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        guard webView.url != url else { return }
+        webView.load(URLRequest(url: url))
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(
+            _ webView: WKWebView,
+            createWebViewWith configuration: WKWebViewConfiguration,
+            for navigationAction: WKNavigationAction,
+            windowFeatures: WKWindowFeatures
+        ) -> WKWebView? {
+            guard navigationAction.targetFrame == nil,
+                  let url = navigationAction.request.url,
+                  isAllowed(url) else { return nil }
+            webView.load(URLRequest(url: url))
+            return nil
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            guard let url = navigationAction.request.url, isAllowed(url) else {
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
+
+        private func isAllowed(_ url: URL) -> Bool {
+            guard let scheme = url.scheme?.lowercased() else { return false }
+            return ["http", "https"].contains(scheme)
+        }
     }
 }
 
@@ -255,8 +500,64 @@ private struct NativeAVPlayerView: NSViewRepresentable {
     }
 }
 
+@MainActor
+private final class ArticleLinkAutocompleteController: ObservableObject {
+    private weak var textView: NSTextView?
+    @Published private(set) var activeLinkQuery: String?
+
+    func attach(to textView: NSTextView) {
+        self.textView = textView
+    }
+
+    func completeSuggestion(_ article: NativeArticleSummary) {
+        guard let textView,
+              let context = linkContext(in: textView.string, selectedRange: textView.selectedRange()) else {
+            return
+        }
+
+        let replacement = "[[\(article.title)]]"
+        guard textView.shouldChangeText(in: context.range, replacementString: replacement) else { return }
+        textView.textStorage?.replaceCharacters(in: context.range, with: replacement)
+        let cursor = context.range.location + (replacement as NSString).length
+        textView.setSelectedRange(NSRange(location: cursor, length: 0))
+        textView.didChangeText()
+        activeLinkQuery = nil
+        textView.window?.makeFirstResponder(textView)
+    }
+
+    func dismissSuggestions() {
+        activeLinkQuery = nil
+    }
+
+    fileprivate func updateLinkQuery(from textView: NSTextView) {
+        activeLinkQuery = linkContext(in: textView.string, selectedRange: textView.selectedRange())?.query
+    }
+
+    private func linkContext(in text: String, selectedRange: NSRange) -> (range: NSRange, query: String)? {
+        guard selectedRange.length == 0 else { return nil }
+        let source = text as NSString
+        guard selectedRange.location <= source.length else { return nil }
+        let prefix = source.substring(to: selectedRange.location) as NSString
+        let opening = prefix.range(of: "[[", options: .backwards)
+        guard opening.location != NSNotFound else { return nil }
+
+        let queryRange = NSRange(
+            location: opening.location + opening.length,
+            length: selectedRange.location - opening.location - opening.length
+        )
+        let query = source.substring(with: queryRange)
+        guard !query.contains("["),
+              !query.contains("]"),
+              !query.contains(where: { $0.isNewline }) else {
+            return nil
+        }
+        return (NSRange(location: opening.location, length: selectedRange.location - opening.location), query)
+    }
+}
+
 private struct NativeBodyEditor: NSViewRepresentable {
     @Binding var text: String
+    let linkController: ArticleLinkAutocompleteController
     let onPasteImage: (NSImage, String) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -292,6 +593,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
             guard let textView else { return }
             coordinator?.insertPastedImage(image, at: selectedRange, into: textView)
         }
+        linkController.attach(to: textView)
 
         scrollView.documentView = textView
         return scrollView
@@ -299,7 +601,9 @@ private struct NativeBodyEditor: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
-        guard let textView = scrollView.documentView as? NSTextView, textView.string != text else { return }
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        linkController.attach(to: textView)
+        guard textView.string != text else { return }
         textView.string = text
     }
 
@@ -313,6 +617,12 @@ private struct NativeBodyEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            parent.linkController.updateLinkQuery(from: textView)
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.linkController.updateLinkQuery(from: textView)
         }
 
         func insertPastedImage(_ image: NSImage, at selectedRange: NSRange, into textView: NSTextView) {
@@ -326,6 +636,21 @@ private struct NativeBodyEditor: NSViewRepresentable {
 
 private final class PastingTextView: NSTextView {
     var onPasteImage: ((NSImage, NSRange) -> Void)?
+    private var requestedInitialFocus = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, !requestedInitialFocus else { return }
+        requestedInitialFocus = true
+
+        // NSViewRepresentable creates the editor before it has a window. Wait
+        // until it is attached, then focus it once so a new writing view accepts
+        // keyboard input without requiring an extra click.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            window.makeFirstResponder(self)
+        }
+    }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         var types = super.readablePasteboardTypes
@@ -419,6 +744,8 @@ private final class PastingTextView: NSTextView {
 private struct MarkdownPreview: View {
     let markdown: String
     let store: LocalBlogStore
+    let articleLinks: [NativeArticleSummary]
+    let onOpenArticle: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -445,7 +772,12 @@ private struct MarkdownPreview: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 280)
                 } else {
-                    MarkdownArticleBody(body: markdown, store: store)
+                    MarkdownArticleBody(
+                        body: markdown,
+                        store: store,
+                        articleLinks: articleLinks,
+                        onOpenArticle: onOpenArticle
+                    )
                         .padding(.vertical, 4)
                 }
             }
@@ -459,6 +791,7 @@ private struct MarkdownPreview: View {
 
 struct ArticleEditorView: View {
     @ObservedObject var model: NativeAppModel
+    @StateObject private var articleLinkController = ArticleLinkAutocompleteController()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -604,16 +937,38 @@ struct ArticleEditorView: View {
                 editorPane
                     .frame(minWidth: 230, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-                MarkdownPreview(markdown: model.editor.body, store: model.store)
+                MarkdownPreview(
+                    markdown: model.editor.body,
+                    store: model.store,
+                    articleLinks: model.articles,
+                    onOpenArticle: model.openArticleLink
+                )
                     .frame(minWidth: 230, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .frame(minHeight: 440)
 
             Divider()
 
-            HStack(spacing: 8) {
-                Image(systemName: "info.circle")
-                Text("支持标题、列表、引用、代码、表格、加粗、斜体、删除线、链接和图片。复制或拖入图片后可直接加入正文。")
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle")
+                    Text("支持标题、列表、引用、代码、表格、加粗、斜体、删除线、链接和图片。复制或拖入图片后可直接加入正文。")
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "safari")
+                    Text("网页嵌入：单独一行粘贴 <iframe src=\"…\"></iframe>，或使用 ```embed 代码块放入网页 URL。")
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    Text("HTML 组件：使用 ```html-render height=360 代码块；组件支持 CSS 和 JavaScript。")
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "link")
+                    Text("文章关联：输入 [[ 后按标题联想，选择后会插入 [[文章标题]]。")
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -633,12 +988,22 @@ struct ArticleEditorView: View {
                 Label("Markdown 编辑", systemImage: "pencil.line")
                     .font(.subheadline.weight(.medium))
                 Spacer()
+                Button {
+                    insertHTMLComponentTemplate()
+                } label: {
+                    Label("HTML 组件", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+                .buttonStyle(.borderless)
+                .help("插入可直接渲染的 HTML 组件")
                 Text("⌘Z 可撤销")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
 
-            NativeBodyEditor(text: $model.editor.body) { image, placeholder in
+            NativeBodyEditor(
+                text: $model.editor.body,
+                linkController: articleLinkController
+            ) { image, placeholder in
                 model.uploadPastedImage(image, placeholder: placeholder)
             }
             .padding(10)
@@ -652,9 +1017,23 @@ struct ArticleEditorView: View {
                     Text("从这里开始写……")
                         .font(.system(size: 18))
                         .foregroundStyle(.secondary)
-                        .padding(18)
+                        // Text's CJK glyphs begin slightly inside their layout
+                        // box, while the NSTextView caret does not. Offset the
+                        // prompt by 6 points so its visible first glyph aligns
+                        // with the caret.
+                        .padding(.leading, 12)
+                        .padding(.top, 18)
                         .allowsHitTesting(false)
                 }
+            }
+
+            if let query = articleLinkController.activeLinkQuery, !articleLinkSuggestions.isEmpty {
+                ArticleLinkSuggestionMenu(
+                    query: query,
+                    articles: articleLinkSuggestions,
+                    onSelect: articleLinkController.completeSuggestion,
+                    onDismiss: articleLinkController.dismissSuggestions
+                )
             }
         }
         .padding(ArticleEditorLayout.contentInset)
@@ -695,10 +1074,24 @@ struct ArticleEditorView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     TextField("分类", text: $model.editor.category)
                         .textFieldStyle(.roundedBorder)
-                    TextField("标签，用逗号分隔", text: $model.editor.tags)
+                    TextField("标签，例如 #Swift #随笔", text: $model.editor.tags)
                         .textFieldStyle(.roundedBorder)
 
-                    Text("标签会帮助读者发现相关文章")
+                    if !tagSuggestions.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(tagSuggestions, id: \.self) { tag in
+                                    Button("#\(tag)") {
+                                        appendTag(tag)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                            }
+                        }
+                    }
+
+                    Text("输入 #标签，使用空格继续添加；也兼容原来的逗号分隔。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -803,6 +1196,117 @@ struct ArticleEditorView: View {
 
     private var readingMinutes: Int {
         max(1, Int(ceil(Double(max(wordCount, 1)) / 500)))
+    }
+
+    private var tagSuggestions: [String] {
+        let chosen = NativeArticleTag.parse(model.editor.tags)
+        return model.availableArticleTags.filter { suggestion in
+            !chosen.contains { $0.caseInsensitiveCompare(suggestion) == .orderedSame }
+        }
+    }
+
+    private var articleLinkSuggestions: [NativeArticleSummary] {
+        guard let query = articleLinkController.activeLinkQuery else { return [] }
+        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.articles.filter { article in
+            normalized.isEmpty
+                || article.title.localizedCaseInsensitiveContains(normalized)
+                || article.slug.localizedCaseInsensitiveContains(normalized)
+        }
+        .prefix(8)
+        .map { $0 }
+    }
+
+    private func appendTag(_ tag: String) {
+        guard !NativeArticleTag.parse(model.editor.tags).contains(where: {
+            $0.caseInsensitiveCompare(tag) == .orderedSame
+        }) else {
+            return
+        }
+        let separator = model.editor.tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
+        model.editor.tags += "\(separator)#\(tag)"
+    }
+
+    private func insertHTMLComponentTemplate() {
+        let template = """
+        ```html-render height=360
+        <div style="padding: 20px; border-radius: 12px; background: #2563eb; color: white;">
+          <h2 style="margin-top: 0;">HTML 组件</h2>
+          <p>在这里输入 HTML、CSS 或 JavaScript。</p>
+        </div>
+        ```
+        """
+        let separator = model.editor.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? ""
+            : (model.editor.body.hasSuffix("\n") ? "\n" : "\n\n")
+        model.editor.body += separator + template
+    }
+}
+
+private struct ArticleLinkSuggestionMenu: View {
+    let query: String
+    let articles: [NativeArticleSummary]
+    let onSelect: (NativeArticleSummary) -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Label(
+                    query.isEmpty ? "关联到文章" : "匹配的文章",
+                    systemImage: "link"
+                )
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("关闭文章联想")
+            }
+
+            ForEach(articles) { article in
+                Button {
+                    onSelect(article)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "doc.text.fill")
+                            .foregroundStyle(.tint)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(article.title)
+                                .font(.callout.weight(.medium))
+                            Text("\(article.category) · \(article.slug)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("插入")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .contentShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: 420, alignment: .leading)
+        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(.quaternary)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("文章关联建议")
     }
 }
 

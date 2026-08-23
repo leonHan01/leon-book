@@ -2,9 +2,9 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-This directory contains the native macOS implementation of `leon-book`. It uses SwiftUI for its windows, menus, navigation, reading, writing, and settings interfaces. It does not use Safari, Chrome, or WKWebView.
+This directory contains the native macOS implementation of `leon-book`. It uses SwiftUI for its windows, menus, navigation, reading, writing, and settings interfaces. Article web embeds use the system WebKit view; the app does not launch Safari or Chrome.
 
-Articles, drafts, settings, images, and videos are stored locally. SQLite is the source of truth for structured records; Markdown/JSON exports and media files remain on the local filesystem. The app does not start Node.js, a browser, or a local HTTP service.
+Articles, drafts, settings, images, and videos are stored locally. SQLite is the source of truth for structured records; Markdown/JSON exports and media files remain on the local filesystem. The app does not start Node.js, an external browser, or a local HTTP service.
 
 ## Build and run
 
@@ -31,7 +31,44 @@ swift run --package-path macos LeonBook
 ./scripts/leonblog test
 ```
 
-The check script builds and runs native checks without opening the app window.
+The check script builds and runs native unit tests and checks without opening the app window. To generate an LLVM coverage report:
+
+```bash
+./scripts/leonblog coverage
+```
+
+The coverage script reports line, function, and region coverage for `Sources/LeonBook`.
+
+## Article web embeds
+
+Article Markdown can render remote HTTP(S) pages inline. Use either a dedicated `embed` fence:
+
+```embed
+https://example.com
+```
+
+or paste a standalone iframe snippet:
+
+```html
+<iframe src="https://example.com" title="Example" height="520"></iframe>
+```
+
+Only `http` and `https` URLs are accepted. The embedded view is interactive and includes a button to open the same page in the external browser.
+
+## Article HTML components
+
+Use the dedicated `html-render` fence to run HTML, CSS, and JavaScript directly in the article and its live editor preview:
+
+````markdown
+```html-render height=360
+<div style="padding: 20px; background: #2563eb; color: white">
+  <h2>Custom component</h2>
+  <button onclick="this.textContent = 'Clicked'">Click</button>
+</div>
+```
+````
+
+`height` is optional and defaults to 360; accepted values are clamped to 160–1200. A regular `html` fence still displays source code without executing it. HTML components use an isolated ephemeral WebKit data store, and HTTP(S) links open in the external browser. Only run HTML and JavaScript you trust.
 
 ## Data directory
 

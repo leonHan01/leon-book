@@ -2,9 +2,9 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本目录包含 `leon-book` 的原生 macOS 实现。应用使用 SwiftUI 提供窗口、菜单、导航、阅读、写作和设置界面，不使用 Safari、Chrome 或 WKWebView。
+本目录包含 `leon-book` 的原生 macOS 实现。应用使用 SwiftUI 提供窗口、菜单、导航、阅读、写作和设置界面；文章网页嵌入使用系统 WebKit，不会启动 Safari 或 Chrome。
 
-文章、草稿、设置、图片和视频都保存在本地。SQLite 负责管理结构化数据，Markdown/JSON 导出文件和媒体文件继续保存在本地文件系统中。应用不会启动 Node.js、浏览器或本地 HTTP 服务。
+文章、草稿、设置、图片和视频都保存在本地。SQLite 负责管理结构化数据，Markdown/JSON 导出文件和媒体文件继续保存在本地文件系统中。应用不会启动 Node.js、外部浏览器或本地 HTTP 服务。
 
 ## 构建与运行
 
@@ -31,7 +31,38 @@ swift run --package-path macos LeonBook
 ./scripts/leonblog test
 ```
 
-检查脚本会构建并运行原生检查，不会打开应用窗口。
+检查脚本会构建并运行原生单元测试和检查，不会打开应用窗口。
+
+## 在文章中嵌入网页
+
+文章 Markdown 支持把远程 HTTP(S) 网页直接嵌入正文。可以使用专用的 `embed` 代码块：
+
+```embed
+https://example.com
+```
+
+也可以直接粘贴独立的 iframe：
+
+```html
+<iframe src="https://example.com" title="Example" height="520"></iframe>
+```
+
+只接受 `http` 和 `https` 地址。内嵌网页可以直接交互，也可以点击“在浏览器中打开”使用外部浏览器。
+
+## 在文章中插入 HTML 组件
+
+使用专用的 `html-render` 代码块，可以在文章和写作实时预览中直接运行 HTML、CSS 和 JavaScript：
+
+````markdown
+```html-render height=360
+<div style="padding: 20px; background: #2563eb; color: white">
+  <h2>自定义组件</h2>
+  <button onclick="this.textContent = '已点击'">点击</button>
+</div>
+```
+````
+
+`height` 可省略，默认值为 360，允许范围为 160–1200。普通的 `html` 代码块仍只展示源码，不会执行。HTML 组件使用独立的临时 WebKit 数据空间，点击其中的 HTTP(S) 链接会交给外部浏览器打开。请只运行自己信任的 HTML 和 JavaScript。
 
 ## 数据目录
 

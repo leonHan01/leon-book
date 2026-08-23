@@ -436,7 +436,7 @@ public actor LocalBlogStore {
             media: relocated.media,
             slug: slug,
             status: article.status,
-            tags: Array(Array(Set(article.tags.filter { !$0.isEmpty })).prefix(12)),
+            tags: NativeArticleTag.normalized(article.tags),
             title: article.title,
             updatedAt: updatedAt,
             publishedAt: publishedAt,

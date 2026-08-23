@@ -20,6 +20,7 @@ leonblog - leon-book 原生 macOS 应用管理
   leonblog start              与 open 相同
   leonblog build              构建原生应用
   leonblog test               运行原生应用检查
+  leonblog coverage           运行单元测试并生成覆盖率报告
   leonblog help               显示帮助
 
 数据位置：
@@ -81,6 +82,7 @@ case "$command_name" in
   open|start) open_native_app ;;
   build) build_native_app ;;
   test) "$PROJECT_DIR/macos/scripts/test-app.sh" ;;
+  coverage) "$PROJECT_DIR/macos/scripts/coverage.sh" ;;
   help|-h|--help) print_help ;;
   *) printf '[ERROR] 未知命令：%s\n\n' "$command_name" >&2; print_help >&2; exit 2 ;;
 esac
