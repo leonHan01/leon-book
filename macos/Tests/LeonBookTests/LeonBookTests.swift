@@ -151,9 +151,22 @@ final class NativeModelsTests {
             """.utf8)
         )
 
+        XCTAssertEqual(articles.first?.pageViews, 0)
         XCTAssertEqual(NativeArticleLink.resolve("路线图", in: articles)?.slug, "roadmap")
         XCTAssertEqual(NativeArticleLink.resolve("ROADMAP", in: articles)?.title, "路线图")
         XCTAssertNil(NativeArticleLink.resolve("不存在", in: articles))
+    }
+
+    func testArticleLineDiffMarksAddedAndRemovedLines() {
+        let diff = NativeArticleLineDiff(
+            previous: "第一行\n旧内容\n保留",
+            current: "第一行\n新内容\n保留\n新增"
+        )
+
+        XCTAssertEqual(diff.removedLineOffsets, [1])
+        XCTAssertEqual(diff.addedLineOffsets, [1, 3])
+        XCTAssertFalse(diff.isEmpty)
+        XCTAssertTrue(NativeArticleLineDiff(previous: "相同", current: "相同").isEmpty)
     }
 
     func testMomentSearchAndFilterMatchTextTagsDatesAndFavorites() {
@@ -201,6 +214,25 @@ final class NativeModelsTests {
         XCTAssertTrue(NativeMomentDateFilter.year(2025).includes(timestamp: sameDay, now: now, calendar: calendar))
         XCTAssertFalse(NativeMomentDateFilter.year(2024).includes(timestamp: sameDay, now: now, calendar: calendar))
         XCTAssertTrue(NativeMomentDateFilter.all.includes(timestamp: "not-a-date", now: now, calendar: calendar))
+    }
+
+    func testGlobalSearchQueryParsesPhrasesAndFilters() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let query = NativeGlobalSearchQuery(
+            #""离线 知识库" tag:#Swift status:草稿 type:文章 date:2026-08-23"#,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(query.textTerms, ["离线 知识库"])
+        XCTAssertEqual(query.tags, ["Swift"])
+        XCTAssertEqual(query.status, .draft)
+        XCTAssertEqual(query.types, [.article])
+        XCTAssertEqual(query.after, calendar.date(from: DateComponents(year: 2026, month: 8, day: 23)))
+        XCTAssertEqual(query.before, calendar.date(from: DateComponents(year: 2026, month: 8, day: 24)))
+
+        let fallback = NativeGlobalSearchQuery("unknown:value")
+        XCTAssertEqual(fallback.textTerms, ["unknown:value"])
     }
 }
 
@@ -345,6 +377,73 @@ final class LocalBlogStoreTests {
         XCTAssertEqual(try await store.getArticle(slug: saved.slug).tags, ["Swift", "随笔", "macOS"])
     }
 
+    func testArticleAutosavesRollWithinFiveMinutesAndCreateHistoryBuckets() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let start = Date(timeIntervalSince1970: 1_787_450_000)
+
+        let first = try await store.saveArticleAutosave(
+            draftKey: "draft-recovery",
+            articleSlug: nil,
+            snapshot: revisionSnapshot(body: "第一版"),
+            at: start
+        )
+        let rolled = try await store.saveArticleAutosave(
+            draftKey: "draft-recovery",
+            articleSlug: nil,
+            snapshot: revisionSnapshot(body: "第二版"),
+            at: start.addingTimeInterval(20)
+        )
+        let nextBucket = try await store.saveArticleAutosave(
+            draftKey: "draft-recovery",
+            articleSlug: nil,
+            snapshot: revisionSnapshot(body: "第三版"),
+            at: start.addingTimeInterval(301)
+        )
+
+        XCTAssertEqual(first.id, rolled.id)
+        XCTAssertFalse(nextBucket.id == first.id)
+        let orphan = try await store.latestUnsavedArticleAutosave()
+        XCTAssertEqual(orphan?.snapshot.body, "第三版")
+
+        try await store.attachArticleRevisions(draftKey: "draft-recovery", toArticleSlug: "saved-note")
+        let history = try await store.listArticleRevisions(
+            articleSlug: "saved-note",
+            draftKey: "draft-recovery"
+        )
+        XCTAssertEqual(history.count, 2)
+        XCTAssertEqual(history.map(\.snapshot.body), ["第三版", "第二版"])
+        XCTAssertEqual(try await store.latestArticleAutosave(articleSlug: "saved-note")?.snapshot.body, "第三版")
+    }
+
+    func testManualArticleSaveKeepsThePreviousVersion() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let original = try await store.saveArticle(article(
+            slug: "versioned",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "保存前"
+        ))
+
+        _ = try await store.saveArticle(article(
+            slug: original.slug,
+            status: .draft,
+            expectedUpdatedAt: original.updatedAt,
+            body: "保存后"
+        ))
+
+        let history = try await store.listArticleRevisions(
+            articleSlug: original.slug,
+            draftKey: original.slug
+        )
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(history.first?.reason, .savedVersion)
+        XCTAssertEqual(history.first?.snapshot.body, "保存前")
+    }
+
     func testArticleRelationsResolveAndDeduplicateWikiLinks() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -481,13 +580,17 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testMomentTagsAreExtractedDeduplicatedAndRemovedFromDisplayContent", { NativeModelsTests().testMomentTagsAreExtractedDeduplicatedAndRemovedFromDisplayContent() }),
             ("NativeModelsTests.testArticleHashtagsNormalizeAndPreserveLegacyCommaTags", { NativeModelsTests().testArticleHashtagsNormalizeAndPreserveLegacyCommaTags() }),
             ("NativeModelsTests.testArticleLinksExtractAndResolveTitlesOrSlugs", { try NativeModelsTests().testArticleLinksExtractAndResolveTitlesOrSlugs() }),
+            ("NativeModelsTests.testArticleLineDiffMarksAddedAndRemovedLines", { NativeModelsTests().testArticleLineDiffMarksAddedAndRemovedLines() }),
             ("NativeModelsTests.testMomentSearchAndFilterMatchTextTagsDatesAndFavorites", { NativeModelsTests().testMomentSearchAndFilterMatchTextTagsDatesAndFavorites() }),
             ("NativeModelsTests.testDateFiltersUseTheProvidedCalendarAndNow", { NativeModelsTests().testDateFiltersUseTheProvidedCalendarAndNow() }),
+            ("NativeModelsTests.testGlobalSearchQueryParsesPhrasesAndFilters", { NativeModelsTests().testGlobalSearchQueryParsesPhrasesAndFilters() }),
             ("LocalBlogStoreTests.testMomentLifecycleNormalizesInputFiltersAndRecordsActivity", { try await LocalBlogStoreTests().testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() }),
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),
             ("LocalBlogStoreTests.testArticleLifecycleSupportsDraftPublishingAndConflictProtection", { try await LocalBlogStoreTests().testArticleLifecycleSupportsDraftPublishingAndConflictProtection() }),
             ("LocalBlogStoreTests.testArticleDeleteHidesRecord", { try await LocalBlogStoreTests().testArticleDeleteHidesRecord() }),
             ("LocalBlogStoreTests.testArticleHashtagsPersistAsNormalizedTags", { try await LocalBlogStoreTests().testArticleHashtagsPersistAsNormalizedTags() }),
+            ("LocalBlogStoreTests.testArticleAutosavesRollWithinFiveMinutesAndCreateHistoryBuckets", { try await LocalBlogStoreTests().testArticleAutosavesRollWithinFiveMinutesAndCreateHistoryBuckets() }),
+            ("LocalBlogStoreTests.testManualArticleSaveKeepsThePreviousVersion", { try await LocalBlogStoreTests().testManualArticleSaveKeepsThePreviousVersion() }),
             ("LocalBlogStoreTests.testArticleRelationsResolveAndDeduplicateWikiLinks", { try await LocalBlogStoreTests().testArticleRelationsResolveAndDeduplicateWikiLinks() }),
             ("LocalBlogStoreTests.testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments", { try await LocalBlogStoreTests().testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments() }),
             ("UserWorkspaceStoreTests.testWorkspacePreparationCreatesAndPersistsDefaultUser", { try await UserWorkspaceStoreTests().testWorkspacePreparationCreatesAndPersistsDefaultUser() }),
@@ -534,5 +637,19 @@ private func article(
         tags: ["swift", "swift", "notes"],
         title: title,
         expectedUpdatedAt: expectedUpdatedAt
+    )
+}
+
+private func revisionSnapshot(body: String) -> NativeArticleRevisionSnapshot {
+    NativeArticleRevisionSnapshot(
+        banner: nil,
+        body: body,
+        category: "Notes",
+        excerpt: "",
+        media: [],
+        status: .draft,
+        tags: [],
+        title: "恢复草稿",
+        articleUpdatedAt: nil
     )
 }

@@ -1,24 +1,73 @@
 import Foundation
 import SwiftUI
 
+struct MarkdownOutlineItem: Hashable, Identifiable {
+    let id: String
+    let level: Int
+    let title: String
+}
+
+enum MarkdownOutline {
+    static func items(in source: String) -> [MarkdownOutlineItem] {
+        var items: [MarkdownOutlineItem] = []
+        for block in MarkdownParser.parse(source) {
+            guard case let .heading(level, title) = block else { continue }
+            items.append(MarkdownOutlineItem(
+                id: anchorID(for: items.count),
+                level: level,
+                title: title
+            ))
+        }
+        return items
+    }
+
+    static func anchorID(for headingIndex: Int) -> String {
+        "markdown-heading-\(headingIndex)"
+    }
+}
+
 /// Renders CommonMark/GFM. Local `/media` URLs are resolved by `MarkdownArticleBody`.
 struct MarkdownDocumentView: View {
     let markdown: String
     let articleLinks: [NativeArticleSummary]
     let onOpenArticle: (String) -> Void
+    let headingIDs: [String]
+
+    init(
+        markdown: String,
+        articleLinks: [NativeArticleSummary],
+        onOpenArticle: @escaping (String) -> Void,
+        headingIDs: [String] = []
+    ) {
+        self.markdown = markdown
+        self.articleLinks = articleLinks
+        self.onOpenArticle = onOpenArticle
+        self.headingIDs = headingIDs
+    }
 
     private var blocks: [MarkdownBlock] {
         MarkdownParser.parse(markdown)
     }
 
+    private var anchoredBlocks: [(block: MarkdownBlock, headingID: String?)] {
+        var nextHeadingIndex = 0
+        return blocks.map { block in
+            guard case .heading = block else { return (block, nil) }
+            defer { nextHeadingIndex += 1 }
+            let headingID = nextHeadingIndex < headingIDs.count ? headingIDs[nextHeadingIndex] : nil
+            return (block, headingID)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                MarkdownBlockView(
-                    block: block,
-                    articleLinks: articleLinks,
-                    onOpenArticle: onOpenArticle
-                )
+            ForEach(Array(anchoredBlocks.enumerated()), id: \.offset) { _, anchoredBlock in
+                if let headingID = anchoredBlock.headingID {
+                    markdownBlockView(anchoredBlock.block)
+                        .id(headingID)
+                } else {
+                    markdownBlockView(anchoredBlock.block)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -33,6 +82,14 @@ struct MarkdownDocumentView: View {
             onOpenArticle(slug)
             return .handled
         })
+    }
+
+    private func markdownBlockView(_ block: MarkdownBlock) -> some View {
+        MarkdownBlockView(
+            block: block,
+            articleLinks: articleLinks,
+            onOpenArticle: onOpenArticle
+        )
     }
 }
 
@@ -198,6 +255,8 @@ private struct MarkdownBlockView: View {
 
         case let .list(items):
             MarkdownListView(items: items, articleLinks: articleLinks)
+                .font(.system(size: 18, design: .serif))
+                .lineSpacing(6)
 
         case let .blockQuote(source):
             HStack(alignment: .top, spacing: 12) {
@@ -552,7 +611,7 @@ private enum MarkdownParser {
         let marker: String
         let afterMarker: Substring
         if let first = content.first, ["-", "+", "*"].contains(first), content.dropFirst().first?.isWhitespace == true {
-            marker = String(first)
+            marker = "•"
             afterMarker = content.dropFirst().drop { $0.isWhitespace }
         } else {
             let digits = content.prefix { $0.isNumber }
@@ -684,11 +743,26 @@ private func inlineMarkdownText(_ source: String, articleLinks: [NativeArticleSu
 }
 
 private func markdownInlineFragment(_ source: String, articleLinks: [NativeArticleSummary]) -> Text {
-    let resolvedSource = MarkdownArticleLinkRenderer.markdown(from: source, articleLinks: articleLinks)
+    let normalizedSource = MarkdownTypography.normalizedCJKSpacing(in: source)
+    let resolvedSource = MarkdownArticleLinkRenderer.markdown(from: normalizedSource, articleLinks: articleLinks)
     if let attributed = try? AttributedString(markdown: resolvedSource) {
         return Text(attributed)
     }
     return Text(resolvedSource)
+}
+
+private enum MarkdownTypography {
+    private static let cjkPunctuationSpacing = try! NSRegularExpression(
+        pattern: #"([，。！？；：、])[ \t]+(?=\p{Han})"#
+    )
+
+    static func normalizedCJKSpacing(in source: String) -> String {
+        cjkPunctuationSpacing.stringByReplacingMatches(
+            in: source,
+            range: NSRange(source.startIndex..., in: source),
+            withTemplate: "$1"
+        )
+    }
 }
 
 private enum MarkdownArticleLinkRenderer {

@@ -9,6 +9,8 @@ The app is built with SwiftUI and stores data directly on the local filesystem. 
 ## Features
 
 - Read, edit, and publish articles
+- Automatically save recovery snapshots after 3 seconds of inactivity, with version diffs and restore
+- Search articles, excerpts, bodies, and moments with SQLite FTS5, filter syntax, `⌘O` quick open, and a `⌘P` command palette
 - Embed remote HTTP(S) webpages directly in article bodies
 - Save drafts locally with independent workspaces for multiple users
 - Manage image and video assets

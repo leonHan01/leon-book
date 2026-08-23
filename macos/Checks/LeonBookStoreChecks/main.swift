@@ -92,6 +92,7 @@ func testLegacyMomentWithoutTagsLoadsFacets() async throws {
             limit: 20
         )
         expect(tagged.moments.map(\.id) == ["legacy-moment"], "legacy tags should be backfilled for tag filtering")
+        expect(tagged.moments.first?.pageViews == 0, "legacy moments should migrate with zero page views")
     }
 }
 
@@ -818,6 +819,109 @@ func testMomentFavoriteCanBeToggledAndPersists() async throws {
     }
 }
 
+func testArticleAndMomentPageViewsPersistAcrossEdits() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let savedArticle = try await store.saveArticle(
+            savePayload(slug: "pv-article", title: "浏览统计", body: "初始正文")
+        )
+        expect(savedArticle.pageViews == 0, "new articles should start with zero page views")
+
+        _ = try await store.incrementArticlePageViews(slug: savedArticle.slug)
+        let viewedArticle = try await store.incrementArticlePageViews(slug: savedArticle.slug)
+        expect(viewedArticle.pageViews == 2, "opening an article should increment and persist its page views")
+
+        let editedArticle = try await store.saveArticle(
+            savePayload(
+                slug: viewedArticle.slug,
+                title: viewedArticle.title,
+                body: "编辑后的正文",
+                expectedUpdatedAt: viewedArticle.updatedAt
+            )
+        )
+        expect(editedArticle.pageViews == 2, "editing an article should preserve its page views")
+        let articleSummaries = try await store.listArticles()
+        expect(articleSummaries.first?.pageViews == 2, "article summaries should expose page views")
+
+        let savedMoment = try await store.saveMoment(text: "记录一次浏览", textRuns: [], images: [])
+        expect(savedMoment.pageViews == 0, "new moments should start with zero page views")
+
+        _ = try await store.incrementMomentPageViews(id: savedMoment.id)
+        let viewedMoment = try await store.incrementMomentPageViews(id: savedMoment.id)
+        expect(viewedMoment.pageViews == 2, "viewing a moment should increment and persist its page views")
+
+        let editedMoment = try await store.updateMoment(
+            id: savedMoment.id,
+            text: "编辑后仍保留浏览量",
+            textRuns: [],
+            images: []
+        )
+        expect(editedMoment.pageViews == 2, "editing a moment should preserve its page views")
+        let reloadedMoments = try await store.listMoments()
+        expect(reloadedMoments.first?.pageViews == 2, "reloaded moments should expose page views")
+    }
+}
+
+func testUnifiedFTSSearchIndexesAndTracksArticlesAndMoments() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let article = try await store.saveArticle(NativeSaveArticle(
+            banner: nil,
+            body: "这里记录离线知识库的正文关键字",
+            category: "Engineering",
+            excerpt: "一段只存在于摘要里的线索",
+            media: [],
+            slug: "offline-search",
+            status: .draft,
+            tags: ["Swift", "本地优先"],
+            title: "搜索架构",
+            expectedUpdatedAt: nil
+        ))
+        let moment = try await store.saveMoment(
+            text: "午后跑步记录 #生活",
+            textRuns: [],
+            images: []
+        )
+
+        let bodyResults = try await store.search("离线知识库")
+        expect(bodyResults.map(\.documentID) == [article.slug], "FTS should search article body text")
+        expect(bodyResults.first?.snippet.contains("⟦") == true, "FTS should return a highlighted result snippet")
+
+        let excerptResults = try await store.search("摘要里的线索")
+        expect(excerptResults.map(\.documentID) == [article.slug], "FTS should search article excerpts")
+
+        let momentResults = try await store.search("跑步记录")
+        expect(momentResults.map(\.documentID) == [moment.id], "FTS should search moment body text")
+        expect(momentResults.first?.documentType == .moment, "unified results should identify moments")
+
+        let filtered = try await store.search("tag:Swift status:draft type:article")
+        expect(filtered.map(\.documentID) == [article.slug], "tag, status, and type filters should compose")
+        let conflictingScope = try await store.search("type:moment", restrictingTo: [.article])
+        expect(conflictingScope.isEmpty, "quick-open article scope should honor conflicting type filters")
+
+        let updated = try await store.saveArticle(NativeSaveArticle(
+            banner: article.banner,
+            body: "正文已经替换为新的同步机制",
+            category: article.category,
+            excerpt: article.excerpt,
+            media: article.media,
+            slug: article.slug,
+            status: article.status,
+            tags: article.tags,
+            title: article.title,
+            expectedUpdatedAt: article.updatedAt
+        ))
+        let staleResults = try await store.search("离线知识库")
+        let updatedResults = try await store.search("同步机制")
+        expect(staleResults.isEmpty, "updating an article should remove stale FTS terms")
+        expect(updatedResults.first?.documentID == updated.slug, "updating an article should index new terms")
+
+        try await store.deleteMoment(id: moment.id)
+        let deletedMomentResults = try await store.search("跑步记录")
+        expect(deletedMomentResults.isEmpty, "soft-deleted moments should leave the FTS index")
+    }
+}
+
 let checks: [(String, () async throws -> Void)] = [
     ("legacy moment without tags loads facets", testLegacyMomentWithoutTagsLoadsFacets),
     ("published moment can be restored from JSON export", testPublishedMomentCanBeRestoredFromJSONExportAlone),
@@ -846,6 +950,8 @@ let checks: [(String, () async throws -> Void)] = [
     ("moment search matches text, tags, and dates", { testMomentSearchMatchesTextTagsAndDates() }),
     ("moment date filters select the expected ranges", { testMomentDateFilters() }),
     ("moment favorites can be toggled and persist", testMomentFavoriteCanBeToggledAndPersists),
+    ("article and moment page views persist across edits", testArticleAndMomentPageViewsPersistAcrossEdits),
+    ("unified FTS search indexes and tracks content", testUnifiedFTSSearchIndexesAndTracksArticlesAndMoments),
     ("purging an article keeps media referenced by another article", testPurgingArticleKeepsMediaReferencedByAnotherArticle),
     ("legacy article slug cannot escape workspace", testLegacyArticleSlugCannotEscapeWorkspace),
     ("invalid legacy user ID is not imported", testInvalidLegacyUserIDIsNotImported),

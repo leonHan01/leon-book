@@ -12,6 +12,13 @@ struct LeonBookApp: App {
         .defaultSize(width: 1280, height: 820)
         .commands {
             CommandMenu("笔记") {
+                Button("快速打开…", action: model.presentQuickSwitcher)
+                    .keyboardShortcut("o", modifiers: .command)
+                Button("命令面板…", action: model.presentCommandPalette)
+                    .keyboardShortcut("p", modifiers: .command)
+                Button("全文搜索…", action: model.presentGlobalSearch)
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                Divider()
                 Button("新文章", action: model.newArticle)
                     .keyboardShortcut("n", modifiers: .command)
                 Button("刷新文章", action: { Task { try? await model.reload() } })

@@ -6,6 +6,14 @@ This directory contains the native macOS implementation of `leon-book`. It uses 
 
 Articles, drafts, settings, images, and videos are stored locally. SQLite is the source of truth for structured records; Markdown/JSON exports and media files remain on the local filesystem. The app does not start Node.js, an external browser, or a local HTTP service.
 
+Article edits are written to a recovery snapshot after 3 seconds of inactivity. Continuous editing creates a history point every 5 minutes, retained for 30 days by default. Version history is available from both the reader and writing workspace, with side-by-side body diffs and restore-to-editor. Autosave never overwrites published content directly; the explicit Save Draft and Publish actions remain the formal save boundary.
+
+## Search and quick navigation
+
+The toolbar search button and `⌘⇧F` open unified full-text search across article titles, categories, tags, excerpts, bodies, and moment text. A SQLite FTS5 index follows saves, edits, trash moves, and restores automatically and produces contextual result snippets. Filters can be combined with `tag:`, `status:draft|published`, `type:article|moment`, `date:YYYY-MM-DD`, `after:YYYY-MM-DD`, and `before:YYYY-MM-DD`; quote phrases that contain spaces.
+
+Press `⌘O` to search and open an article quickly. Press `⌘P` for the command palette, including navigation, new article, and library refresh actions.
+
 ## Build and run
 
 Requirements: macOS 13 or later and Swift 5.10 or later. From the project root, use the management script:

@@ -10,14 +10,19 @@ public struct ContentView: View {
 
     public var body: some View {
         NavigationSplitView {
-            sidebar
+            NativeSidebar(model: model, navigation: model.navigation, isPresentingNewUser: $isPresentingNewUser)
                 .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 320)
         } detail: {
-            detail
+            NativeNavigationDetail(model: model, navigation: model.navigation)
         }
         .frame(minWidth: 1_080, minHeight: 680)
         .toolbar {
             ToolbarItemGroup {
+                Button { model.presentGlobalSearch() } label: {
+                    Label("搜索", systemImage: "magnifyingglass")
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+
                 Button { Task { try? await model.reload() } } label: {
                     Label("刷新", systemImage: "arrow.clockwise")
                 }
@@ -53,9 +58,18 @@ public struct ContentView: View {
         .sheet(isPresented: $isPresentingNewUser) {
             NewUserSheet(model: model, isPresented: $isPresentingNewUser)
         }
+        .sheet(item: $model.searchPresentation) { presentation in
+            NativeSearchSheet(model: model, presentation: presentation)
+        }
     }
+}
 
-    private var sidebar: some View {
+private struct NativeSidebar: View {
+    @ObservedObject var model: NativeAppModel
+    @ObservedObject var navigation: NativeNavigationState
+    @Binding var isPresentingNewUser: Bool
+
+    var body: some View {
         List {
             Section("用户") {
                 Menu {
@@ -118,22 +132,198 @@ public struct ContentView: View {
         } label: {
             Label(title, systemImage: icon)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(model.section == section ? Color.accentColor : .primary)
+        .buttonStyle(SidebarNavigationButtonStyle(isSelected: navigation.section == section))
+        .foregroundStyle(navigation.section == section ? Color.accentColor : .primary)
+    }
+}
+
+private struct SidebarNavigationButtonStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        SidebarNavigationButtonBody(configuration: configuration, isSelected: isSelected)
+    }
+}
+
+private struct SidebarNavigationButtonBody: View {
+    let configuration: ButtonStyle.Configuration
+    let isSelected: Bool
+    @State private var isHovered = false
+
+    var body: some View {
+        configuration.label
+            .padding(.horizontal, 7)
+            .padding(.vertical, 5)
+            .background(backgroundColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .opacity(configuration.isPressed ? 0.78 : 1)
+            .animation(.easeOut(duration: 0.08), value: isHovered)
+            .animation(.easeOut(duration: 0.06), value: configuration.isPressed)
+            .onHover { isHovered = $0 }
+    }
+
+    private var backgroundColor: Color {
+        if configuration.isPressed {
+            return Color.accentColor.opacity(isSelected ? 0.22 : 0.12)
+        }
+        if isSelected {
+            return Color.accentColor.opacity(isHovered ? 0.18 : 0.12)
+        }
+        return isHovered ? Color.primary.opacity(0.07) : .clear
+    }
+}
+
+private struct NativeNavigationDetail: View {
+    let model: NativeAppModel
+    @ObservedObject var navigation: NativeNavigationState
+    @State private var retainedSections: Set<NativeSection> = [.dashboard]
+
+    var body: some View {
+        ZStack {
+            retainedNavigationDetail(.dashboard)
+            retainedNavigationDetail(.articles)
+            retainedNavigationDetail(.graph)
+            retainedNavigationDetail(.moments)
+            retainedNavigationDetail(.editor)
+            retainedNavigationDetail(.trash)
+            retainedNavigationDetail(.settings)
+
+            if navigation.section == .reader {
+                ArticleReaderView(model: model)
+            } else if !retainedSections.contains(navigation.section) {
+                NavigationDestinationPlaceholder(section: navigation.section)
+            }
+        }
+        .task(id: navigation.section) {
+            guard navigation.section != .reader,
+                  !retainedSections.contains(navigation.section) else { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+            guard !Task.isCancelled else { return }
+            retainNavigationSection(navigation.section)
+        }
+        .task {
+            await prewarmNavigationSections()
+        }
     }
 
     @ViewBuilder
-    private var detail: some View {
-        switch model.section {
+    private func retainedNavigationDetail(_ section: NativeSection) -> some View {
+        if retainedSections.contains(section) {
+            RetainedNavigationPage(isVisible: navigation.section == section) {
+                navigationDetail(for: section)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func navigationDetail(for section: NativeSection) -> some View {
+        switch section {
         case .dashboard: DashboardView(model: model)
         case .articles: ArticleListView(model: model)
         case .graph: ArticleGraphView(model: model)
-        case .moments: MomentFeedView(model: model)
+        case .moments: MomentFeedView(model: model, navigation: model.navigation)
         case .reader: ArticleReaderView(model: model)
         case .editor: ArticleEditorView(model: model)
         case .trash: TrashView(model: model)
         case .settings: NativeSettingsView(model: model)
+        }
+    }
+
+    private func retainNavigationSection(_ section: NativeSection) {
+        guard section != .reader else { return }
+        retainedSections.insert(section)
+    }
+
+    @MainActor
+    private func prewarmNavigationSections() async {
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        let sections: [NativeSection] = [.moments, .editor, .articles, .graph, .trash, .settings]
+
+        for section in sections where !retainedSections.contains(section) {
+            guard !Task.isCancelled else { return }
+            retainNavigationSection(section)
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+}
+
+private struct RetainedNavigationPage<Content: View>: NSViewRepresentable {
+    let isVisible: Bool
+    let rootView: Content
+
+    init(isVisible: Bool, @ViewBuilder content: () -> Content) {
+        self.isVisible = isVisible
+        rootView = content()
+    }
+
+    func makeNSView(context: Context) -> RetainedNavigationHostingView<Content> {
+        let view = RetainedNavigationHostingView(rootView: rootView)
+        view.setVisible(isVisible)
+        return view
+    }
+
+    func updateNSView(_ nsView: RetainedNavigationHostingView<Content>, context: Context) {
+        nsView.setVisible(isVisible)
+    }
+}
+
+private final class RetainedNavigationHostingView<Content: View>: NSView {
+    private let hostingView: NSHostingView<Content>
+
+    init(rootView: Content) {
+        hostingView = NSHostingView(rootView: rootView)
+        super.init(frame: .zero)
+
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hostingView)
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func setVisible(_ isVisible: Bool) {
+        let shouldHide = !isVisible
+        guard isHidden != shouldHide else { return }
+        isHidden = shouldHide
+    }
+}
+
+private struct NavigationDestinationPlaceholder: View {
+    let section: NativeSection
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.small)
+            Text("正在准备\(title)…")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var title: String {
+        switch section {
+        case .dashboard: "概览"
+        case .articles: "全部文章"
+        case .graph: "关系图"
+        case .moments: "微博"
+        case .reader: "文章"
+        case .editor: "写作"
+        case .trash: "回收站"
+        case .settings: "设置"
         }
     }
 }
@@ -490,6 +680,9 @@ private struct ArticleRow: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(article.status.label).font(.caption.weight(.medium))
                         .foregroundStyle(article.status == .published ? .green : .orange)
+                    Label("\(article.pageViews) PV", systemImage: "eye")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Text(article.updatedAt.nativeDateLabel).font(.caption).foregroundStyle(.secondary)
                 }
             }

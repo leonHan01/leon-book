@@ -3,6 +3,9 @@ import Foundation
 /// Local SQLite store for structured data, with Markdown/JSON exports and file-based media.
 public actor LocalBlogStore {
     private static let trashRetentionDays = 30
+    private static let articleRevisionRetentionDays = 30
+    private static let articleAutosaveRevisionInterval: TimeInterval = 5 * 60
+    private static let maximumArticleRevisionsPerDraft = 100
     private static let savedWorkDirectoryKey = "leonBook.workDirectoryPath"
     private static let savedBackupDirectoryKey = "leonBook.backupDirectoryPath"
 
@@ -107,6 +110,7 @@ public actor LocalBlogStore {
             try migrateMomentTagsIfNeeded()
             try exportJsonBackupIfNeeded()
             try purgeExpiredTrash()
+            try purgeExpiredArticleRevisions()
         } catch let error as NativeStoreError {
             throw error
         } catch {
@@ -117,9 +121,7 @@ public actor LocalBlogStore {
     public func listArticles(includeDrafts: Bool = true) throws -> [NativeArticleSummary] {
         try prepare()
         let sql = """
-        SELECT slug, title, body, category, excerpt, banner_json, media_json, status,
-               tags_json, updated_at, published_at, word_count
-        FROM articles
+        \(articleSelect)
         WHERE deleted_at IS NULL
         \(includeDrafts ? "" : "AND status = 'published'")
         ORDER BY updated_at DESC
@@ -129,6 +131,126 @@ public actor LocalBlogStore {
             articles.append(summary(for: try decodeArticle(row)))
         }
         return articles
+    }
+
+    public func search(
+        _ rawQuery: String,
+        restrictingTo forcedTypes: Set<NativeSearchDocumentType> = [],
+        limit: Int = 60
+    ) throws -> [NativeGlobalSearchResult] {
+        try prepare()
+        let query = NativeGlobalSearchQuery(rawQuery)
+        let effectiveTypes: Set<NativeSearchDocumentType>
+        if forcedTypes.isEmpty {
+            effectiveTypes = query.types
+        } else if query.types.isEmpty {
+            effectiveTypes = forcedTypes
+        } else {
+            effectiveTypes = forcedTypes.intersection(query.types)
+        }
+        if !forcedTypes.isEmpty, !query.types.isEmpty, effectiveTypes.isEmpty {
+            return []
+        }
+
+        var predicates: [String] = []
+        var values: [SQLiteValue] = []
+        let indexedTerms = query.textTerms.filter { $0.count >= 3 }
+        let shortTerms = query.textTerms.filter { $0.count < 3 }
+
+        if !indexedTerms.isEmpty {
+            let expression = indexedTerms
+                .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
+                .joined(separator: " AND ")
+            predicates.append("content_search MATCH ?")
+            values.append(.text(expression))
+        }
+
+        for term in shortTerms {
+            predicates.append("""
+            (instr(lower(title), lower(?)) > 0
+             OR instr(lower(body), lower(?)) > 0
+             OR instr(lower(excerpt), lower(?)) > 0
+             OR instr(lower(tags), lower(?)) > 0
+             OR instr(lower(category), lower(?)) > 0)
+            """)
+            values.append(contentsOf: Array(repeating: .text(term), count: 5))
+        }
+
+        for tag in query.tags {
+            predicates.append("instr(lower(tags), lower(?)) > 0")
+            values.append(.text("\"\(tag)\""))
+        }
+
+        if !effectiveTypes.isEmpty {
+            let orderedTypes = effectiveTypes.sorted { $0.rawValue < $1.rawValue }
+            predicates.append("document_type IN (\(orderedTypes.map { _ in "?" }.joined(separator: ", ")))")
+            values.append(contentsOf: orderedTypes.map { .text($0.rawValue) })
+        }
+
+        if let status = query.status {
+            predicates.append("status = ?")
+            values.append(.text(status.rawValue))
+        }
+        if let after = query.after {
+            predicates.append("created_at >= ?")
+            values.append(.text(NativeTimestamp.string(from: after)))
+        }
+        if let before = query.before {
+            predicates.append("created_at < ?")
+            values.append(.text(NativeTimestamp.string(from: before)))
+        }
+
+        let whereClause = predicates.isEmpty ? "" : "WHERE \(predicates.joined(separator: " AND "))"
+        let ordering = indexedTerms.isEmpty
+            ? "updated_at DESC"
+            : "bm25(content_search, 0.0, 0.0, 8.0, 3.0, 4.0, 2.0, 2.0) ASC, updated_at DESC"
+        values.append(.integer(min(max(limit, 1), 200)))
+
+        var results: [NativeGlobalSearchResult] = []
+        try db().query(
+            """
+            SELECT document_type, document_id, title,
+                   snippet(content_search, -1, '⟦', '⟧', ' … ', 28),
+                   body, excerpt, tags, category, status, created_at, updated_at
+            FROM content_search
+            \(whereClause)
+            ORDER BY \(ordering)
+            LIMIT ?
+            """,
+            values: values
+        ) { row in
+            guard let typeValue = row.text(at: 0),
+                  let documentType = NativeSearchDocumentType(rawValue: typeValue),
+                  let documentID = row.text(at: 1),
+                  let storedTitle = row.text(at: 2),
+                  let body = row.text(at: 4),
+                  let excerpt = row.text(at: 5),
+                  let tagsJSON = row.text(at: 6),
+                  let updatedAt = row.text(at: 10) else {
+                throw NativeStoreError.fileSystem("SQLite：全文搜索结果不完整")
+            }
+
+            let highlighted = row.text(at: 3) ?? ""
+            let fallback = excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? body : excerpt
+            let snippet = compactSearchSnippet(
+                highlighted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? fallback : highlighted
+            )
+            results.append(NativeGlobalSearchResult(
+                documentType: documentType,
+                documentID: documentID,
+                title: storedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? (documentType == .moment ? "图片微博" : "未命名文章")
+                    : storedTitle,
+                snippet: snippet,
+                tags: (try? decode(tagsJSON)) ?? [],
+                category: row.text(at: 7).flatMap { $0.isEmpty ? nil : $0 },
+                status: row.text(at: 8).flatMap(NativeArticleStatus.init(rawValue:)),
+                timestamp: row.text(at: 9) ?? updatedAt
+            ))
+        }
+        return results
     }
 
     /// Derives wiki-style article links from the current article bodies, so title
@@ -163,6 +285,28 @@ public actor LocalBlogStore {
     public func listMoments() throws -> [NativeMoment] {
         try prepare()
         return try allMoments()
+    }
+
+    public func getMoment(id: String) throws -> NativeMoment {
+        try prepare()
+        guard let moment = try moment(withID: id) else { throw NativeStoreError.notFound }
+        return moment
+    }
+
+    public func incrementMomentPageViews(id: String) throws -> NativeMoment {
+        try prepare()
+        let safeID = try requireSafeSegment(id, label: "微博 ID")
+        try db().execute(
+            "UPDATE moments SET page_views = page_views + 1 WHERE id = ? AND deleted_at IS NULL",
+            values: [.text(safeID)]
+        )
+        guard let updated = try moment(withID: safeID) else { throw NativeStoreError.notFound }
+        do {
+            try writeMomentSidecar(updated)
+        } catch {
+            markJSONBackupNeedsRebuild()
+        }
+        return updated
     }
 
     public func listMomentPage(
@@ -319,7 +463,8 @@ public actor LocalBlogStore {
             tags: normalizedText.tags,
             text: normalizedText.text,
             textRuns: normalizedText.runs,
-            updatedAt: nextTimestamp(after: previous.updatedAt)
+            updatedAt: nextTimestamp(after: previous.updatedAt),
+            pageViews: previous.pageViews
         )
 
         try db().transaction {
@@ -353,7 +498,8 @@ public actor LocalBlogStore {
             tags: previous.tags,
             text: previous.text,
             textRuns: previous.textRuns,
-            updatedAt: previous.updatedAt
+            updatedAt: previous.updatedAt,
+            pageViews: previous.pageViews
         )
         do {
             try writeMomentSidecar(updated)
@@ -407,6 +553,149 @@ public actor LocalBlogStore {
         let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
         guard let article = try storedArticle(withSlug: safeSlug) else { throw NativeStoreError.notFound }
         return article
+    }
+
+    public func incrementArticlePageViews(slug: String) throws -> NativeArticle {
+        try prepare()
+        let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
+        try db().execute(
+            "UPDATE articles SET page_views = page_views + 1 WHERE slug = ? AND deleted_at IS NULL",
+            values: [.text(safeSlug)]
+        )
+        guard let updated = try storedArticle(withSlug: safeSlug) else { throw NativeStoreError.notFound }
+        do {
+            try writeArticleSidecars(updated)
+            try rebuildIndex()
+        } catch {
+            markJSONBackupNeedsRebuild()
+        }
+        return updated
+    }
+
+    public func saveArticleAutosave(
+        draftKey: String,
+        articleSlug: String?,
+        snapshot: NativeArticleRevisionSnapshot,
+        at date: Date = Date()
+    ) throws -> NativeArticleRevision {
+        try prepare()
+        let safeDraftKey = try requireSafeSegment(draftKey, label: "自动保存标识")
+        let safeArticleSlug = try articleSlug.map { try requireSafeSegment($0, label: "文章 slug") }
+        let timestamp = self.timestamp(from: date)
+        let snapshotJSON = try jsonString(snapshot)
+        let latest = try latestArticleRevision(
+            whereClause: "draft_key = ? AND reason = ?",
+            values: [.text(safeDraftKey), .text(NativeArticleRevisionReason.autosave.rawValue)]
+        )
+
+        if let latest,
+           let bucketStart = NativeTimestamp.date(from: latest.createdAt),
+           date.timeIntervalSince(bucketStart) < Self.articleAutosaveRevisionInterval {
+            try db().execute(
+                """
+                UPDATE article_revisions
+                SET article_slug = COALESCE(?, article_slug), snapshot_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                values: [
+                    safeArticleSlug.map(SQLiteValue.text) ?? .null,
+                    .text(snapshotJSON),
+                    .text(timestamp),
+                    .integer(latest.id),
+                ]
+            )
+            return NativeArticleRevision(
+                id: latest.id,
+                draftKey: latest.draftKey,
+                articleSlug: safeArticleSlug ?? latest.articleSlug,
+                reason: .autosave,
+                snapshot: snapshot,
+                createdAt: latest.createdAt,
+                updatedAt: timestamp
+            )
+        }
+
+        let revision = try insertArticleRevision(
+            draftKey: safeDraftKey,
+            articleSlug: safeArticleSlug,
+            reason: .autosave,
+            snapshot: snapshot,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+        try trimArticleRevisions(draftKey: safeDraftKey)
+        return revision
+    }
+
+    public func listArticleRevisions(articleSlug: String?, draftKey: String) throws -> [NativeArticleRevision] {
+        try prepare()
+        let safeDraftKey = try requireSafeSegment(draftKey, label: "版本历史标识")
+        var revisions: [NativeArticleRevision] = []
+
+        if let articleSlug {
+            let safeArticleSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
+            try db().query(
+                revisionSelect + " WHERE article_slug = ? OR draft_key = ? ORDER BY updated_at DESC, id DESC",
+                values: [.text(safeArticleSlug), .text(safeDraftKey)]
+            ) { row in
+                revisions.append(try decodeArticleRevision(row))
+            }
+        } else {
+            try db().query(
+                revisionSelect + " WHERE draft_key = ? ORDER BY updated_at DESC, id DESC",
+                values: [.text(safeDraftKey)]
+            ) { row in
+                revisions.append(try decodeArticleRevision(row))
+            }
+        }
+        return revisions
+    }
+
+    public func latestArticleAutosave(articleSlug: String) throws -> NativeArticleRevision? {
+        try prepare()
+        let safeSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
+        return try latestArticleRevision(
+            whereClause: "article_slug = ? AND reason = ?",
+            values: [.text(safeSlug), .text(NativeArticleRevisionReason.autosave.rawValue)]
+        )
+    }
+
+    public func latestUnsavedArticleAutosave() throws -> NativeArticleRevision? {
+        try prepare()
+        return try latestArticleRevision(
+            whereClause: "article_slug IS NULL AND reason = ?",
+            values: [.text(NativeArticleRevisionReason.autosave.rawValue)]
+        )
+    }
+
+    public func attachArticleRevisions(draftKey: String, toArticleSlug articleSlug: String) throws {
+        try prepare()
+        let safeDraftKey = try requireSafeSegment(draftKey, label: "版本历史标识")
+        let safeSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
+        try db().execute(
+            "UPDATE article_revisions SET article_slug = ? WHERE draft_key = ? AND article_slug IS NULL",
+            values: [.text(safeSlug), .text(safeDraftKey)]
+        )
+    }
+
+    public func discardArticleAutosaves(draftKey: String, newerThan timestamp: String? = nil) throws {
+        try prepare()
+        let safeDraftKey = try requireSafeSegment(draftKey, label: "自动保存标识")
+        if let timestamp {
+            try db().execute(
+                "DELETE FROM article_revisions WHERE draft_key = ? AND reason = ? AND updated_at > ?",
+                values: [
+                    .text(safeDraftKey),
+                    .text(NativeArticleRevisionReason.autosave.rawValue),
+                    .text(timestamp),
+                ]
+            )
+        } else {
+            try db().execute(
+                "DELETE FROM article_revisions WHERE draft_key = ? AND reason = ?",
+                values: [.text(safeDraftKey), .text(NativeArticleRevisionReason.autosave.rawValue)]
+            )
+        }
     }
 
     public func allocateSlug(from title: String) throws -> String {
@@ -469,7 +758,8 @@ public actor LocalBlogStore {
             title: article.title,
             updatedAt: updatedAt,
             publishedAt: publishedAt,
-            wordCount: wordCount(relocated.body)
+            wordCount: wordCount(relocated.body),
+            pageViews: previous?.pageViews ?? 0
         )
 
         let activityType = saved.status == .published && previous?.status != .published
@@ -479,11 +769,22 @@ public actor LocalBlogStore {
                 : "article_edited"
 
         try db().transaction {
+            if let previous {
+                _ = try insertArticleRevision(
+                    draftKey: slug,
+                    articleSlug: slug,
+                    reason: .savedVersion,
+                    snapshot: NativeArticleRevisionSnapshot(article: previous),
+                    createdAt: updatedAt,
+                    updatedAt: updatedAt
+                )
+            }
             try insertArticle(saved, into: db())
             if let activityType {
                 try recordActivityEvent(type: activityType, at: activityDate(from: updatedAt) ?? Date())
             }
         }
+        try trimArticleRevisions(draftKey: slug)
 
         do {
             try writeArticleSidecars(saved)
@@ -608,7 +909,13 @@ public actor LocalBlogStore {
                   try db().text("SELECT deleted_at FROM articles WHERE slug = ?", values: [.text(safeKey)]) != nil else {
                 throw NativeStoreError.notFound
             }
-            try db().execute("DELETE FROM articles WHERE slug = ? AND deleted_at IS NOT NULL", values: [.text(safeKey)])
+            try db().transaction {
+                try db().execute("DELETE FROM articles WHERE slug = ? AND deleted_at IS NOT NULL", values: [.text(safeKey)])
+                try db().execute(
+                    "DELETE FROM article_revisions WHERE article_slug = ? OR draft_key = ?",
+                    values: [.text(safeKey), .text(safeKey)]
+                )
+            }
             removeArticleFiles(for: safeKey)
             try rebuildIndex()
             try writeTrashBackup()
@@ -640,6 +947,12 @@ public actor LocalBlogStore {
         try db().transaction {
             try db().execute("DELETE FROM articles WHERE deleted_at IS NOT NULL")
             try db().execute("DELETE FROM moments WHERE deleted_at IS NOT NULL")
+            for slug in articleSlugs {
+                try db().execute(
+                    "DELETE FROM article_revisions WHERE article_slug = ? OR draft_key = ?",
+                    values: [.text(slug), .text(slug)]
+                )
+            }
         }
         for slug in articleSlugs { removeArticleFiles(for: slug) }
         for moment in momentsToDelete {
@@ -679,6 +992,12 @@ public actor LocalBlogStore {
                 "DELETE FROM moments WHERE deleted_at IS NOT NULL AND delete_expires_at <= ?",
                 values: [.text(now)]
             )
+            for slug in articleSlugs {
+                try db().execute(
+                    "DELETE FROM article_revisions WHERE article_slug = ? OR draft_key = ?",
+                    values: [.text(slug), .text(slug)]
+                )
+            }
         }
         for slug in articleSlugs { removeArticleFiles(for: slug) }
         for moment in momentsToDelete {
@@ -687,6 +1006,114 @@ public actor LocalBlogStore {
         }
         try rebuildIndex()
         try writeTrashBackup()
+    }
+
+    private func purgeExpiredArticleRevisions() throws {
+        let cutoff = timestamp(
+            from: Date().addingTimeInterval(-TimeInterval(Self.articleRevisionRetentionDays) * 24 * 60 * 60)
+        )
+        try db().execute(
+            "DELETE FROM article_revisions WHERE updated_at < ?",
+            values: [.text(cutoff)]
+        )
+        try db().execute("""
+        DELETE FROM article_revisions
+        WHERE id NOT IN (
+            SELECT id FROM article_revisions ORDER BY updated_at DESC, id DESC LIMIT 5000
+        )
+        """)
+    }
+
+    private func trimArticleRevisions(draftKey: String) throws {
+        try db().execute(
+            """
+            DELETE FROM article_revisions
+            WHERE draft_key = ? AND id NOT IN (
+                SELECT id FROM article_revisions
+                WHERE draft_key = ?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+            )
+            """,
+            values: [
+                .text(draftKey),
+                .text(draftKey),
+                .integer(Self.maximumArticleRevisionsPerDraft),
+            ]
+        )
+    }
+
+    private func insertArticleRevision(
+        draftKey: String,
+        articleSlug: String?,
+        reason: NativeArticleRevisionReason,
+        snapshot: NativeArticleRevisionSnapshot,
+        createdAt: String,
+        updatedAt: String
+    ) throws -> NativeArticleRevision {
+        try db().execute(
+            """
+            INSERT INTO article_revisions(
+                draft_key, article_slug, reason, snapshot_json, created_at, updated_at
+            ) VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            values: [
+                .text(draftKey),
+                articleSlug.map(SQLiteValue.text) ?? .null,
+                .text(reason.rawValue),
+                .text(try jsonString(snapshot)),
+                .text(createdAt),
+                .text(updatedAt),
+            ]
+        )
+        guard let id = try db().integer("SELECT last_insert_rowid()") else {
+            throw NativeStoreError.fileSystem("SQLite：无法读取文章版本编号")
+        }
+        return NativeArticleRevision(
+            id: id,
+            draftKey: draftKey,
+            articleSlug: articleSlug,
+            reason: reason,
+            snapshot: snapshot,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
+    private func latestArticleRevision(
+        whereClause: String,
+        values: [SQLiteValue]
+    ) throws -> NativeArticleRevision? {
+        var revision: NativeArticleRevision?
+        try db().query(
+            revisionSelect + " WHERE \(whereClause) ORDER BY updated_at DESC, id DESC LIMIT 1",
+            values: values
+        ) { row in
+            revision = try decodeArticleRevision(row)
+        }
+        return revision
+    }
+
+    private func decodeArticleRevision(_ row: SQLiteRow) throws -> NativeArticleRevision {
+        guard let id = row.integer(at: 0),
+              let draftKey = row.text(at: 1),
+              let reasonValue = row.text(at: 3),
+              let reason = NativeArticleRevisionReason(rawValue: reasonValue),
+              let snapshotJSON = row.text(at: 4),
+              let createdAt = row.text(at: 5),
+              let updatedAt = row.text(at: 6) else {
+            throw NativeStoreError.fileSystem("SQLite：文章版本记录不完整")
+        }
+        let snapshot: NativeArticleRevisionSnapshot = try decode(snapshotJSON)
+        return NativeArticleRevision(
+            id: id,
+            draftKey: draftKey,
+            articleSlug: row.text(at: 2),
+            reason: reason,
+            snapshot: snapshot,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
     }
 
     private func removeArticleExportFiles(for slug: String) {
@@ -872,10 +1299,24 @@ public actor LocalBlogStore {
             updated_at TEXT NOT NULL,
             published_at TEXT,
             word_count INTEGER NOT NULL,
+            page_views INTEGER NOT NULL DEFAULT 0,
             deleted_at TEXT,
             delete_expires_at TEXT
         );
         CREATE INDEX IF NOT EXISTS articles_updated_at_idx ON articles(updated_at DESC);
+        CREATE TABLE IF NOT EXISTS article_revisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            draft_key TEXT NOT NULL,
+            article_slug TEXT,
+            reason TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS article_revisions_article_idx
+            ON article_revisions(article_slug, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS article_revisions_draft_idx
+            ON article_revisions(draft_key, updated_at DESC);
         CREATE TABLE IF NOT EXISTS moments (
             id TEXT PRIMARY KEY NOT NULL,
             created_at TEXT NOT NULL,
@@ -885,6 +1326,7 @@ public actor LocalBlogStore {
             images_json TEXT NOT NULL,
             tags_json TEXT NOT NULL,
             is_favorite INTEGER NOT NULL DEFAULT 0,
+            page_views INTEGER NOT NULL DEFAULT 0,
             deleted_at TEXT,
             delete_expires_at TEXT
         );
@@ -900,14 +1342,147 @@ public actor LocalBlogStore {
         """)
         try ensureColumn("deleted_at", in: "articles", database: database)
         try ensureColumn("delete_expires_at", in: "articles", database: database)
+        try ensureColumn("page_views", in: "articles", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
         try ensureColumn("deleted_at", in: "moments", database: database)
         try ensureColumn("delete_expires_at", in: "moments", database: database)
         try ensureColumn("tags_json", in: "moments", database: database)
         try ensureColumn("is_favorite", in: "moments", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
+        try ensureColumn("page_views", in: "moments", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
         try database.execute("""
         CREATE INDEX IF NOT EXISTS articles_trash_expiry_idx ON articles(delete_expires_at);
         CREATE INDEX IF NOT EXISTS moments_trash_expiry_idx ON moments(delete_expires_at);
         """)
+        try createSearchSchema(in: database)
+    }
+
+    private func createSearchSchema(in database: SQLiteDatabase) throws {
+        try database.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS content_search USING fts5(
+            document_type UNINDEXED,
+            document_id UNINDEXED,
+            title,
+            body,
+            excerpt,
+            tags,
+            category,
+            status UNINDEXED,
+            created_at UNINDEXED,
+            updated_at UNINDEXED,
+            tokenize = 'trigram'
+        );
+
+        DROP TRIGGER IF EXISTS content_search_articles_insert;
+        DROP TRIGGER IF EXISTS content_search_articles_update;
+        DROP TRIGGER IF EXISTS content_search_articles_delete;
+        DROP TRIGGER IF EXISTS content_search_moments_insert;
+        DROP TRIGGER IF EXISTS content_search_moments_update;
+        DROP TRIGGER IF EXISTS content_search_moments_delete;
+
+        CREATE TRIGGER content_search_articles_insert
+        AFTER INSERT ON articles WHEN new.deleted_at IS NULL BEGIN
+            DELETE FROM content_search
+            WHERE document_type = 'article' AND document_id = new.slug;
+            INSERT INTO content_search(
+                document_type, document_id, title, body, excerpt, tags,
+                category, status, created_at, updated_at
+            ) VALUES (
+                'article', new.slug, new.title, new.body, new.excerpt,
+                new.tags_json, new.category, new.status,
+                COALESCE(new.published_at, new.updated_at), new.updated_at
+            );
+        END;
+        CREATE TRIGGER content_search_articles_update
+        AFTER UPDATE OF slug, title, body, category, excerpt, tags_json, status,
+                        updated_at, published_at, deleted_at ON articles BEGIN
+            DELETE FROM content_search
+            WHERE document_type = 'article' AND document_id = old.slug;
+            INSERT INTO content_search(
+                document_type, document_id, title, body, excerpt, tags,
+                category, status, created_at, updated_at
+            )
+            SELECT 'article', new.slug, new.title, new.body, new.excerpt,
+                   new.tags_json, new.category, new.status,
+                   COALESCE(new.published_at, new.updated_at), new.updated_at
+            WHERE new.deleted_at IS NULL;
+        END;
+        CREATE TRIGGER content_search_articles_delete
+        AFTER DELETE ON articles BEGIN
+            DELETE FROM content_search
+            WHERE document_type = 'article' AND document_id = old.slug;
+        END;
+
+        CREATE TRIGGER content_search_moments_insert
+        AFTER INSERT ON moments WHEN new.deleted_at IS NULL BEGIN
+            DELETE FROM content_search
+            WHERE document_type = 'moment' AND document_id = new.id;
+            INSERT INTO content_search(
+                document_type, document_id, title, body, excerpt, tags,
+                category, status, created_at, updated_at
+            ) VALUES (
+                'moment', new.id,
+                CASE WHEN trim(new.text) = '' THEN '图片微博'
+                     ELSE substr(replace(replace(new.text, char(10), ' '), char(13), ' '), 1, 80) END,
+                new.text, '', COALESCE(new.tags_json, '[]'), '', '',
+                new.created_at, new.updated_at
+            );
+        END;
+        CREATE TRIGGER content_search_moments_update
+        AFTER UPDATE OF id, created_at, updated_at, text, tags_json, deleted_at ON moments BEGIN
+            DELETE FROM content_search
+            WHERE document_type = 'moment' AND document_id = old.id;
+            INSERT INTO content_search(
+                document_type, document_id, title, body, excerpt, tags,
+                category, status, created_at, updated_at
+            )
+            SELECT 'moment', new.id,
+                   CASE WHEN trim(new.text) = '' THEN '图片微博'
+                        ELSE substr(replace(replace(new.text, char(10), ' '), char(13), ' '), 1, 80) END,
+                   new.text, '', COALESCE(new.tags_json, '[]'), '', '',
+                   new.created_at, new.updated_at
+            WHERE new.deleted_at IS NULL;
+        END;
+        CREATE TRIGGER content_search_moments_delete
+        AFTER DELETE ON moments BEGIN
+            DELETE FROM content_search
+            WHERE document_type = 'moment' AND document_id = old.id;
+        END;
+        """)
+
+        let activeCount = try database.integer("""
+        SELECT (SELECT COUNT(*) FROM articles WHERE deleted_at IS NULL)
+             + (SELECT COUNT(*) FROM moments WHERE deleted_at IS NULL)
+        """) ?? 0
+        let indexedCount = try database.integer("SELECT COUNT(*) FROM content_search") ?? 0
+        let version = try database.text(
+            "SELECT value FROM metadata WHERE key = 'content_search_v1'"
+        )
+        guard version != "trigram-v1" || activeCount != indexedCount else { return }
+
+        try database.transaction {
+            try database.execute("DELETE FROM content_search")
+            try database.execute("""
+            INSERT INTO content_search(
+                document_type, document_id, title, body, excerpt, tags,
+                category, status, created_at, updated_at
+            )
+            SELECT 'article', slug, title, body, excerpt, tags_json,
+                   category, status, COALESCE(published_at, updated_at), updated_at
+            FROM articles WHERE deleted_at IS NULL;
+
+            INSERT INTO content_search(
+                document_type, document_id, title, body, excerpt, tags,
+                category, status, created_at, updated_at
+            )
+            SELECT 'moment', id,
+                   CASE WHEN trim(text) = '' THEN '图片微博'
+                        ELSE substr(replace(replace(text, char(10), ' '), char(13), ' '), 1, 80) END,
+                   text, '', COALESCE(tags_json, '[]'), '', '', created_at, updated_at
+            FROM moments WHERE deleted_at IS NULL;
+
+            INSERT OR REPLACE INTO metadata(key, value)
+            VALUES('content_search_v1', 'trigram-v1');
+            """)
+        }
     }
 
     private func ensureColumn(
@@ -1267,8 +1842,8 @@ public actor LocalBlogStore {
         try database.execute("""
         INSERT OR REPLACE INTO articles(
             slug, title, body, category, excerpt, banner_json, media_json, status,
-            tags_json, updated_at, published_at, word_count, deleted_at, delete_expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, values: [
             .text(article.slug),
             .text(article.title),
@@ -1282,6 +1857,7 @@ public actor LocalBlogStore {
             .text(article.updatedAt),
             article.publishedAt.map(SQLiteValue.text) ?? .null,
             .integer(article.wordCount ?? wordCount(article.body)),
+            .integer(article.pageViews),
             deletedAt.map(SQLiteValue.text) ?? .null,
             deleteExpiresAt.map(SQLiteValue.text) ?? .null,
         ])
@@ -1312,7 +1888,8 @@ public actor LocalBlogStore {
             title: title,
             updatedAt: updatedAt,
             publishedAt: row.text(at: 10),
-            wordCount: wordCount(body)
+            wordCount: wordCount(body),
+            pageViews: row.integer(at: 12) ?? 0
         )
     }
 
@@ -1320,7 +1897,7 @@ public actor LocalBlogStore {
         var result: NativeMoment?
         let whereClause = includingDeleted ? "id = ?" : "deleted_at IS NULL AND id = ?"
         try db().query(
-            "SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite FROM moments WHERE \(whereClause)",
+            momentSelect + " WHERE \(whereClause)",
             values: [.text(id)]
         ) { row in
             result = try decodeMoment(row)
@@ -1331,10 +1908,7 @@ public actor LocalBlogStore {
     private func allMoments(includingDeleted: Bool = false) throws -> [NativeMoment] {
         var moments: [NativeMoment] = []
         let whereClause = includingDeleted ? "" : "WHERE deleted_at IS NULL"
-        try db().query("""
-        SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite
-        FROM moments \(whereClause) ORDER BY created_at DESC, id DESC
-        """) { row in
+        try db().query(momentSelect + " \(whereClause) ORDER BY created_at DESC, id DESC") { row in
             moments.append(try decodeMoment(row))
         }
         return moments
@@ -1355,8 +1929,7 @@ public actor LocalBlogStore {
         values.append(.integer(limit))
         try db().query(
             """
-            SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite
-            FROM moments
+            \(momentSelect)
             WHERE \(query.whereClause)
             ORDER BY created_at DESC, id DESC
             LIMIT ?
@@ -1447,8 +2020,8 @@ public actor LocalBlogStore {
         into database: SQLiteDatabase
     ) throws {
         try database.execute("""
-        INSERT OR REPLACE INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, page_views, deleted_at, delete_expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, values: [
             .text(moment.id),
             .text(moment.createdAt),
@@ -1458,6 +2031,7 @@ public actor LocalBlogStore {
             .text(try jsonString(moment.images)),
             .text(try jsonString(moment.tags)),
             .integer(moment.isFavorite ? 1 : 0),
+            .integer(moment.pageViews),
             deletedAt.map(SQLiteValue.text) ?? .null,
             deleteExpiresAt.map(SQLiteValue.text) ?? .null,
         ])
@@ -1487,14 +2061,15 @@ public actor LocalBlogStore {
             tags: tags,
             text: text,
             textRuns: try decode(textRunsJSON),
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            pageViews: row.integer(at: 8) ?? 0
         )
     }
 
     private func trashBackup() throws -> NativeTrashBackup {
         var articles: [NativeTrashedArticle] = []
         try db().query(articleSelect + " WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL ORDER BY slug") { row in
-            guard let deletedAt = row.text(at: 12), let expiresAt = row.text(at: 13) else {
+            guard let deletedAt = row.text(at: 13), let expiresAt = row.text(at: 14) else {
                 throw NativeStoreError.fileSystem("SQLite：回收站文章记录不完整")
             }
             articles.append(NativeTrashedArticle(
@@ -1506,12 +2081,11 @@ public actor LocalBlogStore {
 
         var moments: [NativeTrashedMoment] = []
         try db().query("""
-        SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at
-        FROM moments
+        \(momentSelect)
         WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL
         ORDER BY id
         """) { row in
-            guard let deletedAt = row.text(at: 8), let expiresAt = row.text(at: 9) else {
+            guard let deletedAt = row.text(at: 9), let expiresAt = row.text(at: 10) else {
                 throw NativeStoreError.fileSystem("SQLite：回收站微博记录不完整")
             }
             moments.append(NativeTrashedMoment(
@@ -1676,7 +2250,8 @@ public actor LocalBlogStore {
             title: article.title,
             updatedAt: article.updatedAt,
             publishedAt: article.publishedAt,
-            wordCount: article.wordCount ?? wordCount(body)
+            wordCount: article.wordCount ?? wordCount(body),
+            pageViews: article.pageViews
         )
     }
 
@@ -1754,6 +2329,14 @@ public actor LocalBlogStore {
             .replacingOccurrences(of: "http://127.0.0.1:8787/media/", with: "/media/")
     }
 
+    private func compactSearchSnippet(_ source: String) -> String {
+        let compact = source
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        guard compact.count > 240 else { return compact }
+        return String(compact.prefix(240)) + "…"
+    }
+
     private func normalizeMediaURL(_ value: String) -> String {
         guard let url = URL(string: value),
               let host = url.host?.lowercased(),
@@ -1769,6 +2352,7 @@ public actor LocalBlogStore {
             banner: article.banner,
             category: article.category,
             excerpt: article.excerpt,
+            pageViews: article.pageViews,
             publishedAt: article.publishedAt,
             slug: article.slug,
             status: article.status,
@@ -1849,7 +2433,15 @@ public actor LocalBlogStore {
     }
 
     private var articleSelect: String {
-        "SELECT slug, title, body, category, excerpt, banner_json, media_json, status, tags_json, updated_at, published_at, word_count, deleted_at, delete_expires_at FROM articles"
+        "SELECT slug, title, body, category, excerpt, banner_json, media_json, status, tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at FROM articles"
+    }
+
+    private var momentSelect: String {
+        "SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, page_views, deleted_at, delete_expires_at FROM moments"
+    }
+
+    private var revisionSelect: String {
+        "SELECT id, draft_key, article_slug, reason, snapshot_json, created_at, updated_at FROM article_revisions"
     }
 }
 

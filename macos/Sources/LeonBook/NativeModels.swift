@@ -29,6 +29,200 @@ public enum NativeTimestamp {
     }
 }
 
+public enum NativeSearchDocumentType: String, Codable, CaseIterable, Hashable, Identifiable {
+    case article
+    case moment
+
+    public var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .article: return "文章"
+        case .moment: return "微博"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .article: return "doc.text"
+        case .moment: return "bubble.left.and.text.bubble.right"
+        }
+    }
+}
+
+/// Parsed form of the search box syntax. Unknown operators remain ordinary
+/// search terms so typing a colon never makes content silently disappear.
+public struct NativeGlobalSearchQuery: Equatable {
+    public let rawValue: String
+    public let textTerms: [String]
+    public let tags: [String]
+    public let status: NativeArticleStatus?
+    public let types: Set<NativeSearchDocumentType>
+    public let after: Date?
+    public let before: Date?
+
+    public var isEmpty: Bool {
+        textTerms.isEmpty && tags.isEmpty && status == nil && types.isEmpty
+            && after == nil && before == nil
+    }
+
+    public init(_ rawValue: String, calendar: Calendar = .current) {
+        self.rawValue = rawValue
+        var textTerms: [String] = []
+        var tags: [String] = []
+        var status: NativeArticleStatus?
+        var types = Set<NativeSearchDocumentType>()
+        var after: Date?
+        var before: Date?
+
+        for token in Self.tokens(in: rawValue) {
+            guard let separator = token.firstIndex(of: ":") else {
+                if !token.isEmpty { textTerms.append(token) }
+                continue
+            }
+
+            let key = token[..<separator].lowercased()
+            let value = String(token[token.index(after: separator)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else {
+                textTerms.append(token)
+                continue
+            }
+
+            switch key {
+            case "tag", "标签":
+                let normalized = value.trimmingCharacters(in: CharacterSet(charactersIn: "#＃"))
+                if !normalized.isEmpty { tags.append(normalized) }
+            case "status", "状态":
+                switch value.lowercased() {
+                case "draft", "草稿": status = .draft
+                case "published", "已发布", "发布": status = .published
+                default: textTerms.append(token)
+                }
+            case "type", "类型":
+                switch value.lowercased() {
+                case "article", "articles", "文章": types.insert(.article)
+                case "moment", "moments", "微博", "动态": types.insert(.moment)
+                default: textTerms.append(token)
+                }
+            case "after", "起始":
+                if let date = Self.day(value, calendar: calendar) {
+                    after = calendar.startOfDay(for: date)
+                } else {
+                    textTerms.append(token)
+                }
+            case "before", "截止":
+                if let date = Self.day(value, calendar: calendar) {
+                    before = calendar.startOfDay(for: date)
+                } else {
+                    textTerms.append(token)
+                }
+            case "date", "日期":
+                if let date = Self.day(value, calendar: calendar) {
+                    let start = calendar.startOfDay(for: date)
+                    after = start
+                    before = calendar.date(byAdding: .day, value: 1, to: start)
+                } else {
+                    textTerms.append(token)
+                }
+            default:
+                textTerms.append(token)
+            }
+        }
+
+        self.textTerms = textTerms
+        self.tags = tags
+        self.status = status
+        self.types = types
+        self.after = after
+        self.before = before
+    }
+
+    private static func tokens(in source: String) -> [String] {
+        var tokens: [String] = []
+        var token = ""
+        var quote: Character?
+        var isEscaping = false
+
+        func finishToken() {
+            if !token.isEmpty { tokens.append(token) }
+            token = ""
+        }
+
+        for character in source {
+            if isEscaping {
+                token.append(character)
+                isEscaping = false
+            } else if character == "\\" {
+                isEscaping = true
+            } else if let activeQuote = quote {
+                if character == activeQuote {
+                    quote = nil
+                } else {
+                    token.append(character)
+                }
+            } else if character == "\"" || character == "'" {
+                quote = character
+            } else if character.isWhitespace {
+                finishToken()
+            } else {
+                token.append(character)
+            }
+        }
+        if isEscaping { token.append("\\") }
+        finishToken()
+        return tokens
+    }
+
+    private static func day(_ value: String, calendar: Calendar) -> Date? {
+        let components = value.split(separator: "-").compactMap { Int($0) }
+        guard components.count == 3,
+              components[0] >= 1,
+              (1...12).contains(components[1]),
+              (1...31).contains(components[2]) else {
+            return nil
+        }
+        return calendar.date(from: DateComponents(
+            year: components[0],
+            month: components[1],
+            day: components[2]
+        ))
+    }
+}
+
+public struct NativeGlobalSearchResult: Hashable, Identifiable {
+    public let documentType: NativeSearchDocumentType
+    public let documentID: String
+    public let title: String
+    public let snippet: String
+    public let tags: [String]
+    public let category: String?
+    public let status: NativeArticleStatus?
+    public let timestamp: String
+
+    public var id: String { "\(documentType.rawValue):\(documentID)" }
+
+    public init(
+        documentType: NativeSearchDocumentType,
+        documentID: String,
+        title: String,
+        snippet: String,
+        tags: [String],
+        category: String?,
+        status: NativeArticleStatus?,
+        timestamp: String
+    ) {
+        self.documentType = documentType
+        self.documentID = documentID
+        self.title = title
+        self.snippet = snippet
+        self.tags = tags
+        self.category = category
+        self.status = status
+        self.timestamp = timestamp
+    }
+}
+
 public struct NativeUser: Codable, Hashable, Identifiable {
     public let id: String
     public let name: String
@@ -101,6 +295,7 @@ public struct NativeArticleSummary: Codable, Hashable, Identifiable {
     public let banner: NativeBanner?
     public let category: String
     public let excerpt: String
+    public var pageViews: Int
     public let publishedAt: String?
     public let slug: String
     public let status: NativeArticleStatus
@@ -110,6 +305,49 @@ public struct NativeArticleSummary: Codable, Hashable, Identifiable {
     public let wordCount: Int
 
     public var id: String { slug }
+
+    public init(
+        banner: NativeBanner?,
+        category: String,
+        excerpt: String,
+        pageViews: Int = 0,
+        publishedAt: String?,
+        slug: String,
+        status: NativeArticleStatus,
+        tags: [String],
+        title: String,
+        updatedAt: String,
+        wordCount: Int
+    ) {
+        self.banner = banner
+        self.category = category
+        self.excerpt = excerpt
+        self.pageViews = max(0, pageViews)
+        self.publishedAt = publishedAt
+        self.slug = slug
+        self.status = status
+        self.tags = NativeArticleTag.normalized(tags)
+        self.title = title
+        self.updatedAt = updatedAt
+        self.wordCount = wordCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            banner: try container.decodeIfPresent(NativeBanner.self, forKey: .banner),
+            category: try container.decodeIfPresent(String.self, forKey: .category) ?? "Uncategorized",
+            excerpt: try container.decodeIfPresent(String.self, forKey: .excerpt) ?? "",
+            pageViews: try container.decodeIfPresent(Int.self, forKey: .pageViews) ?? 0,
+            publishedAt: try container.decodeIfPresent(String.self, forKey: .publishedAt),
+            slug: try container.decodeIfPresent(String.self, forKey: .slug) ?? "",
+            status: try container.decodeIfPresent(NativeArticleStatus.self, forKey: .status) ?? .published,
+            tags: try container.decodeIfPresent([String].self, forKey: .tags) ?? [],
+            title: try container.decodeIfPresent(String.self, forKey: .title) ?? "Untitled note",
+            updatedAt: try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? "",
+            wordCount: try container.decodeIfPresent(Int.self, forKey: .wordCount) ?? 0
+        )
+    }
 }
 
 public struct NativeArticleRelations: Equatable {
@@ -260,6 +498,7 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
     public let category: String
     public let excerpt: String
     public let media: [NativeMedia]
+    public let pageViews: Int
     public let slug: String
     public let status: NativeArticleStatus
     public let tags: [String]
@@ -282,13 +521,15 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
         title: String,
         updatedAt: String,
         publishedAt: String?,
-        wordCount: Int?
+        wordCount: Int?,
+        pageViews: Int = 0
     ) {
         self.banner = banner
         self.body = body
         self.category = category
         self.excerpt = excerpt
         self.media = media
+        self.pageViews = max(0, pageViews)
         self.slug = slug
         self.status = status
         self.tags = NativeArticleTag.normalized(tags)
@@ -305,6 +546,7 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
         category = try container.decodeIfPresent(String.self, forKey: .category) ?? "Uncategorized"
         excerpt = try container.decodeIfPresent(String.self, forKey: .excerpt) ?? ""
         media = try container.decodeIfPresent([NativeMedia].self, forKey: .media) ?? []
+        pageViews = max(0, try container.decodeIfPresent(Int.self, forKey: .pageViews) ?? 0)
         slug = try container.decodeIfPresent(String.self, forKey: .slug) ?? ""
         status = try container.decodeIfPresent(NativeArticleStatus.self, forKey: .status) ?? .published
         tags = NativeArticleTag.normalized(try container.decodeIfPresent([String].self, forKey: .tags) ?? [])
@@ -349,6 +591,123 @@ public struct NativeSaveArticle: Encodable {
         self.tags = tags
         self.title = title
         self.expectedUpdatedAt = expectedUpdatedAt
+    }
+}
+
+public enum NativeArticleRevisionReason: String, Codable, Hashable {
+    case autosave
+    case savedVersion
+
+    var label: String {
+        switch self {
+        case .autosave: return "自动保存"
+        case .savedVersion: return "正式保存前"
+        }
+    }
+}
+
+public struct NativeArticleRevisionSnapshot: Codable, Hashable {
+    public let banner: NativeBanner?
+    public let body: String
+    public let category: String
+    public let excerpt: String
+    public let media: [NativeMedia]
+    public let status: NativeArticleStatus
+    public let tags: [String]
+    public let title: String
+    public let articleUpdatedAt: String?
+
+    public init(
+        banner: NativeBanner?,
+        body: String,
+        category: String,
+        excerpt: String,
+        media: [NativeMedia],
+        status: NativeArticleStatus,
+        tags: [String],
+        title: String,
+        articleUpdatedAt: String?
+    ) {
+        self.banner = banner
+        self.body = body
+        self.category = category
+        self.excerpt = excerpt
+        self.media = media
+        self.status = status
+        self.tags = NativeArticleTag.normalized(tags)
+        self.title = title
+        self.articleUpdatedAt = articleUpdatedAt
+    }
+
+    public init(article: NativeArticle) {
+        self.init(
+            banner: article.banner,
+            body: article.body,
+            category: article.category,
+            excerpt: article.excerpt,
+            media: article.media,
+            status: article.status,
+            tags: article.tags,
+            title: article.title,
+            articleUpdatedAt: article.updatedAt
+        )
+    }
+}
+
+public struct NativeArticleRevision: Hashable, Identifiable {
+    public let id: Int
+    public let draftKey: String
+    public let articleSlug: String?
+    public let reason: NativeArticleRevisionReason
+    public let snapshot: NativeArticleRevisionSnapshot
+    public let createdAt: String
+    public let updatedAt: String
+
+    public init(
+        id: Int,
+        draftKey: String,
+        articleSlug: String?,
+        reason: NativeArticleRevisionReason,
+        snapshot: NativeArticleRevisionSnapshot,
+        createdAt: String,
+        updatedAt: String
+    ) {
+        self.id = id
+        self.draftKey = draftKey
+        self.articleSlug = articleSlug
+        self.reason = reason
+        self.snapshot = snapshot
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct NativeArticleLineDiff: Equatable {
+    public let addedLineOffsets: Set<Int>
+    public let removedLineOffsets: Set<Int>
+
+    public init(previous: String, current: String) {
+        let previousLines = previous.components(separatedBy: .newlines)
+        let currentLines = current.components(separatedBy: .newlines)
+        let difference = currentLines.difference(from: previousLines)
+        var added: Set<Int> = []
+        var removed: Set<Int> = []
+
+        for change in difference {
+            switch change {
+            case .insert(let offset, _, _):
+                added.insert(offset)
+            case .remove(let offset, _, _):
+                removed.insert(offset)
+            }
+        }
+
+        addedLineOffsets = added
+        removedLineOffsets = removed
+    }
+
+    public var isEmpty: Bool {
+        addedLineOffsets.isEmpty && removedLineOffsets.isEmpty
     }
 }
 
@@ -532,6 +891,7 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
     public let id: String
     public let images: [NativeMedia]
     public let isFavorite: Bool
+    public let pageViews: Int
     public let tags: [String]
     public let text: String
     public let textRuns: [NativeMomentTextRun]
@@ -545,12 +905,14 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         tags: [String] = [],
         text: String,
         textRuns: [NativeMomentTextRun],
-        updatedAt: String
+        updatedAt: String,
+        pageViews: Int = 0
     ) {
         self.createdAt = createdAt
         self.id = id
         self.images = images
         self.isFavorite = isFavorite
+        self.pageViews = max(0, pageViews)
         self.tags = tags
         self.text = text
         self.textRuns = textRuns
@@ -563,6 +925,7 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString.lowercased()
         images = try container.decodeIfPresent([NativeMedia].self, forKey: .images) ?? []
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+        pageViews = max(0, try container.decodeIfPresent(Int.self, forKey: .pageViews) ?? 0)
         text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? NativeMomentTag.extract(from: text)
         textRuns = try container.decodeIfPresent([NativeMomentTextRun].self, forKey: .textRuns) ?? []
@@ -771,6 +1134,7 @@ struct NativeMomentDraft: Equatable {
 }
 
 struct NativeEditorDraft: Equatable {
+    var recoveryID = UUID().uuidString.lowercased()
     var slug = ""
     var title = ""
     var category = "Notes"
@@ -794,6 +1158,29 @@ enum NativeSection: Hashable {
     case editor
     case trash
     case settings
+}
+
+enum NativeSearchPresentation: String, Identifiable {
+    case globalSearch
+    case quickOpen
+    case commandPalette
+
+    var id: String { rawValue }
+}
+
+enum NativeCommandID: String, CaseIterable, Identifiable {
+    case globalSearch
+    case quickOpen
+    case newArticle
+    case dashboard
+    case articles
+    case graph
+    case moments
+    case trash
+    case settings
+    case reload
+
+    var id: String { rawValue }
 }
 
 enum NativeStoreError: LocalizedError {

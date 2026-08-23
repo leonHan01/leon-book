@@ -6,8 +6,11 @@ private let momentFeedMaximumWidth: CGFloat = 1_760
 
 struct MomentFeedView: View {
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var navigation: NativeNavigationState
     @State private var imageBrowser: MomentImageBrowserState?
     @State private var collapsedTimelineDays: Set<String> = []
+    @State private var recordedPageViewIDs: Set<String> = []
+    @State private var pageViewSessionID = UUID()
     @AppStorage("momentFeedLayout") private var momentFeedLayoutRawValue = MomentFeedLayout.singleColumn.rawValue
 
     private var momentFeedLayout: MomentFeedLayout {
@@ -372,6 +375,11 @@ struct MomentFeedView: View {
                 store: model.store
             )
         }
+        .onChange(of: navigation.section) { section in
+            guard section == .moments else { return }
+            recordedPageViewIDs.removeAll()
+            pageViewSessionID = UUID()
+        }
     }
 
     @ViewBuilder
@@ -391,7 +399,19 @@ struct MomentFeedView: View {
             } onDelete: {
                 model.deleteMoment(moment)
             }
+            .onAppear {
+                recordPageViewIfVisible(for: moment)
+            }
+            .onChange(of: pageViewSessionID) { _ in
+                recordPageViewIfVisible(for: moment)
+            }
         }
+    }
+
+    private func recordPageViewIfVisible(for moment: NativeMoment) {
+        guard navigation.section == .moments,
+              recordedPageViewIDs.insert(moment.id).inserted else { return }
+        model.recordMomentPageView(moment)
     }
 
     @ViewBuilder
@@ -776,11 +796,10 @@ private struct MomentCard: View {
     let onSelectTag: (String) -> Void
     let onDelete: () -> Void
 
-    private var displayContent: (text: String, runs: [NativeMomentTextRun]) {
-        moment.displayContent
-    }
-
     var body: some View {
+        let displayContent = moment.displayContent
+        let dateLabel = moment.createdAt.nativeDateLabel
+
         VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "person.crop.circle.fill")
@@ -789,7 +808,11 @@ private struct MomentCard: View {
                     .font(.subheadline.weight(.semibold))
                 Spacer(minLength: 8)
                 HStack(alignment: .center, spacing: 8) {
-                    Text(moment.createdAt.nativeDateLabel)
+                    Text(dateLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Label("\(moment.pageViews) PV", systemImage: "eye")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -866,6 +889,50 @@ private struct MomentCard: View {
                 .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilitySummary(text: displayContent.text, dateLabel: dateLabel))
+        .accessibilityHint("可执行收藏、编辑、删除、筛选标签和查看图片操作")
+        .accessibilityAction(named: Text(moment.isFavorite ? "取消收藏" : "收藏")) {
+            onToggleFavorite()
+        }
+        .accessibilityAction(named: Text("编辑")) {
+            onEdit()
+        }
+        .accessibilityAction(named: Text("删除")) {
+            confirmDeletion()
+        }
+        .accessibilityActions {
+            ForEach(moment.tags, id: \.self) { tag in
+                Button("筛选标签 #\(tag)") {
+                    onSelectTag(tag)
+                }
+            }
+        }
+        .modifier(
+            MomentCardImageAccessibilityModifier(
+                hasImages: !moment.images.isEmpty,
+                onOpenImage: { onOpenImage(0) }
+            )
+        )
+    }
+
+    private func accessibilitySummary(text: String, dateLabel: String) -> String {
+        var parts = ["leon-book", dateLabel]
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedText.isEmpty {
+            parts.append(trimmedText)
+        }
+        if !moment.tags.isEmpty {
+            parts.append("标签 " + moment.tags.map { "#\($0)" }.joined(separator: "、"))
+        }
+        if !moment.images.isEmpty {
+            parts.append("\(moment.images.count) 张图片")
+        }
+        if moment.isFavorite {
+            parts.append("已收藏")
+        }
+        parts.append("\(moment.pageViews) 次浏览")
+        return parts.joined(separator: "，")
     }
 
     private func confirmDeletion() {
@@ -879,6 +946,22 @@ private struct MomentCard: View {
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         onDelete()
+    }
+}
+
+private struct MomentCardImageAccessibilityModifier: ViewModifier {
+    let hasImages: Bool
+    let onOpenImage: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if hasImages {
+            content.accessibilityAction(named: Text("查看图片")) {
+                onOpenImage()
+            }
+        } else {
+            content
+        }
     }
 }
 
@@ -962,6 +1045,11 @@ private struct MomentImageGrid: View {
                 .accessibilityHint("点按打开图片浏览器")
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(images.count == 1 ? "1 张图片" : "\(images.count) 张图片")
+        .accessibilityHint("打开图片浏览器，可在浏览器中逐张查看")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onOpenImage(0) }
     }
 }
 

@@ -23,6 +23,9 @@ expect(!FileManager.default.fileExists(atPath: sourcePath("BlogWebView.swift")),
 expect(!FileManager.default.fileExists(atPath: sourcePath("BrowserModel.swift")), "browser model should be removed")
 
 if let articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift"), encoding: .utf8) {
+    expect(articleViews.contains("ArticleHistoryView"), "article reader and editor should expose version history")
+    expect(articleViews.contains("ArticleRevisionDiffView"), "version history should compare revisions with current content")
+    expect(articleViews.contains("model.scheduleEditorAutosave()"), "editor changes should schedule debounced recovery snapshots")
     expect(
         !articleViews.contains("ScrollView {\n                        VStack(alignment: .leading, spacing: 24) {\n                            titleSection\n                            writingSection"),
         "Markdown editor must not be nested inside the outer editor ScrollView"
@@ -48,6 +51,7 @@ if let articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("insertHTMLComponentTemplate()"), "article editor should insert an HTML component template")
     expect(articleViews.contains("标签，例如 #Swift #随笔"), "article editor should accept hashtag-style tags")
     expect(articleViews.contains("model.showArticles(tag: tag)"), "article reader tags should open the matching article filter")
+    expect(articleViews.contains("article.pageViews"), "article reader should display its persisted page views")
     expect(articleViews.contains("ArticleLinkSuggestionMenu"), "article editor should offer article-link suggestions")
     expect(articleViews.contains("activeLinkQuery"), "article editor should detect a [[ article-link query")
     expect(articleViews.contains("[[\\(article.title)]]"), "selecting an article suggestion should insert a wiki-style link")
@@ -57,6 +61,7 @@ if let articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains(".padding(.leading, 12)"), "the Markdown placeholder should visually align with the native text caret")
     expect(articleViews.contains(".padding(.top, 12)"), "the Markdown placeholder should be vertically centered with the native text caret")
     expect(articleViews.contains("PastingTextView()"), "native body editor should receive keyboard input through its NSTextView subclass")
+    expect(articleViews.contains("textView.isAutomaticDashSubstitutionEnabled = false"), "Markdown input should preserve triple hyphens for thematic breaks")
     expect(articleViews.contains("PastingTextView: NSTextView"), "native body editor should extend NSTextView for image paste handling")
     expect(articleViews.contains("override func viewDidMoveToWindow()"), "the native body editor should detect when it is attached to a window")
     expect(articleViews.contains("window.makeFirstResponder(self)"), "the native body editor should request the initial keyboard focus")
@@ -75,6 +80,11 @@ if let articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
 
 if let markdownRenderer = try? String(contentsOfFile: sourcePath("MarkdownRenderer.swift"), encoding: .utf8) {
     expect(markdownRenderer.contains("case list"), "Markdown renderer should support ordered and unordered lists")
+    expect(markdownRenderer.contains("marker = \"•\""), "Markdown renderer should display dash, plus, and asterisk list markers as unordered bullets")
+    expect(
+        markdownRenderer.contains("MarkdownListView(items: items, articleLinks: articleLinks)\n                .font(.system(size: 18, design: .serif))\n                .lineSpacing(6)"),
+        "Markdown lists should use the same font and line spacing as body paragraphs"
+    )
     expect(markdownRenderer.contains("case blockQuote"), "Markdown renderer should support block quotes")
     expect(markdownRenderer.contains("case codeBlock"), "Markdown renderer should support fenced and indented code blocks")
     expect(markdownRenderer.contains("case thematicBreak"), "Markdown renderer should support thematic breaks")
@@ -92,6 +102,7 @@ if let markdownRenderer = try? String(contentsOfFile: sourcePath("MarkdownRender
     expect(markdownRenderer.contains("min(max(requestedHeight, 160), 1_200)"), "HTML component heights should be bounded")
     expect(markdownRenderer.contains("taskState"), "Markdown renderer should support GFM task lists")
     expect(markdownRenderer.contains("text.strikethrough()"), "Markdown renderer should support GFM strikethrough")
+    expect(markdownRenderer.contains("MarkdownTypography.normalizedCJKSpacing"), "Markdown renderer should remove redundant ASCII spacing between CJK punctuation and Han text")
     expect(markdownRenderer.contains("AttributedString(markdown: resolvedSource)"), "Markdown renderer should retain standard inline Markdown styling")
     expect(markdownRenderer.contains("MarkdownArticleLinkRenderer"), "Markdown renderer should resolve wiki-style article links")
     expect(markdownRenderer.contains("components.host == \"article\""), "Markdown renderer should intercept internal article links")
@@ -102,13 +113,29 @@ if let markdownRenderer = try? String(contentsOfFile: sourcePath("MarkdownRender
 if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift"), encoding: .utf8) {
     expect(contentView.contains("ActivityHeatmapView(activity: model.activity)"), "dashboard should display the activity heatmap")
     expect(contentView.contains("过去一年"), "activity heatmap should label its one-year range")
-    expect(contentView.contains("case .moments: MomentFeedView(model: model)"), "ContentView should show the native moments feed")
+    expect(contentView.contains("MomentFeedView(model: model, navigation: model.navigation)"), "ContentView should show the native moments feed with navigation visibility")
     expect(contentView.contains("case .trash: TrashView(model: model)"), "ContentView should show the recycle bin")
     expect(contentView.contains("回收站"), "sidebar should expose the recycle bin")
     expect(contentView.contains("新建用户…"), "sidebar should support creating users")
     expect(contentView.contains("独立工作空间"), "sidebar should identify user-isolated workspaces")
     expect(contentView.contains("ArticleTagFilterBar"), "article list should expose hashtag filters")
+    expect(contentView.contains("article.pageViews"), "article list rows should display page views")
     expect(contentView.contains("可多选，任一匹配"), "article tag filters should explain multi-select matching")
+    expect(contentView.contains("private struct NativeNavigationDetail: View"), "ContentView should isolate navigation updates in a dedicated detail subtree")
+    expect(contentView.contains("NativeSidebar(model: model, navigation: model.navigation"), "ContentView should isolate sidebar selection updates from the root split view")
+    expect(contentView.contains("NativeNavigationDetail(model: model, navigation: model.navigation)"), "ContentView should keep the root split view independent from section changes")
+    expect(contentView.contains("@State private var retainedSections: Set<NativeSection> = [.dashboard]"), "ContentView should retain mounted navigation destinations")
+    expect(contentView.contains("prewarmNavigationSections()"), "ContentView should prewarm sidebar destinations while idle")
+    expect(contentView.contains("retainNavigationSection(navigation.section)"), "ContentView should retain a requested destination outside the navigation transaction")
+    expect(contentView.contains("RetainedNavigationPage(isVisible: navigation.section == section)"), "ContentView should isolate retained destinations in stable native hosts")
+    expect(contentView.contains("nsView.setVisible(isVisible)"), "Retained destination updates should only change native visibility")
+    expect(!contentView.contains("hostingView.rootView = rootView"), "Retained destination updates should never rebuild hosted SwiftUI pages")
+    expect(
+        contentView.contains(".frame(maxWidth: .infinity, alignment: .leading)\n                .contentShape(Rectangle())"),
+        "sidebar navigation labels should expose their full row as the click target"
+    )
+    expect(contentView.contains("SidebarNavigationButtonStyle(isSelected:"), "sidebar navigation rows should use a dedicated hover style")
+    expect(contentView.contains(".onHover { isHovered = $0 }"), "sidebar navigation rows should react to pointer movement")
 } else {
     failures.append("native content view should be readable")
 }
@@ -116,6 +143,12 @@ if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift")
 if let localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8) {
     expect(localStore.contains("leon-book.sqlite"), "structured content should use a local SQLite database")
     expect(localStore.contains("CREATE TABLE IF NOT EXISTS articles"), "SQLite article schema should exist")
+    expect(localStore.contains("CREATE VIRTUAL TABLE IF NOT EXISTS content_search USING fts5"), "SQLite should expose a unified FTS5 index")
+    expect(localStore.contains("tokenize = 'trigram'"), "FTS5 should use trigram tokenization for Chinese substring search")
+    expect(localStore.contains("public func search("), "LocalBlogStore should expose unified full-text search")
+    expect(localStore.contains("CREATE TABLE IF NOT EXISTS article_revisions"), "SQLite should retain article recovery snapshots")
+    expect(localStore.contains("func saveArticleAutosave"), "LocalBlogStore should save rolling article autosaves")
+    expect(localStore.contains("articleRevisionRetentionDays = 30"), "article revisions should have a bounded retention period")
     expect(localStore.contains("deleted_at TEXT"), "SQLite content schema should support soft deletion")
     expect(localStore.contains("delete_expires_at TEXT"), "SQLite content schema should track trash expiry")
     expect(localStore.contains("migrateLegacyDataIfNeeded"), "legacy local files should migrate into SQLite")
@@ -126,6 +159,9 @@ if let localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift
     expect(localStore.contains("func saveMoment"), "LocalBlogStore should save moments")
     expect(localStore.contains("func updateMoment"), "LocalBlogStore should update moments")
     expect(localStore.contains("func deleteMoment"), "LocalBlogStore should delete moments")
+    expect(localStore.contains("page_views INTEGER NOT NULL DEFAULT 0"), "SQLite content schemas should persist page views")
+    expect(localStore.contains("func incrementArticlePageViews"), "LocalBlogStore should increment article page views atomically")
+    expect(localStore.contains("func incrementMomentPageViews"), "LocalBlogStore should increment moment page views atomically")
     expect(localStore.contains("moment_published"), "LocalBlogStore should record moment publishing")
     expect(localStore.contains("moment_edited"), "LocalBlogStore should record moment edits")
     expect(localStore.contains("func listTrash()"), "LocalBlogStore should list recycle bin items")
@@ -155,6 +191,9 @@ if let settingsView = try? String(contentsOfFile: sourcePath("NativeSettingsView
 }
 
 if let appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift"), encoding: .utf8) {
+    expect(appModel.contains("3_000_000_000"), "article autosave should use a three-second debounce")
+    expect(appModel.contains("restoreLatestUnsavedArticleDraftIfNeeded"), "startup should restore an unsaved new article")
+    expect(appModel.contains("restoreLatestAutosaveIfNeeded"), "editing a saved article should recover newer autosaved content")
     expect(appModel.contains("func uploadPastedImage"), "pasted images should be saved as local media")
     expect(appModel.contains("![粘贴的图片]"), "pasted images should be inserted as Markdown image links")
     expect(appModel.contains("func chooseMomentImages()"), "NativeAppModel should choose moment images")
@@ -179,6 +218,12 @@ if let appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
     expect(appModel.contains("availableArticleTagFilters"), "Article tags should include their post counts")
     expect(appModel.contains("func toggleArticleTagFilter(_ tag: String)"), "Article tags should be toggled independently")
     expect(appModel.contains("func openArticleLink(_ slug: String)"), "NativeAppModel should open a linked article")
+    expect(appModel.contains("public func presentQuickSwitcher()"), "NativeAppModel should expose the quick switcher")
+    expect(appModel.contains("public func presentCommandPalette()"), "NativeAppModel should expose the command palette")
+    expect(appModel.contains("recordsPageView: Bool = true"), "article selection should distinguish user views from background reloads")
+    expect(appModel.contains("func recordMomentPageView(_ moment: NativeMoment)"), "NativeAppModel should record visible moment page views")
+    expect(appModel.contains("let navigation = NativeNavigationState()"), "navigation changes should use an isolated observable state")
+    expect(appModel.contains("get { navigation.section }\n        set { navigation.section = newValue }"), "section changes should not invalidate every content observer")
 } else {
     failures.append("native app model should be readable")
 }
@@ -202,6 +247,8 @@ if let momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("最多 9 张图片"), "Moments should communicate the image limit")
     expect(momentViews.contains("LazyVStack(spacing: 16)"), "Moment history should display one post per row")
     expect(momentViews.contains("MomentImageBrowserView"), "Moments should present an image browser")
+    expect(momentViews.contains(".accessibilityElement(children: .ignore)"), "Moment image grids should expose one accessibility node instead of one node per thumbnail")
+    expect(momentViews.contains(".accessibilityAction { onOpenImage(0) }"), "The combined moment image node should open the image browser")
     expect(momentViews.contains("将这条微博移入回收站？"), "Moment deletion should require confirmation")
     expect(!momentViews.contains(".overlay(alignment: .topTrailing)"), "Moment card actions must participate in header layout so they do not overlap the date")
     expect(!momentViews.contains("VStack(alignment: .trailing, spacing: 8)"), "Moment header actions should stay inline so they do not create blank space before the content")
@@ -215,6 +262,12 @@ if let momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("MagnificationGesture()"), "Image browser should support magnifying images")
     expect(momentViews.contains("showNextImage()"), "Image browser should support next image navigation")
     expect(momentViews.contains("Button(action: onEdit)"), "Moment cards should expose an edit control")
+    expect(momentViews.contains("moment.pageViews"), "Moment cards should display page views")
+    expect(momentViews.contains("recordPageViewIfVisible"), "Moment cards should count only visible feed impressions")
+    expect(momentViews.contains("let displayContent = moment.displayContent"), "Moment cards should derive display content only once per render")
+    expect(momentViews.contains(".accessibilityLabel(accessibilitySummary("), "Moment cards should expose one concise accessibility summary")
+    expect(momentViews.contains(".accessibilityAction(named: Text(\"编辑\"))"), "Combined moment cards should preserve their edit accessibility action")
+    expect(momentViews.contains(".accessibilityAction(named: Text(\"删除\"))"), "Combined moment cards should preserve their delete accessibility action")
     expect(momentViews.contains("编辑微博"), "Moment composer should identify edit mode")
     expect(momentViews.contains("保存修改"), "Moment composer should save edits")
     expect(momentViews.contains("collapsedTimelineDays"), "Moment timeline should track collapsed days")

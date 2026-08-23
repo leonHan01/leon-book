@@ -12,16 +12,23 @@ private enum ArticleEditorLayout {
 
 struct ArticleReaderView: View {
     @ObservedObject var model: NativeAppModel
+    @State private var isPresentingHistory = false
 
     var body: some View {
         Group {
             if let article = model.selectedArticle {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
+                let outline = MarkdownOutline.items(in: article.body)
+                ScrollViewReader { scrollProxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 24) {
                         HStack {
                             Label(article.status.label, systemImage: article.status == .published ? "checkmark.circle.fill" : "pencil.circle.fill")
                                 .foregroundStyle(article.status == .published ? .green : .orange)
                             Spacer()
+                            Button("版本历史") {
+                                model.refreshArticleHistory()
+                                isPresentingHistory = true
+                            }
                             Button("编辑") { model.editSelected() }
                             Button("移入回收站", role: .destructive) { Task { await model.deleteSelected() } }
                         }
@@ -33,6 +40,7 @@ struct ArticleReaderView: View {
                             Text("·")
                             Text("更新于 \(article.updatedAt.nativeDateLabel)")
                             if let wordCount = article.wordCount { Text("· \(wordCount) 字") }
+                            Text("· \(article.pageViews) PV")
                         }
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -64,13 +72,21 @@ struct ArticleReaderView: View {
                             NativeImageView(url: banner.url, alt: banner.alt, store: model.store)
                         }
 
-                        Divider()
-                        MarkdownArticleBody(
-                            body: article.body,
-                            store: model.store,
-                            articleLinks: model.articles,
-                            onOpenArticle: model.openArticleLink
-                        )
+                            if !outline.isEmpty {
+                                ArticleTableOfContents(items: outline) { item in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        scrollProxy.scrollTo(item.id, anchor: .top)
+                                    }
+                                }
+                            }
+
+                            Divider()
+                            MarkdownArticleBody(
+                                body: article.body,
+                                store: model.store,
+                                articleLinks: model.articles,
+                                onOpenArticle: model.openArticleLink
+                            )
 
                         if !model.selectedArticleRelations.isEmpty {
                             Divider()
@@ -94,14 +110,63 @@ struct ArticleReaderView: View {
                                 }
                             }
                         }
+                        }
+                        .frame(maxWidth: 800, alignment: .leading)
+                        .padding(42)
                     }
-                    .frame(maxWidth: 800, alignment: .leading)
-                    .padding(42)
                 }
             } else {
                 EmptyState(title: "选择一篇文章", message: "从左侧打开文章，或创建一篇新笔记。", actionTitle: "新文章") { model.newArticle() }
             }
         }
+        .sheet(isPresented: $isPresentingHistory) {
+            ArticleHistoryView(model: model)
+        }
+    }
+}
+
+private struct ArticleTableOfContents: View {
+    let items: [MarkdownOutlineItem]
+    let onSelect: (MarkdownOutlineItem) -> Void
+
+    private var baseLevel: Int {
+        items.map(\.level).min() ?? 1
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("目录", systemImage: "list.bullet.indent")
+                .font(.headline)
+
+            ForEach(items) { item in
+                Button {
+                    onSelect(item)
+                } label: {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Color.secondary.opacity(0.55))
+                            .frame(width: 4, height: 4)
+                        Text(item.title)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.leading, CGFloat(max(0, item.level - baseLevel)) * 16)
+                .help("跳转到“\(item.title)”")
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.secondary.opacity(0.16))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("文章目录")
     }
 }
 
@@ -166,9 +231,232 @@ private struct ArticleRelationsSection: View {
     }
 }
 
+private struct ArticleHistoryView: View {
+    @ObservedObject var model: NativeAppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedRevisionID: Int?
+
+    private var selectedRevision: NativeArticleRevision? {
+        guard let selectedRevisionID else { return model.articleRevisions.first }
+        return model.articleRevisions.first { $0.id == selectedRevisionID }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("版本历史", systemImage: "clock.arrow.circlepath")
+                        .font(.title2.weight(.semibold))
+                    Text(model.currentArticleHistoryTitle)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("自动版本保留 30 天")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("完成") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+
+            Divider()
+
+            if model.articleRevisions.isEmpty {
+                EmptyState(
+                    title: "还没有历史版本",
+                    message: "停止输入 3 秒后会生成第一份自动保存；再次正式保存文章时，也会保留保存前的版本。",
+                    actionTitle: "关闭"
+                ) {
+                    dismiss()
+                }
+            } else {
+                HSplitView {
+                    List(model.articleRevisions, selection: $selectedRevisionID) { revision in
+                        ArticleRevisionRow(revision: revision)
+                            .tag(revision.id)
+                    }
+                    .listStyle(.sidebar)
+                    .frame(minWidth: 230, idealWidth: 270, maxWidth: 340)
+
+                    if let selectedRevision {
+                        ArticleRevisionDiffView(
+                            revision: selectedRevision,
+                            current: model.currentArticleHistorySnapshot
+                        ) {
+                            if model.restoreArticleRevision(selectedRevision) {
+                                dismiss()
+                            }
+                        }
+                        .frame(minWidth: 650)
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 980, minHeight: 640)
+        .task {
+            model.refreshArticleHistory()
+            selectNewestRevisionIfNeeded()
+        }
+        .onChange(of: model.articleRevisions.map(\.id)) { _ in
+            selectNewestRevisionIfNeeded()
+        }
+    }
+
+    private func selectNewestRevisionIfNeeded() {
+        guard selectedRevisionID == nil || selectedRevision == nil else { return }
+        selectedRevisionID = model.articleRevisions.first?.id
+    }
+}
+
+private struct ArticleRevisionRow: View {
+    let revision: NativeArticleRevision
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
+                Image(systemName: revision.reason == .autosave ? "bolt.circle" : "tray.full")
+                    .foregroundStyle(revision.reason == .autosave ? Color.accentColor : Color.orange)
+                Text(revision.reason.label)
+                    .font(.subheadline.weight(.medium))
+            }
+            Text(revision.updatedAt.nativeDateLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(revision.snapshot.title.isEmpty ? "未命名文章" : revision.snapshot.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.vertical, 5)
+    }
+}
+
+private struct ArticleRevisionDiffView: View {
+    let revision: NativeArticleRevision
+    let current: NativeArticleRevisionSnapshot
+    let onRestore: () -> Void
+
+    private var diff: NativeArticleLineDiff {
+        NativeArticleLineDiff(previous: revision.snapshot.body, current: current.body)
+    }
+
+    private var metadataChanges: [String] {
+        var changes: [String] = []
+        if revision.snapshot.title != current.title { changes.append("标题") }
+        if revision.snapshot.category != current.category { changes.append("分类") }
+        if revision.snapshot.tags != current.tags { changes.append("标签") }
+        if revision.snapshot.excerpt != current.excerpt { changes.append("摘要") }
+        if revision.snapshot.status != current.status { changes.append("状态") }
+        if revision.snapshot.banner != current.banner { changes.append("封面") }
+        if revision.snapshot.media != current.media { changes.append("附件") }
+        return changes
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("与当前内容比较")
+                        .font(.headline)
+                    HStack(spacing: 10) {
+                        Label("删除 \(diff.removedLineOffsets.count) 行", systemImage: "minus.circle")
+                            .foregroundStyle(.red)
+                        Label("新增 \(diff.addedLineOffsets.count) 行", systemImage: "plus.circle")
+                            .foregroundStyle(.green)
+                        if !metadataChanges.isEmpty {
+                            Text("属性变化：\(metadataChanges.joined(separator: "、"))")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.caption)
+                }
+                Spacer()
+                Button(action: onRestore) {
+                    Label("恢复此版本", systemImage: "arrow.uturn.backward.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(16)
+
+            Divider()
+
+            HSplitView {
+                ArticleRevisionCodeColumn(
+                    title: "历史版本",
+                    source: revision.snapshot.body,
+                    highlightedOffsets: diff.removedLineOffsets,
+                    highlightColor: .red
+                )
+                ArticleRevisionCodeColumn(
+                    title: "当前内容",
+                    source: current.body,
+                    highlightedOffsets: diff.addedLineOffsets,
+                    highlightColor: .green
+                )
+            }
+        }
+    }
+}
+
+private struct ArticleRevisionCodeColumn: View {
+    let title: String
+    let source: String
+    let highlightedOffsets: Set<Int>
+    let highlightColor: Color
+
+    private var lines: [String] {
+        source.components(separatedBy: .newlines)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(lines.count) 行")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            Divider()
+
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(lines.indices, id: \.self) { index in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text("\(index + 1)")
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 38, alignment: .trailing)
+                            Text(lines[index].isEmpty ? " " : lines[index])
+                                .foregroundStyle(.primary)
+                                .textSelection(.enabled)
+                        }
+                        .font(.system(.caption, design: .monospaced))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            highlightedOffsets.contains(index)
+                                ? highlightColor.opacity(0.14)
+                                : Color.clear
+                        )
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+        }
+    }
+}
+
 private enum MarkdownArticleBlock {
     case image(url: String, alt: String)
-    case text(String)
+    case text(markdown: String, headingIDs: [String])
 }
 
 private struct MarkdownArticleBody: View {
@@ -197,11 +485,12 @@ private struct MarkdownArticleBody: View {
                 switch block {
                 case let .image(url, alt):
                     NativeImageView(url: url, alt: alt, store: store)
-                case let .text(markdown):
+                case let .text(markdown, headingIDs):
                     MarkdownDocumentView(
                         markdown: markdown,
                         articleLinks: articleLinks,
-                        onOpenArticle: onOpenArticle
+                        onOpenArticle: onOpenArticle,
+                        headingIDs: headingIDs
                     )
                 }
             }
@@ -216,10 +505,22 @@ private struct MarkdownArticleBody: View {
     }
 
     private static func markdownBlocks(in markdown: String) -> [MarkdownArticleBlock] {
+        var nextHeadingIndex = 0
+        func textBlock(_ source: String) -> MarkdownArticleBlock {
+            let headingCount = MarkdownOutline.items(in: source).count
+            let headingIDs = (0..<headingCount).map { offset in
+                MarkdownOutline.anchorID(for: nextHeadingIndex + offset)
+            }
+            nextHeadingIndex += headingCount
+            return .text(markdown: source, headingIDs: headingIDs)
+        }
+
         let expression = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)"#)
         let searchRange = NSRange(markdown.startIndex..., in: markdown)
         let matches = expression.matches(in: markdown, range: searchRange)
-        guard !matches.isEmpty else { return markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [.text(markdown)] }
+        guard !matches.isEmpty else {
+            return markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [textBlock(markdown)]
+        }
 
         var blocks: [MarkdownArticleBlock] = []
         var cursor = markdown.startIndex
@@ -228,13 +529,13 @@ private struct MarkdownArticleBody: View {
                   let altRange = Range(match.range(at: 1), in: markdown),
                   let urlRange = Range(match.range(at: 2), in: markdown) else { continue }
             let textBefore = String(markdown[cursor..<matchRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !textBefore.isEmpty { blocks.append(.text(textBefore)) }
+            if !textBefore.isEmpty { blocks.append(textBlock(textBefore)) }
             blocks.append(.image(url: String(markdown[urlRange]), alt: String(markdown[altRange])))
             cursor = matchRange.upperBound
         }
 
         let trailingText = String(markdown[cursor...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trailingText.isEmpty { blocks.append(.text(trailingText)) }
+        if !trailingText.isEmpty { blocks.append(textBlock(trailingText)) }
         return blocks
     }
 }
@@ -642,6 +943,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
 
         let textView = PastingTextView()
         textView.allowsUndo = true
+        textView.isAutomaticDashSubstitutionEnabled = false
         textView.autoresizingMask = [.width]
         textView.backgroundColor = .textBackgroundColor
         textView.delegate = context.coordinator
@@ -861,6 +1163,7 @@ private struct MarkdownPreview: View {
 struct ArticleEditorView: View {
     @ObservedObject var model: NativeAppModel
     @StateObject private var articleLinkController = ArticleLinkAutocompleteController()
+    @State private var isPresentingHistory = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -892,6 +1195,12 @@ struct ArticleEditorView: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: model.editor) { _ in
+            model.scheduleEditorAutosave()
+        }
+        .sheet(isPresented: $isPresentingHistory) {
+            ArticleHistoryView(model: model)
+        }
     }
 
     private var editorHeader: some View {
@@ -917,9 +1226,30 @@ struct ArticleEditorView: View {
                 Text(model.editor.isNew ? "创建一篇新文章" : "继续编辑这篇文章")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                HStack(spacing: 6) {
+                    if model.isEditorAutosaving {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "checkmark.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(model.editorAutosaveStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .help("编辑内容停止变化 3 秒后自动保存恢复快照")
             }
 
             Spacer()
+
+            Button {
+                model.refreshArticleHistory()
+                isPresentingHistory = true
+            } label: {
+                Label("版本历史", systemImage: "clock.arrow.circlepath")
+            }
 
             Menu {
                 Button("添加封面") {
