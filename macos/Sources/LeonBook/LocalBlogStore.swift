@@ -131,6 +131,35 @@ public actor LocalBlogStore {
         return articles
     }
 
+    /// Derives wiki-style article links from the current article bodies, so title
+    /// changes and edits are reflected immediately without a second link index.
+    public func articleRelations(for slug: String) throws -> NativeArticleRelations {
+        try prepare()
+        let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
+        let allArticles = try allArticles()
+        guard let article = allArticles.first(where: { $0.slug == safeSlug }) else {
+            throw NativeStoreError.notFound
+        }
+
+        let graph = articleGraph(from: allArticles)
+        let summariesBySlug = Dictionary(uniqueKeysWithValues: graph.nodes.map { ($0.slug, $0) })
+        let outgoing = graph.edges.compactMap { edge in
+            edge.sourceSlug == article.slug ? summariesBySlug[edge.targetSlug] : nil
+        }
+        let incoming = graph.edges.compactMap { edge in
+            edge.targetSlug == article.slug && edge.sourceSlug != article.slug
+                ? summariesBySlug[edge.sourceSlug]
+                : nil
+        }
+
+        return NativeArticleRelations(outgoing: outgoing, incoming: incoming)
+    }
+
+    public func articleGraph() throws -> NativeArticleGraph {
+        try prepare()
+        return articleGraph(from: try allArticles())
+    }
+
     public func listMoments() throws -> [NativeMoment] {
         try prepare()
         return try allMoments()
@@ -1203,6 +1232,24 @@ public actor LocalBlogStore {
             articles.append(try decodeArticle(row))
         }
         return articles
+    }
+
+    private func articleGraph(from articles: [NativeArticle]) -> NativeArticleGraph {
+        let nodes = articles.map(summary)
+        var edges: [NativeArticleGraphEdge] = []
+
+        for article in articles {
+            var targetSlugs = Set<String>()
+            for reference in NativeArticleLink.references(in: article.body) {
+                guard let target = NativeArticleLink.resolve(reference, in: nodes),
+                      targetSlugs.insert(target.slug).inserted else {
+                    continue
+                }
+                edges.append(NativeArticleGraphEdge(sourceSlug: article.slug, targetSlug: target.slug))
+            }
+        }
+
+        return NativeArticleGraph(nodes: nodes, edges: edges)
     }
 
     private func insertArticle(

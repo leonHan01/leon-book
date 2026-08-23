@@ -7,19 +7,25 @@ public enum NativeWritingMetrics {
 }
 
 public enum NativeTimestamp {
-    public static func date(from timestamp: String) -> Date? {
-        let standardFormatter = ISO8601DateFormatter()
-        if let date = standardFormatter.date(from: timestamp) { return date }
+    private static let formatterLock = NSLock()
+    private static let standardFormatter = ISO8601DateFormatter()
+    private static let fractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter
+    }()
 
-        let fractionalFormatter = ISO8601DateFormatter()
-        fractionalFormatter.formatOptions.insert(.withFractionalSeconds)
-        return fractionalFormatter.date(from: timestamp)
+    public static func date(from timestamp: String) -> Date? {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return standardFormatter.date(from: timestamp)
+            ?? fractionalFormatter.date(from: timestamp)
     }
 
     public static func string(from date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions.insert(.withFractionalSeconds)
-        return formatter.string(from: date)
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return fractionalFormatter.string(from: date)
     }
 }
 
@@ -104,6 +110,46 @@ public struct NativeArticleSummary: Codable, Hashable, Identifiable {
     public let wordCount: Int
 
     public var id: String { slug }
+}
+
+public struct NativeArticleRelations: Equatable {
+    public let outgoing: [NativeArticleSummary]
+    public let incoming: [NativeArticleSummary]
+
+    public static let empty = NativeArticleRelations(outgoing: [], incoming: [])
+
+    public var isEmpty: Bool {
+        outgoing.isEmpty && incoming.isEmpty
+    }
+
+    public init(outgoing: [NativeArticleSummary], incoming: [NativeArticleSummary]) {
+        self.outgoing = outgoing
+        self.incoming = incoming
+    }
+}
+
+public struct NativeArticleGraph: Equatable {
+    public let nodes: [NativeArticleSummary]
+    public let edges: [NativeArticleGraphEdge]
+
+    public static let empty = NativeArticleGraph(nodes: [], edges: [])
+
+    public init(nodes: [NativeArticleSummary], edges: [NativeArticleGraphEdge]) {
+        self.nodes = nodes
+        self.edges = edges
+    }
+}
+
+public struct NativeArticleGraphEdge: Hashable, Identifiable {
+    public let sourceSlug: String
+    public let targetSlug: String
+
+    public var id: String { "\(sourceSlug)->\(targetSlug)" }
+
+    public init(sourceSlug: String, targetSlug: String) {
+        self.sourceSlug = sourceSlug
+        self.targetSlug = targetSlug
+    }
 }
 
 public enum NativeArticleLink {
@@ -742,6 +788,7 @@ struct NativeEditorDraft: Equatable {
 enum NativeSection: Hashable {
     case dashboard
     case articles
+    case graph
     case moments
     case reader
     case editor

@@ -23,6 +23,11 @@ struct MomentFeedView: View {
     }
 
     var body: some View {
+        let availableMomentMonths = model.availableMomentMonths
+        let availableMomentYears = Set(availableMomentMonths.map(\.year)).sorted(by: >)
+        let availableMomentTagFilters = model.availableMomentTagFilters
+        let momentTimeline = model.momentTimeline
+
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 26) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -100,10 +105,10 @@ struct MomentFeedView: View {
                             }
                         }
 
-                        if !model.availableMomentMonths.isEmpty {
+                        if !availableMomentMonths.isEmpty {
                             Divider()
                             Menu("按月份回顾") {
-                                ForEach(model.availableMomentMonths) { month in
+                                ForEach(availableMomentMonths) { month in
                                     let filter = NativeMomentDateFilter.month(year: month.year, month: month.month)
                                     Button {
                                         model.selectMomentDateFilter(filter)
@@ -117,7 +122,7 @@ struct MomentFeedView: View {
                                 }
                             }
                             Menu("按年份回顾") {
-                                ForEach(model.availableMomentYears, id: \.self) { year in
+                                ForEach(availableMomentYears, id: \.self) { year in
                                     let filter = NativeMomentDateFilter.year(year)
                                     Button {
                                         model.selectMomentDateFilter(filter)
@@ -156,7 +161,7 @@ struct MomentFeedView: View {
                     }
                 }
 
-                if !model.availableMomentTagFilters.isEmpty {
+                if !availableMomentTagFilters.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 8) {
                             Label("标签筛选", systemImage: "tag")
@@ -177,7 +182,7 @@ struct MomentFeedView: View {
                             alignment: .leading,
                             spacing: 8
                         ) {
-                            ForEach(model.availableMomentTagFilters) { tagFilter in
+                            ForEach(availableMomentTagFilters) { tagFilter in
                                 let isSelected = model.isMomentTagSelected(tagFilter.tag)
                                 Button {
                                     model.toggleMomentTagFilter(tagFilter.tag)
@@ -240,7 +245,7 @@ struct MomentFeedView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 24) {
-                        ForEach(Array(model.momentTimeline.enumerated()), id: \.element.id) { index, group in
+                        ForEach(Array(momentTimeline.enumerated()), id: \.element.id) { index, group in
                             HStack(alignment: .top, spacing: 14) {
                                 VStack(spacing: 0) {
                                     ZStack {
@@ -252,7 +257,7 @@ struct MomentFeedView: View {
                                             .frame(width: 10, height: 10)
                                     }
                                     .padding(.top, 5)
-                                    if index < model.momentTimeline.count - 1 {
+                                    if index < momentTimeline.count - 1 {
                                         Rectangle()
                                             .fill(
                                                 LinearGradient(
@@ -326,9 +331,7 @@ struct MomentFeedView: View {
                                                 momentCards(for: group.moments)
                                             }
                                         } else {
-                                            MomentMasonryLayout(columns: momentFeedLayout.columnCount, spacing: 16) {
-                                                momentCards(for: group.moments)
-                                            }
+                                            momentWaterfallColumns(for: group.moments)
                                         }
                                     }
                                 }
@@ -390,6 +393,29 @@ struct MomentFeedView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private func momentWaterfallColumns(for moments: [NativeMoment]) -> some View {
+        let columnCount = momentFeedLayout.columnCount
+        HStack(alignment: .top, spacing: 16) {
+            ForEach(0..<columnCount, id: \.self) { columnIndex in
+                LazyVStack(spacing: 16) {
+                    momentCards(for: momentColumn(
+                        columnIndex,
+                        count: columnCount,
+                        moments: moments
+                    ))
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+        }
+    }
+
+    private func momentColumn(_ index: Int, count: Int, moments: [NativeMoment]) -> [NativeMoment] {
+        moments.enumerated().compactMap { offset, moment in
+            offset % count == index ? moment : nil
+        }
+    }
 }
 
 private enum MomentFeedLayout: String, CaseIterable, Identifiable {
@@ -425,89 +451,6 @@ private enum MomentFeedLayout: String, CaseIterable, Identifiable {
         case .threeColumnWaterfall: return "rectangle.split.3x1"
         case .fourColumnWaterfall: return "rectangle.split.2x2"
         }
-    }
-}
-
-private struct MomentMasonryLayout: Layout {
-    let columns: Int
-    let spacing: CGFloat
-
-    struct Cache {
-        var frames: [CGRect] = []
-        var size = CGSize.zero
-    }
-
-    func makeCache(subviews: Subviews) -> Cache {
-        Cache()
-    }
-
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout Cache
-    ) -> CGSize {
-        cache = arrangement(width: proposedWidth(from: proposal, subviews: subviews), subviews: subviews)
-        return cache.size
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout Cache
-    ) {
-        cache = arrangement(width: bounds.width, subviews: subviews)
-
-        for (index, subview) in subviews.enumerated() {
-            let frame = cache.frames[index]
-            subview.place(
-                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
-                anchor: .topLeading,
-                proposal: ProposedViewSize(width: frame.width, height: nil)
-            )
-        }
-    }
-
-    private func proposedWidth(from proposal: ProposedViewSize, subviews: Subviews) -> CGFloat {
-        if let width = proposal.width {
-            return width
-        }
-
-        let minimumColumnWidth: CGFloat = 280
-        return minimumColumnWidth * CGFloat(max(columns, 1)) + spacing * CGFloat(max(columns - 1, 0))
-    }
-
-    private func arrangement(width: CGFloat, subviews: Subviews) -> Cache {
-        let columnCount = max(columns, 1)
-        let resolvedWidth = max(width, 0)
-        let columnWidth = max(
-            0,
-            (resolvedWidth - spacing * CGFloat(columnCount - 1)) / CGFloat(columnCount)
-        )
-        var columnHeights = Array(repeating: CGFloat.zero, count: columnCount)
-        var frames: [CGRect] = []
-
-        for subview in subviews {
-            let column = columnHeights.indices.min { columnHeights[$0] < columnHeights[$1] } ?? 0
-            let y = columnHeights[column] == 0 ? 0 : columnHeights[column] + spacing
-            let size = subview.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil))
-            let height = max(size.height, 0)
-
-            frames.append(
-                CGRect(
-                    x: CGFloat(column) * (columnWidth + spacing),
-                    y: y,
-                    width: columnWidth,
-                    height: height
-                )
-            )
-            columnHeights[column] = y + height
-        }
-
-        return Cache(
-            frames: frames,
-            size: CGSize(width: resolvedWidth, height: columnHeights.max() ?? 0)
-        )
     }
 }
 
@@ -1088,7 +1031,7 @@ private actor MomentImageLoader {
     static let shared = MomentImageLoader()
 
     private let cache = NSCache<NSString, NSImage>()
-    private let maximumConcurrentDecodes = 4
+    private let maximumConcurrentDecodes = 2
     private var activeDecodeCount = 0
     private var decodeWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -1111,9 +1054,15 @@ private actor MomentImageLoader {
             return MomentImageDecodeResult(image: cached)
         }
 
-        let decoded = await Task.detached(priority: .userInitiated) {
-            MomentImageDecodeResult(image: MomentImageDecoder.load(from: url, mode: mode))
-        }.value
+        let decodeTask = Task.detached(priority: .utility) {
+            guard !Task.isCancelled else { return MomentImageDecodeResult(image: nil) }
+            return MomentImageDecodeResult(image: MomentImageDecoder.load(from: url, mode: mode))
+        }
+        let decoded = await withTaskCancellationHandler {
+            await decodeTask.value
+        } onCancel: {
+            decodeTask.cancel()
+        }
 
         if mode != .fullSize, let image = decoded.image {
             cache.setObject(image, forKey: key, cost: imageCost(image))
@@ -1154,11 +1103,19 @@ private enum MomentImageDecoder {
             return NSImage(contentsOf: url)
         }
 
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+        guard case let .thumbnail(maxPixelSize) = mode else { return nil }
+        let cachedURL = thumbnailCacheURL(for: url, maxPixelSize: maxPixelSize)
+        if let cached = decodedImage(from: cachedURL) {
+            return cached
+        }
+        if FileManager.default.fileExists(atPath: cachedURL.path) {
+            try? FileManager.default.removeItem(at: cachedURL)
+        }
+        guard !Task.isCancelled,
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             return nil
         }
 
-        guard case let .thumbnail(maxPixelSize) = mode else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -1166,11 +1123,81 @@ private enum MomentImageDecoder {
         ]
         let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
 
-        guard let cgImage else { return nil }
+        guard let cgImage, !Task.isCancelled else { return nil }
+        persistThumbnail(cgImage, at: cachedURL)
         return NSImage(
             cgImage: cgImage,
             size: NSSize(width: cgImage.width, height: cgImage.height)
         )
+    }
+
+    private static func decodedImage(from url: URL) -> NSImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceShouldCache: true,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard FileManager.default.fileExists(atPath: url.path),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        )
+    }
+
+    private static func thumbnailCacheURL(for sourceURL: URL, maxPixelSize: Int) -> URL {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: sourceURL.path)
+        let fileSize = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+        let modifiedAt = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let signature = "\(sourceURL.standardizedFileURL.path)|\(fileSize)|\(modifiedAt)|\(maxPixelSize)"
+        let filename = "\(stableHash(signature))-\(maxPixelSize).png"
+        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("com.leon-book.macos", isDirectory: true)
+            .appendingPathComponent("moment-thumbnails", isDirectory: true)
+            .appendingPathComponent(filename)
+    }
+
+    private static func stableHash(_ value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+
+    private static func persistThumbnail(_ image: CGImage, at url: URL) {
+        guard !Task.isCancelled else { return }
+        let fileManager = FileManager.default
+        let directory = url.deletingLastPathComponent()
+        let temporaryURL = directory.appendingPathComponent(".\(UUID().uuidString).tmp.png")
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            guard !fileManager.fileExists(atPath: url.path) else { return }
+
+            guard let destination = CGImageDestinationCreateWithURL(
+                temporaryURL as CFURL,
+                "public.png" as CFString,
+                1,
+                nil
+            ) else { return }
+            CGImageDestinationAddImage(destination, image, nil)
+            guard CGImageDestinationFinalize(destination) else {
+                try? fileManager.removeItem(at: temporaryURL)
+                return
+            }
+
+            if fileManager.fileExists(atPath: url.path) {
+                try? fileManager.removeItem(at: temporaryURL)
+            } else {
+                try fileManager.moveItem(at: temporaryURL, to: url)
+            }
+        } catch {
+            try? fileManager.removeItem(at: temporaryURL)
+            // Thumbnail caching is an optimization; the decoded in-memory image remains usable.
+        }
     }
 }
 

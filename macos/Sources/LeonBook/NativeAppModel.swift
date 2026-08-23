@@ -36,6 +36,8 @@ public final class NativeAppModel: ObservableObject {
     @Published private(set) var filteredMomentCount = 0
     @Published private(set) var trashItems: [NativeTrashItem] = []
     @Published private(set) var selectedArticle: NativeArticle?
+    @Published private(set) var selectedArticleRelations = NativeArticleRelations.empty
+    @Published private(set) var articleGraph = NativeArticleGraph.empty
     @Published var selectedSlug: String?
     @Published var editor = NativeEditorDraft()
     @Published var momentDraft = NativeMomentDraft()
@@ -448,6 +450,7 @@ public final class NativeAppModel: ObservableObject {
 
     public func reload() async throws {
         articles = try await store.listArticles()
+        articleGraph = try await store.articleGraph()
         try await reloadMomentFeed()
         trashItems = try await store.listTrash()
         try await refreshActivity()
@@ -474,6 +477,8 @@ public final class NativeAppModel: ObservableObject {
         trashItems = []
         activity = []
         selectedArticle = nil
+        selectedArticleRelations = .empty
+        articleGraph = .empty
         selectedSlug = nil
         editor = NativeEditorDraft()
         pendingEditorMediaCleanup = []
@@ -565,8 +570,11 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func select(_ summary: NativeArticleSummary) async throws {
+        let selected = try await store.getArticle(slug: summary.slug)
+        let relations = try await store.articleRelations(for: summary.slug)
         selectedSlug = summary.slug
-        selectedArticle = try await store.getArticle(slug: summary.slug)
+        selectedArticle = selected
+        selectedArticleRelations = relations
         section = .reader
         errorMessage = nil
     }
@@ -596,6 +604,7 @@ public final class NativeAppModel: ObservableObject {
         discardUnreferencedMedia(editorDraftMedia() + pendingEditorMediaCleanup)
         selectedSlug = nil
         selectedArticle = nil
+        selectedArticleRelations = .empty
         editor = NativeEditorDraft()
         pendingEditorMediaCleanup = []
         editorOriginalArticle = nil
@@ -671,6 +680,7 @@ public final class NativeAppModel: ObservableObject {
             editor.updatedAt = saved.updatedAt
             selectedSlug = saved.slug
             selectedArticle = saved
+            selectedArticleRelations = .empty
             editorOriginalArticle = saved
             discardUnreferencedMedia(cleanupCandidates)
             try await reload()
@@ -702,6 +712,7 @@ public final class NativeAppModel: ObservableObject {
         do {
             try await store.deleteArticle(slug: article.slug, expectedUpdatedAt: article.updatedAt)
             selectedArticle = nil
+            selectedArticleRelations = .empty
             selectedSlug = nil
             section = .articles
             try await reload()

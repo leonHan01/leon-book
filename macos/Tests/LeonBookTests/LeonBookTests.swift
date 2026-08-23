@@ -52,6 +52,29 @@ final class NativeModelsTests {
         XCTAssertNil(NativeTimestamp.date(from: "not-a-timestamp"))
     }
 
+    func testMomentFeedTimestampBatchStaysResponsive() {
+        let timestamps = (0..<48).map { second in
+            String(format: "2026-08-23T10:00:%02d.123Z", second)
+        }
+        let start = ProcessInfo.processInfo.systemUptime
+
+        for _ in 0..<12 {
+            for timestamp in timestamps {
+                guard let date = NativeTimestamp.date(from: timestamp) else {
+                    XCTFail("expected a valid timestamp")
+                    return
+                }
+                _ = NativeTimestamp.string(from: date)
+            }
+        }
+
+        let elapsed = ProcessInfo.processInfo.systemUptime - start
+        XCTAssertTrue(
+            elapsed < 0.12,
+            "moment-feed timestamp derivation took \(elapsed) seconds"
+        )
+    }
+
     func testLegacyMediaJSONUsesSafeDefaults() throws {
         let media = try JSONDecoder().decode(
             NativeMedia.self,
@@ -322,6 +345,52 @@ final class LocalBlogStoreTests {
         XCTAssertEqual(try await store.getArticle(slug: saved.slug).tags, ["Swift", "随笔", "macOS"])
     }
 
+    func testArticleRelationsResolveAndDeduplicateWikiLinks() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+
+        let linked = try await store.saveArticle(article(
+            slug: "idea",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "想法正文",
+            title: "想法"
+        ))
+        let current = try await store.saveArticle(article(
+            slug: "foundation",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "参见 [[想法]]、[[idea]]、[[想法]] 和 [[不存在]]。",
+            title: "基础"
+        ))
+        let titleBacklink = try await store.saveArticle(article(
+            slug: "by-title",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "来自 [[基础]] 的引用",
+            title: "按标题引用"
+        ))
+        let slugBacklink = try await store.saveArticle(article(
+            slug: "by-slug",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "来自 [[foundation]] 的引用",
+            title: "按地址引用"
+        ))
+
+        let relations = try await store.articleRelations(for: current.slug)
+        XCTAssertEqual(relations.outgoing.map(\.slug), [linked.slug])
+        XCTAssertEqual(Set(relations.incoming.map(\.slug)), Set([titleBacklink.slug, slugBacklink.slug]))
+
+        let graph = try await store.articleGraph()
+        XCTAssertEqual(Set(graph.nodes.map(\.slug)), Set([linked.slug, current.slug, titleBacklink.slug, slugBacklink.slug]))
+        XCTAssertEqual(
+            Set(graph.edges.map(\.id)),
+            Set(["foundation->idea", "by-title->foundation", "by-slug->foundation"])
+        )
+    }
+
     func testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -407,6 +476,7 @@ struct LeonBookUnitTests {
     static func main() async {
         let tests: [(String, () async throws -> Void)] = [
             ("NativeModelsTests.testWritingMetricsAndTimestampRoundTrip", { NativeModelsTests().testWritingMetricsAndTimestampRoundTrip() }),
+            ("NativeModelsTests.testMomentFeedTimestampBatchStaysResponsive", { NativeModelsTests().testMomentFeedTimestampBatchStaysResponsive() }),
             ("NativeModelsTests.testLegacyMediaJSONUsesSafeDefaults", { try NativeModelsTests().testLegacyMediaJSONUsesSafeDefaults() }),
             ("NativeModelsTests.testMomentTagsAreExtractedDeduplicatedAndRemovedFromDisplayContent", { NativeModelsTests().testMomentTagsAreExtractedDeduplicatedAndRemovedFromDisplayContent() }),
             ("NativeModelsTests.testArticleHashtagsNormalizeAndPreserveLegacyCommaTags", { NativeModelsTests().testArticleHashtagsNormalizeAndPreserveLegacyCommaTags() }),
@@ -418,6 +488,7 @@ struct LeonBookUnitTests {
             ("LocalBlogStoreTests.testArticleLifecycleSupportsDraftPublishingAndConflictProtection", { try await LocalBlogStoreTests().testArticleLifecycleSupportsDraftPublishingAndConflictProtection() }),
             ("LocalBlogStoreTests.testArticleDeleteHidesRecord", { try await LocalBlogStoreTests().testArticleDeleteHidesRecord() }),
             ("LocalBlogStoreTests.testArticleHashtagsPersistAsNormalizedTags", { try await LocalBlogStoreTests().testArticleHashtagsPersistAsNormalizedTags() }),
+            ("LocalBlogStoreTests.testArticleRelationsResolveAndDeduplicateWikiLinks", { try await LocalBlogStoreTests().testArticleRelationsResolveAndDeduplicateWikiLinks() }),
             ("LocalBlogStoreTests.testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments", { try await LocalBlogStoreTests().testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments() }),
             ("UserWorkspaceStoreTests.testWorkspacePreparationCreatesAndPersistsDefaultUser", { try await UserWorkspaceStoreTests().testWorkspacePreparationCreatesAndPersistsDefaultUser() }),
             ("LocalBackupManagerTests.testSnapshotCopiesDataWritesManifestAndSkipsLockFile", { try LocalBackupManagerTests().testSnapshotCopiesDataWritesManifestAndSkipsLockFile() }),
@@ -449,7 +520,8 @@ private func article(
     slug: String,
     status: NativeArticleStatus,
     expectedUpdatedAt: String?,
-    body: String
+    body: String,
+    title: String = "Test article"
 ) -> NativeSaveArticle {
     NativeSaveArticle(
         banner: nil,
@@ -460,7 +532,7 @@ private func article(
         slug: slug,
         status: status,
         tags: ["swift", "swift", "notes"],
-        title: "Test article",
+        title: title,
         expectedUpdatedAt: expectedUpdatedAt
     )
 }

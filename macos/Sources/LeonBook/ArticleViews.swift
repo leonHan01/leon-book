@@ -72,6 +72,14 @@ struct ArticleReaderView: View {
                             onOpenArticle: model.openArticleLink
                         )
 
+                        if !model.selectedArticleRelations.isEmpty {
+                            Divider()
+                            ArticleRelationsSection(
+                                relations: model.selectedArticleRelations,
+                                onOpenArticle: model.openArticleLink
+                            )
+                        }
+
                         let attachmentMedia = article.media.filter {
                             !MarkdownArticleBody.imageURLs(in: article.body).contains($0.url)
                         }
@@ -92,6 +100,67 @@ struct ArticleReaderView: View {
                 }
             } else {
                 EmptyState(title: "选择一篇文章", message: "从左侧打开文章，或创建一篇新笔记。", actionTitle: "新文章") { model.newArticle() }
+            }
+        }
+    }
+}
+
+private struct ArticleRelationsSection: View {
+    let relations: NativeArticleRelations
+    let onOpenArticle: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("文章双链", systemImage: "arrow.triangle.branch")
+                .font(.headline)
+
+            if !relations.outgoing.isEmpty {
+                relationList(title: "引用的文章", articles: relations.outgoing)
+            }
+
+            if !relations.incoming.isEmpty {
+                relationList(title: "被引用于", articles: relations.incoming)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("文章双链")
+    }
+
+    @ViewBuilder
+    private func relationList(title: String, articles: [NativeArticleSummary]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(title)（\(articles.count)）")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ForEach(articles) { article in
+                Button {
+                    onOpenArticle(article.slug)
+                } label: {
+                    HStack(spacing: 10) {
+                        if article.status == .published {
+                            Image(systemName: "doc.text")
+                                .foregroundStyle(.tint)
+                        } else {
+                            Image(systemName: "doc.text.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(article.title)
+                                .font(.body.weight(.medium))
+                            Text("\(article.status.label) · 更新于 \(article.updatedAt.nativeDateLabel)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 4)
             }
         }
     }
@@ -1022,7 +1091,10 @@ struct ArticleEditorView: View {
                         // prompt by 6 points so its visible first glyph aligns
                         // with the caret.
                         .padding(.leading, 12)
-                        .padding(.top, 18)
+                        // The caret spans the full line height while the text
+                        // glyph itself is shorter. Center the prompt vertically
+                        // within that line rather than aligning its top edge.
+                        .padding(.top, 12)
                         .allowsHitTesting(false)
                 }
             }

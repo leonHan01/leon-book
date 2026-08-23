@@ -84,6 +84,7 @@ public struct ContentView: View {
             Section("leon-book") {
                 sidebarButton(.dashboard, title: "概览", icon: "rectangle.grid.2x2")
                 sidebarButton(.articles, title: "全部文章", icon: "doc.text")
+                sidebarButton(.graph, title: "关系图", icon: "point.3.connected.trianglepath.dotted")
                 sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
                 sidebarButton(.editor, title: "写作", icon: "square.and.pencil")
                 sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
@@ -127,6 +128,7 @@ public struct ContentView: View {
         switch model.section {
         case .dashboard: DashboardView(model: model)
         case .articles: ArticleListView(model: model)
+        case .graph: ArticleGraphView(model: model)
         case .moments: MomentFeedView(model: model)
         case .reader: ArticleReaderView(model: model)
         case .editor: ArticleEditorView(model: model)
@@ -377,6 +379,9 @@ struct ArticleListView: View {
     @ObservedObject var model: NativeAppModel
 
     var body: some View {
+        let filteredArticles = model.filteredArticles
+        let availableArticleTagFilters = model.availableArticleTagFilters
+
         VStack(spacing: 0) {
             HStack {
                 Text("全部文章").font(.title2.weight(.semibold))
@@ -391,17 +396,17 @@ struct ArticleListView: View {
             }
             .padding(22)
 
-            if !model.availableArticleTagFilters.isEmpty {
-                ArticleTagFilterBar(model: model)
+            if !availableArticleTagFilters.isEmpty {
+                ArticleTagFilterBar(model: model, tagFilters: availableArticleTagFilters)
                     .padding(.horizontal, 22)
                     .padding(.bottom, 14)
             }
             Divider()
 
-            if model.filteredArticles.isEmpty {
+            if filteredArticles.isEmpty {
                 EmptyState(title: "没有匹配的文章", message: "试试其他搜索词，或者开始写一篇新文章。", actionTitle: "新文章") { model.newArticle() }
             } else {
-                List(model.filteredArticles) { article in
+                List(filteredArticles) { article in
                     ArticleRow(article: article) { model.selectSlug(article.slug) }
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 5, leading: 18, bottom: 5, trailing: 18))
@@ -414,6 +419,7 @@ struct ArticleListView: View {
 
 private struct ArticleTagFilterBar: View {
     @ObservedObject var model: NativeAppModel
+    let tagFilters: [NativeArticleTagFilter]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -423,7 +429,7 @@ private struct ArticleTagFilterBar: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(model.availableArticleTagFilters) { tagFilter in
+                    ForEach(tagFilters) { tagFilter in
                         let isSelected = model.isArticleTagSelected(tagFilter.tag)
                         Button {
                             model.toggleArticleTagFilter(tagFilter.tag)
