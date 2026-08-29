@@ -179,7 +179,14 @@ private struct NativeSidebar: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .disabled(model.isLoading || model.isSwitchingWorkspace || model.isSaving || model.isPublishingMoment)
+                .disabled(
+                    model.isLoading
+                        || model.isSwitchingWorkspace
+                        || model.isSaving
+                        || model.isPublishingMoment
+                        || model.isPublishingQuestion
+                        || model.isPublishingQuestionAnswer
+                )
             }
 
             Section("leon-book") {
@@ -187,6 +194,7 @@ private struct NativeSidebar: View {
                 articleLibraryButton
                 sidebarButton(.graph, title: "关系图", icon: "point.3.connected.trianglepath.dotted")
                 sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
+                sidebarButton(.zhihu, title: "知乎", icon: "questionmark.bubble")
                 sidebarButton(.editor, title: "写作", icon: "square.and.pencil")
                 sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
             }
@@ -274,7 +282,7 @@ private struct NativeSidebar: View {
                     Image(systemName: model.storageReady ? "checkmark.circle.fill" : "circle.dotted")
                         .foregroundStyle(model.storageReady ? .green : .secondary)
                 }
-                Text("\(model.publishedArticles.count) 篇已发布 · \(model.draftArticles.count) 篇草稿 · \(model.totalMomentCount) 条微博")
+                Text("\(model.publishedArticles.count) 篇已发布 · \(model.draftArticles.count) 篇草稿 · \(model.totalMomentCount) 条微博 · \(model.totalQuestionCount) 个问题")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -379,6 +387,7 @@ private struct NativeNavigationDetail: View {
                 navigation: model.navigation,
                 pageState: pageStateCache.moments
             )
+        case .zhihu: ZhihuView(model: model)
         case .reader: ArticleReaderView(
             model: model,
             workspaceLayout: workspaceLayout,

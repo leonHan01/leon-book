@@ -742,6 +742,49 @@ final class LocalBlogStoreTests {
         XCTAssertTrue(try await store.listMoments().isEmpty)
     }
 
+    func testQuestionAnswersAndTagSearchPersistInSQLite() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+
+        let first = try await store.saveQuestion(
+            title: "如何设计 SwiftUI 本地应用？",
+            body: "希望数据保存在 SQLite 中。",
+            tags: [" SwiftUI ", "macOS", "swiftui"]
+        )
+        let second = try await store.saveQuestion(
+            title: "SQLite 索引如何选择？",
+            body: "需要支持标签检索。",
+            tags: ["SQLite", "性能"]
+        )
+
+        XCTAssertEqual(first.tags, ["SwiftUI", "macOS"])
+        XCTAssertEqual(try await store.countQuestions(), 2)
+        XCTAssertEqual(
+            try await store.listQuestions(tag: "MACOS").map(\.id),
+            [first.id]
+        )
+        XCTAssertEqual(
+            try await store.listQuestions(searchText: "sqlite").map(\.id),
+            [second.id, first.id]
+        )
+        XCTAssertEqual(
+            try await store.listQuestions(searchText: "性能").map(\.id),
+            [second.id]
+        )
+
+        let answer = try await store.saveQuestionAnswer(
+            questionID: first.id,
+            body: "先划清状态和持久化边界，再设计界面。"
+        )
+        XCTAssertEqual(try await store.listQuestionAnswers(questionID: first.id), [answer])
+        XCTAssertEqual(try await store.getQuestion(id: first.id).answerCount, 1)
+        XCTAssertEqual(try await store.listQuestions().first?.id, first.id)
+        XCTAssertTrue(try await store.listQuestionTagFacets().contains {
+            $0.tag == "SwiftUI" && $0.count == 1
+        })
+    }
+
     func testArticleLifecycleSupportsDraftPublishingAndConflictProtection() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -818,6 +861,169 @@ final class LocalBlogStoreTests {
 
         XCTAssertEqual(saved.tags, ["Swift", "随笔", "macOS"])
         XCTAssertEqual(try await store.getArticle(slug: saved.slug).tags, ["Swift", "随笔", "macOS"])
+    }
+
+    func testSavingImportedMarkdownPreservesUnchangedFrontmatterSource() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let articlesURL = root.appendingPathComponent("articles", isDirectory: true)
+        try FileManager.default.createDirectory(at: articlesURL, withIntermediateDirectories: true)
+        let sourceURL = articlesURL.appendingPathComponent("lossless-note.md")
+        let source = """
+        ---
+        # identity comment
+        title: 'Original title' # keep title comment
+        aliases:
+          - "First Alias" # keep list comment
+          - Second Alias
+        cssclasses: [wide-page] # keep property comment
+        rating: 5
+        slug: lossless-note
+        status: draft
+        ---
+        Original body
+        """
+        try Data(source.utf8).write(to: sourceURL, options: .atomic)
+
+        let store = LocalBlogStore(rootURL: root)
+        _ = try await store.refreshMarkdownSources()
+        let imported = try await store.getArticle(slug: "lossless-note")
+        _ = try await store.saveArticle(NativeSaveArticle(
+            banner: imported.banner,
+            body: "Changed body",
+            category: imported.category,
+            excerpt: imported.excerpt,
+            media: imported.media,
+            slug: imported.slug,
+            status: imported.status,
+            tags: imported.tags,
+            title: "Changed title",
+            expectedUpdatedAt: imported.updatedAt,
+            properties: imported.properties
+        ))
+
+        let savedSource = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertTrue(savedSource.contains("# identity comment"))
+        XCTAssertTrue(savedSource.contains("title: 'Changed title' # keep title comment"))
+        XCTAssertTrue(savedSource.contains("""
+        aliases:
+          - "First Alias" # keep list comment
+          - Second Alias
+        cssclasses: [wide-page] # keep property comment
+        rating: 5
+        slug: lossless-note
+        status: draft
+        """))
+        XCTAssertTrue(savedSource.hasSuffix("---\nChanged body"))
+    }
+
+    func testSavingObsidianFixturePreservesBlockListStyleAndLineEndings() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let articlesURL = root.appendingPathComponent("articles", isDirectory: true)
+        try FileManager.default.createDirectory(at: articlesURL, withIntermediateDirectories: true)
+        guard let fixturesURL = Bundle.module.url(forResource: "Fixtures", withExtension: nil) else {
+            XCTFail("Obsidian compatibility fixtures should be bundled")
+            return
+        }
+        let fixtureURL = fixturesURL.appendingPathComponent("ObsidianVault/Round Trip Styles.md")
+        let fixture = try String(contentsOf: fixtureURL, encoding: .utf8)
+        let windowsFixture = "\u{feff}" + fixture.replacingOccurrences(of: "\n", with: "\r\n")
+        let sourceURL = articlesURL.appendingPathComponent("round-trip-styles.md")
+        try Data(windowsFixture.utf8).write(to: sourceURL, options: .atomic)
+
+        let store = LocalBlogStore(rootURL: root)
+        _ = try await store.refreshMarkdownSources()
+        let imported = try await store.getArticle(slug: "round-trip-styles")
+        _ = try await store.saveArticle(NativeSaveArticle(
+            banner: imported.banner,
+            body: "Changed fixture body",
+            category: imported.category,
+            excerpt: imported.excerpt,
+            media: imported.media,
+            slug: imported.slug,
+            status: imported.status,
+            tags: ["swift", "pkm"],
+            title: imported.title,
+            expectedUpdatedAt: imported.updatedAt,
+            properties: imported.properties
+        ))
+
+        let savedData = try Data(contentsOf: sourceURL)
+        guard let savedSource = String(data: savedData, encoding: .utf8) else {
+            XCTFail("saved Obsidian fixture should remain UTF-8")
+            return
+        }
+        XCTAssertEqual(
+            Array(savedData.prefix(3)),
+            [0xEF, 0xBB, 0xBF],
+            "UTF-8 BOM should survive"
+        )
+        XCTAssertFalse(
+            savedSource.replacingOccurrences(of: "\r\n", with: "").contains("\n"),
+            "CRLF line endings should survive"
+        )
+        let normalized = savedSource
+            .replacingOccurrences(of: "\u{feff}", with: "")
+            .replacingOccurrences(of: "\r\n", with: "\n")
+        XCTAssertTrue(normalized.contains("""
+        tags:
+          - swift
+          - pkm # subject
+        aliases:
+          - "Knowledge Base"
+        """), "changed tags should retain Obsidian block-list source style")
+        XCTAssertTrue(normalized.contains("""
+        cssclasses: [wide-page] # layout
+        summary: >-
+          First summary line.
+          Second summary line.
+        slug: round-trip-styles
+        status: draft
+        """), "unchanged folded properties and comments should survive")
+        XCTAssertTrue(normalized.contains("\n...\n"), "the YAML document-end marker should survive")
+        XCTAssertTrue(normalized.hasSuffix("Changed fixture body\n"), "trailing newline should survive")
+    }
+
+    func testEditingObsidianFoldedPropertyPreservesBlockScalarStyle() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let articlesURL = root.appendingPathComponent("articles", isDirectory: true)
+        try FileManager.default.createDirectory(at: articlesURL, withIntermediateDirectories: true)
+        guard let fixturesURL = Bundle.module.url(forResource: "Fixtures", withExtension: nil) else {
+            XCTFail("Obsidian compatibility fixtures should be bundled")
+            return
+        }
+        let fixtureURL = fixturesURL.appendingPathComponent("ObsidianVault/Round Trip Styles.md")
+        let sourceURL = articlesURL.appendingPathComponent("round-trip-styles.md")
+        try Data(contentsOf: fixtureURL).write(to: sourceURL, options: .atomic)
+
+        let store = LocalBlogStore(rootURL: root)
+        _ = try await store.refreshMarkdownSources()
+        let imported = try await store.getArticle(slug: "round-trip-styles")
+        var properties = imported.properties
+        properties["summary"] = .text("Changed first line.\nChanged second line.")
+        _ = try await store.saveArticle(NativeSaveArticle(
+            banner: imported.banner,
+            body: imported.body,
+            category: imported.category,
+            excerpt: imported.excerpt,
+            media: imported.media,
+            slug: imported.slug,
+            status: imported.status,
+            tags: imported.tags,
+            title: imported.title,
+            expectedUpdatedAt: imported.updatedAt,
+            properties: properties
+        ))
+
+        let savedSource = try String(contentsOf: sourceURL, encoding: .utf8)
+        XCTAssertTrue(savedSource.contains("""
+        summary: >-
+          Changed first line.
+          Changed second line.
+        slug: round-trip-styles
+        """), "edited folded properties should retain their YAML block-scalar style")
     }
 
     func testIncrementalMarkdownRefreshReadsChangedFilesAndHandlesDeletion() async throws {
@@ -1876,9 +2082,13 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testArticleGraphProjectionFiltersOrphansAndClipsByDegree", { NativeModelsTests().testArticleGraphProjectionFiltersOrphansAndClipsByDegree() }),
             ("LocalBlogStoreTests.testMomentLifecycleNormalizesInputFiltersAndRecordsActivity", { try await LocalBlogStoreTests().testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() }),
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),
+            ("LocalBlogStoreTests.testQuestionAnswersAndTagSearchPersistInSQLite", { try await LocalBlogStoreTests().testQuestionAnswersAndTagSearchPersistInSQLite() }),
             ("LocalBlogStoreTests.testArticleLifecycleSupportsDraftPublishingAndConflictProtection", { try await LocalBlogStoreTests().testArticleLifecycleSupportsDraftPublishingAndConflictProtection() }),
             ("LocalBlogStoreTests.testArticleDeleteHidesRecord", { try await LocalBlogStoreTests().testArticleDeleteHidesRecord() }),
             ("LocalBlogStoreTests.testArticleHashtagsPersistAsNormalizedTags", { try await LocalBlogStoreTests().testArticleHashtagsPersistAsNormalizedTags() }),
+            ("LocalBlogStoreTests.testSavingImportedMarkdownPreservesUnchangedFrontmatterSource", { try await LocalBlogStoreTests().testSavingImportedMarkdownPreservesUnchangedFrontmatterSource() }),
+            ("LocalBlogStoreTests.testSavingObsidianFixturePreservesBlockListStyleAndLineEndings", { try await LocalBlogStoreTests().testSavingObsidianFixturePreservesBlockListStyleAndLineEndings() }),
+            ("LocalBlogStoreTests.testEditingObsidianFoldedPropertyPreservesBlockScalarStyle", { try await LocalBlogStoreTests().testEditingObsidianFoldedPropertyPreservesBlockScalarStyle() }),
             ("LocalBlogStoreTests.testIncrementalMarkdownRefreshReadsChangedFilesAndHandlesDeletion", { try await LocalBlogStoreTests().testIncrementalMarkdownRefreshReadsChangedFilesAndHandlesDeletion() }),
             ("LocalBlogStoreTests.testIncrementalMarkdownRefreshPreservesIdentityAcrossRename", { try await LocalBlogStoreTests().testIncrementalMarkdownRefreshPreservesIdentityAcrossRename() }),
             ("LocalBlogStoreTests.testArticleAutosavesRollWithinFiveMinutesAndCreateHistoryBuckets", { try await LocalBlogStoreTests().testArticleAutosavesRollWithinFiveMinutesAndCreateHistoryBuckets() }),

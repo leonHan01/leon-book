@@ -1420,6 +1420,189 @@ public actor LocalBlogStore {
         try writeTrashBackup()
     }
 
+    public func listQuestions(
+        searchText: String = "",
+        tag: String? = nil
+    ) throws -> [NativeQuestion] {
+        try prepare()
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawSelectedTag = tag?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let selectedTag = rawSelectedTag.isEmpty ? nil : NativeQuestionTag.identifier(rawSelectedTag)
+        var predicates: [String] = []
+        var values: [SQLiteValue] = []
+
+        if !query.isEmpty {
+            predicates.append("""
+            (
+                instr(lower(q.title), lower(?)) > 0
+                OR instr(lower(q.body), lower(?)) > 0
+                OR EXISTS (
+                    SELECT 1 FROM question_tags AS searched_tag
+                    WHERE searched_tag.question_id = q.id
+                      AND instr(searched_tag.normalized_tag, ?) > 0
+                )
+            )
+            """)
+            values.append(.text(query))
+            values.append(.text(query))
+            values.append(.text(NativeQuestionTag.identifier(query)))
+        }
+        if let selectedTag {
+            predicates.append("""
+            EXISTS (
+                SELECT 1 FROM question_tags AS selected_tag
+                WHERE selected_tag.question_id = q.id
+                  AND selected_tag.normalized_tag = ?
+            )
+            """)
+            values.append(.text(selectedTag))
+        }
+
+        let whereClause = predicates.isEmpty ? "" : "WHERE " + predicates.joined(separator: " AND ")
+        var questions: [NativeQuestion] = []
+        try db().query(
+            """
+            \(questionSelect)
+            \(whereClause)
+            ORDER BY q.updated_at DESC, q.id DESC
+            """,
+            values: values
+        ) { row in
+            questions.append(try decodeQuestion(row))
+        }
+        return questions
+    }
+
+    public func countQuestions() throws -> Int {
+        try prepare()
+        return try db().integer("SELECT COUNT(*) FROM questions") ?? 0
+    }
+
+    public func listQuestionTagFacets() throws -> [NativeQuestionTagFacet] {
+        try prepare()
+        var facets: [NativeQuestionTagFacet] = []
+        try db().query("""
+        SELECT MIN(tag), COUNT(*)
+        FROM question_tags
+        GROUP BY normalized_tag
+        ORDER BY COUNT(*) DESC, normalized_tag ASC
+        """) { row in
+            guard let tag = row.text(at: 0) else {
+                throw NativeStoreError.fileSystem("SQLite：问题标签记录不完整")
+            }
+            facets.append(NativeQuestionTagFacet(tag: tag, count: row.integer(at: 1) ?? 0))
+        }
+        return facets
+    }
+
+    public func getQuestion(id: String) throws -> NativeQuestion {
+        try prepare()
+        let safeID = try requireSafeSegment(id, label: "问题 ID")
+        var result: NativeQuestion?
+        try db().query(
+            questionSelect + " WHERE q.id = ?",
+            values: [.text(safeID)]
+        ) { row in
+            result = try decodeQuestion(row)
+        }
+        guard let result else { throw NativeStoreError.notFound }
+        return result
+    }
+
+    public func saveQuestion(
+        title: String,
+        body: String,
+        tags: [String]
+    ) throws -> NativeQuestion {
+        try prepare()
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedTags = NativeQuestionTag.normalized(tags)
+        guard (1...200).contains(normalizedTitle.count) else {
+            throw NativeStoreError.invalidQuestion
+        }
+
+        let latestQuestionTimestamp = try db().text("SELECT MAX(updated_at) FROM questions")
+        let createdAt = nextTimestamp(after: latestQuestionTimestamp)
+        let id = "question-\(Int(Date().timeIntervalSince1970 * 1_000))-\(UUID().uuidString.lowercased().prefix(8))"
+        try db().transaction {
+            try db().execute("""
+            INSERT INTO questions(id, title, body, tags_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, values: [
+                .text(id),
+                .text(normalizedTitle),
+                .text(normalizedBody),
+                .text(try jsonString(normalizedTags)),
+                .text(createdAt),
+                .text(createdAt),
+            ])
+            try replaceQuestionTags(questionID: id, tags: normalizedTags)
+        }
+        return NativeQuestion(
+            id: id,
+            title: normalizedTitle,
+            body: normalizedBody,
+            tags: normalizedTags,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+    }
+
+    public func listQuestionAnswers(questionID: String) throws -> [NativeQuestionAnswer] {
+        try prepare()
+        let safeQuestionID = try requireSafeSegment(questionID, label: "问题 ID")
+        var answers: [NativeQuestionAnswer] = []
+        try db().query(
+            questionAnswerSelect + " WHERE question_id = ? ORDER BY created_at ASC, id ASC",
+            values: [.text(safeQuestionID)]
+        ) { row in
+            answers.append(try decodeQuestionAnswer(row))
+        }
+        return answers
+    }
+
+    public func saveQuestionAnswer(
+        questionID: String,
+        body: String
+    ) throws -> NativeQuestionAnswer {
+        try prepare()
+        let safeQuestionID = try requireSafeSegment(questionID, label: "问题 ID")
+        let question = try getQuestion(id: safeQuestionID)
+        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (1...10_000).contains(normalizedBody.count) else {
+            throw NativeStoreError.invalidAnswer
+        }
+
+        let latestQuestionTimestamp = try db().text("SELECT MAX(updated_at) FROM questions")
+        let timestampBaseline = latestQuestionTimestamp.map { max($0, question.updatedAt) } ?? question.updatedAt
+        let createdAt = nextTimestamp(after: timestampBaseline)
+        let id = "answer-\(Int(Date().timeIntervalSince1970 * 1_000))-\(UUID().uuidString.lowercased().prefix(8))"
+        try db().transaction {
+            try db().execute("""
+            INSERT INTO question_answers(id, question_id, body, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """, values: [
+                .text(id),
+                .text(safeQuestionID),
+                .text(normalizedBody),
+                .text(createdAt),
+                .text(createdAt),
+            ])
+            try db().execute(
+                "UPDATE questions SET updated_at = ? WHERE id = ?",
+                values: [.text(createdAt), .text(safeQuestionID)]
+            )
+        }
+        return NativeQuestionAnswer(
+            id: id,
+            questionID: safeQuestionID,
+            body: normalizedBody,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+    }
+
     private func removeUnreferencedMomentImages(
         _ images: [NativeMedia],
         includingDeleted: Bool = true
@@ -2952,6 +3135,35 @@ public actor LocalBlogStore {
         CREATE INDEX IF NOT EXISTS moments_created_at_idx ON moments(created_at DESC);
         CREATE INDEX IF NOT EXISTS moments_feed_active_idx ON moments(created_at DESC, id DESC)
             WHERE deleted_at IS NULL;
+        CREATE TABLE IF NOT EXISTS questions (
+            id TEXT PRIMARY KEY NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            tags_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS questions_updated_at_idx
+            ON questions(updated_at DESC, id DESC);
+        CREATE TABLE IF NOT EXISTS question_tags (
+            question_id TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            normalized_tag TEXT NOT NULL,
+            PRIMARY KEY(question_id, normalized_tag),
+            FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS question_tags_search_idx
+            ON question_tags(normalized_tag, question_id);
+        CREATE TABLE IF NOT EXISTS question_answers (
+            id TEXT PRIMARY KEY NOT NULL,
+            question_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS question_answers_question_idx
+            ON question_answers(question_id, created_at, id);
         CREATE TABLE IF NOT EXISTS activity_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             type TEXT NOT NULL,
@@ -4099,6 +4311,60 @@ public actor LocalBlogStore {
         )
     }
 
+    private func replaceQuestionTags(questionID: String, tags: [String]) throws {
+        try db().execute(
+            "DELETE FROM question_tags WHERE question_id = ?",
+            values: [.text(questionID)]
+        )
+        for tag in tags {
+            try db().execute("""
+            INSERT INTO question_tags(question_id, tag, normalized_tag)
+            VALUES (?, ?, ?)
+            """, values: [
+                .text(questionID),
+                .text(tag),
+                .text(NativeQuestionTag.identifier(tag)),
+            ])
+        }
+    }
+
+    private func decodeQuestion(_ row: SQLiteRow) throws -> NativeQuestion {
+        guard let id = row.text(at: 0),
+              let title = row.text(at: 1),
+              let body = row.text(at: 2),
+              let tagsJSON = row.text(at: 3),
+              let createdAt = row.text(at: 4),
+              let updatedAt = row.text(at: 5) else {
+            throw NativeStoreError.fileSystem("SQLite：问题记录不完整")
+        }
+        return NativeQuestion(
+            id: id,
+            title: title,
+            body: body,
+            tags: try decode(tagsJSON),
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            answerCount: row.integer(at: 6) ?? 0
+        )
+    }
+
+    private func decodeQuestionAnswer(_ row: SQLiteRow) throws -> NativeQuestionAnswer {
+        guard let id = row.text(at: 0),
+              let questionID = row.text(at: 1),
+              let body = row.text(at: 2),
+              let createdAt = row.text(at: 3),
+              let updatedAt = row.text(at: 4) else {
+            throw NativeStoreError.fileSystem("SQLite：问题回答记录不完整")
+        }
+        return NativeQuestionAnswer(
+            id: id,
+            questionID: questionID,
+            body: body,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+
     private func trashBackup() throws -> NativeTrashBackup {
         var articles: [NativeTrashedArticle] = []
         try db().query(articleSelect + " WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL ORDER BY slug") { row in
@@ -4474,6 +4740,18 @@ public actor LocalBlogStore {
 
     private var momentSelect: String {
         "SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, page_views, deleted_at, delete_expires_at FROM moments"
+    }
+
+    private var questionSelect: String {
+        """
+        SELECT q.id, q.title, q.body, q.tags_json, q.created_at, q.updated_at,
+               (SELECT COUNT(*) FROM question_answers AS a WHERE a.question_id = q.id)
+        FROM questions AS q
+        """
+    }
+
+    private var questionAnswerSelect: String {
+        "SELECT id, question_id, body, created_at, updated_at FROM question_answers"
     }
 
     private var revisionSelect: String {

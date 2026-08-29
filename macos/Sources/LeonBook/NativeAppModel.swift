@@ -85,6 +85,11 @@ public final class NativeAppModel: ObservableObject {
     @Published var moments: [NativeMoment] = []
     @Published private(set) var totalMomentCount = 0
     @Published var filteredMomentCount = 0
+    @Published private(set) var questions: [NativeQuestion] = []
+    @Published private(set) var totalQuestionCount = 0
+    @Published private(set) var questionTagFacets: [NativeQuestionTagFacet] = []
+    @Published private(set) var selectedQuestion: NativeQuestion?
+    @Published private(set) var questionAnswers: [NativeQuestionAnswer] = []
     @Published private(set) var trashItems: [NativeTrashItem] = []
     @Published var selectedArticle: NativeArticle?
     @Published var selectedArticleRelations = NativeArticleRelations.empty
@@ -112,6 +117,8 @@ public final class NativeAppModel: ObservableObject {
     @Published var showsOnlyFavoriteMoments = false
     @Published var isLoading = true
     @Published private(set) var isPublishingMoment = false
+    @Published private(set) var isPublishingQuestion = false
+    @Published private(set) var isPublishingQuestionAnswer = false
     @Published private(set) var isLoadingMoreMoments = false
     @Published var hasMoreMoments = false
     @Published var isSaving = false
@@ -142,6 +149,8 @@ public final class NativeAppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var searchText = ""
     @Published var momentSearchText = ""
+    @Published var questionSearchText = ""
+    @Published var selectedQuestionTag: String?
     @Published var searchPresentation: NativeSearchPresentation?
     @Published var globalSearchResults: [NativeGlobalSearchResult] = []
     @Published var isSearchingGlobally = false
@@ -170,6 +179,7 @@ public final class NativeAppModel: ObservableObject {
     var nextMomentCursor: NativeMomentCursor?
     private var momentFeedGeneration = 0
     private var momentSearchTask: Task<Void, Never>?
+    private var questionSearchTask: Task<Void, Never>?
     var globalSearchTask: Task<Void, Never>?
     var globalSearchGeneration = 0
     var articleListSearchTask: Task<Void, Never>?
@@ -203,6 +213,7 @@ public final class NativeAppModel: ObservableObject {
         backupTask?.cancel()
         editorAutosaveTask?.cancel()
         momentSearchTask?.cancel()
+        questionSearchTask?.cancel()
         globalSearchTask?.cancel()
         articleListSearchTask?.cancel()
         markdownSourceEventMonitor?.stop()
@@ -341,6 +352,8 @@ public final class NativeAppModel: ObservableObject {
                 || isSaving
                 || isSavingArticleComment
                 || isPublishingMoment
+                || isPublishingQuestion
+                || isPublishingQuestionAnswer
                 || isUploadingMedia
                 || isBackingUp
                 || isScanningObsidianVault
@@ -481,7 +494,8 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func chooseWorkDirectory() {
-        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia, !isBackingUp,
+        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment,
+              !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia, !isBackingUp,
               !isScanningObsidianVault, !isImportingObsidianVault,
               let rootURL = presentWorkDirectoryPicker() else { return }
         LocalBlogStore.rememberWorkDirectory(rootURL)
@@ -539,7 +553,8 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func selectUser(_ user: NativeUser) {
-        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia,
+        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment,
+              !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia,
               !isBackingUp, !isScanningObsidianVault, !isImportingObsidianVault else { return }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return }
         Task {
@@ -564,7 +579,8 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func createUser(named name: String) async -> Bool {
-        guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia, !isBackingUp,
+        guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment,
+              !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia, !isBackingUp,
               !isScanningObsidianVault, !isImportingObsidianVault else { return false }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return false }
         isSwitchingWorkspace = true
@@ -614,6 +630,7 @@ public final class NativeAppModel: ObservableObject {
         }
         articleGraph = try await store.articleGraph()
         try await reloadMomentFeed()
+        try await reloadQuestionList()
         trashItems = try await store.listTrash()
         try await refreshActivity()
         if !isEditorDirty,
@@ -730,6 +747,7 @@ public final class NativeAppModel: ObservableObject {
         stopMarkdownSourceMonitor()
         articleListSearchTask?.cancel()
         globalSearchTask?.cancel()
+        questionSearchTask?.cancel()
         workspaceGeneration += 1
         store = nextStore
         users = workspace.users
@@ -739,6 +757,11 @@ public final class NativeAppModel: ObservableObject {
         moments = []
         totalMomentCount = 0
         filteredMomentCount = 0
+        questions = []
+        totalQuestionCount = 0
+        questionTagFacets = []
+        selectedQuestion = nil
+        questionAnswers = []
         momentFacetRecords = []
         nextMomentCursor = nil
         hasMoreMoments = false
@@ -763,6 +786,8 @@ public final class NativeAppModel: ObservableObject {
         editingMomentID = nil
         searchText = ""
         momentSearchText = ""
+        questionSearchText = ""
+        selectedQuestionTag = nil
         globalSearchText = ""
         globalSearchResults = []
         searchPresentation = nil
@@ -859,6 +884,121 @@ public final class NativeAppModel: ObservableObject {
             } catch {
                 self.errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    var isFilteringQuestions: Bool {
+        selectedQuestionTag != nil
+            || !questionSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func reloadQuestionList(selecting questionID: String? = nil) async throws {
+        let preferredQuestionID = questionID ?? selectedQuestion?.id
+        let loadedQuestions = try await store.listQuestions(
+            searchText: questionSearchText,
+            tag: selectedQuestionTag
+        )
+        let loadedFacets = try await store.listQuestionTagFacets()
+        let loadedTotal = try await store.countQuestions()
+        let nextSelection = preferredQuestionID.flatMap { preferredID in
+            loadedQuestions.first(where: { $0.id == preferredID })
+        } ?? loadedQuestions.first
+        let loadedAnswers: [NativeQuestionAnswer]
+        if let nextSelection {
+            loadedAnswers = try await store.listQuestionAnswers(questionID: nextSelection.id)
+        } else {
+            loadedAnswers = []
+        }
+
+        questions = loadedQuestions
+        questionTagFacets = loadedFacets
+        totalQuestionCount = loadedTotal
+        selectedQuestion = nextSelection
+        questionAnswers = loadedAnswers
+    }
+
+    func refreshQuestionList(after delay: TimeInterval = 0) {
+        questionSearchTask?.cancel()
+        questionSearchTask = Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            guard !Task.isCancelled, let self else { return }
+            do {
+                try await self.reloadQuestionList()
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func selectQuestion(_ question: NativeQuestion) {
+        guard question.id != selectedQuestion?.id else { return }
+        selectedQuestion = question
+        questionAnswers = []
+        let generation = workspaceGeneration
+        let activeStore = store
+        Task {
+            do {
+                let loadedAnswers = try await activeStore.listQuestionAnswers(questionID: question.id)
+                guard generation == workspaceGeneration, selectedQuestion?.id == question.id else { return }
+                questionAnswers = loadedAnswers
+                errorMessage = nil
+            } catch {
+                guard generation == workspaceGeneration else { return }
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func selectQuestionTag(_ tag: String?) {
+        let normalized = tag?.trimmingCharacters(in: .whitespacesAndNewlines)
+        selectedQuestionTag = normalized?.isEmpty == false ? normalized : nil
+        refreshQuestionList()
+    }
+
+    func clearQuestionFilters() {
+        questionSearchText = ""
+        selectedQuestionTag = nil
+        refreshQuestionList()
+    }
+
+    func publishQuestion(title: String, body: String, tagsText: String) async -> Bool {
+        guard !isBackingUp, !isPublishingQuestion else { return false }
+        isPublishingQuestion = true
+        defer { isPublishingQuestion = false }
+        do {
+            let saved = try await store.saveQuestion(
+                title: title,
+                body: body,
+                tags: NativeQuestionTag.parse(tagsText)
+            )
+            questionSearchText = ""
+            selectedQuestionTag = nil
+            try await reloadQuestionList(selecting: saved.id)
+            scheduleBackup()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func publishQuestionAnswer(body: String) async -> Bool {
+        guard !isBackingUp, !isPublishingQuestionAnswer, let selectedQuestion else { return false }
+        isPublishingQuestionAnswer = true
+        defer { isPublishingQuestionAnswer = false }
+        do {
+            _ = try await store.saveQuestionAnswer(questionID: selectedQuestion.id, body: body)
+            try await reloadQuestionList(selecting: selectedQuestion.id)
+            scheduleBackup()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
         }
     }
 

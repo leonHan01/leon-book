@@ -24,8 +24,8 @@ struct MarkdownArticleSourceRecord: Hashable {
 
 enum MarkdownArticleSource {
     private static let reservedKeys = Set([
-        "title", "category", "tags", "slug", "status", "updatedat", "updated_at",
-        "publishedat", "published_at", "banner", "banneralt", "excerpt", "description",
+        "title", "category", "tags", "tag", "slug", "status", "updatedat", "updated_at",
+        "publishedat", "published_at", "banner", "banneralt", "banner_alt", "excerpt", "description",
         "leonmedia", "leon_media",
     ])
 
@@ -199,7 +199,26 @@ enum MarkdownArticleSource {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let data = Data(render(article).utf8)
+        let existingSource: String?
+        if fileManager.fileExists(atPath: url.path) {
+            do {
+                let existingData = try Data(contentsOf: url)
+                guard let decoded = String(data: existingData, encoding: .utf8) else {
+                    throw NativeStoreError.fileSystem("\(relativePath) 不是 UTF-8 Markdown 文件")
+                }
+                let hasUTF8ByteOrderMark = existingData.starts(with: [0xEF, 0xBB, 0xBF])
+                existingSource = hasUTF8ByteOrderMark && !decoded.hasPrefix("\u{feff}")
+                    ? "\u{feff}" + decoded
+                    : decoded
+            } catch let error as NativeStoreError {
+                throw error
+            } catch {
+                throw NativeStoreError.fileSystem("无法读取 \(relativePath)：\(error.localizedDescription)")
+            }
+        } else {
+            existingSource = nil
+        }
+        let data = Data(render(article, preserving: existingSource).utf8)
         do {
             try data.write(to: url, options: .atomic)
         } catch {
@@ -338,7 +357,8 @@ enum MarkdownArticleSource {
     }
 
     private static func parseFrontmatter(_ source: String) -> Frontmatter {
-        let normalized = source.replacingOccurrences(of: "\r\n", with: "\n")
+        var normalized = source.replacingOccurrences(of: "\r\n", with: "\n")
+        if normalized.hasPrefix("\u{feff}") { normalized.removeFirst() }
         let lines = normalized.components(separatedBy: "\n")
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
               let closingIndex = lines.indices.dropFirst().first(where: {
@@ -388,15 +408,93 @@ enum MarkdownArticleSource {
         return Frontmatter(body: body, values: values)
     }
 
-    private static func render(_ article: NativeArticle) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        func quoted(_ value: String) -> String {
-            (try? String(data: encoder.encode(value), encoding: .utf8)) ?? "\"\""
+    private struct FrontmatterSourceEntry {
+        let key: String
+        let lineRange: Range<Int>
+    }
+
+    /// A source-preserving view over the frontmatter document. It deliberately
+    /// records line ranges instead of rebuilding YAML so untouched entries,
+    /// comments, ordering and scalar styles survive an article save.
+    private struct FrontmatterSourceDocument {
+        let hadByteOrderMark: Bool
+        let lineEnding: String
+        let hadTrailingLineEnding: Bool
+        let lines: [String]
+        let closingIndex: Int
+        let leadingBodyBlankLineCount: Int
+        let entries: [FrontmatterSourceEntry]
+
+        init?(_ source: String) {
+            hadByteOrderMark = source.hasPrefix("\u{feff}")
+            let content = hadByteOrderMark ? String(source.dropFirst()) : source
+            lineEnding = content.contains("\r\n") ? "\r\n" : "\n"
+            hadTrailingLineEnding = content.hasSuffix(lineEnding)
+            let normalized = content
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
+            let parsedLines = normalized.components(separatedBy: "\n")
+            guard parsedLines.first?.trimmingCharacters(in: .whitespaces) == "---",
+                  let closingIndex = parsedLines.indices.dropFirst().first(where: {
+                      let marker = parsedLines[$0].trimmingCharacters(in: .whitespaces)
+                      return marker == "---" || marker == "..."
+                  }) else { return nil }
+            lines = parsedLines
+            self.closingIndex = closingIndex
+
+            var blankLines = 0
+            var bodyIndex = closingIndex + 1
+            while bodyIndex < lines.count,
+                  lines[bodyIndex].trimmingCharacters(in: .whitespaces).isEmpty {
+                if bodyIndex == lines.count - 1, hadTrailingLineEnding { break }
+                blankLines += 1
+                bodyIndex += 1
+            }
+            leadingBodyBlankLineCount = blankLines
+
+            var entries: [FrontmatterSourceEntry] = []
+            var index = 1
+            while index < closingIndex {
+                guard let key = MarkdownArticleSource.topLevelKey(in: lines[index]) else {
+                    index += 1
+                    continue
+                }
+                var end = index + 1
+                while end < closingIndex {
+                    let candidate = lines[end]
+                    let trimmed = candidate.trimmingCharacters(in: .whitespaces)
+                    if candidate.first?.isWhitespace == true || trimmed.hasPrefix("-") || trimmed.isEmpty {
+                        end += 1
+                    } else {
+                        break
+                    }
+                }
+                let scanEnd = end
+                while end > index + 1,
+                      lines[end - 1].trimmingCharacters(in: .whitespaces).isEmpty {
+                    end -= 1
+                }
+                entries.append(FrontmatterSourceEntry(key: key, lineRange: index..<end))
+                index = scanEnd
+            }
+            self.entries = entries
         }
-        func yamlKey(_ key: String) -> String {
-            key.range(of: #"^[A-Za-z0-9_.-]+$"#, options: .regularExpression) == nil ? quoted(key) : key
+    }
+
+    private struct FrontmatterSourcePatch {
+        let lineRange: Range<Int>
+        let replacement: [String]
+    }
+
+    private static func render(_ article: NativeArticle, preserving source: String? = nil) -> String {
+        guard let source,
+              let document = FrontmatterSourceDocument(source) else {
+            return renderCanonical(article)
         }
+        return renderPreservingFrontmatter(article, source: source, document: document)
+    }
+
+    private static func renderCanonical(_ article: NativeArticle) -> String {
 
         var lines = [
             "---",
@@ -414,7 +512,7 @@ enum MarkdownArticleSource {
             lines.append("bannerAlt: \(quoted(banner.alt))")
         }
         if !article.media.isEmpty,
-           let mediaData = try? encoder.encode(article.media),
+           let mediaData = try? canonicalJSONEncoder().encode(article.media),
            let mediaJSON = String(data: mediaData, encoding: .utf8) {
             lines.append("leonMedia: \(quoted(mediaJSON))")
         }
@@ -424,6 +522,429 @@ enum MarkdownArticleSource {
         }
         lines.append(contentsOf: ["---", "", article.body, ""])
         return lines.joined(separator: "\n")
+    }
+
+    private static func renderPreservingFrontmatter(
+        _ article: NativeArticle,
+        source: String,
+        document: FrontmatterSourceDocument
+    ) -> String {
+        let parsed = parseFrontmatter(source)
+        var patches: [FrontmatterSourcePatch] = []
+        var additions: [String] = []
+        var claimedEntryStarts = Set<Int>()
+
+        func matchingEntries(_ aliases: [String]) -> [FrontmatterSourceEntry] {
+            document.entries.filter { entry in
+                aliases.contains { entry.key.caseInsensitiveCompare($0) == .orderedSame }
+            }
+        }
+
+        func update(
+            aliases: [String],
+            canonicalKey: String,
+            desiredRawValue: String?,
+            isSemanticallyUnchanged: Bool
+        ) {
+            let matches = matchingEntries(aliases)
+            if isSemanticallyUnchanged {
+                claimedEntryStarts.formUnion(matches.map(\.lineRange.lowerBound))
+                return
+            }
+            guard let desiredRawValue else {
+                for entry in matches {
+                    claimedEntryStarts.insert(entry.lineRange.lowerBound)
+                    patches.append(FrontmatterSourcePatch(lineRange: entry.lineRange, replacement: []))
+                }
+                return
+            }
+            if let first = matches.first {
+                claimedEntryStarts.insert(first.lineRange.lowerBound)
+                patches.append(FrontmatterSourcePatch(
+                    lineRange: first.lineRange,
+                    replacement: replacementLines(
+                        for: first,
+                        desiredRawValue: desiredRawValue,
+                        sourceLines: document.lines
+                    )
+                ))
+                for duplicate in matches.dropFirst() {
+                    claimedEntryStarts.insert(duplicate.lineRange.lowerBound)
+                    patches.append(FrontmatterSourcePatch(lineRange: duplicate.lineRange, replacement: []))
+                }
+            } else {
+                additions.append("\(yamlKey(canonicalKey)): \(desiredRawValue)")
+            }
+        }
+
+        let sourceFileTitle = URL(fileURLWithPath: article.sourceRelativePath)
+            .deletingPathExtension().lastPathComponent
+        let sourceFolder = article.sourceRelativePath.split(separator: "/")
+            .dropLast().joined(separator: "/")
+        let existingTitle = parsed.scalar(for: ["title"]) ?? sourceFileTitle
+        let existingCategory = parsed.scalar(for: ["category"])
+            ?? (sourceFolder.isEmpty ? "Notes" : sourceFolder)
+        let existingExcerpt = parsed.scalar(for: ["excerpt", "description"])
+            ?? generatedExcerpt(from: parsed.body)
+
+        update(
+            aliases: ["title"],
+            canonicalKey: "title",
+            desiredRawValue: quoted(article.title),
+            isSemanticallyUnchanged: existingTitle == article.title
+        )
+        update(
+            aliases: ["category"],
+            canonicalKey: "category",
+            desiredRawValue: quoted(article.category),
+            isSemanticallyUnchanged: existingCategory == article.category
+        )
+        update(
+            aliases: ["tags", "tag"],
+            canonicalKey: "tags",
+            desiredRawValue: "[\(article.tags.map(quoted).joined(separator: ", "))]",
+            isSemanticallyUnchanged: NativeArticleTag.normalized(parsed.list(for: ["tags", "tag"]))
+                == NativeArticleTag.normalized(article.tags)
+        )
+        update(
+            aliases: ["slug"],
+            canonicalKey: "slug",
+            desiredRawValue: article.slug,
+            isSemanticallyUnchanged: parsed.scalar(for: ["slug"]).map { $0 == article.slug } ?? true
+        )
+        update(
+            aliases: ["status"],
+            canonicalKey: "status",
+            desiredRawValue: article.status.rawValue,
+            isSemanticallyUnchanged: (NativeArticleStatus(
+                rawValue: parsed.scalar(for: ["status"])?.lowercased() ?? ""
+            ) ?? .draft) == article.status
+        )
+        update(
+            aliases: ["updatedAt", "updated_at"],
+            canonicalKey: "updatedAt",
+            desiredRawValue: article.updatedAt,
+            isSemanticallyUnchanged: parsed.scalar(for: ["updatedAt", "updated_at"]) == article.updatedAt
+        )
+        update(
+            aliases: ["excerpt", "description"],
+            canonicalKey: "excerpt",
+            desiredRawValue: quoted(article.excerpt),
+            isSemanticallyUnchanged: existingExcerpt == article.excerpt
+        )
+        update(
+            aliases: ["publishedAt", "published_at"],
+            canonicalKey: "publishedAt",
+            desiredRawValue: article.publishedAt,
+            isSemanticallyUnchanged: parsed.scalar(for: ["publishedAt", "published_at"]) == article.publishedAt
+        )
+        update(
+            aliases: ["banner"],
+            canonicalKey: "banner",
+            desiredRawValue: article.banner.map { quoted($0.url) },
+            isSemanticallyUnchanged: parsed.scalar(for: ["banner"]) == article.banner?.url
+        )
+        update(
+            aliases: ["bannerAlt", "banner_alt"],
+            canonicalKey: "bannerAlt",
+            desiredRawValue: article.banner.map { quoted($0.alt) },
+            isSemanticallyUnchanged: parsed.scalar(for: ["bannerAlt", "banner_alt"]) == article.banner?.alt
+        )
+
+        let encodedMedia: String? = {
+            guard !article.media.isEmpty,
+                  let data = try? canonicalJSONEncoder().encode(article.media),
+                  let value = String(data: data, encoding: .utf8) else { return nil }
+            return quoted(value)
+        }()
+        update(
+            aliases: ["leonMedia", "leon_media"],
+            canonicalKey: "leonMedia",
+            desiredRawValue: encodedMedia,
+            isSemanticallyUnchanged: decodedMedia(parsed.scalar(for: ["leonMedia", "leon_media"])) == article.media
+        )
+
+        let desiredProperties = article.properties.filter { !reservedKeys.contains($0.key.lowercased()) }
+        for key in desiredProperties.keys.sorted() {
+            guard let value = desiredProperties[key] else { continue }
+            let existingKey = parsed.values.keys.first {
+                $0.caseInsensitiveCompare(key) == .orderedSame
+            }
+            let existingValue = existingKey.flatMap { parsed.values[$0] }
+            update(
+                aliases: [key],
+                canonicalKey: key,
+                desiredRawValue: value.yamlValue,
+                isSemanticallyUnchanged: existingValue.map(NativeArticlePropertyValue.fromYAML) == value
+            )
+        }
+
+        for entry in document.entries where !claimedEntryStarts.contains(entry.lineRange.lowerBound) {
+            guard !reservedKeys.contains(entry.key.lowercased()),
+                  NativeArticleProperties.isValidKey(entry.key),
+                  !desiredProperties.keys.contains(where: {
+                      $0.caseInsensitiveCompare(entry.key) == .orderedSame
+                  }) else { continue }
+            patches.append(FrontmatterSourcePatch(lineRange: entry.lineRange, replacement: []))
+        }
+
+        if !additions.isEmpty {
+            patches.append(FrontmatterSourcePatch(
+                lineRange: document.closingIndex..<document.closingIndex,
+                replacement: additions
+            ))
+        }
+
+        var frontmatterLines = Array(document.lines[...document.closingIndex])
+        for patch in patches.sorted(by: { $0.lineRange.lowerBound > $1.lineRange.lowerBound }) {
+            frontmatterLines.replaceSubrange(patch.lineRange, with: patch.replacement)
+        }
+
+        let normalizedBody = article.body
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\n", with: document.lineEnding)
+        let separator = String(
+            repeating: document.lineEnding,
+            count: 1 + document.leadingBodyBlankLineCount
+        )
+        let trailing = document.hadTrailingLineEnding ? document.lineEnding : ""
+        let renderedFrontmatter = (document.hadByteOrderMark ? "\u{feff}" : "")
+            + frontmatterLines.joined(separator: document.lineEnding)
+        if normalizedBody.isEmpty {
+            let emptyBodyLineEndings = String(
+                repeating: document.lineEnding,
+                count: document.leadingBodyBlankLineCount + (document.hadTrailingLineEnding ? 1 : 0)
+            )
+            return renderedFrontmatter + emptyBodyLineEndings
+        }
+        return renderedFrontmatter
+            + separator
+            + normalizedBody
+            + trailing
+    }
+
+    private static func replacementLines(
+        for entry: FrontmatterSourceEntry,
+        desiredRawValue: String,
+        sourceLines: [String]
+    ) -> [String] {
+        if let blockScalar = replacementBlockScalarLines(
+            for: entry,
+            desiredRawValue: desiredRawValue,
+            sourceLines: sourceLines
+        ) {
+            return blockScalar
+        }
+        if let blockList = replacementBlockListLines(
+            for: entry,
+            desiredRawValue: desiredRawValue,
+            sourceLines: sourceLines
+        ) {
+            return blockList
+        }
+        guard sourceLines.indices.contains(entry.lineRange.lowerBound) else {
+            return ["\(yamlKey(entry.key)): \(desiredRawValue)"]
+        }
+        let line = sourceLines[entry.lineRange.lowerBound]
+        guard let colon = line.firstIndex(of: ":") else {
+            return ["\(yamlKey(entry.key)): \(desiredRawValue)"]
+        }
+        let prefix = String(line[...colon])
+        let tail = String(line[line.index(after: colon)...])
+        let commentIndex = inlineCommentIndex(in: tail)
+        let valueAndWhitespace = commentIndex.map { String(tail[..<$0]) } ?? tail
+        let comment = commentIndex.map { String(tail[$0...]) } ?? ""
+        let leadingWhitespace = String(valueAndWhitespace.prefix { $0.isWhitespace })
+        let withoutLeading = valueAndWhitespace.dropFirst(leadingWhitespace.count)
+        let trailingWhitespace = String(withoutLeading.reversed().prefix { $0.isWhitespace }.reversed())
+        let existingRawValue = String(withoutLeading.dropLast(trailingWhitespace.count))
+        let preservedLeadingWhitespace = leadingWhitespace.isEmpty ? " " : leadingWhitespace
+        let renderedValue = preservingScalarStyle(
+            desiredRawValue,
+            existingRawValue: existingRawValue
+        )
+        return [prefix + preservedLeadingWhitespace + renderedValue + trailingWhitespace + comment]
+    }
+
+    private static func replacementBlockScalarLines(
+        for entry: FrontmatterSourceEntry,
+        desiredRawValue: String,
+        sourceLines: [String]
+    ) -> [String]? {
+        guard entry.lineRange.count > 1,
+              sourceLines.indices.contains(entry.lineRange.lowerBound) else { return nil }
+        let header = sourceLines[entry.lineRange.lowerBound]
+        guard let colon = header.firstIndex(of: ":") else { return nil }
+        let headerTail = String(header[header.index(after: colon)...])
+        let commentIndex = inlineCommentIndex(in: headerTail)
+        let indicatorSource = commentIndex.map { String(headerTail[..<$0]) } ?? headerTail
+        let indicator = indicatorSource.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard ["|", "|-", "|+", ">", ">-", ">+"].contains(indicator),
+              desiredRawValue.hasPrefix("\""), desiredRawValue.hasSuffix("\"") else { return nil }
+
+        let continuation = sourceLines[(entry.lineRange.lowerBound + 1)..<entry.lineRange.upperBound]
+        let indentation = continuation.lazy.compactMap { line -> String? in
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            let prefix = String(line.prefix { $0.isWhitespace })
+            return prefix.isEmpty ? nil : prefix
+        }.first ?? "  "
+        let value = parseScalar(desiredRawValue)
+        return [header] + value.components(separatedBy: "\n").map { line in
+            line.isEmpty ? "" : indentation + line
+        }
+    }
+
+    private static func replacementBlockListLines(
+        for entry: FrontmatterSourceEntry,
+        desiredRawValue: String,
+        sourceLines: [String]
+    ) -> [String]? {
+        guard entry.lineRange.count > 1,
+              sourceLines.indices.contains(entry.lineRange.lowerBound) else { return nil }
+        let desired = NativeArticlePropertyValue.fromYAML(desiredRawValue)
+        guard desired.kind == .list || desired.kind == .tags else { return nil }
+
+        let header = sourceLines[entry.lineRange.lowerBound]
+        guard let colon = header.firstIndex(of: ":") else { return nil }
+        let headerTail = String(header[header.index(after: colon)...])
+        let headerValueEnd = inlineCommentIndex(in: headerTail) ?? headerTail.endIndex
+        guard headerTail[..<headerValueEnd]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty else { return nil }
+
+        let continuation = Array(sourceLines[(entry.lineRange.lowerBound + 1)..<entry.lineRange.upperBound])
+        let listLineOffsets = continuation.indices.filter {
+            continuation[$0].trimmingCharacters(in: .whitespaces).hasPrefix("-")
+        }
+        guard let lastListOffset = listLineOffsets.last else { return nil }
+
+        var replacement = [header]
+        var desiredIndex = 0
+        for (offset, line) in continuation.enumerated() {
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("-") {
+                if desired.listValues.indices.contains(desiredIndex) {
+                    replacement.append(replacingBlockListItem(
+                        in: line,
+                        with: desired.listValues[desiredIndex]
+                    ))
+                }
+                desiredIndex += 1
+                if offset == lastListOffset, desiredIndex < desired.listValues.count {
+                    for value in desired.listValues[desiredIndex...] {
+                        replacement.append(replacingBlockListItem(in: line, with: value))
+                    }
+                    desiredIndex = desired.listValues.count
+                }
+            } else {
+                replacement.append(line)
+            }
+        }
+        return replacement
+    }
+
+    private static func replacingBlockListItem(in line: String, with value: String) -> String {
+        guard let dash = line.firstIndex(where: { !$0.isWhitespace }), line[dash] == "-" else {
+            return "  - \(quoted(value))"
+        }
+        let prefix = String(line[...dash])
+        let tail = String(line[line.index(after: dash)...])
+        let commentIndex = inlineCommentIndex(in: tail)
+        let valueAndWhitespace = commentIndex.map { String(tail[..<$0]) } ?? tail
+        let comment = commentIndex.map { String(tail[$0...]) } ?? ""
+        let leadingWhitespace = String(valueAndWhitespace.prefix { $0.isWhitespace })
+        let withoutLeading = valueAndWhitespace.dropFirst(leadingWhitespace.count)
+        let trailingWhitespace = String(withoutLeading.reversed().prefix { $0.isWhitespace }.reversed())
+        let existingRawValue = String(withoutLeading.dropLast(trailingWhitespace.count))
+        let rendered: String
+        let existing = existingRawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if existing.hasPrefix("'") && existing.hasSuffix("'") {
+            rendered = "'\(value.replacingOccurrences(of: "'", with: "''"))'"
+        } else if existing.hasPrefix("\"") && existing.hasSuffix("\"") {
+            rendered = quoted(value)
+        } else if isSafePlainYAMLScalar(value) {
+            rendered = value
+        } else {
+            rendered = quoted(value)
+        }
+        return prefix
+            + (leadingWhitespace.isEmpty ? " " : leadingWhitespace)
+            + rendered
+            + trailingWhitespace
+            + comment
+    }
+
+    private static func isSafePlainYAMLScalar(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed == value,
+              !trimmed.hasPrefix("-"), !trimmed.hasPrefix("?"), !trimmed.hasPrefix(":"),
+              trimmed.rangeOfCharacter(from: CharacterSet(charactersIn: ":#[]{},&*!|>'\"%@`")) == nil else {
+            return false
+        }
+        switch trimmed.lowercased() {
+        case "true", "false", "yes", "no", "on", "off", "null", "~": return false
+        default: return true
+        }
+    }
+
+    private static func preservingScalarStyle(_ desiredRawValue: String, existingRawValue: String) -> String {
+        let existing = existingRawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard desiredRawValue.count >= 2,
+              desiredRawValue.hasPrefix("\""), desiredRawValue.hasSuffix("\"") else {
+            return desiredRawValue
+        }
+        let value = parseScalar(desiredRawValue)
+        if existing.hasPrefix("'") && existing.hasSuffix("'") {
+            return "'\(value.replacingOccurrences(of: "'", with: "''"))'"
+        }
+        if existing.hasPrefix("\"") && existing.hasSuffix("\"") {
+            return quoted(value)
+        }
+        return desiredRawValue
+    }
+
+    private static func inlineCommentIndex(in value: String) -> String.Index? {
+        var quote: Character?
+        var previous: Character?
+        var escaping = false
+        for index in value.indices {
+            let character = value[index]
+            if escaping {
+                escaping = false
+            } else if character == "\\", quote == "\"" {
+                escaping = true
+            } else if character == "\"" || character == "'" {
+                if quote == character { quote = nil } else if quote == nil { quote = character }
+            } else if character == "#", quote == nil, previous?.isWhitespace == true {
+                return index
+            }
+            previous = character
+        }
+        return nil
+    }
+
+    private static func topLevelKey(in line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
+              line.first?.isWhitespace != true,
+              let colon = line.firstIndex(of: ":") else { return nil }
+        let key = parseScalar(String(line[..<colon]).trimmingCharacters(in: .whitespaces))
+        return NativeArticleProperties.isValidKey(key) ? key : nil
+    }
+
+    private static func canonicalJSONEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }
+
+    private static func quoted(_ value: String) -> String {
+        let encoder = canonicalJSONEncoder()
+        return (try? String(data: encoder.encode(value), encoding: .utf8)) ?? "\"\""
+    }
+
+    private static func yamlKey(_ key: String) -> String {
+        key.range(of: #"^[A-Za-z0-9_.-]+$"#, options: .regularExpression) == nil ? quoted(key) : key
     }
 
     private static func decodedMedia(_ value: String?) -> [NativeMedia] {

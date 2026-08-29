@@ -46,7 +46,10 @@ let package = Package(
             dependencies: [
                 "LeonBook",
             ],
-            path: "Tests/LeonBookTests"
+            path: "Tests/LeonBookTests",
+            resources: [
+                .copy("Fixtures"),
+            ]
         ),
     ],
     swiftLanguageVersions: [.v5]

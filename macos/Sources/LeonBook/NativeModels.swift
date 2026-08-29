@@ -1735,6 +1735,7 @@ enum NativeSection: Hashable {
     case articles
     case graph
     case moments
+    case zhihu
     case reader
     case editor
     case trash
@@ -1758,6 +1759,8 @@ enum NativeStoreError: LocalizedError {
     case noLevel2Sections
     case invalidArticleMerge
     case invalidMoment
+    case invalidQuestion
+    case invalidAnswer
     case invalidComment
     case invalidUser
     case notFound
@@ -1782,6 +1785,10 @@ enum NativeStoreError: LocalizedError {
             return "不能将文章合并到自身，或合并目标已经不存在。"
         case .invalidMoment:
             return "微博需要文字或至少一张图片。"
+        case .invalidQuestion:
+            return "问题标题需要 1 到 200 个字符。"
+        case .invalidAnswer:
+            return "回答需要 1 到 10000 个字符。"
         case .invalidComment:
             return "评论需要 1 到 2000 个字符。"
         case .invalidUser:
