@@ -12,13 +12,43 @@ let macosRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
 let sourcePath = { (name: String) in macosRoot.appendingPathComponent("Sources/LeonBook/\(name)").path }
+let moduleSourcePath = { (module: String, name: String) in
+    macosRoot.appendingPathComponent("Sources/\(module)/\(name)").path
+}
 let appSourcePath = { (name: String) in macosRoot.appendingPathComponent("Sources/LeonBookApp/\(name)").path }
 let resourcePath = { (name: String) in macosRoot.appendingPathComponent("Resources/\(name)").path }
 
+if let packageManifest = try? String(
+    contentsOf: macosRoot.appendingPathComponent("Package.swift"),
+    encoding: .utf8
+) {
+    for target in [
+        "LeonBookModuleKit",
+        "LeonBookSearchModule",
+        "LeonBookKnowledgeGraphModule",
+        "LeonBookPublishingModule",
+        "LeonBookBackupModule",
+        "LeonBookCaptureModule",
+    ] {
+        expect(packageManifest.contains("name: \"\(target)\""), "SwiftPM should declare the \(target) target")
+    }
+} else {
+    failures.append("Swift package manifest should be readable")
+}
+
 expect(FileManager.default.fileExists(atPath: sourcePath("ContentView.swift")), "native SwiftUI content view should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore.swift")), "native local store should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore+SearchGraph.swift")), "search and graph SQLite adapters should be split from the core store")
+expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore+Schema.swift")), "SQLite schema should be split from the core store")
+expect(FileManager.default.fileExists(atPath: sourcePath("FirstPartyModules.swift")), "first-party module runtime adapter should exist")
+expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookModuleKit", "FirstPartyModule.swift")), "shared first-party module interface should exist")
+expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookSearchModule", "SearchModule.swift")), "search feature target should exist")
+expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookKnowledgeGraphModule", "KnowledgeGraphModule.swift")), "knowledge graph feature target should exist")
+expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookPublishingModule", "PublishingModule.swift")), "publishing feature target should exist")
+expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookBackupModule", "BackupModule.swift")), "backup feature target should exist")
+expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookCaptureModule", "CaptureModule.swift")), "capture feature target should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("SQLiteDatabase.swift")), "SQLite database adapter should exist")
-expect(FileManager.default.fileExists(atPath: sourcePath("LocalBackupManager.swift")), "local backup manager should exist")
+expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookBackupModule", "LocalBackupManager.swift")), "backup engine should live in its feature target")
 expect(FileManager.default.fileExists(atPath: sourcePath("MarkdownRenderer.swift")), "native Markdown renderer should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("MarkdownSourceEventMonitor.swift")), "Markdown filesystem event monitor should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("ObsidianVaultImporter.swift")), "Obsidian Vault importer should exist")
@@ -54,6 +84,7 @@ if let properties = try? String(contentsOfFile: sourcePath("ArticleProperties.sw
 
 if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift"), encoding: .utf8) {
     articleViews += (try? String(contentsOfFile: sourcePath("ArticleEditorViews.swift"), encoding: .utf8)) ?? ""
+    articleViews += (try? String(contentsOfFile: sourcePath("NativeMarkdownLiveStyler.swift"), encoding: .utf8)) ?? ""
     expect(articleViews.contains("ArticleHistoryView"), "article reader and editor should expose version history")
     expect(articleViews.contains("ArticleRevisionDiffView"), "version history should compare revisions with current content")
     expect(articleViews.contains("ArticleTableOfContents"), "article reader should display a Markdown table of contents")
@@ -81,8 +112,14 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("controlsStyle = .inline"), "embedded video should expose inline playback controls")
     expect(articleViews.contains("showsFullScreenToggleButton = true"), "embedded video should expose a fullscreen control")
     expect(articleViews.contains("Button(\"添加视频\")"), "article editor should allow selecting video media")
-    expect(articleViews.contains("body: article.body,"), "article reader should render article Markdown instead of showing its source")
-    expect(articleViews.contains("MarkdownDocumentView(\n                        markdown: markdown,"), "article reader should render complete Markdown documents")
+    expect(articleViews.contains("document: document,"), "article reader should render the parsed article Markdown document")
+    expect(articleViews.contains("NativeMarkdownArticleDocumentCache.shared.document"), "article reader should reuse one parsed Markdown document")
+    expect(!articleViews.contains("MarkdownOutline.items(in: article.body)"), "article reader should not reparse the article body for each outline consumer")
+    expect(!articleViews.contains("MarkdownArticleBody.imageURLs(in: article.body)"), "article attachments should reuse image URLs from the parsed document")
+    expect(articleViews.contains("MarkdownDocumentView(\n                        blocks: blocks,"), "article reader should pass parsed Markdown blocks to the renderer")
+    expect(articleViews.contains("pendingStylingRange"), "Markdown live styling should coalesce dirty editor ranges")
+    expect(articleViews.contains("editedRange:"), "Markdown live styling should update only the edited range")
+    expect(!articleViews.contains("storage.setAttributes(baseAttributes, range: fullRange)"), "Markdown typing should not reset attributes across the full document")
     expect(articleViews.contains("import WebKit"), "article reader should use WebKit for embedded webpages")
     expect(articleViews.contains("MarkdownEmbeddedWebView(url: embed.url)"), "article reader should render webpage embed blocks")
     expect(articleViews.contains("WKWebView(frame: .zero)"), "article reader should create a native embedded webpage view")
@@ -100,7 +137,8 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("[[\\(article.title)]]"), "selecting an article suggestion should insert a wiki-style link")
     expect(articleViews.contains("NativeImageView(url: banner.url, alt: banner.alt, store: model.store)"), "article reader should render a banner image inline")
     expect(articleViews.contains("NativeImageView(url: media.url, alt: media.name, store: model.store)"), "article reader should render attached images inline")
-    expect(articleViews.contains("NativeBodyEditor(\n                text: $model.editor.body,"), "article editor should use the reliable native multiline input")
+    expect(articleViews.contains("NativeImagePipeline.shared.image"), "article images should use the shared cached decode pipeline")
+    expect(articleViews.contains("NativeBodyEditor(\n                text: $editorSession.draft.body,"), "article editor should use the isolated native multiline input")
     expect(articleViews.contains(".padding(.leading, 12)"), "the Markdown placeholder should visually align with the native text caret")
     expect(articleViews.contains(".padding(.top, 12)"), "the Markdown placeholder should be vertically centered with the native text caret")
     expect(articleViews.contains("PastingTextView()"), "native body editor should receive keyboard input through its NSTextView subclass")
@@ -185,8 +223,9 @@ if let markdownRenderer = try? String(contentsOfFile: sourcePath("MarkdownRender
 }
 
 if let settingsView = try? String(contentsOfFile: sourcePath("NativeSettingsView.swift"), encoding: .utf8) {
-    expect(settingsView.contains("Obsidian Vault 导入"), "settings should expose Obsidian Vault import")
-    expect(settingsView.contains("复制后的 Markdown 为权威数据"), "Obsidian import should identify copied Markdown as authoritative")
+    expect(settingsView.contains("Markdown 工作区 / Obsidian Vault"), "settings should expose Markdown workspace modes")
+    expect(settingsView.contains("NativeMarkdownWorkspaceMode.allCases"), "settings should offer copy, read-only mount, and direct-edit modes")
+    expect(settingsView.contains("model.markdownSourceDirectoryPath"), "settings should show the active Markdown source directory")
     expect(settingsView.contains("model.confirmObsidianImport()"), "Obsidian import should require an explicit confirmation")
     expect(settingsView.contains("命令与快捷键"), "settings should expose command hotkey customization")
     expect(settingsView.contains("阅读与编辑排版"), "settings should expose reading and editor typography")
@@ -275,27 +314,37 @@ if let workspaceLayouts = try? String(contentsOfFile: sourcePath("WorkspaceLayou
 }
 
 if let graphProjection = try? String(contentsOfFile: sourcePath("ArticleGraphProjection.swift"), encoding: .utf8),
+   let graphModule = try? String(contentsOfFile: moduleSourcePath("LeonBookKnowledgeGraphModule", "KnowledgeGraphModule.swift"), encoding: .utf8),
    let graphView = try? String(contentsOfFile: sourcePath("ArticleGraphView.swift"), encoding: .utf8),
    let pageState = try? String(contentsOfFile: sourcePath("NavigationPageState.swift"), encoding: .utf8) {
     expect(graphProjection.contains("NativeArticleGraphProjector"), "graph filtering and clipping should live behind one projection interface")
     expect(graphProjection.contains("includesOrphans"), "graph projection should filter orphan nodes")
     expect(graphProjection.contains("nodeLimit"), "graph projection should clip nodes before rendering")
-    expect(graphProjection.contains("degree[edge.sourceSlug"), "graph clipping should prioritize connected nodes")
+    expect(graphProjection.contains("FirstPartyKnowledgeGraphProjector.project"), "LeonBook should adapt graph records through the feature target")
+    expect(graphModule.contains("degree[edge.sourceID"), "graph clipping should prioritize connected nodes inside the graph target")
     expect(graphView.contains("Slider(value: $pageState.zoom"), "graph view should expose zoom control")
     expect(graphView.contains("筛选标题、slug、标签或别名"), "graph view should expose text filtering")
     expect(graphView.contains("显示孤立节点"), "graph view should expose orphan filtering")
     expect(pageState.contains("NativeNavigationPageStateCache"), "inactive pages should retain only lightweight state")
-    expect(pageState.contains("recordedPageViewIDs"), "moment impression state should survive view reconstruction")
+    expect(!pageState.contains("recordedPageViewIDs"), "moment page state should not retain impression counters")
 } else {
     failures.append("graph projection and lightweight page state should be readable")
 }
 
 if let articleReader = try? String(contentsOfFile: sourcePath("ArticleViews.swift"), encoding: .utf8),
    let articleEditor = try? String(contentsOfFile: sourcePath("ArticleEditorViews.swift"), encoding: .utf8),
-   let appModelCore = try? String(contentsOfFile: sourcePath("NativeAppModel.swift"), encoding: .utf8) {
+   let appModelCore = try? String(contentsOfFile: sourcePath("NativeAppModel.swift"), encoding: .utf8),
+   let appModelSupport = try? String(contentsOfFile: sourcePath("NativeAppModelSupport.swift"), encoding: .utf8) {
     expect(articleReader.split(separator: "\n").count < 2_200, "article reader module should stay below the former monolithic size")
     expect(articleEditor.split(separator: "\n").count < 1_700, "article editor should be isolated from reader implementation")
     expect(appModelCore.split(separator: "\n").count < 2_000, "NativeAppModel core should delegate article, backup, import, and search modules")
+    expect(appModelCore.contains("let editorSession = NativeEditorSessionState()"), "high-frequency editor state should live outside the global app publisher")
+    expect(!appModelCore.contains("@Published var editor ="), "editor typing should not invalidate every NativeAppModel observer")
+    expect(appModelCore.contains("if result.didChange { try await reloadAfterMarkdownSourceChanges(result) }"), "external Markdown events should use the targeted article refresh path")
+    expect(!appModelCore.contains("if result.didChange { try await reloadIndexedState() }"), "external Markdown events should not reload unrelated domains")
+    expect(appModelSupport.contains("reloadsMoments = false"), "Markdown refresh plans should not reload moments")
+    expect(appModelSupport.contains("reloadsQuestions = false"), "Markdown refresh plans should not reload questions")
+    expect(appModelSupport.contains("reloadsActivity = false"), "Markdown refresh plans should not reload activity")
 } else {
     failures.append("split article and app-model modules should be readable")
 }
@@ -340,7 +389,12 @@ if let infoPlist = try? String(contentsOfFile: resourcePath("Info.plist"), encod
     failures.append("app Info.plist should be readable")
 }
 
-if let localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8) {
+if var localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8) {
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+SearchGraph.swift"), encoding: .utf8)) ?? ""
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Schema.swift"), encoding: .utf8)) ?? ""
+    let coreLineCount = ((try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8)) ?? "")
+        .split(separator: "\n").count
+    expect(coreLineCount < 4_500, "LocalBlogStore core should remain below the former monolithic size")
     expect(localStore.contains("leon-book.sqlite"), "structured content should use a local SQLite database")
     expect(localStore.contains("CREATE TABLE IF NOT EXISTS articles"), "SQLite article schema should exist")
     expect(localStore.contains("CREATE VIRTUAL TABLE IF NOT EXISTS content_search USING fts5"), "SQLite should expose a unified FTS5 index")
@@ -378,7 +432,7 @@ if let localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift
     expect(localStore.contains("func deleteMoment"), "LocalBlogStore should delete moments")
     expect(localStore.contains("page_views INTEGER NOT NULL DEFAULT 0"), "SQLite content schemas should persist page views")
     expect(localStore.contains("func incrementArticlePageViews"), "LocalBlogStore should increment article page views atomically")
-    expect(localStore.contains("func incrementMomentPageViews"), "LocalBlogStore should increment moment page views atomically")
+    expect(!localStore.contains("func incrementMomentPageViews"), "LocalBlogStore should not collect moment page views")
     expect(localStore.contains("changedRelativePaths: Set<String>"), "Markdown sync should expose a changed-path incremental API")
     expect(localStore.contains("markdownSyncCandidates("), "incremental Markdown sync should query only affected index records")
     expect(localStore.contains("moment_published"), "LocalBlogStore should record moment publishing")
@@ -416,7 +470,10 @@ if let smartCollections = try? String(contentsOfFile: sourcePath("SmartCollectio
     failures.append("smart collection views should be readable")
 }
 
-if let backupManager = try? String(contentsOfFile: sourcePath("LocalBackupManager.swift"), encoding: .utf8) {
+if let backupManager = try? String(
+    contentsOfFile: moduleSourcePath("LeonBookBackupModule", "LocalBackupManager.swift"),
+    encoding: .utf8
+) {
     expect(backupManager.contains("createSnapshot"), "backup manager should create snapshots")
     expect(backupManager.contains("createManagedSnapshot"), "backup manager should create policy-managed snapshots")
     expect(backupManager.contains("clonefile"), "backup manager should use copy-on-write clones when available")
@@ -498,7 +555,7 @@ if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
     expect(appModel.contains("public func presentCommandPalette()"), "NativeAppModel should expose the command palette")
     expect(appModel.contains("func updateArticleListSearch("), "the existing article search box should query the FTS index")
     expect(appModel.contains("recordsPageView: Bool = true"), "article selection should distinguish user views from background reloads")
-    expect(appModel.contains("func recordMomentPageView(_ moment: NativeMoment)"), "NativeAppModel should record visible moment page views")
+    expect(!appModel.contains("func recordMomentPageView(_ moment: NativeMoment)"), "NativeAppModel should not record moment page views")
     expect(appModel.contains("let navigation = NativeNavigationState()"), "navigation changes should use an isolated observable state")
     expect(appModel.contains("get { navigation.section }") && appModel.contains("navigation.section = newValue"), "section changes should not invalidate every content observer")
     expect(appModel.contains("MarkdownSourceEventMonitor"), "Markdown auto-sync should use filesystem events")
@@ -530,7 +587,9 @@ if let userWorkspaceStore = try? String(contentsOfFile: sourcePath("UserWorkspac
     failures.append("user workspace store should be readable")
 }
 
-if let momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift"), encoding: .utf8) {
+if var momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift"), encoding: .utf8) {
+    let imagePipeline = (try? String(contentsOfFile: sourcePath("NativeImagePipeline.swift"), encoding: .utf8)) ?? ""
+    momentViews += imagePipeline
     expect(momentViews.contains("struct MomentFeedView"), "MomentFeedView should be present")
     expect(momentViews.contains("MomentRichTextEditor("), "Moments should support rich text publishing")
     expect(momentViews.contains(".frame(height: 63)"), "Moment input should use the compact 63-point height")
@@ -554,8 +613,8 @@ if let momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("MagnificationGesture()"), "Image browser should support magnifying images")
     expect(momentViews.contains("showNextImage()"), "Image browser should support next image navigation")
     expect(momentViews.contains("Button(action: onEdit)"), "Moment cards should expose an edit control")
-    expect(momentViews.contains("moment.pageViews"), "Moment cards should display page views")
-    expect(momentViews.contains("recordPageViewIfVisible"), "Moment cards should count only visible feed impressions")
+    expect(!momentViews.contains("moment.pageViews"), "Moment cards should not display page views")
+    expect(!momentViews.contains("recordPageViewIfVisible"), "Moment cards should not collect feed impressions")
     expect(momentViews.contains("let displayContent = moment.displayContent"), "Moment cards should derive display content only once per render")
     expect(momentViews.contains(".accessibilityLabel(accessibilitySummary("), "Moment cards should expose one concise accessibility summary")
     expect(momentViews.contains(".accessibilityAction(named: Text(\"编辑\"))"), "Combined moment cards should preserve their edit accessibility action")
@@ -570,6 +629,18 @@ if let momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("availableMomentTagFilters"), "Moment tags should be shown as a filter tile collection")
     expect(momentViews.contains("可多选 · 任一匹配"), "Moment tag filters should explain multi-select matching")
     expect(momentViews.contains("@AppStorage(\"momentFeedLayout\")"), "Moment feed layout selection should persist")
+    expect(momentViews.contains("Label(\"沉浸浏览\", systemImage: \"play.rectangle.fill\")"), "Moment feed should expose immersive browsing")
+    expect(momentViews.contains("MomentImmersiveBrowserView"), "Moments should support a slide-like immersive browser")
+    expect(momentViews.contains(".sheet(isPresented: $isPresentingImmersiveBrowser)"), "Immersive moment browsing should cover the feed")
+    expect(momentViews.contains("available.width * 0.96"), "Immersive moment browsing should use the available screen space")
+    expect(momentViews.contains("case 123, 126:"), "Left and up arrows should show the previous moment")
+    expect(momentViews.contains("case 124, 125:"), "Right and down arrows should show the next moment")
+    expect(momentViews.contains("方向键翻页"), "Immersive browsing should explain keyboard navigation")
+    expect(momentViews.contains("preloadMoreMomentsIfNeeded"), "Immersive browsing should preload the next page of moments")
+    expect(momentViews.contains("model.loadMoreMoments()"), "Immersive browsing should continue across paginated moment history")
+    expect(momentViews.contains(".frame(maxWidth: 1_520, alignment: .leading)"), "Immersive browsing should use a wide presentation canvas")
+    expect(momentViews.contains("if images.count <= 4 { return 2 }"), "Immersive browsing should keep small image sets large with at most two columns")
+    expect(momentViews.contains("if images.count == 1 { return 600 }"), "A single immersive moment image should receive a large display area")
     expect(momentViews.contains("doubleColumnWaterfall"), "Moment feed should offer a double-column waterfall layout")
     expect(momentViews.contains("threeColumnWaterfall"), "Moment feed should offer a three-column waterfall layout")
     expect(momentViews.contains("fourColumnWaterfall"), "Moment feed should offer a four-column waterfall layout")
@@ -584,12 +655,17 @@ if let momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("Color.gray.opacity(0.72)"), "Image browser should use a translucent gray background")
     expect(momentViews.contains("Color.gray.opacity(0.48)"), "Image canvas should use a translucent gray background")
     expect(momentViews.contains("CGImageSourceCreateThumbnailAtIndex"), "Moment previews should downsample images")
-    expect(momentViews.contains("loadMode: .thumbnail(maxPixelSize: 720)"), "Moment feed should render image thumbnails")
+    expect(momentViews.contains("@Environment(\\.displayScale)"), "Moment thumbnails should account for the display scale")
+    expect(momentViews.contains("MomentThumbnailSizing.maxPixelSize"), "Moment feed should size thumbnails for their rendered tiles")
+    expect(momentViews.contains("loadMode: .thumbnail(maxPixelSize: thumbnailMaxPixelSize)"), "Moment feed should render right-sized image thumbnails")
     expect(momentViews.contains("let momentTimeline = model.momentTimeline"), "Moment timeline should be derived once per feed render")
-    expect(momentViews.contains("maximumConcurrentDecodes = 2"), "Moment thumbnail decoding should leave CPU capacity for navigation")
+    expect(momentViews.contains("maximumConcurrentDecodes: 2"), "Moment thumbnail decoding should leave CPU capacity for navigation")
     expect(momentViews.contains("Task.detached(priority: .utility)"), "Moment thumbnail decoding should not compete at user-initiated priority")
-    expect(momentViews.contains("withTaskCancellationHandler"), "Moment thumbnail decoding should respond when its view disappears")
-    expect(momentViews.contains("moment-thumbnails"), "Moment thumbnails should persist in the system cache")
+    expect(momentViews.contains("guard !Task.isCancelled else"), "Moment thumbnail views should ignore canceled results")
+    expect(momentViews.contains("image-thumbnails"), "Moment thumbnails should persist in the shared system cache")
+    expect(imagePipeline.contains("private var inFlight"), "shared image loading should coalesce duplicate decode requests")
+    expect(imagePipeline.contains("maximumConcurrentDecodes: 2"), "shared image loading should cap concurrent decodes")
+    expect(momentViews.contains("NativeImagePipeline.shared.image"), "moment images should use the shared image pipeline")
     expect(momentViews.contains(".aspectRatio(contentMode: .fit)"), "Moment thumbnails should show the complete image")
     expect(momentViews.contains("Color.clear"), "Moment image canvases should reveal the card background instead of forcing white")
     expect(!momentViews.contains("Color(nsColor: .controlBackgroundColor)"), "Moment image canvases should not force a white control background")

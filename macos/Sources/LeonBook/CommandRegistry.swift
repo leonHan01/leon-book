@@ -29,6 +29,8 @@ public struct NativeCommandID: RawRepresentable, Hashable, Codable, Identifiable
     public static let closeArticleTab = Self(rawValue: "article-tab.close")
     public static let openArticle = Self(rawValue: "article.open")
     public static let reload = Self(rawValue: "data.reload")
+    public static let backupNow = Self(rawValue: "backup.create")
+    public static let captureMarkdownFolder = Self(rawValue: "capture.markdown-folder")
 
     public static let insertHeading2 = Self(rawValue: "editor.insert.heading-2")
     public static let insertTask = Self(rawValue: "editor.insert.task")
@@ -510,23 +512,10 @@ private extension Array where Element: Hashable {
 }
 
 private extension NativeCommandRegistry {
-    static let builtInDefinitions: [NativeCommandDefinition] = [
-        .init(
-            id: .globalSearch,
-            title: "全文搜索",
-            detail: "搜索文章正文、摘要和微博",
-            keywords: "查找 find search",
-            systemImage: "magnifyingglass",
-            defaultShortcut: .init(key: "f", modifiers: [.command, .shift])
-        ),
-        .init(
-            id: .quickOpen,
-            title: "快速打开文章",
-            detail: "按标题或正文切换文章",
-            keywords: "open switch article",
-            systemImage: "doc.text.magnifyingglass",
-            defaultShortcut: .init(key: "o", modifiers: [.command])
-        ),
+    static let builtInDefinitions: [NativeCommandDefinition] = coreDefinitions
+        + NativeFirstPartyModules.commandDefinitions
+
+    static let coreDefinitions: [NativeCommandDefinition] = [
         .init(
             id: .commandPalette,
             title: "打开命令面板",
@@ -553,17 +542,8 @@ private extension NativeCommandRegistry {
             availability: .articleEditorAndIdle,
             defaultShortcut: .init(key: "s", modifiers: [.command])
         ),
-        .init(
-            id: .publishArticle,
-            title: "发布当前文章",
-            detail: "保存并发布当前编辑器内容",
-            keywords: "publish post",
-            systemImage: "paperplane.fill",
-            availability: .articleEditorAndIdle
-        ),
         .init(id: .dashboard, title: "前往概览", detail: "打开活动概览", keywords: "home dashboard", systemImage: "rectangle.grid.2x2"),
         .init(id: .articles, title: "前往全部文章", detail: "浏览文章列表", keywords: "notes article", systemImage: "doc.text"),
-        .init(id: .graph, title: "前往关系图", detail: "查看文章链接关系", keywords: "graph link", systemImage: "point.3.connected.trianglepath.dotted"),
         .init(id: .moments, title: "前往微博", detail: "浏览和发布微博", keywords: "moment post", systemImage: "rectangle.3.group"),
         .init(id: .today, title: "前往今日微博", detail: "只查看今天发布的微博", keywords: "today calendar", systemImage: "calendar"),
         .init(id: .trash, title: "前往回收站", detail: "恢复或彻底删除内容", keywords: "delete restore", systemImage: "trash"),

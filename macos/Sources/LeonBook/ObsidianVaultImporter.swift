@@ -1,4 +1,5 @@
 import Foundation
+import LeonBookCaptureModule
 
 public struct NativeObsidianAttachment: Hashable, Identifiable {
     public let sourceURL: URL
@@ -51,7 +52,8 @@ public struct NativeObsidianImportResult: Hashable {
 public enum NativeObsidianVaultImporter {
     public static func scan(
         vaultURL: URL,
-        existingSlugs: Set<String> = []
+        existingSlugs: Set<String> = [],
+        shouldCancel: () -> Bool = { false }
     ) throws -> NativeObsidianImportPreview {
         let root = vaultURL.standardizedFileURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
@@ -72,14 +74,15 @@ public enum NativeObsidianVaultImporter {
         var markdownURLs: [URL] = []
         var fileURLs: [URL] = []
         for case let url as URL in enumerator {
-            let values = try? url.resourceValues(forKeys: resourceKeys)
-            guard values?.isRegularFile == true, values?.isSymbolicLink != true else { continue }
-            let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
-            guard isInside(resolved, root: root) else { continue }
-            fileURLs.append(resolved)
-            if resolved.pathExtension.caseInsensitiveCompare("md") == .orderedSame {
-                markdownURLs.append(resolved)
-            }
+            if shouldCancel() { throw CancellationError() }
+            guard let values = try? url.resourceValues(forKeys: resourceKeys),
+                  let candidate = FirstPartyCaptureFilePolicy.candidate(
+                    for: url,
+                    root: root,
+                    resourceValues: values
+                  ) else { continue }
+            fileURLs.append(candidate.url)
+            if candidate.isMarkdown { markdownURLs.append(candidate.url) }
         }
         markdownURLs.sort { relativePath(of: $0, root: root) < relativePath(of: $1, root: root) }
 
@@ -88,6 +91,7 @@ public enum NativeObsidianVaultImporter {
         var warnings: [String] = []
         var allocatedSlugs = Set<String>()
         for url in markdownURLs {
+            if shouldCancel() { throw CancellationError() }
             do {
                 var parsed = try parseNote(at: url, root: root, attachmentIndex: attachmentIndex)
                 let baseSlug = sanitizedSlug(parsed.requestedSlug ?? parsed.relativePathWithoutExtension)

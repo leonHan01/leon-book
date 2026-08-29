@@ -16,9 +16,44 @@ let package = Package(
             path: "Sources/CSQLite"
         ),
         .target(
+            name: "LeonBookModuleKit",
+            path: "Sources/LeonBookModuleKit"
+        ),
+        .target(
+            name: "LeonBookSearchModule",
+            dependencies: ["LeonBookModuleKit"],
+            path: "Sources/LeonBookSearchModule"
+        ),
+        .target(
+            name: "LeonBookKnowledgeGraphModule",
+            dependencies: ["LeonBookModuleKit"],
+            path: "Sources/LeonBookKnowledgeGraphModule"
+        ),
+        .target(
+            name: "LeonBookPublishingModule",
+            dependencies: ["LeonBookModuleKit"],
+            path: "Sources/LeonBookPublishingModule"
+        ),
+        .target(
+            name: "LeonBookBackupModule",
+            dependencies: ["LeonBookModuleKit"],
+            path: "Sources/LeonBookBackupModule"
+        ),
+        .target(
+            name: "LeonBookCaptureModule",
+            dependencies: ["LeonBookModuleKit"],
+            path: "Sources/LeonBookCaptureModule"
+        ),
+        .target(
             name: "LeonBook",
             dependencies: [
                 "CSQLite",
+                "LeonBookModuleKit",
+                "LeonBookSearchModule",
+                "LeonBookKnowledgeGraphModule",
+                "LeonBookPublishingModule",
+                "LeonBookBackupModule",
+                "LeonBookCaptureModule",
             ],
             path: "Sources/LeonBook"
         ),
@@ -50,6 +85,18 @@ let package = Package(
             resources: [
                 .copy("Fixtures"),
             ]
+        ),
+        .executableTarget(
+            name: "LeonBookModuleTests",
+            dependencies: [
+                "LeonBookModuleKit",
+                "LeonBookSearchModule",
+                "LeonBookKnowledgeGraphModule",
+                "LeonBookPublishingModule",
+                "LeonBookBackupModule",
+                "LeonBookCaptureModule",
+            ],
+            path: "Tests/LeonBookModuleTests"
         ),
     ],
     swiftLanguageVersions: [.v5]

@@ -1,6 +1,5 @@
 import AVKit
 import AppKit
-import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
@@ -23,13 +22,15 @@ struct ArticleReaderView: View {
 
             Group {
                 if let article = model.selectedArticle {
-                    let outline = MarkdownOutline.items(in: article.body)
+                    let document = NativeMarkdownArticleDocumentCache.shared.document(for: article.body)
+                    let outline = document.outline
                     GeometryReader { proxy in
                         let usesCompactInspector = proxy.size.width < 980
                         ScrollViewReader { scrollProxy in
                             HStack(spacing: 0) {
                                 articleScroll(
                                     article: article,
+                                    document: document,
                                     usesCompactInspector: usesCompactInspector
                                 )
 
@@ -128,7 +129,11 @@ struct ArticleReaderView: View {
         }
     }
 
-    private func articleScroll(article: NativeArticle, usesCompactInspector: Bool) -> some View {
+    private func articleScroll(
+        article: NativeArticle,
+        document: NativeMarkdownArticleDocument,
+        usesCompactInspector: Bool
+    ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 HStack {
@@ -150,7 +155,7 @@ struct ArticleReaderView: View {
                         }
                     }
                     NativeWorkspaceLayoutMenu(model: model, workspaceLayout: workspaceLayout)
-                    let outline = MarkdownOutline.items(in: article.body)
+                    let outline = document.outline
                     if !outline.isEmpty {
                         Menu {
                             ForEach(outline) { heading in
@@ -237,9 +242,10 @@ struct ArticleReaderView: View {
 
                 Divider()
                 MarkdownArticleBody(
-                    body: article.body,
+                    document: document,
                     store: model.store,
                     articleLinks: model.articles,
+                    sourceRelativePath: article.sourceRelativePath,
                     rootArticleSlug: article.slug,
                     onOpenArticle: model.openArticleLink,
                     onToggleTask: { lineIndex, completed in
@@ -263,9 +269,8 @@ struct ArticleReaderView: View {
                     }
                 }
 
-                let attachmentMedia = article.media.filter {
-                    !MarkdownArticleBody.imageURLs(in: article.body).contains($0.url)
-                }
+                let embeddedImageURLs = document.imageURLs
+                let attachmentMedia = article.media.filter { !embeddedImageURLs.contains($0.url) }
                 if !attachmentMedia.isEmpty {
                     Divider()
                     Text("媒体").font(.headline)
@@ -551,16 +556,18 @@ private struct ArticleInspectorView: View {
                     }
                 }
 
-                ArticleInspectorSection(
-                    title: "局部关系图",
-                    systemImage: "point.3.connected.trianglepath.dotted",
-                    count: max(0, localGraph.nodes.count - 1)
-                ) {
-                    ArticleLocalGraphView(
-                        graph: localGraph,
-                        selectedSlug: article.slug,
-                        onOpenArticle: onOpenArticle
-                    )
+                if model.isKnowledgeGraphModuleEnabled {
+                    ArticleInspectorSection(
+                        title: "局部关系图",
+                        systemImage: "point.3.connected.trianglepath.dotted",
+                        count: max(0, localGraph.nodes.count - 1)
+                    ) {
+                        ArticleLocalGraphView(
+                            graph: localGraph,
+                            selectedSlug: article.slug,
+                            onOpenArticle: onOpenArticle
+                        )
+                    }
                 }
             }
             .padding(12)
@@ -1556,16 +1563,153 @@ private struct ArticleRevisionCodeColumn: View {
     }
 }
 
-private enum MarkdownArticleBlock {
+enum MarkdownArticleBlock {
     case image(url: String, alt: String)
     case base(reference: String)
     case transclusion(reference: String)
-    case text(markdown: String, headingIDs: [String], lineOffset: Int)
+    case text(blocks: [MarkdownBlock], headingIDs: [String], lineOffset: Int)
+}
+
+final class NativeMarkdownArticleDocument {
+    let blocks: [MarkdownArticleBlock]
+    let outline: [MarkdownOutlineItem]
+    let imageURLs: Set<String>
+
+    private static let embeddedBlockExpression = try! NSRegularExpression(
+        pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)|!\[\[([^\[\]\r\n]+)\]\]|(?s:```base[^\r\n]*\r?\n(.*?)\r?\n```)"#
+    )
+
+    init(markdown: String) {
+        var parsedBlocks: [MarkdownArticleBlock] = []
+        var parsedOutline: [MarkdownOutlineItem] = []
+        var parsedImageURLs = Set<String>()
+
+        func appendTextBlock(_ source: String, lineOffset: Int) {
+            let parsed = NativeParsedMarkdownDocument(source: source, lineOffset: lineOffset)
+            let headingIDs = parsed.outline.map { heading -> String in
+                let id = MarkdownOutline.anchorID(for: parsedOutline.count)
+                parsedOutline.append(MarkdownOutlineItem(
+                    id: id,
+                    level: heading.level,
+                    title: heading.title
+                ))
+                return id
+            }
+            parsedBlocks.append(.text(
+                blocks: parsed.blocks,
+                headingIDs: headingIDs,
+                lineOffset: lineOffset
+            ))
+        }
+
+        let searchRange = NSRange(markdown.startIndex..., in: markdown)
+        let matches = Self.embeddedBlockExpression.matches(in: markdown, range: searchRange)
+        if matches.isEmpty {
+            if !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                appendTextBlock(markdown, lineOffset: 0)
+            }
+        } else {
+            var cursor = markdown.startIndex
+            var cursorLineOffset = 0
+            for match in matches {
+                guard let matchRange = Range(match.range, in: markdown) else { continue }
+                let rawText = String(markdown[cursor..<matchRange.lowerBound])
+                let textBefore = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !textBefore.isEmpty {
+                    let leadingLines = rawText.prefix { $0.isWhitespace }.filter { $0 == "\n" }.count
+                    appendTextBlock(textBefore, lineOffset: cursorLineOffset + leadingLines)
+                }
+
+                if let baseRange = Range(match.range(at: 4), in: markdown) {
+                    let config = String(markdown[baseRange])
+                    let reference = config.components(separatedBy: .newlines).compactMap { line -> String? in
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard let colon = trimmed.firstIndex(of: ":") else { return nil }
+                        let key = trimmed[..<colon].lowercased()
+                        guard key == "id" || key == "name" || key == "source" else { return nil }
+                        return String(trimmed[trimmed.index(after: colon)...])
+                            .trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
+                    }.first ?? config.trimmingCharacters(in: .whitespacesAndNewlines)
+                    parsedBlocks.append(.base(
+                        reference: reference.hasSuffix(".base") ? reference : "\(reference).base"
+                    ))
+                } else if let referenceRange = Range(match.range(at: 3), in: markdown) {
+                    let reference = String(markdown[referenceRange])
+                    let target = NativeArticleLink.Reference(rawValue: reference).target
+                    let extensionName = URL(fileURLWithPath: target).pathExtension.lowercased()
+                    if extensionName == "base" {
+                        parsedBlocks.append(.base(reference: reference))
+                    } else if ["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic", "tif", "tiff", "svg"]
+                        .contains(extensionName) {
+                        parsedBlocks.append(.image(
+                            url: target,
+                            alt: URL(fileURLWithPath: target).deletingPathExtension().lastPathComponent
+                        ))
+                        parsedImageURLs.insert(target)
+                    } else {
+                        parsedBlocks.append(.transclusion(reference: reference))
+                    }
+                } else if let altRange = Range(match.range(at: 1), in: markdown),
+                          let urlRange = Range(match.range(at: 2), in: markdown) {
+                    let url = String(markdown[urlRange])
+                    parsedBlocks.append(.image(url: url, alt: String(markdown[altRange])))
+                    parsedImageURLs.insert(url)
+                }
+
+                cursorLineOffset += rawText.filter { $0 == "\n" }.count
+                cursorLineOffset += markdown[matchRange].filter { $0 == "\n" }.count
+                cursor = matchRange.upperBound
+            }
+
+            let rawTrailingText = String(markdown[cursor...])
+            let trailingText = rawTrailingText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trailingText.isEmpty {
+                let leadingLines = rawTrailingText.prefix { $0.isWhitespace }.filter { $0 == "\n" }.count
+                appendTextBlock(trailingText, lineOffset: cursorLineOffset + leadingLines)
+            }
+        }
+
+        blocks = parsedBlocks
+        outline = parsedOutline
+        imageURLs = parsedImageURLs
+    }
+}
+
+private final class NativeMarkdownArticleDocumentBox: NSObject {
+    let document: NativeMarkdownArticleDocument
+
+    init(_ document: NativeMarkdownArticleDocument) {
+        self.document = document
+    }
+}
+
+final class NativeMarkdownArticleDocumentCache {
+    static let shared = NativeMarkdownArticleDocumentCache()
+
+    private let cache = NSCache<NSString, NativeMarkdownArticleDocumentBox>()
+
+    private init() {
+        cache.countLimit = 24
+        cache.totalCostLimit = 24 * 1_024 * 1_024
+    }
+
+    func document(for markdown: String) -> NativeMarkdownArticleDocument {
+        let key = markdown as NSString
+        if let cached = cache.object(forKey: key) { return cached.document }
+        let document = NativeMarkdownArticleDocument(markdown: markdown)
+        cache.setObject(
+            NativeMarkdownArticleDocumentBox(document),
+            forKey: key,
+            cost: max(1, key.length * 2)
+        )
+        return document
+    }
 }
 
 struct MarkdownArticleBody: View {
-    let markdown: String
+    private let document: NativeMarkdownArticleDocument
     let store: LocalBlogStore
+    let sourceRelativePath: String?
     let articleLinks: [NativeArticleSummary]
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
     let onToggleTask: ((Int, Bool) -> Void)?
@@ -1576,27 +1720,51 @@ struct MarkdownArticleBody: View {
         body: String,
         store: LocalBlogStore,
         articleLinks: [NativeArticleSummary] = [],
+        sourceRelativePath: String? = nil,
         rootArticleSlug: String? = nil,
         embeddedSlugs: Set<String> = [],
         onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void = { _ in },
         onToggleTask: ((Int, Bool) -> Void)? = nil
     ) {
-        markdown = body
+        document = NativeMarkdownArticleDocumentCache.shared.document(for: body)
         self.store = store
+        self.sourceRelativePath = sourceRelativePath
         self.articleLinks = articleLinks
         self.onOpenArticle = onOpenArticle
         self.onToggleTask = onToggleTask
         self.embeddedSlugs = rootArticleSlug.map { embeddedSlugs.union([$0]) } ?? embeddedSlugs
     }
 
-    private var blocks: [MarkdownArticleBlock] { Self.markdownBlocks(in: markdown) }
+    fileprivate init(
+        document: NativeMarkdownArticleDocument,
+        store: LocalBlogStore,
+        articleLinks: [NativeArticleSummary] = [],
+        sourceRelativePath: String? = nil,
+        rootArticleSlug: String? = nil,
+        embeddedSlugs: Set<String> = [],
+        onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void = { _ in },
+        onToggleTask: ((Int, Bool) -> Void)? = nil
+    ) {
+        self.document = document
+        self.store = store
+        self.sourceRelativePath = sourceRelativePath
+        self.articleLinks = articleLinks
+        self.onOpenArticle = onOpenArticle
+        self.onToggleTask = onToggleTask
+        self.embeddedSlugs = rootArticleSlug.map { embeddedSlugs.union([$0]) } ?? embeddedSlugs
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: max(12, typography.paragraphSpacing)) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(document.blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case let .image(url, alt):
-                    NativeImageView(url: url, alt: alt, store: store)
+                    NativeImageView(
+                        url: url,
+                        alt: alt,
+                        store: store,
+                        sourceRelativePath: sourceRelativePath
+                    )
                 case let .base(reference):
                     SmartCollectionEmbedView(
                         reference: reference,
@@ -1611,9 +1779,9 @@ struct MarkdownArticleBody: View {
                         embeddedSlugs: embeddedSlugs,
                         onOpenArticle: onOpenArticle
                     )
-                case let .text(markdown, headingIDs, lineOffset):
+                case let .text(blocks, headingIDs, lineOffset):
                     MarkdownDocumentView(
-                        markdown: markdown,
+                        blocks: blocks,
                         articleLinks: articleLinks,
                         onOpenArticle: onOpenArticle,
                         onToggleTask: onToggleTask,
@@ -1626,78 +1794,7 @@ struct MarkdownArticleBody: View {
     }
 
     static func imageURLs(in markdown: String) -> Set<String> {
-        Set(markdownBlocks(in: markdown).compactMap { block in
-            guard case let .image(url, _) = block else { return nil }
-            return url
-        })
-    }
-
-    private static func markdownBlocks(in markdown: String) -> [MarkdownArticleBlock] {
-        var nextHeadingIndex = 0
-        func textBlock(_ source: String, lineOffset: Int) -> MarkdownArticleBlock {
-            let headingCount = MarkdownOutline.items(in: source).count
-            let headingIDs = (0..<headingCount).map { offset in
-                MarkdownOutline.anchorID(for: nextHeadingIndex + offset)
-            }
-            nextHeadingIndex += headingCount
-            return .text(markdown: source, headingIDs: headingIDs, lineOffset: lineOffset)
-        }
-
-        let expression = try! NSRegularExpression(
-            pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)|!\[\[([^\[\]\r\n]+)\]\]|(?s:```base[^\r\n]*\r?\n(.*?)\r?\n```)"#
-        )
-        let searchRange = NSRange(markdown.startIndex..., in: markdown)
-        let matches = expression.matches(in: markdown, range: searchRange)
-        guard !matches.isEmpty else {
-            return markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? [] : [textBlock(markdown, lineOffset: 0)]
-        }
-
-        var blocks: [MarkdownArticleBlock] = []
-        var cursor = markdown.startIndex
-        for match in matches {
-            guard let matchRange = Range(match.range, in: markdown) else { continue }
-            let rawText = String(markdown[cursor..<matchRange.lowerBound])
-            let textBefore = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !textBefore.isEmpty {
-                let baseLine = markdown[..<cursor].filter { $0 == "\n" }.count
-                let leadingLines = rawText.prefix { $0.isWhitespace }.filter { $0 == "\n" }.count
-                blocks.append(textBlock(textBefore, lineOffset: baseLine + leadingLines))
-            }
-            if let baseRange = Range(match.range(at: 4), in: markdown) {
-                let config = String(markdown[baseRange])
-                let reference = config.components(separatedBy: .newlines).compactMap { line -> String? in
-                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard let colon = trimmed.firstIndex(of: ":") else { return nil }
-                    let key = trimmed[..<colon].lowercased()
-                    guard key == "id" || key == "name" || key == "source" else { return nil }
-                    return String(trimmed[trimmed.index(after: colon)...])
-                        .trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
-                }.first ?? config.trimmingCharacters(in: .whitespacesAndNewlines)
-                blocks.append(.base(reference: reference.hasSuffix(".base") ? reference : "\(reference).base"))
-            } else if let referenceRange = Range(match.range(at: 3), in: markdown) {
-                let reference = String(markdown[referenceRange])
-                let target = NativeArticleLink.Reference(rawValue: reference).target
-                if URL(fileURLWithPath: target).pathExtension.caseInsensitiveCompare("base") == .orderedSame {
-                    blocks.append(.base(reference: reference))
-                } else {
-                    blocks.append(.transclusion(reference: reference))
-                }
-            } else if let altRange = Range(match.range(at: 1), in: markdown),
-                      let urlRange = Range(match.range(at: 2), in: markdown) {
-                blocks.append(.image(url: String(markdown[urlRange]), alt: String(markdown[altRange])))
-            }
-            cursor = matchRange.upperBound
-        }
-
-        let rawTrailingText = String(markdown[cursor...])
-        let trailingText = rawTrailingText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trailingText.isEmpty {
-            let baseLine = markdown[..<cursor].filter { $0 == "\n" }.count
-            let leadingLines = rawTrailingText.prefix { $0.isWhitespace }.filter { $0 == "\n" }.count
-            blocks.append(textBlock(trailingText, lineOffset: baseLine + leadingLines))
-        }
-        return blocks
+        NativeMarkdownArticleDocumentCache.shared.document(for: markdown).imageURLs
     }
 }
 
@@ -1737,6 +1834,7 @@ private struct MarkdownArticleTransclusionView: View {
                             body: fragment,
                             store: store,
                             articleLinks: articleLinks,
+                            sourceRelativePath: article.sourceRelativePath,
                             embeddedSlugs: embeddedSlugs.union([article.slug]),
                             onOpenArticle: onOpenArticle
                         ))
@@ -1993,9 +2091,22 @@ struct NativeImageView: View {
     let url: String
     let alt: String
     let store: LocalBlogStore
+    let sourceRelativePath: String?
 
     @State private var image: NSImage?
     @State private var failedToLoad = false
+
+    init(
+        url: String,
+        alt: String,
+        store: LocalBlogStore,
+        sourceRelativePath: String? = nil
+    ) {
+        self.url = url
+        self.alt = alt
+        self.store = store
+        self.sourceRelativePath = sourceRelativePath
+    }
 
     var body: some View {
         Group {
@@ -2013,39 +2124,24 @@ struct NativeImageView: View {
                     .frame(maxWidth: .infinity, minHeight: 160)
             }
         }
-        .task(id: url) {
-            guard let fileURL = await store.mediaURL(for: url) else {
+        .task(id: "\(url)|\(sourceRelativePath ?? "")") {
+            image = nil
+            failedToLoad = false
+            guard let fileURL = await store.mediaURL(
+                for: url,
+                relativeToMarkdownSource: sourceRelativePath
+            ) else {
                 failedToLoad = true
                 return
             }
-            let decoded = await Task.detached(priority: .userInitiated) {
-                NativeImageDecodeResult(
-                    image: NativeImageLoader.thumbnail(from: fileURL, maxPixelSize: 2_400)
-                )
-            }.value
+            let decoded = await NativeImagePipeline.shared.image(
+                from: fileURL,
+                mode: .thumbnail(maxPixelSize: 2_400)
+            )
             guard !Task.isCancelled else { return }
             image = decoded.image
             failedToLoad = image == nil
         }
-    }
-}
-
-private struct NativeImageDecodeResult: @unchecked Sendable {
-    let image: NSImage?
-}
-
-private enum NativeImageLoader {
-    static func thumbnail(from url: URL, maxPixelSize: Int) -> NSImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-        ]
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            return nil
-        }
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 }
 

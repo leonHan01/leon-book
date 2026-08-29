@@ -192,9 +192,11 @@ private struct NativeSidebar: View {
             Section("leon-book") {
                 sidebarButton(.dashboard, title: "概览", icon: "rectangle.grid.2x2")
                 articleLibraryButton
-                sidebarButton(.graph, title: "关系图", icon: "point.3.connected.trianglepath.dotted")
+                if model.isKnowledgeGraphModuleEnabled {
+                    sidebarButton(.graph, title: "关系图", icon: "point.3.connected.trianglepath.dotted")
+                }
                 sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
-                sidebarButton(.zhihu, title: "知乎", icon: "questionmark.bubble")
+                sidebarButton(.zhihu, title: "问答", icon: "questionmark.bubble")
                 sidebarButton(.editor, title: "写作", icon: "square.and.pencil")
                 sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
             }
@@ -384,7 +386,6 @@ private struct NativeNavigationDetail: View {
         case .moments:
             MomentFeedView(
                 model: model,
-                navigation: model.navigation,
                 pageState: pageStateCache.moments
             )
         case .zhihu: ZhihuView(model: model)

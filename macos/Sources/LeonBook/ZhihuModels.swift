@@ -32,6 +32,7 @@ public struct NativeQuestionAnswer: Codable, Hashable, Identifiable {
     public let id: String
     public let questionID: String
     public let body: String
+    public let images: [NativeMedia]
     public let createdAt: String
     public let updatedAt: String
 
@@ -39,14 +40,36 @@ public struct NativeQuestionAnswer: Codable, Hashable, Identifiable {
         id: String,
         questionID: String,
         body: String,
+        images: [NativeMedia] = [],
         createdAt: String,
         updatedAt: String
     ) {
         self.id = id
         self.questionID = questionID
         self.body = body
+        self.images = images
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        questionID = try container.decode(String.self, forKey: .questionID)
+        body = try container.decode(String.self, forKey: .body)
+        images = try container.decodeIfPresent([NativeMedia].self, forKey: .images) ?? []
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+    }
+}
+
+struct NativeQuestionAnswerDraft: Equatable {
+    var body = ""
+    var textRuns: [NativeMomentTextRun] = []
+    var images: [NativeMedia] = []
+
+    var isEmpty: Bool {
+        body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty
     }
 }
 

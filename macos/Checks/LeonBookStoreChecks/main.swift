@@ -43,6 +43,49 @@ func withWorkspace(_ body: (URL) async throws -> Void) async throws {
     try await body(workspace)
 }
 
+func executeSQLite(at url: URL, sql: String) throws {
+    var database: OpaquePointer?
+    let result = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE, nil)
+    guard result == SQLITE_OK, let database else {
+        let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unable to open test database"
+        if let database { sqlite3_close(database) }
+        throw NSError(domain: "LeonBookStoreChecks", code: Int(result), userInfo: [NSLocalizedDescriptionKey: message])
+    }
+    defer { sqlite3_close(database) }
+    sqlite3_busy_timeout(database, 5_000)
+
+    var errorMessage: UnsafeMutablePointer<CChar>?
+    let executionResult = sqlite3_exec(database, sql, nil, nil, &errorMessage)
+    guard executionResult == SQLITE_OK else {
+        let message = errorMessage.map { String(cString: $0) } ?? String(cString: sqlite3_errmsg(database))
+        if let errorMessage { sqlite3_free(errorMessage) }
+        throw NSError(domain: "LeonBookStoreChecks", code: Int(executionResult), userInfo: [NSLocalizedDescriptionKey: message])
+    }
+}
+
+func sqliteInteger(at url: URL, sql: String) throws -> Int {
+    var database: OpaquePointer?
+    let result = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY, nil)
+    guard result == SQLITE_OK, let database else {
+        let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "unable to open test database"
+        if let database { sqlite3_close(database) }
+        throw NSError(domain: "LeonBookStoreChecks", code: Int(result), userInfo: [NSLocalizedDescriptionKey: message])
+    }
+    defer { sqlite3_close(database) }
+
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+        throw NSError(
+            domain: "LeonBookStoreChecks",
+            code: Int(sqlite3_errcode(database)),
+            userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(database))]
+        )
+    }
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+    return Int(sqlite3_column_int64(statement, 0))
+}
+
 func createLegacyMomentsDatabase(at url: URL) throws {
     var database: OpaquePointer?
     let result = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE, nil)
@@ -92,7 +135,65 @@ func testLegacyMomentWithoutTagsLoadsFacets() async throws {
             limit: 20
         )
         expect(tagged.moments.map(\.id) == ["legacy-moment"], "legacy tags should be backfilled for tag filtering")
-        expect(tagged.moments.first?.pageViews == 0, "legacy moments should migrate with zero page views")
+    }
+}
+
+func testRoutineStoreReadsDoNotRepeatMaintenance() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        _ = try await store.listArticles()
+        let databaseURL = workspace.appendingPathComponent("leon-book.sqlite")
+        try executeSQLite(at: databaseURL, sql: """
+        INSERT INTO article_revisions(
+            draft_key, article_slug, reason, snapshot_json, created_at, updated_at
+        ) VALUES (
+            'maintenance-probe', NULL, 'autosave', '{}',
+            '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z'
+        );
+        """)
+
+        _ = try await store.listArticles()
+        let remaining = try sqliteInteger(
+            at: databaseURL,
+            sql: "SELECT COUNT(*) FROM article_revisions WHERE draft_key = 'maintenance-probe'"
+        )
+        expect(remaining == 1, "routine store reads should not rerun revision maintenance")
+
+        try await store.performMaintenance()
+        let remainingAfterMaintenance = try sqliteInteger(
+            at: databaseURL,
+            sql: "SELECT COUNT(*) FROM article_revisions WHERE draft_key = 'maintenance-probe'"
+        )
+        expect(remainingAfterMaintenance == 0, "explicit maintenance should still purge expired revisions")
+    }
+}
+
+func testMomentSearchFiltersInSQLiteBeforeDecodingRows() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let matching = try await store.saveMoment(
+            text: "A uniquely searchable needlephrase",
+            textRuns: [],
+            images: []
+        )
+        try executeSQLite(
+            at: workspace.appendingPathComponent("leon-book.sqlite"),
+            sql: """
+            INSERT INTO moments(
+                id, created_at, updated_at, text, text_runs_json, images_json,
+                tags_json, is_favorite, deleted_at, delete_expires_at
+            ) VALUES (
+                'malformed-unrelated', '2099-01-01T00:00:00Z', '2099-01-01T00:00:00Z',
+                'unrelated content', '{', '{', '[]', 0, NULL, NULL
+            );
+            """
+        )
+
+        let filter = NativeMomentFilter(searchText: "needlephrase")
+        let count = try await store.countMoments(matching: filter)
+        let page = try await store.listMomentPage(matching: filter, limit: 20)
+        expect(count == 1, "moment search count should be resolved by SQLite/FTS")
+        expect(page.moments.map(\.id) == [matching.id], "moment search should decode only matching rows")
     }
 }
 
@@ -819,7 +920,7 @@ func testMomentFavoriteCanBeToggledAndPersists() async throws {
     }
 }
 
-func testArticleAndMomentPageViewsPersistAcrossEdits() async throws {
+func testArticlePageViewsPersistAcrossEdits() async throws {
     try await withWorkspace { workspace in
         let store = LocalBlogStore(rootURL: workspace)
         let savedArticle = try await store.saveArticle(
@@ -842,23 +943,6 @@ func testArticleAndMomentPageViewsPersistAcrossEdits() async throws {
         expect(editedArticle.pageViews == 2, "editing an article should preserve its page views")
         let articleSummaries = try await store.listArticles()
         expect(articleSummaries.first?.pageViews == 2, "article summaries should expose page views")
-
-        let savedMoment = try await store.saveMoment(text: "记录一次浏览", textRuns: [], images: [])
-        expect(savedMoment.pageViews == 0, "new moments should start with zero page views")
-
-        _ = try await store.incrementMomentPageViews(id: savedMoment.id)
-        let viewedMoment = try await store.incrementMomentPageViews(id: savedMoment.id)
-        expect(viewedMoment.pageViews == 2, "viewing a moment should increment and persist its page views")
-
-        let editedMoment = try await store.updateMoment(
-            id: savedMoment.id,
-            text: "编辑后仍保留浏览量",
-            textRuns: [],
-            images: []
-        )
-        expect(editedMoment.pageViews == 2, "editing a moment should preserve its page views")
-        let reloadedMoments = try await store.listMoments()
-        expect(reloadedMoments.first?.pageViews == 2, "reloaded moments should expose page views")
     }
 }
 
@@ -1063,6 +1147,8 @@ func testMarkdownIsPrimaryArticleSource() async throws {
 
 let checks: [(String, () async throws -> Void)] = [
     ("legacy moment without tags loads facets", testLegacyMomentWithoutTagsLoadsFacets),
+    ("routine store reads do not repeat maintenance", testRoutineStoreReadsDoNotRepeatMaintenance),
+    ("moment search filters before decoding rows", testMomentSearchFiltersInSQLiteBeforeDecodingRows),
     ("published moment can be restored from JSON export", testPublishedMomentCanBeRestoredFromJSONExportAlone),
     ("moment pages use stable cursors", testMomentPagesUseStableCursors),
     ("moment sidecars track changes", testMomentSidecarsTrackChangesWithoutRebuildingTheIndex),
@@ -1089,7 +1175,7 @@ let checks: [(String, () async throws -> Void)] = [
     ("moment search matches text, tags, and dates", { testMomentSearchMatchesTextTagsAndDates() }),
     ("moment date filters select the expected ranges", { testMomentDateFilters() }),
     ("moment favorites can be toggled and persist", testMomentFavoriteCanBeToggledAndPersists),
-    ("article and moment page views persist across edits", testArticleAndMomentPageViewsPersistAcrossEdits),
+    ("article page views persist across edits", testArticlePageViewsPersistAcrossEdits),
     ("unified FTS search indexes and tracks content", testUnifiedFTSSearchIndexesAndTracksArticlesAndMoments),
     ("Markdown is the primary article source", testMarkdownIsPrimaryArticleSource),
     ("purging an article keeps media referenced by another article", testPurgingArticleKeepsMediaReferencedByAnotherArticle),

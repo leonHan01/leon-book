@@ -1,8 +1,15 @@
 import AppKit
 import Foundation
+import LeonBookBackupModule
+import LeonBookModuleKit
 
 extension NativeAppModel {
     func chooseBackupDirectory() {
+        guard authorizeFirstPartyModule(
+            BackupFirstPartyModule.id,
+            permission: .backupWrite,
+            action: "设置备份目录"
+        ) else { return }
         guard !isBackingUp, !isRestoringBackup else { return }
         let panel = NSOpenPanel()
         panel.title = "选择备份目录"
@@ -34,6 +41,11 @@ extension NativeAppModel {
     }
 
     func clearBackupDirectory() {
+        guard authorizeFirstPartyModule(
+            BackupFirstPartyModule.id,
+            permission: .backupWrite,
+            action: "清除备份设置"
+        ) else { return }
         guard !isBackingUp, !isRestoringBackup else { return }
         backupTask?.cancel()
         LocalBlogStore.clearBackupDirectory()
@@ -46,11 +58,21 @@ extension NativeAppModel {
     }
 
     func openBackupDirectory() {
+        guard authorizeFirstPartyModule(
+            BackupFirstPartyModule.id,
+            permission: .backupRead,
+            action: "打开备份目录"
+        ) else { return }
         guard !backupDirectoryPath.isEmpty else { return }
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: backupDirectoryPath)
     }
 
     func backupNow() {
+        guard authorizeFirstPartyModule(
+            BackupFirstPartyModule.id,
+            permission: .backupWrite,
+            action: "创建备份"
+        ) else { return }
         guard !isRestoringBackup else { return }
         backupTask?.cancel()
         backupTask = Task { [weak self] in
@@ -59,7 +81,13 @@ extension NativeAppModel {
     }
 
     func scheduleBackup() {
-        guard claimBackgroundMaintenanceOwnership(),
+        guard authorizeFirstPartyModule(
+                BackupFirstPartyModule.id,
+                permission: .backupWrite,
+                action: "创建自动备份",
+                presentsError: false
+              ),
+              claimBackgroundMaintenanceOwnership(),
               !backupDirectoryPath.isEmpty,
               !isRestoringBackup else { return }
         startTrashCleanupLoop()
@@ -82,6 +110,12 @@ extension NativeAppModel {
 
     @discardableResult
     private func performBackup(manual: Bool) async -> Bool {
+        guard authorizeFirstPartyModule(
+            BackupFirstPartyModule.id,
+            permission: .backupWrite,
+            action: "创建备份",
+            presentsError: manual
+        ) else { return false }
         guard storageReady, !backupDirectoryPath.isEmpty else { return false }
         guard !isBackingUp, !isRestoringBackup else { return false }
         guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia else {
@@ -95,6 +129,11 @@ extension NativeAppModel {
         let policy = backupPolicy
         isBackingUp = true
         backupStatus = manual ? "正在创建手动备份…" : "正在创建增量备份…"
+        recordFirstPartyModuleEvent(
+            moduleID: BackupFirstPartyModule.id,
+            name: "backup.requested",
+            payload: ["manual": String(manual)]
+        )
         defer { isBackingUp = false }
 
         do {
@@ -113,10 +152,20 @@ extension NativeAppModel {
             backupStatus = "备份完成：\(result.snapshot.url.lastPathComponent)\(reused)\(cleaned)"
             await refreshBackupOverview()
             errorMessage = nil
+            recordFirstPartyModuleEvent(
+                moduleID: BackupFirstPartyModule.id,
+                name: "backup.completed",
+                payload: ["snapshot": result.snapshot.url.lastPathComponent]
+            )
             return true
         } catch {
             backupStatus = "备份失败"
             errorMessage = "\(manual ? "手动" : "自动")备份失败：\(error.localizedDescription)"
+            recordFirstPartyModuleEvent(
+                moduleID: BackupFirstPartyModule.id,
+                name: "backup.failed",
+                payload: ["reason": error.localizedDescription]
+            )
             return false
         }
     }
@@ -137,6 +186,11 @@ extension NativeAppModel {
         maximumSnapshotCount: Int? = nil,
         minimumFreeSpaceGB: Int? = nil
     ) {
+        guard authorizeFirstPartyModule(
+            BackupFirstPartyModule.id,
+            permission: .backupWrite,
+            action: "修改备份策略"
+        ) else { return }
         backupPolicy = NativeBackupPolicy(
             automaticInterval: TimeInterval(automaticIntervalHours ?? backupAutomaticIntervalHours) * 60 * 60,
             retentionDays: retentionDays ?? backupRetentionDays,
@@ -161,6 +215,16 @@ extension NativeAppModel {
     }
 
     func refreshBackupOverview() async {
+        guard authorizeFirstPartyModule(
+            BackupFirstPartyModule.id,
+            permission: .backupRead,
+            action: "读取备份快照",
+            presentsError: false
+        ) else {
+            backupSnapshots = []
+            backupStorageEstimate = nil
+            return
+        }
         guard !backupDirectoryPath.isEmpty else {
             backupSnapshots = []
             backupStorageEstimate = nil
@@ -190,6 +254,11 @@ extension NativeAppModel {
     }
 
     func validateBackupSnapshot(_ snapshot: NativeBackupSnapshot) {
+        guard authorizeFirstPartyModule(
+            BackupFirstPartyModule.id,
+            permission: .backupRead,
+            action: "校验备份快照"
+        ) else { return }
         guard !isValidatingBackup, !isRestoringBackup else { return }
         isValidatingBackup = true
         backupValidationStatus = "正在校验 \(snapshot.url.lastPathComponent)…"
@@ -210,6 +279,11 @@ extension NativeAppModel {
     }
 
     func restoreBackupSnapshot(_ snapshot: NativeBackupSnapshot) {
+        guard authorizeFirstPartyModule(
+            BackupFirstPartyModule.id,
+            permission: .backupWrite,
+            action: "恢复备份快照"
+        ) else { return }
         guard storageReady,
               !isBackingUp,
               !isRestoringBackup,
@@ -223,6 +297,9 @@ extension NativeAppModel {
         alert.addButton(withTitle: "校验并恢复")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        // Lock module lifecycle before yielding to the restore task. A restore
+        // cannot be cancelled safely after it starts replacing workspace data.
+        isRestoringBackup = true
         Task { await performBackupRestore(snapshot) }
     }
 
@@ -269,6 +346,11 @@ extension NativeAppModel {
             backupStatus = "恢复完成：\(snapshot.url.lastPathComponent)；恢复前数据已保存为安全快照"
             backupValidationStatus = "恢复时已通过快照校验"
             errorMessage = nil
+            recordFirstPartyModuleEvent(
+                moduleID: BackupFirstPartyModule.id,
+                name: "backup.restored",
+                payload: ["snapshot": snapshot.url.lastPathComponent]
+            )
         } catch {
             isBackingUp = false
             if !storageReady {

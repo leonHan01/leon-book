@@ -1,6 +1,7 @@
 import Darwin
+import AppKit
 import Foundation
-import LeonBook
+@testable import LeonBook
 
 private var failures: [String] = []
 
@@ -109,6 +110,12 @@ final class NativeModelsTests {
         let regularContext = NativeCommandContext(storageReady: true)
         let matches = registry.matches("快速文", on: .palette, context: regularContext)
         XCTAssertEqual(matches.first?.id, .quickOpen)
+        XCTAssertEqual(registry.definition(for: .backupNow)?.title, "立即备份")
+        XCTAssertEqual(registry.definition(for: .backupNow)?.surfaces, [.palette])
+        XCTAssertEqual(
+            registry.definition(for: .globalSearch)?.defaultShortcut,
+            NativeCommandShortcut(key: "f", modifiers: [.command, .shift])
+        )
 
         let ranked = registry.matches(
             "",
@@ -679,6 +686,192 @@ final class NativeModelsTests {
     }
 }
 
+private final class NativeImageDecodeProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var invocationCount = 0
+    private var activeCount = 0
+    private var peakActiveCount = 0
+
+    func decode(url: URL, mode: NativeImageLoadMode) -> NSImage? {
+        lock.lock()
+        invocationCount += 1
+        activeCount += 1
+        peakActiveCount = max(peakActiveCount, activeCount)
+        lock.unlock()
+
+        usleep(35_000)
+
+        lock.lock()
+        activeCount -= 1
+        lock.unlock()
+        return NSImage(size: NSSize(width: 32, height: 32))
+    }
+
+    var counts: (invocations: Int, peakActive: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (invocationCount, peakActiveCount)
+    }
+}
+
+final class PerformanceRegressionTests {
+    @MainActor
+    func testEditorSessionOwnsHighFrequencyDraftState() {
+        let session = NativeEditorSessionState()
+
+        session.draft.body = "typed without invalidating the whole app model"
+        session.bodySelection = NSRange(location: 5, length: 3)
+        session.autosaveStatus = "等待自动保存…"
+
+        XCTAssertEqual(session.draft.body, "typed without invalidating the whole app model")
+        XCTAssertEqual(session.bodySelection, NSRange(location: 5, length: 3))
+        XCTAssertEqual(session.autosaveStatus, "等待自动保存…")
+    }
+
+    func testMarkdownRefreshPlanSkipsUnrelatedDomains() {
+        let update = NativeMarkdownSyncResult(
+            updatedCount: 1,
+            affectedArticleSlugs: ["first-note"]
+        )
+        let updatePlan = NativeMarkdownRefreshPlan(
+            result: update,
+            selectedArticleSlug: "first-note"
+        )
+
+        XCTAssertTrue(updatePlan.reloadsArticleList)
+        XCTAssertTrue(updatePlan.reloadsSelectedArticle)
+        XCTAssertTrue(updatePlan.reloadsSelectedSmartCollection)
+        XCTAssertTrue(updatePlan.reloadsKnowledgeGraph)
+        XCTAssertFalse(updatePlan.reloadsTrash)
+        XCTAssertFalse(updatePlan.reloadsMoments)
+        XCTAssertFalse(updatePlan.reloadsQuestions)
+        XCTAssertFalse(updatePlan.reloadsActivity)
+
+        let deletionPlan = NativeMarkdownRefreshPlan(
+            result: NativeMarkdownSyncResult(
+                deletedCount: 1,
+                affectedArticleSlugs: ["deleted-note"]
+            ),
+            selectedArticleSlug: nil
+        )
+        XCTAssertTrue(deletionPlan.reloadsTrash)
+        XCTAssertFalse(deletionPlan.reloadsSelectedArticle)
+    }
+
+    func testMarkdownLiveStylingLimitsOrdinaryEditsToNearbyParagraphs() {
+        let source = (0..<1_000).map { "paragraph \($0) with **markdown**" }
+            .joined(separator: "\n")
+        let fullRange = NSRange(location: 0, length: (source as NSString).length)
+        let editRange = (source as NSString).range(of: "paragraph 500")
+        let styledRange = NativeMarkdownLiveStyler.stylingRange(
+            in: source,
+            editedRange: editRange
+        )
+
+        XCTAssertTrue(NSIntersectionRange(styledRange, editRange).length == editRange.length)
+        XCTAssertTrue(styledRange.length < fullRange.length / 20)
+        XCTAssertEqual(
+            NativeMarkdownLiveStyler.stylingRange(in: source, editedRange: nil),
+            fullRange
+        )
+
+        let fencedSource = """
+        before
+        ```swift
+        let first = 1
+        let second = 2
+        let third = 3
+        let fourth = 4
+        let fifth = 5
+        ```
+        after
+        """
+        let fencedEdit = (fencedSource as NSString).range(of: "let third = 3")
+        let fencedRange = NativeMarkdownLiveStyler.stylingRange(
+            in: fencedSource,
+            editedRange: fencedEdit
+        )
+        XCTAssertTrue((fencedSource as NSString).substring(with: fencedRange).contains("```swift"))
+        XCTAssertTrue((fencedSource as NSString).substring(with: fencedRange).contains("let fifth = 5"))
+    }
+
+    func testArticleMarkdownAnalysisIsCachedAndSharedAcrossConsumers() {
+        let markdown = """
+        # Overview
+
+        ![Cover](/media/cover.png)
+
+        ## Details
+
+        ![[assets/diagram.jpg]]
+        """
+        let first = NativeMarkdownArticleDocumentCache.shared.document(for: markdown)
+        let second = NativeMarkdownArticleDocumentCache.shared.document(for: markdown)
+
+        XCTAssertTrue(first === second)
+        XCTAssertEqual(first.outline.map(\.title), ["Overview", "Details"])
+        XCTAssertEqual(first.imageURLs, ["/media/cover.png", "assets/diagram.jpg"])
+    }
+
+    func testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let duplicateURL = root.appendingPathComponent("duplicate.png")
+        try Data([0]).write(to: duplicateURL)
+        let duplicateProbe = NativeImageDecodeProbe()
+        let duplicatePipeline = NativeImagePipeline(
+            maximumConcurrentDecodes: 2,
+            decoder: { [duplicateProbe] url, mode in
+                duplicateProbe.decode(url: url, mode: mode)
+            }
+        )
+
+        async let first = duplicatePipeline.image(
+            from: duplicateURL,
+            mode: .thumbnail(maxPixelSize: 480)
+        )
+        async let second = duplicatePipeline.image(
+            from: duplicateURL,
+            mode: .thumbnail(maxPixelSize: 480)
+        )
+        let duplicateResults = await (first, second)
+        XCTAssertNotNil(duplicateResults.0.image)
+        XCTAssertNotNil(duplicateResults.1.image)
+        XCTAssertEqual(duplicateProbe.counts.invocations, 1)
+
+        let concurrencyProbe = NativeImageDecodeProbe()
+        let concurrencyPipeline = NativeImagePipeline(
+            maximumConcurrentDecodes: 2,
+            decoder: { [concurrencyProbe] url, mode in
+                concurrencyProbe.decode(url: url, mode: mode)
+            }
+        )
+        let urls = try (0..<6).map { index -> URL in
+            let url = root.appendingPathComponent("image-\(index).png")
+            try Data([UInt8(index)]).write(to: url)
+            return url
+        }
+        let loadedCount = await withTaskGroup(of: Bool.self) { group -> Int in
+            for url in urls {
+                group.addTask {
+                    await concurrencyPipeline.image(
+                        from: url,
+                        mode: .thumbnail(maxPixelSize: 480)
+                    ).image != nil
+                }
+            }
+            var loaded = 0
+            for await didLoad in group where didLoad { loaded += 1 }
+            return loaded
+        }
+
+        XCTAssertEqual(loadedCount, urls.count)
+        XCTAssertEqual(concurrencyProbe.counts.invocations, urls.count)
+        XCTAssertTrue(concurrencyProbe.counts.peakActive <= 2)
+    }
+}
+
 final class LocalBlogStoreTests {
     func testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() async throws {
         let root = try makeTemporaryDirectory()
@@ -775,10 +968,59 @@ final class LocalBlogStoreTests {
 
         let answer = try await store.saveQuestionAnswer(
             questionID: first.id,
-            body: "先划清状态和持久化边界，再设计界面。"
+            body: "先划清状态和持久化边界，再设计界面。",
+            images: [NativeMedia(
+                kind: "image",
+                name: "diagram.png",
+                size: 128,
+                url: "media/question-answers/diagram.png"
+            )]
         )
-        XCTAssertEqual(try await store.listQuestionAnswers(questionID: first.id), [answer])
-        XCTAssertEqual(try await store.getQuestion(id: first.id).answerCount, 1)
+        XCTAssertEqual(answer.images.map(\.url), ["/media/question-answers/diagram.png"])
+        let imageOnlyAnswer = try await store.saveQuestionAnswer(
+            questionID: first.id,
+            body: "  ",
+            images: [NativeMedia(
+                kind: "image",
+                name: "screenshot.png",
+                size: 256,
+                url: "/media/question-answers/screenshot.png"
+            )]
+        )
+        let editedAnswer = try await store.updateQuestionAnswer(
+            id: answer.id,
+            body: "## 更新后的回答\n\n- 支持 **Markdown**\n- 支持图片",
+            images: [NativeMedia(
+                kind: "image",
+                name: "edited.png",
+                size: 512,
+                url: "/media/question-answers/edited.png"
+            )],
+            expectedUpdatedAt: answer.updatedAt
+        )
+        XCTAssertEqual(editedAnswer.id, answer.id)
+        XCTAssertEqual(editedAnswer.createdAt, answer.createdAt)
+        XCTAssertTrue(editedAnswer.body.contains("**Markdown**"))
+        XCTAssertEqual(editedAnswer.images.map(\.name), ["edited.png"])
+        XCTAssertEqual(
+            try await store.listQuestionAnswers(questionID: first.id),
+            [editedAnswer, imageOnlyAnswer]
+        )
+        XCTAssertEqual(try await store.getQuestion(id: first.id).answerCount, 2)
+
+        do {
+            _ = try await store.updateQuestionAnswer(
+                id: answer.id,
+                body: "过期修改",
+                expectedUpdatedAt: answer.updatedAt
+            )
+            XCTFail("updating an answer with a stale timestamp should fail")
+        } catch {
+            XCTAssertEqual(
+                error.localizedDescription,
+                "这条回答已在其他窗口中更新，请重新载入后再编辑。"
+            )
+        }
         XCTAssertEqual(try await store.listQuestions().first?.id, first.id)
         XCTAssertTrue(try await store.listQuestionTagFacets().contains {
             $0.tag == "SwiftUI" && $0.count == 1
@@ -1062,6 +1304,7 @@ final class LocalBlogStoreTests {
             changedRelativePaths: [first.sourceRelativePath]
         )
         XCTAssertEqual(updated.updatedCount, 1)
+        XCTAssertEqual(updated.affectedArticleSlugs, [first.slug])
         XCTAssertEqual(try await store.getArticle(slug: first.slug).body, "changed body")
         XCTAssertEqual(try await store.getArticle(slug: second.slug).body, "second body")
 
@@ -1075,8 +1318,11 @@ final class LocalBlogStoreTests {
             changedDirectoryPrefixes: ["inbox"]
         )
         XCTAssertEqual(inserted.insertedCount, 1)
+        XCTAssertEqual(inserted.affectedArticleSlugs.count, 1)
         XCTAssertTrue(try await store.listArticles().contains {
-            $0.sourceRelativePath == "inbox/nested.md"
+            guard $0.sourceRelativePath == "inbox/nested.md" else { return false }
+            XCTAssertEqual(inserted.affectedArticleSlugs, [$0.slug])
+            return true
         })
 
         try FileManager.default.removeItem(
@@ -1086,6 +1332,7 @@ final class LocalBlogStoreTests {
             changedRelativePaths: [second.sourceRelativePath]
         )
         XCTAssertEqual(deleted.deletedCount, 1)
+        XCTAssertEqual(deleted.affectedArticleSlugs, [second.slug])
         XCTAssertFalse(try await store.listArticles().contains { $0.slug == second.slug })
     }
 
@@ -1850,6 +2097,153 @@ final class LocalBlogStoreTests {
             XCTAssertTrue(toggled.body.contains("[x] 待办"))
         }
     }
+
+    func testReadOnlyMarkdownMountIndexesExternalChangesWithoutWritingVault() async throws {
+        let root = try makeTemporaryDirectory()
+        let vault = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: vault)
+        }
+        let noteURL = vault.appendingPathComponent("folder/mounted-note.md")
+        try FileManager.default.createDirectory(
+            at: noteURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let original = """
+        ---
+        slug: mounted-note
+        title: Mounted note
+        # keep this Obsidian comment
+        tags: [vault]
+        ---
+        Original body
+        """
+        try Data(original.utf8).write(to: noteURL)
+        let attachmentURL = vault.appendingPathComponent("folder/assets/pixel.png")
+        try FileManager.default.createDirectory(
+            at: attachmentURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: attachmentURL)
+
+        let store = LocalBlogStore(rootURL: root)
+        _ = try await store.configureMarkdownWorkspaceSource(
+            mode: .readOnlyMount,
+            directoryURL: vault
+        )
+        let mounted = try await store.getArticle(slug: "mounted-note")
+        XCTAssertEqual(mounted.body, "Original body")
+        XCTAssertEqual(try await store.markdownWorkspaceSourceState().mode, .readOnlyMount)
+        XCTAssertEqual(try await store.markdownSourceDirectoryURL(), vault.standardizedFileURL.resolvingSymlinksInPath())
+        XCTAssertEqual(
+            await store.mediaURL(
+                for: "assets/pixel.png",
+                relativeToMarkdownSource: "folder/mounted-note.md"
+            ),
+            attachmentURL.standardizedFileURL.resolvingSymlinksInPath()
+        )
+        XCTAssertNil(await store.mediaURL(
+            for: "../../outside.png",
+            relativeToMarkdownSource: "folder/mounted-note.md"
+        ))
+
+        do {
+            _ = try await store.saveArticle(article(
+                slug: mounted.slug,
+                status: mounted.status,
+                expectedUpdatedAt: mounted.updatedAt,
+                body: "LeonBook must not write this",
+                title: mounted.title
+            ))
+            XCTFail("read-only mount should reject article saves")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("只读"))
+        }
+        XCTAssertEqual(try String(contentsOf: noteURL, encoding: .utf8), original)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: vault.appendingPathComponent(".sidecars-v1").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: vault.appendingPathComponent("mounted-note.json").path))
+
+        let externallyEdited = original.replacingOccurrences(of: "Original body", with: "Edited in Obsidian")
+        try Data(externallyEdited.utf8).write(to: noteURL, options: .atomic)
+        _ = try await store.refreshMarkdownSources(changedRelativePaths: ["folder/mounted-note.md"])
+        XCTAssertEqual(try await store.getArticle(slug: "mounted-note").body, "Edited in Obsidian")
+
+        let reopened = LocalBlogStore(rootURL: root)
+        XCTAssertEqual(try await reopened.markdownWorkspaceSourceState().mode, .readOnlyMount)
+        XCTAssertEqual(try await reopened.markdownSourceDirectoryURL(), vault.standardizedFileURL.resolvingSymlinksInPath())
+    }
+
+    func testDirectEditMarkdownMountWritesBackInPlace() async throws {
+        let root = try makeTemporaryDirectory()
+        let vault = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: vault)
+        }
+        let noteURL = vault.appendingPathComponent("direct-note.md")
+        let source = """
+        ---
+        slug: direct-note
+        # preserve me
+        title: Direct note
+        custom_plugin_key: yes
+        ---
+        Before
+        """
+        try Data(source.utf8).write(to: noteURL)
+
+        let store = LocalBlogStore(rootURL: root)
+        _ = try await store.configureMarkdownWorkspaceSource(mode: .directEdit, directoryURL: vault)
+        let mounted = try await store.getArticle(slug: "direct-note")
+        _ = try await store.saveArticle(article(
+            slug: mounted.slug,
+            status: mounted.status,
+            expectedUpdatedAt: mounted.updatedAt,
+            body: "After",
+            title: "Direct note renamed",
+            properties: mounted.properties
+        ))
+
+        let written = try String(contentsOf: noteURL, encoding: .utf8)
+        XCTAssertTrue(written.contains("# preserve me"), "direct edit should preserve YAML comments; got: \(written)")
+        XCTAssertTrue(written.contains("custom_plugin_key: yes"), "direct edit should preserve unknown YAML; got: \(written)")
+        XCTAssertTrue(written.contains("Direct note renamed"), "direct edit should update the title; got: \(written)")
+        XCTAssertTrue(written.hasSuffix("After"), "direct edit should update the body; got: \(written)")
+        XCTAssertEqual(try await store.markdownWorkspaceSourceState().mode, .directEdit)
+    }
+
+    func testSwitchingBackToManagedMarkdownRevivesWorkspaceArticles() async throws {
+        let root = try makeTemporaryDirectory()
+        let vault = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: vault)
+        }
+        let store = LocalBlogStore(rootURL: root)
+        _ = try await store.saveArticle(article(
+            slug: "managed-note",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "Managed body"
+        ))
+        let mountedSource = """
+        ---
+        slug: mounted-note
+        title: Mounted note
+        ---
+        Mounted body
+        """
+        try Data(mountedSource.utf8).write(to: vault.appendingPathComponent("mounted.md"))
+
+        _ = try await store.configureMarkdownWorkspaceSource(mode: .readOnlyMount, directoryURL: vault)
+        XCTAssertEqual(try await store.listArticles().map(\.slug), ["mounted-note"])
+
+        _ = try await store.configureMarkdownWorkspaceSource(mode: .copyImport)
+        XCTAssertEqual(try await store.listArticles().map(\.slug), ["managed-note"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("articles/managed-note.md").path))
+        XCTAssertEqual(try String(contentsOf: vault.appendingPathComponent("mounted.md"), encoding: .utf8), mountedSource)
+    }
 }
 
 final class UserWorkspaceStoreTests {
@@ -2080,6 +2474,11 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testSmartCollectionCombinesPropertiesDatesAndMultiSort", { NativeModelsTests().testSmartCollectionCombinesPropertiesDatesAndMultiSort() }),
             ("NativeModelsTests.testBaseFormulasCalculatePropertiesDatesAndSummaries", { NativeModelsTests().testBaseFormulasCalculatePropertiesDatesAndSummaries() }),
             ("NativeModelsTests.testArticleGraphProjectionFiltersOrphansAndClipsByDegree", { NativeModelsTests().testArticleGraphProjectionFiltersOrphansAndClipsByDegree() }),
+            ("PerformanceRegressionTests.testEditorSessionOwnsHighFrequencyDraftState", { PerformanceRegressionTests().testEditorSessionOwnsHighFrequencyDraftState() }),
+            ("PerformanceRegressionTests.testMarkdownRefreshPlanSkipsUnrelatedDomains", { PerformanceRegressionTests().testMarkdownRefreshPlanSkipsUnrelatedDomains() }),
+            ("PerformanceRegressionTests.testMarkdownLiveStylingLimitsOrdinaryEditsToNearbyParagraphs", { PerformanceRegressionTests().testMarkdownLiveStylingLimitsOrdinaryEditsToNearbyParagraphs() }),
+            ("PerformanceRegressionTests.testArticleMarkdownAnalysisIsCachedAndSharedAcrossConsumers", { PerformanceRegressionTests().testArticleMarkdownAnalysisIsCachedAndSharedAcrossConsumers() }),
+            ("PerformanceRegressionTests.testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency", { try await PerformanceRegressionTests().testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency() }),
             ("LocalBlogStoreTests.testMomentLifecycleNormalizesInputFiltersAndRecordsActivity", { try await LocalBlogStoreTests().testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() }),
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),
             ("LocalBlogStoreTests.testQuestionAnswersAndTagSearchPersistInSQLite", { try await LocalBlogStoreTests().testQuestionAnswersAndTagSearchPersistInSQLite() }),
@@ -2102,6 +2501,9 @@ struct LeonBookUnitTests {
             ("LocalBlogStoreTests.testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields", { try await LocalBlogStoreTests().testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields() }),
             ("LocalBlogStoreTests.testTwoWindowStoresCanShareOneWorkspaceInTheSameProcess", { try await LocalBlogStoreTests().testTwoWindowStoresCanShareOneWorkspaceInTheSameProcess() }),
             ("LocalBlogStoreTests.testArticleRefactorsPersistMarkdownAndRepairIncomingLinks", { try await LocalBlogStoreTests().testArticleRefactorsPersistMarkdownAndRepairIncomingLinks() }),
+            ("LocalBlogStoreTests.testReadOnlyMarkdownMountIndexesExternalChangesWithoutWritingVault", { try await LocalBlogStoreTests().testReadOnlyMarkdownMountIndexesExternalChangesWithoutWritingVault() }),
+            ("LocalBlogStoreTests.testDirectEditMarkdownMountWritesBackInPlace", { try await LocalBlogStoreTests().testDirectEditMarkdownMountWritesBackInPlace() }),
+            ("LocalBlogStoreTests.testSwitchingBackToManagedMarkdownRevivesWorkspaceArticles", { try await LocalBlogStoreTests().testSwitchingBackToManagedMarkdownRevivesWorkspaceArticles() }),
             ("UserWorkspaceStoreTests.testWorkspacePreparationCreatesAndPersistsDefaultUser", { try await UserWorkspaceStoreTests().testWorkspacePreparationCreatesAndPersistsDefaultUser() }),
             ("UserWorkspaceStoreTests.testTwoWindowRegistriesCanShareTheDataRootInTheSameProcess", { try await UserWorkspaceStoreTests().testTwoWindowRegistriesCanShareTheDataRootInTheSameProcess() }),
             ("LocalBackupManagerTests.testSnapshotCopiesDataWritesManifestAndSkipsLockFile", { try LocalBackupManagerTests().testSnapshotCopiesDataWritesManifestAndSkipsLockFile() }),
@@ -2138,7 +2540,8 @@ private func article(
     status: NativeArticleStatus,
     expectedUpdatedAt: String?,
     body: String,
-    title: String = "Test article"
+    title: String = "Test article",
+    properties: [String: NativeArticlePropertyValue] = [:]
 ) -> NativeSaveArticle {
     NativeSaveArticle(
         banner: nil,
@@ -2150,7 +2553,8 @@ private func article(
         status: status,
         tags: ["swift", "swift", "notes"],
         title: title,
-        expectedUpdatedAt: expectedUpdatedAt
+        expectedUpdatedAt: expectedUpdatedAt,
+        properties: properties
     )
 }
 

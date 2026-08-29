@@ -23,7 +23,8 @@ The app is built with SwiftUI and stores data directly on the local filesystem. 
 - Edit text, list, number, date, checkbox, and tag properties; rename a property across the workspace; switch among Settings, Properties, Outline, and Links; and save per-user Writing, Reading, and Reviewing layouts
 - Keep the current article, tabs, and back/forward navigation independent in every macOS window
 - Mount only the selected main page and retain lightweight page state instead of prewarming full view trees
-- Scan and one-way import an Obsidian Vault from Settings, including YAML properties, `[[wiki links]]`, local attachments, and a conflict preview
+- Enable or disable Search, Knowledge Graph, Publishing, Backup, and Capture independently; their commands, events, and permissions share one ModuleKit contract
+- Use any Markdown folder or Obsidian Vault as a workspace with copy import, read-only mount, or direct-edit modes
 - Embed remote HTTP(S) webpages directly in article bodies
 - Save drafts locally with independent workspaces for multiple users
 - Manage image and video assets
@@ -101,13 +102,15 @@ The default policy retains snapshots for 90 days, caps the set at 60 snapshots, 
 
 The backup destination cannot be inside the live data directory. Backups remain local, unencrypted files and are never uploaded automatically; use a FileVault-protected APFS volume, encrypted external disk, or access-controlled folder for sensitive content.
 
-SQLite is the source of truth for structured records. JSON and Markdown files are kept as readable local exports and for compatibility with existing workspaces; images and videos remain ordinary local files under `media/`. Existing JSON records are imported into SQLite automatically on first launch.
+Markdown is authoritative for articles, while SQLite keeps rebuildable article indexes plus comments, revisions, bookmarks, and other structured records. Images and videos remain ordinary local files under `media/`. Existing JSON records are imported automatically on first launch.
 
-Obsidian Vault import is deliberately one-way: the app reads the selected Vault and copies confirmed notes and attachments into the current user workspace, but never watches or writes back to the Vault. SQLite remains authoritative after import, and an existing article with the same slug is skipped to prevent cross-source overwrites.
+Settings offers three Markdown workspace modes. **Copy import** reads the selected folder and copies confirmed notes and attachments into the current user workspace. **Read-only mount** uses and watches the original folder while rejecting all article writes. **Direct edit** uses the same live mount but atomically writes saves, moves, and deletes back to the original Markdown files. SQLite, comments, revisions, layout state, and app-managed media stay inside the LeonBook user workspace; external mounted folders must be backed up separately.
 
 ## Development
 
 The native macOS source code, resources, and check scripts are located in [`macos/`](macos/). See [`macos/README.md`](macos/README.md) for additional build, debugging, and data-directory details.
+
+The Swift package uses `LeonBookModuleKit` as the first-party feature seam and gives Search, Knowledge Graph, Publishing, Backup, and Capture their own targets. Each module declares a stable ID, permissions, complete command metadata, and event names. The `LeonBook` target retains the SwiftUI, SQLite, and filesystem adapters, native command handlers, and persisted enablement. Disabling a module removes its commands and applies the same authorization gate to direct UI actions; destructive backup restores and capture writes must drain before disablement, while read-only scans are cancelled safely. Search/graph SQLite adapters and schema setup are also split out of the core `LocalBlogStore` file.
 
 To run the SwiftPM executable directly:
 

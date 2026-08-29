@@ -1,4 +1,5 @@
 import Foundation
+import LeonBookSearchModule
 
 public enum NativeWritingMetrics {
     public static func characterCount(of body: String) -> Int {
@@ -69,148 +70,20 @@ public struct NativeGlobalSearchQuery: Equatable {
 
     public init(_ rawValue: String, calendar: Calendar = .current) {
         self.rawValue = rawValue
-        var textTerms: [String] = []
-        var tags: [String] = []
-        var status: NativeArticleStatus?
-        var types = Set<NativeSearchDocumentType>()
-        var after: Date?
-        var before: Date?
-        var propertyFilters: [NativeArticlePropertyFilter] = []
-
-        for token in Self.tokens(in: rawValue) {
-            if token.hasPrefix("["), token.hasSuffix("]") {
-                let expression = String(token.dropFirst().dropLast())
-                if let separator = expression.firstIndex(of: ":") {
-                    let key = String(expression[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
-                    let value = String(expression[expression.index(after: separator)...])
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    if NativeArticleProperties.isValidKey(key), !value.isEmpty {
-                        propertyFilters.append(NativeArticlePropertyFilter(key: key, value: value))
-                        continue
-                    }
-                }
-            }
-            guard let separator = token.firstIndex(of: ":") else {
-                if !token.isEmpty { textTerms.append(token) }
-                continue
-            }
-
-            let key = token[..<separator].lowercased()
-            let value = String(token[token.index(after: separator)...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !value.isEmpty else {
-                textTerms.append(token)
-                continue
-            }
-
-            switch key {
-            case "tag", "标签":
-                let normalized = value.trimmingCharacters(in: CharacterSet(charactersIn: "#＃"))
-                if !normalized.isEmpty { tags.append(normalized) }
-            case "status", "状态":
-                switch value.lowercased() {
-                case "draft", "草稿": status = .draft
-                case "published", "已发布", "发布": status = .published
-                default: textTerms.append(token)
-                }
-            case "type", "类型":
-                switch value.lowercased() {
-                case "article", "articles", "文章": types.insert(.article)
-                case "moment", "moments", "微博", "动态": types.insert(.moment)
-                default: textTerms.append(token)
-                }
-            case "after", "起始":
-                if let date = Self.day(value, calendar: calendar) {
-                    after = calendar.startOfDay(for: date)
-                } else {
-                    textTerms.append(token)
-                }
-            case "before", "截止":
-                if let date = Self.day(value, calendar: calendar) {
-                    before = calendar.startOfDay(for: date)
-                } else {
-                    textTerms.append(token)
-                }
-            case "date", "日期":
-                if let date = Self.day(value, calendar: calendar) {
-                    let start = calendar.startOfDay(for: date)
-                    after = start
-                    before = calendar.date(byAdding: .day, value: 1, to: start)
-                } else {
-                    textTerms.append(token)
-                }
-            default:
-                textTerms.append(token)
-            }
+        let parsed = FirstPartySearchQueryParser.parse(
+            rawValue,
+            calendar: calendar,
+            isValidPropertyKey: NativeArticleProperties.isValidKey
+        )
+        textTerms = parsed.textTerms
+        tags = parsed.tags
+        status = parsed.status.flatMap(NativeArticleStatus.init(rawValue:))
+        types = Set(parsed.types.compactMap(NativeSearchDocumentType.init(rawValue:)))
+        after = parsed.after
+        before = parsed.before
+        propertyFilters = parsed.propertyFilters.map {
+            NativeArticlePropertyFilter(key: $0.key, value: $0.value)
         }
-
-        self.textTerms = textTerms
-        self.tags = tags
-        self.status = status
-        self.types = types
-        self.after = after
-        self.before = before
-        self.propertyFilters = propertyFilters
-    }
-
-    private static func tokens(in source: String) -> [String] {
-        var tokens: [String] = []
-        var token = ""
-        var quote: Character?
-        var isEscaping = false
-        var bracketDepth = 0
-
-        func finishToken() {
-            if !token.isEmpty { tokens.append(token) }
-            token = ""
-        }
-
-        for character in source {
-            if isEscaping {
-                token.append(character)
-                isEscaping = false
-            } else if character == "\\" {
-                isEscaping = true
-            } else if let activeQuote = quote {
-                if character == activeQuote {
-                    quote = nil
-                } else {
-                    token.append(character)
-                }
-            } else if character == "\"" || character == "'" {
-                quote = character
-            } else if character == "[" {
-                bracketDepth += 1
-                token.append(character)
-            } else if character == "]", bracketDepth > 0 {
-                bracketDepth -= 1
-                token.append(character)
-            } else if character.isWhitespace, bracketDepth == 0 {
-                finishToken()
-            } else {
-                token.append(character)
-            }
-        }
-        if isEscaping { token.append("\\") }
-        finishToken()
-        return tokens
-    }
-
-    private static func day(_ value: String, calendar: Calendar) -> Date? {
-        let segments = value.split(separator: "-", omittingEmptySubsequences: false)
-        guard segments.count == 3,
-              let year = Int(segments[0]),
-              let month = Int(segments[1]),
-              let day = Int(segments[2]),
-              year >= 1,
-              (1...12).contains(month),
-              (1...31).contains(day),
-              let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
-            return nil
-        }
-        let resolved = calendar.dateComponents([.year, .month, .day], from: date)
-        guard resolved.year == year, resolved.month == month, resolved.day == day else { return nil }
-        return date
     }
 }
 
@@ -408,6 +281,7 @@ public struct NativeMarkdownSyncResult: Equatable {
     public let movedCount: Int
     public let deletedCount: Int
     public let unchangedCount: Int
+    public let affectedArticleSlugs: [String]
     public let warnings: [String]
 
     public var didChange: Bool {
@@ -420,6 +294,7 @@ public struct NativeMarkdownSyncResult: Equatable {
         movedCount: Int = 0,
         deletedCount: Int = 0,
         unchangedCount: Int = 0,
+        affectedArticleSlugs: [String] = [],
         warnings: [String] = []
     ) {
         self.insertedCount = insertedCount
@@ -427,6 +302,7 @@ public struct NativeMarkdownSyncResult: Equatable {
         self.movedCount = movedCount
         self.deletedCount = deletedCount
         self.unchangedCount = unchangedCount
+        self.affectedArticleSlugs = affectedArticleSlugs
         self.warnings = warnings
     }
 }
@@ -1471,7 +1347,6 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
     public let id: String
     public let images: [NativeMedia]
     public let isFavorite: Bool
-    public let pageViews: Int
     public let tags: [String]
     public let text: String
     public let textRuns: [NativeMomentTextRun]
@@ -1485,14 +1360,12 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         tags: [String] = [],
         text: String,
         textRuns: [NativeMomentTextRun],
-        updatedAt: String,
-        pageViews: Int = 0
+        updatedAt: String
     ) {
         self.createdAt = createdAt
         self.id = id
         self.images = images
         self.isFavorite = isFavorite
-        self.pageViews = max(0, pageViews)
         self.tags = tags
         self.text = text
         self.textRuns = textRuns
@@ -1505,7 +1378,6 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString.lowercased()
         images = try container.decodeIfPresent([NativeMedia].self, forKey: .images) ?? []
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
-        pageViews = max(0, try container.decodeIfPresent(Int.self, forKey: .pageViews) ?? 0)
         text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? NativeMomentTag.extract(from: text)
         textRuns = try container.decodeIfPresent([NativeMomentTextRun].self, forKey: .textRuns) ?? []
@@ -1752,6 +1624,7 @@ enum NativeSearchPresentation: String, Identifiable {
 
 enum NativeStoreError: LocalizedError {
     case conflict
+    case readOnlyArticleSource
     case reservedSlug
     case slugTaken
     case invalidArticle
@@ -1761,6 +1634,7 @@ enum NativeStoreError: LocalizedError {
     case invalidMoment
     case invalidQuestion
     case invalidAnswer
+    case questionAnswerConflict
     case invalidComment
     case invalidUser
     case notFound
@@ -1771,6 +1645,8 @@ enum NativeStoreError: LocalizedError {
         switch self {
         case .conflict:
             return "这篇文章已在其他窗口中更新，请重新加载后再保存。"
+        case .readOnlyArticleSource:
+            return "当前 Markdown 目录以只读方式挂载；请切换为“直接编辑”后再修改文章。"
         case .reservedSlug:
             return "不能使用 inbox 或 moments 作为文章地址。"
         case .slugTaken:
@@ -1788,7 +1664,9 @@ enum NativeStoreError: LocalizedError {
         case .invalidQuestion:
             return "问题标题需要 1 到 200 个字符。"
         case .invalidAnswer:
-            return "回答需要 1 到 10000 个字符。"
+            return "回答需要文字或至少一张图片，文字最多 10000 个字符。"
+        case .questionAnswerConflict:
+            return "这条回答已在其他窗口中更新，请重新载入后再编辑。"
         case .invalidComment:
             return "评论需要 1 到 2000 个字符。"
         case .invalidUser:

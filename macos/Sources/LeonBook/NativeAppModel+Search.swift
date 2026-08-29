@@ -1,9 +1,15 @@
 import AppKit
 import Foundation
+import LeonBookSearchModule
 
 extension NativeAppModel {
     public func presentGlobalSearch() {
-        guard storageReady else { return }
+        guard storageReady,
+              authorizeFirstPartyModule(
+                SearchFirstPartyModule.id,
+                permission: .contentRead,
+                action: "搜索"
+              ) else { return }
         searchPresentation = .globalSearch
         updateGlobalSearch(globalSearchText, articlesOnly: false, debounce: false)
     }
@@ -57,7 +63,12 @@ extension NativeAppModel {
     }
 
     public func presentQuickSwitcher() {
-        guard storageReady else { return }
+        guard storageReady,
+              authorizeFirstPartyModule(
+                SearchFirstPartyModule.id,
+                permission: .contentRead,
+                action: "快速打开"
+              ) else { return }
         globalSearchText = ""
         searchPresentation = .quickOpen
         updateGlobalSearch("", articlesOnly: true, debounce: false)
@@ -72,6 +83,11 @@ extension NativeAppModel {
         articlesOnly: Bool,
         debounce: Bool = true
     ) {
+        guard isSearchModuleEnabled else {
+            globalSearchResults = []
+            isSearchingGlobally = false
+            return
+        }
         globalSearchText = query
         globalSearchTask?.cancel()
         globalSearchGeneration += 1
@@ -93,6 +109,11 @@ extension NativeAppModel {
                       workspace == self.workspaceGeneration else { return }
                 self.globalSearchResults = results
                 self.isSearchingGlobally = false
+                self.recordFirstPartyModuleEvent(
+                    moduleID: SearchFirstPartyModule.id,
+                    name: "search.completed",
+                    payload: ["resultCount": String(results.count)]
+                )
             } catch {
                 guard !Task.isCancelled,
                       generation == self.globalSearchGeneration,
@@ -108,6 +129,12 @@ extension NativeAppModel {
         articleListSearchTask?.cancel()
         articleListSearchGeneration += 1
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isSearchModuleEnabled else {
+            articleSearchMatchSlugs = []
+            articleSearchResolvedText = ""
+            isSearchingArticles = false
+            return
+        }
         guard !trimmed.isEmpty else {
             articleSearchMatchSlugs = []
             articleSearchResolvedText = ""
@@ -160,7 +187,8 @@ extension NativeAppModel {
     }
 
     public func canExecuteCommand(_ command: NativeCommandID) -> Bool {
-        commandRegistry.definition(for: command)?.isAvailable(in: commandContext) == true
+        firstPartyModuleAllowsCommand(command)
+            && commandRegistry.definition(for: command)?.isAvailable(in: commandContext) == true
     }
 
     public func executeCommand(_ command: NativeCommandID) {
@@ -169,6 +197,17 @@ extension NativeAppModel {
 
     public func executeCommand(_ invocation: NativeCommandInvocation) {
         let command = invocation.id
+        guard firstPartyModuleAllowsCommand(command) else {
+            if let module = firstPartyModuleRuntime.catalog.module(owningCommand: command.rawValue) {
+                errorMessage = "“\(module.name)”模块已停用，无法执行该命令。"
+                recordFirstPartyModuleEvent(
+                    moduleID: module.id,
+                    name: "module.authorization-denied",
+                    payload: ["command": command.rawValue]
+                )
+            }
+            return
+        }
         guard let definition = commandRegistry.definition(for: command) else {
             errorMessage = "找不到命令“\(command.rawValue)”。"
             return
@@ -178,25 +217,18 @@ extension NativeAppModel {
         searchPresentation = nil
         commandPreferences.recordUse(command)
 
-        if command == .globalSearch {
-            if let query = invocation.arguments["query"] { globalSearchText = query }
-            presentGlobalSearch()
-        } else if command == .quickOpen {
-            presentQuickSwitcher()
-        } else if command == .commandPalette {
+        if executeFirstPartyModuleCommand(invocation) { return }
+
+        if command == .commandPalette {
             presentCommandPalette()
         } else if command == .newArticle {
             performNewArticleCommand(invocation)
         } else if command == .saveDraft {
             Task { await saveEditor(as: .draft) }
-        } else if command == .publishArticle {
-            Task { await saveEditor(as: .published) }
         } else if command == .dashboard {
             section = .dashboard
         } else if command == .articles {
             showAllArticles()
-        } else if command == .graph {
-            section = .graph
         } else if command == .moments {
             section = .moments
         } else if command == .today {

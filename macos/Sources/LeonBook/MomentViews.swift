@@ -1,14 +1,13 @@
 import AppKit
-import ImageIO
 import SwiftUI
 
 private let momentFeedMaximumWidth: CGFloat = 1_760
 
 struct MomentFeedView: View {
     @ObservedObject var model: NativeAppModel
-    @ObservedObject var navigation: NativeNavigationState
     @ObservedObject var pageState: NativeMomentFeedPageState
     @State private var imageBrowser: MomentImageBrowserState?
+    @State private var isPresentingImmersiveBrowser = false
     @AppStorage("momentFeedLayout") private var momentFeedLayoutRawValue = MomentFeedLayout.singleColumn.rawValue
 
     private var momentFeedLayout: MomentFeedLayout {
@@ -46,6 +45,16 @@ struct MomentFeedView: View {
                     )
                         .foregroundStyle(.secondary)
                     Spacer()
+
+                    Button {
+                        isPresentingImmersiveBrowser = true
+                    } label: {
+                        Label("沉浸浏览", systemImage: "play.rectangle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.filteredMoments.isEmpty)
+                    .help("像幻灯片一样逐页浏览当前微博，使用方向键翻页")
+                    .accessibilityLabel("进入微博沉浸浏览模式")
 
                     Menu {
                         ForEach(MomentFeedLayout.allCases) { layout in
@@ -369,7 +378,9 @@ struct MomentFeedView: View {
                 store: model.store
             )
         }
-        .onDisappear { pageState.endVisit() }
+        .sheet(isPresented: $isPresentingImmersiveBrowser) {
+            MomentImmersiveBrowserView(model: model)
+        }
     }
 
     @ViewBuilder
@@ -389,19 +400,7 @@ struct MomentFeedView: View {
             } onDelete: {
                 model.deleteMoment(moment)
             }
-            .onAppear {
-                recordPageViewIfVisible(for: moment)
-            }
-            .onChange(of: pageState.pageViewSessionID) { _ in
-                recordPageViewIfVisible(for: moment)
-            }
         }
-    }
-
-    private func recordPageViewIfVisible(for moment: NativeMoment) {
-        guard navigation.section == .moments,
-              pageState.shouldRecordPageView(for: moment.id) else { return }
-        model.recordMomentPageView(moment)
     }
 
     @ViewBuilder
@@ -802,10 +801,6 @@ private struct MomentCard: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    Label("\(moment.pageViews) PV", systemImage: "eye")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
                     HStack(spacing: 8) {
                         Button(action: onToggleFavorite) {
                             Label(
@@ -921,7 +916,6 @@ private struct MomentCard: View {
         if moment.isFavorite {
             parts.append("已收藏")
         }
-        parts.append("\(moment.pageViews) 次浏览")
         return parts.joined(separator: "，")
     }
 
@@ -985,6 +979,8 @@ private struct MomentImageGrid: View {
     let store: LocalBlogStore
     let onOpenImage: (Int) -> Void
 
+    @Environment(\.displayScale) private var displayScale
+
     private let spacing: CGFloat = 6
 
     private var columns: Int {
@@ -997,6 +993,13 @@ private struct MomentImageGrid: View {
 
     private var imageHeight: CGFloat {
         images.count == 1 ? 240 : imageTileSize
+    }
+
+    private var thumbnailMaxPixelSize: Int {
+        MomentThumbnailSizing.maxPixelSize(
+            for: CGSize(width: imageTileSize, height: imageHeight),
+            displayScale: displayScale
+        )
     }
 
     private var gridColumns: [GridItem] {
@@ -1019,7 +1022,7 @@ private struct MomentImageGrid: View {
                     MomentImage(
                         media: image,
                         store: store,
-                        loadMode: .thumbnail(maxPixelSize: 720)
+                        loadMode: .thumbnail(maxPixelSize: thumbnailMaxPixelSize)
                     )
                         .frame(width: imageTileSize, height: imageHeight)
                         .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
@@ -1043,22 +1046,23 @@ private struct MomentImageGrid: View {
     }
 }
 
-private enum MomentImageLoadMode: Equatable, Sendable {
-    case thumbnail(maxPixelSize: Int)
-    case fullSize
+private enum MomentThumbnailSizing {
+    private static let minimumPixelSize = 192
+    private static let maximumPixelSize = 720
+    private static let pixelBucketSize = 64
 
-    var cacheKey: String {
-        switch self {
-        case let .thumbnail(maxPixelSize): return "thumbnail-\(maxPixelSize)"
-        case .fullSize: return "full-size"
-        }
+    static func maxPixelSize(for pointSize: CGSize, displayScale: CGFloat) -> Int {
+        let longestSide = max(pointSize.width, pointSize.height)
+        let requiredPixels = Int(ceil(longestSide * max(1, displayScale)))
+        let bucketedPixels = ((requiredPixels + pixelBucketSize - 1) / pixelBucketSize) * pixelBucketSize
+        return min(maximumPixelSize, max(minimumPixelSize, bucketedPixels))
     }
 }
 
 private struct MomentImage: View {
     let media: NativeMedia
     let store: LocalBlogStore
-    let loadMode: MomentImageLoadMode
+    let loadMode: NativeImageLoadMode
 
     @State private var image: NSImage?
     @State private var failedToLoad = false
@@ -1066,7 +1070,7 @@ private struct MomentImage: View {
     init(
         media: NativeMedia,
         store: LocalBlogStore,
-        loadMode: MomentImageLoadMode = .thumbnail(maxPixelSize: 480)
+        loadMode: NativeImageLoadMode = .thumbnail(maxPixelSize: 480)
     ) {
         self.media = media
         self.store = store
@@ -1096,7 +1100,7 @@ private struct MomentImage: View {
                 failedToLoad = true
                 return
             }
-            let decoded = await MomentImageLoader.shared.image(from: url, mode: loadMode)
+            let decoded = await NativeImagePipeline.shared.image(from: url, mode: loadMode)
             guard !Task.isCancelled else { return }
             image = decoded.image
             failedToLoad = image == nil
@@ -1105,182 +1109,350 @@ private struct MomentImage: View {
     }
 }
 
-private actor MomentImageLoader {
-    static let shared = MomentImageLoader()
+private struct MomentImmersiveBrowserView: View {
+    @ObservedObject var model: NativeAppModel
 
-    private let cache = NSCache<NSString, NSImage>()
-    private let maximumConcurrentDecodes = 2
-    private var activeDecodeCount = 0
-    private var decodeWaiters: [CheckedContinuation<Void, Never>] = []
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedIndex = 0
+    @State private var imageBrowser: MomentImageBrowserState?
+    @State private var keyboardMonitor: Any?
+    @State private var advancesWhenMoreMomentsLoad = false
 
-    init() {
-        cache.countLimit = 512
-        cache.totalCostLimit = 160 * 1_024 * 1_024
+    private var moments: [NativeMoment] {
+        model.filteredMoments
     }
 
-    func image(from url: URL, mode: MomentImageLoadMode) async -> MomentImageDecodeResult {
-        let key = "\(url.path)|\(mode.cacheKey)" as NSString
-        if mode != .fullSize, let cached = cache.object(forKey: key) {
-            return MomentImageDecodeResult(image: cached)
-        }
-
-        await acquireDecodeSlot()
-        defer { releaseDecodeSlot() }
-
-        guard !Task.isCancelled else { return MomentImageDecodeResult(image: nil) }
-        if mode != .fullSize, let cached = cache.object(forKey: key) {
-            return MomentImageDecodeResult(image: cached)
-        }
-
-        let decodeTask = Task.detached(priority: .utility) {
-            guard !Task.isCancelled else { return MomentImageDecodeResult(image: nil) }
-            return MomentImageDecodeResult(image: MomentImageDecoder.load(from: url, mode: mode))
-        }
-        let decoded = await withTaskCancellationHandler {
-            await decodeTask.value
-        } onCancel: {
-            decodeTask.cancel()
-        }
-
-        if mode != .fullSize, let image = decoded.image {
-            cache.setObject(image, forKey: key, cost: imageCost(image))
-        }
-        return decoded
+    private var totalMomentCount: Int {
+        max(model.filteredMomentCount, moments.count)
     }
 
-    private func acquireDecodeSlot() async {
-        if activeDecodeCount < maximumConcurrentDecodes {
-            activeDecodeCount += 1
-            return
+    private var selectedMoment: NativeMoment? {
+        guard moments.indices.contains(selectedIndex) else { return nil }
+        return moments[selectedIndex]
+    }
+
+    private var browserSize: CGSize {
+        let available = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1_440, height: 900)
+        return CGSize(width: available.width * 0.96, height: available.height * 0.94)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                Label("微博沉浸浏览", systemImage: "play.rectangle.fill")
+                    .font(.headline)
+
+                Text("方向键翻页")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Text(moments.isEmpty ? "0 / 0" : "\(selectedIndex + 1) / \(totalMomentCount)")
+                    .font(.callout.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    dismiss()
+                } label: {
+                    Label("退出", systemImage: "xmark")
+                }
+                .keyboardShortcut(.cancelAction)
+                .help("退出沉浸浏览模式（Esc）")
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
+
+            Divider()
+
+            ZStack {
+                LinearGradient(
+                    colors: [
+                        Color.accentColor.opacity(0.12),
+                        Color(nsColor: .windowBackgroundColor),
+                        Color.purple.opacity(0.08),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+
+                if let selectedMoment {
+                    MomentImmersiveSlide(
+                        moment: selectedMoment,
+                        store: model.store,
+                        onOpenImage: { imageIndex in
+                            removeKeyboardMonitor()
+                            imageBrowser = MomentImageBrowserState(
+                                images: selectedMoment.images,
+                                initialIndex: imageIndex
+                            )
+                        }
+                    )
+                    .id(selectedMoment.id)
+                    .transition(.opacity.combined(with: .scale(scale: 0.985)))
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "rectangle.3.group")
+                            .font(.system(size: 38))
+                            .foregroundStyle(.secondary)
+                        Text("没有可浏览的微博")
+                            .font(.headline)
+                        Text("退出沉浸模式后发布或重新筛选微博。")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.easeInOut(duration: 0.2), value: selectedIndex)
+
+            Divider()
+
+            HStack(spacing: 18) {
+                Button {
+                    showPreviousMoment()
+                } label: {
+                    Label("上一页", systemImage: "chevron.left")
+                        .frame(minWidth: 88)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(selectedIndex == 0 || moments.isEmpty)
+                .keyboardShortcut(.leftArrow, modifiers: [])
+
+                ProgressView(
+                    value: moments.isEmpty ? 0 : Double(selectedIndex + 1),
+                    total: Double(max(1, totalMomentCount))
+                )
+                .frame(maxWidth: 420)
+                .accessibilityLabel("沉浸浏览进度")
+                .accessibilityValue(moments.isEmpty ? "没有微博" : "第 \(selectedIndex + 1) 页，共 \(totalMomentCount) 页")
+
+                Button {
+                    showNextMoment()
+                } label: {
+                    Label("下一页", systemImage: "chevron.right")
+                        .labelStyle(.titleAndIcon)
+                        .frame(minWidth: 88)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(moments.isEmpty || (!model.hasMoreMoments && selectedIndex == moments.count - 1))
+                .keyboardShortcut(.rightArrow, modifiers: [])
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
         }
-        await withCheckedContinuation { continuation in
-            decodeWaiters.append(continuation)
+        .frame(width: browserSize.width, height: browserSize.height)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            selectedIndex = min(selectedIndex, max(0, moments.count - 1))
+            installKeyboardMonitor()
+            preloadMoreMomentsIfNeeded()
+        }
+        .onChange(of: selectedIndex) { _ in
+            preloadMoreMomentsIfNeeded()
+        }
+        .onChange(of: moments.count) { _ in
+            guard advancesWhenMoreMomentsLoad, selectedIndex < moments.count - 1 else { return }
+            advancesWhenMoreMomentsLoad = false
+            selectedIndex += 1
+        }
+        .onDisappear {
+            removeKeyboardMonitor()
+        }
+        .sheet(item: $imageBrowser, onDismiss: installKeyboardMonitor) { browser in
+            MomentImageBrowserView(
+                images: browser.images,
+                initialIndex: browser.initialIndex,
+                store: model.store
+            )
         }
     }
 
-    private func releaseDecodeSlot() {
-        if let waiter = decodeWaiters.first {
-            decodeWaiters.removeFirst()
-            waiter.resume()
-        } else {
-            activeDecodeCount = max(0, activeDecodeCount - 1)
+    private func installKeyboardMonitor() {
+        guard keyboardMonitor == nil else { return }
+
+        keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let navigationModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+            guard event.modifierFlags.intersection(navigationModifiers).isEmpty else {
+                return event
+            }
+
+            switch event.keyCode {
+            case 123, 126:
+                showPreviousMoment()
+                return nil
+            case 124, 125:
+                showNextMoment()
+                return nil
+            case 53:
+                dismiss()
+                return nil
+            default:
+                return event
+            }
         }
     }
 
-    private func imageCost(_ image: NSImage) -> Int {
-        let representation = image.representations.first
-        let width = representation?.pixelsWide ?? Int(image.size.width)
-        let height = representation?.pixelsHigh ?? Int(image.size.height)
-        return max(1, width * height * 4)
+    private func removeKeyboardMonitor() {
+        guard let keyboardMonitor else { return }
+        NSEvent.removeMonitor(keyboardMonitor)
+        self.keyboardMonitor = nil
+    }
+
+    private func showPreviousMoment() {
+        guard selectedIndex > 0 else { return }
+        selectedIndex -= 1
+    }
+
+    private func showNextMoment() {
+        if selectedIndex < moments.count - 1 {
+            selectedIndex += 1
+        } else if model.hasMoreMoments {
+            advancesWhenMoreMomentsLoad = true
+            model.loadMoreMoments()
+        }
+    }
+
+    private func preloadMoreMomentsIfNeeded() {
+        guard model.hasMoreMoments,
+              selectedIndex >= max(0, moments.count - 3) else { return }
+        model.loadMoreMoments()
     }
 }
 
-private enum MomentImageDecoder {
-    static func load(from url: URL, mode: MomentImageLoadMode) -> NSImage? {
-        if mode == .fullSize {
-            return NSImage(contentsOf: url)
-        }
+private struct MomentImmersiveSlide: View {
+    let moment: NativeMoment
+    let store: LocalBlogStore
+    let onOpenImage: (Int) -> Void
 
-        guard case let .thumbnail(maxPixelSize) = mode else { return nil }
-        let cachedURL = thumbnailCacheURL(for: url, maxPixelSize: maxPixelSize)
-        if let cached = decodedImage(from: cachedURL) {
-            return cached
-        }
-        if FileManager.default.fileExists(atPath: cachedURL.path) {
-            try? FileManager.default.removeItem(at: cachedURL)
-        }
-        guard !Task.isCancelled,
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            return nil
-        }
+    var body: some View {
+        let displayContent = moment.displayContent
 
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-        ]
-        let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: "person.crop.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.tint)
 
-        guard let cgImage, !Task.isCancelled else { return nil }
-        persistThumbnail(cgImage, at: cachedURL)
-        return NSImage(
-            cgImage: cgImage,
-            size: NSSize(width: cgImage.width, height: cgImage.height)
-        )
-    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("leon-book")
+                            .font(.headline)
+                        Text(moment.createdAt.nativeDateLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
-    private static func decodedImage(from url: URL) -> NSImage? {
-        let options: [CFString: Any] = [
-            kCGImageSourceShouldCache: true,
-            kCGImageSourceShouldCacheImmediately: true,
-        ]
-        guard FileManager.default.fileExists(atPath: url.path),
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary) else {
-            return nil
-        }
-        return NSImage(
-            cgImage: cgImage,
-            size: NSSize(width: cgImage.width, height: cgImage.height)
-        )
-    }
+                    Spacer()
 
-    private static func thumbnailCacheURL(for sourceURL: URL, maxPixelSize: Int) -> URL {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: sourceURL.path)
-        let fileSize = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
-        let modifiedAt = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let signature = "\(sourceURL.standardizedFileURL.path)|\(fileSize)|\(modifiedAt)|\(maxPixelSize)"
-        let filename = "\(stableHash(signature))-\(maxPixelSize).png"
-        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("com.leon-book.macos", isDirectory: true)
-            .appendingPathComponent("moment-thumbnails", isDirectory: true)
-            .appendingPathComponent(filename)
-    }
+                    if moment.isFavorite {
+                        Label("已收藏", systemImage: "heart.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.pink)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.pink.opacity(0.12), in: Capsule())
+                    }
+                }
 
-    private static func stableHash(_ value: String) -> String {
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in value.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1_099_511_628_211
-        }
-        return String(hash, radix: 16)
-    }
+                if !displayContent.text.isEmpty {
+                    MomentStyledText(text: displayContent.text, runs: displayContent.runs)
+                        .font(.system(size: 28, weight: .regular, design: .rounded))
+                        .lineSpacing(8)
+                }
 
-    private static func persistThumbnail(_ image: CGImage, at url: URL) {
-        guard !Task.isCancelled else { return }
-        let fileManager = FileManager.default
-        let directory = url.deletingLastPathComponent()
-        let temporaryURL = directory.appendingPathComponent(".\(UUID().uuidString).tmp.png")
-        do {
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            guard !fileManager.fileExists(atPath: url.path) else { return }
+                if !moment.tags.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            ForEach(moment.tags, id: \.self) { tag in
+                                Text("#\(tag)")
+                                    .font(.callout.weight(.medium))
+                                    .foregroundStyle(.tint)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 6)
+                                    .background(.tint.opacity(0.12), in: Capsule())
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                }
 
-            guard let destination = CGImageDestinationCreateWithURL(
-                temporaryURL as CFURL,
-                "public.png" as CFString,
-                1,
-                nil
-            ) else { return }
-            CGImageDestinationAddImage(destination, image, nil)
-            guard CGImageDestinationFinalize(destination) else {
-                try? fileManager.removeItem(at: temporaryURL)
-                return
+                if !moment.images.isEmpty {
+                    MomentImmersiveImageGrid(
+                        images: moment.images,
+                        store: store,
+                        onOpenImage: onOpenImage
+                    )
+                }
             }
-
-            if fileManager.fileExists(atPath: url.path) {
-                try? fileManager.removeItem(at: temporaryURL)
-            } else {
-                try fileManager.moveItem(at: temporaryURL, to: url)
+            .padding(34)
+            .frame(maxWidth: 1_520, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+                    .allowsHitTesting(false)
             }
-        } catch {
-            try? fileManager.removeItem(at: temporaryURL)
-            // Thumbnail caching is an optimization; the decoded in-memory image remains usable.
+            .shadow(color: .black.opacity(0.12), radius: 28, y: 12)
+            .padding(.horizontal, 36)
+            .padding(.vertical, 24)
+            .frame(maxWidth: .infinity)
         }
+        .scrollIndicators(.automatic)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("第 \(moment.createdAt.nativeDateLabel) 发布的微博")
     }
 }
 
-private struct MomentImageDecodeResult: @unchecked Sendable {
-    let image: NSImage?
+private struct MomentImmersiveImageGrid: View {
+    let images: [NativeMedia]
+    let store: LocalBlogStore
+    let onOpenImage: (Int) -> Void
+
+    private var columnCount: Int {
+        if images.count == 1 { return 1 }
+        if images.count <= 4 { return 2 }
+        return 3
+    }
+
+    private var imageHeight: CGFloat {
+        if images.count == 1 { return 600 }
+        if images.count <= 4 { return 400 }
+        return 290
+    }
+
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 10), count: columnCount)
+    }
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(Array(images.enumerated()), id: \.element.id) { index, image in
+                Button {
+                    onOpenImage(index)
+                } label: {
+                    MomentImage(
+                        media: image,
+                        store: store,
+                        loadMode: .thumbnail(maxPixelSize: 1_280)
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: imageHeight)
+                    .background(.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("放大浏览第 \(index + 1) 张图片")
+            }
+        }
+    }
 }
 
 private struct MomentImageBrowserState: Identifiable {
@@ -1511,7 +1683,7 @@ private struct MomentZoomableImage: View {
                 failedToLoad = true
                 return
             }
-            let decoded = await MomentImageLoader.shared.image(from: url, mode: .fullSize)
+            let decoded = await NativeImagePipeline.shared.image(from: url, mode: .fullSize)
             guard !Task.isCancelled else { return }
             image = decoded.image
             failedToLoad = image == nil

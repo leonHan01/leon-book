@@ -128,6 +128,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
     @Binding var textRuns: [NativeMomentTextRun]
     let controller: MomentRichTextController
     let onPasteImages: ([NSImage]) -> Void
+    var maximumLength = 500
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -202,7 +203,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
         ) -> Bool {
             let replacementLength = ((replacementString ?? "") as NSString).length
             let currentLength = (textView.string as NSString).length
-            return currentLength - affectedCharRange.length + replacementLength <= 500
+            return currentLength - affectedCharRange.length + replacementLength <= parent.maximumLength
         }
     }
 }

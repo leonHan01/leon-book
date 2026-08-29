@@ -1,15 +1,27 @@
+import AppKit
 import SwiftUI
 
 struct ZhihuView: View {
     @ObservedObject var model: NativeAppModel
     @State private var isPresentingQuestionComposer = false
+    @State private var detailQuestionID: String?
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            filters
-            Divider()
-            content
+            if detailQuestionID != nil, model.selectedQuestion?.id == detailQuestionID {
+                detailHeader
+                Divider()
+                QuestionDetailView(model: model) { tag in
+                    model.selectQuestionTag(tag)
+                    detailQuestionID = nil
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                header
+                filters
+                Divider()
+                listContent
+            }
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(isPresented: $isPresentingQuestionComposer) {
@@ -20,7 +32,7 @@ struct ZhihuView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("知乎")
+                Text("问答")
                     .font(.system(size: 28, weight: .bold))
                 Text("发布问题，围绕问题沉淀答案")
                     .font(.callout)
@@ -41,6 +53,43 @@ struct ZhihuView: View {
         .padding(.horizontal, 24)
         .padding(.top, 22)
         .padding(.bottom, 16)
+    }
+
+    private var detailHeader: some View {
+        HStack(spacing: 14) {
+            Button {
+                detailQuestionID = nil
+            } label: {
+                Label("问题列表", systemImage: "chevron.left")
+            }
+            .buttonStyle(.borderless)
+            .help("返回问题列表")
+
+            Divider()
+                .frame(height: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("问答 · 问题详情")
+                    .font(.headline)
+                Text("阅读回答或写下你的答案")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if let question = model.selectedQuestion {
+                Label("\(question.answerCount) 个回答", systemImage: "text.bubble")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Button {
+                isPresentingQuestionComposer = true
+            } label: {
+                Label("发布问题", systemImage: "plus.bubble")
+            }
+            .disabled(model.isPublishingQuestion || model.isBackingUp)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
     }
 
     private var filters: some View {
@@ -112,7 +161,7 @@ struct ZhihuView: View {
     }
 
     @ViewBuilder
-    private var content: some View {
+    private var listContent: some View {
         if model.questions.isEmpty {
             VStack(spacing: 12) {
                 Image(systemName: model.isFilteringQuestions ? "magnifyingglass" : "questionmark.bubble")
@@ -120,7 +169,7 @@ struct ZhihuView: View {
                     .foregroundStyle(.secondary)
                 Text(model.isFilteringQuestions ? "没有找到符合条件的问题" : "还没有问题")
                     .font(.title3.weight(.semibold))
-                Text(model.isFilteringQuestions ? "换一个标签或搜索词试试" : "发布第一个问题，答案会集中显示在问题下方。")
+                Text(model.isFilteringQuestions ? "换一个标签或搜索词试试" : "发布第一个问题，其他人可以进入问题详情回答。")
                     .foregroundStyle(.secondary)
                 if !model.isFilteringQuestions {
                     Button("发布问题") { isPresentingQuestionComposer = true }
@@ -129,88 +178,120 @@ struct ZhihuView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            HSplitView {
-                questionList
-                    .frame(minWidth: 280, idealWidth: 350, maxWidth: 440)
-                QuestionDetailView(model: model)
-                    .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity)
-            }
+            questionList
         }
     }
 
     private var questionList: some View {
         ScrollView {
-            LazyVStack(spacing: 8) {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(model.isFilteringQuestions ? "筛选结果" : "全部问题")
+                        .font(.title3.weight(.semibold))
+                    Spacer()
+                    Text("\(model.questions.count) 条")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.bottom, 4)
+
                 ForEach(model.questions) { question in
                     Button {
-                        model.selectQuestion(question)
+                        if model.selectQuestion(question) {
+                            detailQuestionID = question.id
+                        }
                     } label: {
-                        QuestionListRow(
-                            question: question,
-                            isSelected: model.selectedQuestion?.id == question.id
-                        )
+                        QuestionListRow(question: question)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(14)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .frame(maxWidth: 920, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.45))
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.32))
     }
 }
 
 private struct QuestionListRow: View {
     let question: NativeQuestion
-    let isSelected: Bool
+    @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(question.title)
-                .font(.headline)
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-            if !question.body.isEmpty {
-                Text(question.body)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+        HStack(alignment: .center, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(question.title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-            }
-            HStack(spacing: 7) {
-                ForEach(question.tags.prefix(2), id: \.self) { tag in
-                    Text(tag)
-                        .font(.caption)
-                        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                if !question.body.isEmpty {
+                    Text(question.body)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 }
-                if question.tags.count > 2 {
-                    Text("+\(question.tags.count - 2)")
+                HStack(spacing: 8) {
+                    ForEach(question.tags.prefix(4), id: \.self) { tag in
+                        Text(tag)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.accentColor.opacity(0.09), in: Capsule())
+                    }
+                    if question.tags.count > 4 {
+                        Text("+\(question.tags.count - 4)")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    Text(question.createdAt.nativeDateLabel)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                    Label("\(question.answerCount) 个回答", systemImage: "text.bubble")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Spacer()
-                Label("\(question.answerCount)", systemImage: "text.bubble")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+            Image(systemName: "chevron.right")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(
+                    isHovered ? Color.accentColor : Color(nsColor: .tertiaryLabelColor)
+                )
         }
-        .padding(13)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            isSelected ? Color.accentColor.opacity(0.13) : Color(nsColor: .textBackgroundColor),
-            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+            isHovered ? Color.accentColor.opacity(0.07) : Color(nsColor: .textBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.07))
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(isHovered ? Color.accentColor.opacity(0.32) : Color.primary.opacity(0.07))
         }
-        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .onHover { isHovered = $0 }
     }
+}
+
+private enum QuestionAnswerComposerMode: String, CaseIterable, Identifiable {
+    case edit
+    case preview
+
+    var id: String { rawValue }
+    var title: String { self == .edit ? "编辑" : "预览" }
+    var systemImage: String { self == .edit ? "chevron.left.forwardslash.chevron.right" : "eye" }
 }
 
 private struct QuestionDetailView: View {
     @ObservedObject var model: NativeAppModel
-    @State private var answerBody = ""
+    let onSelectTag: (String) -> Void
+    @StateObject private var answerEditorController = MomentRichTextController()
+    @State private var answerComposerMode = QuestionAnswerComposerMode.edit
 
     var body: some View {
         if let question = model.selectedQuestion {
@@ -222,10 +303,8 @@ private struct QuestionDetailView: View {
                     answerComposer
                 }
                 .padding(26)
-                .frame(maxWidth: 920, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .onChange(of: question.id) { _ in answerBody = "" }
         } else {
             Text("选择一个问题查看答案")
                 .foregroundStyle(.secondary)
@@ -247,7 +326,7 @@ private struct QuestionDetailView: View {
             HStack(spacing: 8) {
                 ForEach(question.tags, id: \.self) { tag in
                     Button {
-                        model.selectQuestionTag(tag)
+                        onSelectTag(tag)
                     } label: {
                         Label(tag, systemImage: "tag.fill")
                     }
@@ -267,31 +346,80 @@ private struct QuestionDetailView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("\(model.questionAnswers.count) 个回答")
                 .font(.title3.weight(.semibold))
-            if model.questionAnswers.isEmpty {
+            if model.isLoadingQuestionAnswers {
+                HStack(spacing: 9) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在加载回答…")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 8)
+            } else if model.questionAnswers.isEmpty {
                 Text("还没有回答。写下第一个答案吧。")
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
-                ForEach(Array(model.questionAnswers.enumerated()), id: \.element.id) { index, answer in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Label("回答 \(index + 1)", systemImage: "person.crop.circle")
-                                .font(.callout.weight(.medium))
-                            Spacer()
-                            Text(answer.createdAt.nativeDateLabel)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    ForEach(Array(model.questionAnswers.enumerated()), id: \.element.id) { index, answer in
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Label("回答 \(index + 1)", systemImage: "person.crop.circle")
+                                    .font(.callout.weight(.medium))
+                                Spacer()
+                                if answer.updatedAt != answer.createdAt {
+                                    Text("已编辑")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(answer.createdAt.nativeDateLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Button {
+                                    model.beginEditingQuestionAnswer(answer)
+                                    answerComposerMode = .edit
+                                } label: {
+                                    Label(
+                                        model.editingQuestionAnswerID == answer.id ? "正在编辑" : "编辑",
+                                        systemImage: "pencil"
+                                    )
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(
+                                    model.isPublishingQuestionAnswer
+                                        || model.isUploadingMedia
+                                        || model.isBackingUp
+                                )
+                            }
+                            if !answer.body.isEmpty {
+                                MarkdownArticleBody(
+                                    body: answer.body,
+                                    store: model.store,
+                                    articleLinks: model.articles,
+                                    onOpenArticle: model.openArticleLink
+                                )
+                            }
+                            if !answer.images.isEmpty {
+                                QuestionAnswerImageGrid(
+                                    images: answer.images,
+                                    store: model.store,
+                                    onOpen: model.openMedia
+                                )
+                            }
                         }
-                        Text(answer.body)
-                            .lineSpacing(5)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(16)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.primary.opacity(0.07))
+                        .padding(16)
+                        .background(
+                            Color(nsColor: .textBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 12)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.primary.opacity(0.12))
+                        }
+                        .shadow(
+                            color: Color.black.opacity(0.05),
+                            radius: 4,
+                            y: 2
+                        )
                     }
                 }
             }
@@ -300,50 +428,122 @@ private struct QuestionDetailView: View {
 
     private var answerComposer: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("写回答", systemImage: "square.and.pencil")
-                .font(.title3.weight(.semibold))
-            ZStack(alignment: .topLeading) {
-                if answerBody.isEmpty {
-                    Text("分享你的知识、经验和判断…")
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 9)
-                        .allowsHitTesting(false)
-                }
-                TextEditor(text: $answerBody)
-                    .font(.body)
-                    .scrollContentBackground(.hidden)
-                    .padding(2)
-            }
-            .frame(minHeight: 130)
-            .padding(8)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12))
-            }
             HStack {
-                Text("\(answerBody.count) / 10000")
-                    .font(.caption)
-                    .foregroundStyle(answerBody.count > 10_000 ? .red : .secondary)
+                Label(
+                    model.editingQuestionAnswerID == nil ? "写回答" : "编辑回答",
+                    systemImage: model.editingQuestionAnswerID == nil ? "square.and.pencil" : "pencil"
+                )
+                .font(.title3.weight(.semibold))
                 Spacer()
+                Picker("回答模式", selection: $answerComposerMode) {
+                    ForEach(QuestionAnswerComposerMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 190)
+            }
+
+            if answerComposerMode == .edit {
+                ZStack(alignment: .topLeading) {
+                    if model.questionAnswerDraft.body.isEmpty {
+                        Text("使用 Markdown 写下你的回答…")
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 13)
+                            .allowsHitTesting(false)
+                    }
+                    MomentRichTextEditor(
+                        text: $model.questionAnswerDraft.body,
+                        textRuns: $model.questionAnswerDraft.textRuns,
+                        controller: answerEditorController,
+                        onPasteImages: model.uploadQuestionAnswerPastedImages,
+                        maximumLength: 10_000
+                    )
+                }
+                .frame(minHeight: 170)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12))
+                }
+            } else {
+                Group {
+                    if model.questionAnswerDraft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "text.document")
+                                .font(.title2)
+                            Text("输入 Markdown 后可在这里预览")
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 150)
+                    } else {
+                        MarkdownArticleBody(
+                            body: model.questionAnswerDraft.body,
+                            store: model.store,
+                            articleLinks: model.articles,
+                            onOpenArticle: model.openArticleLink
+                        )
+                        .padding(14)
+                        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+                    }
+                }
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12))
+                }
+            }
+
+            if !model.questionAnswerDraft.images.isEmpty {
+                QuestionAnswerImageGrid(
+                    images: model.questionAnswerDraft.images,
+                    store: model.store,
+                    onOpen: model.openMedia,
+                    onRemove: model.removeQuestionAnswerImage
+                )
+            }
+
+            HStack {
+                Label("支持 Markdown；可直接粘贴或拖入图片，最多 9 张", systemImage: "text.badge.checkmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if model.isUploadingMedia {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在保存图片")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(model.questionAnswerDraft.body.count) / 10000")
+                    .font(.caption)
+                    .foregroundStyle(model.questionAnswerDraft.body.count > 10_000 ? .red : .secondary)
+                if model.editingQuestionAnswerID != nil {
+                    Button("取消编辑") {
+                        model.cancelQuestionAnswerEditing()
+                        answerComposerMode = .edit
+                    }
+                    .disabled(model.isPublishingQuestionAnswer || model.isUploadingMedia)
+                }
                 Button {
                     Task {
-                        if await model.publishQuestionAnswer(body: answerBody) {
-                            answerBody = ""
-                        }
+                        _ = await model.publishQuestionAnswer()
                     }
                 } label: {
                     if model.isPublishingQuestionAnswer {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label("发布回答", systemImage: "paperplane.fill")
+                        Label(
+                            model.editingQuestionAnswerID == nil ? "发布回答" : "保存修改",
+                            systemImage: model.editingQuestionAnswerID == nil ? "paperplane.fill" : "checkmark"
+                        )
                     }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(
-                    answerBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || answerBody.count > 10_000
+                    model.questionAnswerDraft.isEmpty
+                        || model.questionAnswerDraft.body.count > 10_000
                         || model.isPublishingQuestionAnswer
+                        || model.isUploadingMedia
                         || model.isBackingUp
                 )
             }
@@ -441,6 +641,98 @@ private struct QuestionComposerSheet: View {
         .padding(24)
         .frame(width: 620)
     }
+}
+
+private struct QuestionAnswerImageGrid: View {
+    let images: [NativeMedia]
+    let store: LocalBlogStore
+    let onOpen: (NativeMedia) -> Void
+    var onRemove: ((NativeMedia) -> Void)?
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 140, maximum: 220), spacing: 10),
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+            ForEach(images) { media in
+                ZStack(alignment: .topTrailing) {
+                    Button {
+                        onOpen(media)
+                    } label: {
+                        QuestionAnswerImage(media: media, store: store)
+                    }
+                    .buttonStyle(.plain)
+                    .help("打开原图")
+
+                    if let onRemove {
+                        Button {
+                            onRemove(media)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title3)
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(Color.white, Color.black.opacity(0.65))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(7)
+                        .help("移除图片")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct QuestionAnswerImage: View {
+    let media: NativeMedia
+    let store: LocalBlogStore
+    @State private var image: NSImage?
+    @State private var didFinishLoading = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor))
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else if didFinishLoading {
+                Image(systemName: "photo")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .frame(height: 150)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.primary.opacity(0.08))
+        }
+        .task(id: media.url) {
+            image = nil
+            didFinishLoading = false
+            guard let url = await store.mediaURL(for: media.url) else {
+                didFinishLoading = true
+                return
+            }
+            let result = await Task.detached(priority: .utility) {
+                QuestionAnswerImageResult(image: NSImage(contentsOf: url))
+            }.value
+            guard !Task.isCancelled else { return }
+            image = result.image
+            didFinishLoading = true
+        }
+        .accessibilityLabel(media.name.isEmpty ? "回答图片" : media.name)
+    }
+}
+
+private struct QuestionAnswerImageResult: @unchecked Sendable {
+    let image: NSImage?
 }
 
 private struct QuestionTagButtonStyle: ButtonStyle {

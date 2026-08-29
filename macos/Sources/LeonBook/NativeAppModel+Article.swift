@@ -14,7 +14,7 @@ extension NativeAppModel {
                 guard selectedArticle?.slug == updated.slug else { return }
                 selectedArticle = updated
                 articles = try await store.listArticles()
-                articleGraph = try await store.articleGraph()
+                try await reloadKnowledgeGraph()
                 selectedArticleRelations = try await store.articleRelations(for: updated.slug)
                 scheduleBackup()
                 errorMessage = nil
@@ -170,7 +170,7 @@ extension NativeAppModel {
                     position: position
                 )
                 articles = try await store.listArticles()
-                articleGraph = try await store.articleGraph()
+                try await reloadKnowledgeGraph()
                 articleTabs.removeAll(where: { $0.slug == source.slug })
                 recentArticleSlugs.removeAll(where: { $0 == source.slug })
                 if let summary = articles.first(where: { $0.slug == result.primaryArticle.slug }) {
@@ -186,7 +186,7 @@ extension NativeAppModel {
 
     private func refreshAfterArticleRefactor(primarySlug: String) async throws {
         articles = try await store.listArticles()
-        articleGraph = try await store.articleGraph()
+        try await reloadKnowledgeGraph()
         selectedArticleRelations = try await store.articleRelations(for: primarySlug)
         try await refreshSelectedSmartCollection()
     }
@@ -220,7 +220,7 @@ extension NativeAppModel {
                 let changedCount = try await store.renameArticleProperty(from: oldKey, to: newKey)
                 editor.properties = editorProperties
                 articles = try await store.listArticles()
-                articleGraph = try await store.articleGraph()
+                try await reloadKnowledgeGraph()
                 try await refreshSelectedSmartCollection()
                 if let slug = selectedArticle?.slug {
                     selectedArticle = try await store.getArticle(slug: slug)
@@ -419,7 +419,7 @@ extension NativeAppModel {
                 articles = try await store.listArticles()
                 try await refreshSelectedSmartCollection()
                 if selectedArticle?.slug == updated.slug { selectedArticle = updated }
-                articleGraph = try await store.articleGraph()
+                try await reloadKnowledgeGraph()
                 scheduleBackup()
                 errorMessage = nil
             } catch {
@@ -542,7 +542,7 @@ extension NativeAppModel {
             globalSearchText = query
             presentGlobalSearch()
         case .graph:
-            section = .graph
+            openKnowledgeGraph()
         }
     }
 

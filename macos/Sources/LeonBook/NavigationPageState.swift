@@ -11,9 +11,6 @@ final class NativeNavigationPageStateCache: ObservableObject {
 @MainActor
 final class NativeMomentFeedPageState: ObservableObject {
     @Published private(set) var collapsedTimelineDays: Set<String> = []
-    @Published private(set) var pageViewSessionID = UUID()
-    private var recordedPageViewIDs: Set<String> = []
-    private var startsNewPageViewSession = true
 
     func toggleTimelineDay(_ dayID: String) {
         if collapsedTimelineDays.contains(dayID) {
@@ -21,19 +18,6 @@ final class NativeMomentFeedPageState: ObservableObject {
         } else {
             collapsedTimelineDays.insert(dayID)
         }
-    }
-
-    func shouldRecordPageView(for momentID: String) -> Bool {
-        if startsNewPageViewSession {
-            startsNewPageViewSession = false
-            recordedPageViewIDs.removeAll(keepingCapacity: true)
-            pageViewSessionID = UUID()
-        }
-        return recordedPageViewIDs.insert(momentID).inserted
-    }
-
-    func endVisit() {
-        startsNewPageViewSession = true
     }
 }
 

@@ -10,7 +10,7 @@ private enum ArticleEditorLayout {
     static let titleVerticalInset: CGFloat = 24
 }
 
-private enum NativeBodyEditorAppearance {
+enum NativeBodyEditorAppearance {
     case source
     case livePreview
 }
@@ -127,6 +127,7 @@ private final class EditorSlashCommandController: ObservableObject {
 private struct NativeBodyEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var selectedRange: NSRange
+    let isEditable: Bool
     let linkController: ArticleLinkAutocompleteController
     let slashController: EditorSlashCommandController
     let appearance: NativeBodyEditorAppearance
@@ -147,6 +148,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
 
         let textView = PastingTextView()
         textView.allowsUndo = true
+        textView.isEditable = isEditable
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.autoresizingMask = [.width]
         textView.backgroundColor = .textBackgroundColor
@@ -171,7 +173,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
         linkController.attach(to: textView)
         slashController.attach(to: textView)
         slashController.onExecute = onRunCommand
-        context.coordinator.applyStyling(to: textView, immediately: true)
+        context.coordinator.applyStyling(to: textView, immediately: true, editedRange: nil)
 
         scrollView.documentView = textView
         return scrollView
@@ -180,6 +182,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        textView.isEditable = isEditable
         linkController.attach(to: textView)
         slashController.attach(to: textView)
         slashController.onExecute = onRunCommand
@@ -198,7 +201,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
         if textChanged
             || context.coordinator.lastAppearance != appearance
             || context.coordinator.lastTypography != typography {
-            context.coordinator.applyStyling(to: textView, immediately: true)
+            context.coordinator.applyStyling(to: textView, immediately: true, editedRange: nil)
         }
     }
 
@@ -211,6 +214,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
         fileprivate var lastAppearance: NativeBodyEditorAppearance?
         fileprivate var lastTypography: NativeReadingTypography?
         private var styleWorkItem: DispatchWorkItem?
+        private var pendingStylingRange: NSRange?
 
         init(parent: NativeBodyEditor) {
             self.parent = parent
@@ -222,7 +226,36 @@ private struct NativeBodyEditor: NSViewRepresentable {
             parent.selectedRange = textView.selectedRange()
             parent.linkController.updateLinkQuery(from: textView)
             parent.slashController.updateQuery(from: textView)
-            applyStyling(to: textView, immediately: false)
+            let fallbackRange = NSRange(location: textView.selectedRange().location, length: 0)
+            applyStyling(
+                to: textView,
+                immediately: false,
+                editedRange: pendingStylingRange ?? fallbackRange
+            )
+        }
+
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            let replacementLength = ((replacementString ?? "") as NSString).length
+            if var pending = pendingStylingRange {
+                let delta = replacementLength - affectedCharRange.length
+                if NSMaxRange(affectedCharRange) <= pending.location {
+                    pending.location = max(0, pending.location + delta)
+                }
+                pendingStylingRange = NSUnionRange(
+                    pending,
+                    NSRange(location: affectedCharRange.location, length: replacementLength)
+                )
+            } else {
+                pendingStylingRange = NSRange(
+                    location: affectedCharRange.location,
+                    length: replacementLength
+                )
+            }
+            return true
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -239,17 +272,34 @@ private struct NativeBodyEditor: NSViewRepresentable {
             parent.onPasteImage(image, placeholder)
         }
 
-        func applyStyling(to textView: NSTextView, immediately: Bool) {
+        func applyStyling(
+            to textView: NSTextView,
+            immediately: Bool,
+            editedRange: NSRange?
+        ) {
             styleWorkItem?.cancel()
+            if !immediately, let editedRange {
+                pendingStylingRange = pendingStylingRange.map {
+                    NSUnionRange($0, editedRange)
+                } ?? editedRange
+            }
             let appearance = parent.appearance
             let workItem = DispatchWorkItem { [weak self, weak textView] in
                 guard let self, let textView else { return }
-                NativeMarkdownLiveStyler.apply(appearance, typography: self.parent.typography, to: textView)
+                let range = immediately ? editedRange : self.pendingStylingRange
+                self.pendingStylingRange = nil
+                NativeMarkdownLiveStyler.apply(
+                    appearance,
+                    typography: self.parent.typography,
+                    to: textView,
+                    editedRange: range
+                )
                 self.lastAppearance = appearance
                 self.lastTypography = self.parent.typography
             }
             styleWorkItem = workItem
             if immediately {
+                pendingStylingRange = nil
                 workItem.perform()
             } else {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.045, execute: workItem)
@@ -259,128 +309,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
         func cancelStyling() {
             styleWorkItem?.cancel()
             styleWorkItem = nil
-        }
-    }
-}
-
-private enum NativeMarkdownLiveStyler {
-    private static let inlineCode = try! NSRegularExpression(pattern: #"`([^`\n]+)`"#)
-    private static let strongAsterisk = try! NSRegularExpression(pattern: #"\*\*([^*\n]+)\*\*"#)
-    private static let strongUnderscore = try! NSRegularExpression(pattern: #"__([^_\n]+)__"#)
-    private static let emphasis = try! NSRegularExpression(pattern: #"(?<!\*)\*([^*\n]+)\*(?!\*)"#)
-    private static let wikiLink = try! NSRegularExpression(pattern: #"\[\[([^\[\]\n]+)\]\]"#)
-    private static let markdownLink = try! NSRegularExpression(pattern: #"\[([^\]\n]+)\]\(([^)\n]+)\)"#)
-    private static let blockQuote = try! NSRegularExpression(pattern: #"(?m)^[ \t]*(>)[ \t]+(.+)$"#)
-    private static let listMarker = try! NSRegularExpression(pattern: #"(?m)^[ \t]*([-+*]|\d+[.)])[ \t]+"#)
-    private static let heading = try! NSRegularExpression(pattern: #"(?m)^(#{1,6})[ \t]+(.+)$"#)
-    private static let fencedCode = try! NSRegularExpression(pattern: #"(?ms)^```[^\n]*\n.*?^```[ \t]*$"#)
-    private static let markdownMarkers = try! NSRegularExpression(
-        pattern: #"\*\*|__|(?<!\*)\*(?!\*)|`|\[\[|\]\]|\]\(|\)"#
-    )
-
-    static func apply(
-        _ appearance: NativeBodyEditorAppearance,
-        typography: NativeReadingTypography,
-        to textView: NSTextView
-    ) {
-        guard let storage = textView.textStorage else { return }
-        let fullRange = NSRange(location: 0, length: storage.length)
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = typography.lineSpacing
-        paragraphStyle.paragraphSpacing = typography.paragraphSpacing
-        let baseAttributes: [NSAttributedString.Key: Any] = [
-            .font: typography.bodyFont.nsFont(size: typography.fontSize),
-            .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: paragraphStyle,
-        ]
-
-        storage.beginEditing()
-        storage.setAttributes(baseAttributes, range: fullRange)
-        textView.typingAttributes = baseAttributes
-        textView.insertionPointColor = .controlAccentColor
-
-        guard appearance == .livePreview, storage.length > 0 else {
-            storage.endEditing()
-            return
-        }
-
-        let source = storage.string
-        let searchRange = NSRange(location: 0, length: storage.length)
-        let markerAttributes: [NSAttributedString.Key: Any] = [
-            .foregroundColor: NSColor.tertiaryLabelColor,
-        ]
-
-        apply(inlineCode, group: 1, to: storage, source: source, attributes: [
-            .font: typography.codeFont.nsFont(size: max(11, typography.fontSize - 2)),
-            .backgroundColor: NSColor.controlBackgroundColor,
-        ])
-        apply(strongAsterisk, group: 1, to: storage, source: source, attributes: [
-            .font: typography.bodyFont.nsFont(size: typography.fontSize, weight: .bold),
-        ])
-        apply(strongUnderscore, group: 1, to: storage, source: source, attributes: [
-            .font: typography.bodyFont.nsFont(size: typography.fontSize, weight: .bold),
-        ])
-        apply(emphasis, group: 1, to: storage, source: source, attributes: [
-            .font: NSFontManager.shared.convert(
-                typography.bodyFont.nsFont(size: typography.fontSize),
-                toHaveTrait: .italicFontMask
-            ),
-        ])
-        apply(wikiLink, group: 1, to: storage, source: source, attributes: [
-            .foregroundColor: NSColor.controlAccentColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-        ])
-        apply(markdownLink, group: 1, to: storage, source: source, attributes: [
-            .foregroundColor: NSColor.linkColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-        ])
-        apply(blockQuote, group: 0, to: storage, source: source, attributes: [
-            .foregroundColor: NSColor.secondaryLabelColor,
-        ])
-        apply(blockQuote, group: 1, to: storage, source: source, attributes: [
-            .foregroundColor: NSColor.controlAccentColor,
-            .font: typography.bodyFont.nsFont(size: typography.fontSize, weight: .semibold),
-        ])
-        apply(listMarker, group: 1, to: storage, source: source, attributes: [
-            .foregroundColor: NSColor.controlAccentColor,
-            .font: typography.bodyFont.nsFont(size: typography.fontSize, weight: .semibold),
-        ])
-        apply(fencedCode, group: 0, to: storage, source: source, attributes: [
-            .font: typography.codeFont.nsFont(size: max(11, typography.fontSize - 3)),
-            .backgroundColor: NSColor.controlBackgroundColor,
-        ])
-
-        for match in heading.matches(in: source, range: searchRange) {
-            guard match.numberOfRanges >= 3,
-                  match.range(at: 0).location != NSNotFound,
-                  match.range(at: 1).location != NSNotFound else { continue }
-            let level = max(1, min(match.range(at: 1).length, 6))
-            let scales: [CGFloat] = [1.78, 1.55, 1.34, 1.17, 1.06, 1]
-            storage.addAttributes([
-                .font: typography.bodyFont.nsFont(
-                    size: max(13, typography.fontSize * scales[level - 1]),
-                    weight: level <= 2 ? .bold : .semibold
-                ),
-            ], range: match.range(at: 0))
-            storage.addAttributes(markerAttributes, range: match.range(at: 1))
-        }
-
-        apply(markdownMarkers, group: 0, to: storage, source: source, attributes: markerAttributes)
-        storage.endEditing()
-    }
-
-    private static func apply(
-        _ expression: NSRegularExpression,
-        group: Int,
-        to storage: NSTextStorage,
-        source: String,
-        attributes: [NSAttributedString.Key: Any]
-    ) {
-        let range = NSRange(location: 0, length: storage.length)
-        for match in expression.matches(in: source, range: range) where match.numberOfRanges > group {
-            let matchRange = match.range(at: group)
-            guard matchRange.location != NSNotFound, matchRange.length > 0 else { continue }
-            storage.addAttributes(attributes, range: matchRange)
+            pendingStylingRange = nil
         }
     }
 }
@@ -672,6 +601,7 @@ private struct EditorWikiLink: Identifiable {
 
 struct ArticleEditorView: View {
     @ObservedObject var model: NativeAppModel
+    @ObservedObject private var editorSession: NativeEditorSessionState
     @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
     @ObservedObject var readingPreferences: NativeReadingPreferences
     @StateObject private var articleLinkController = ArticleLinkAutocompleteController()
@@ -681,6 +611,17 @@ struct ArticleEditorView: View {
     @State private var propertyRenameRequest: EditorPropertyRenameRequest?
     @State private var editorSidebarDragStart: Double?
     @State private var splitDragStart: Double?
+
+    init(
+        model: NativeAppModel,
+        workspaceLayout: NativeWorkspaceLayoutState,
+        readingPreferences: NativeReadingPreferences
+    ) {
+        self.model = model
+        _editorSession = ObservedObject(wrappedValue: model.editorSession)
+        self.workspaceLayout = workspaceLayout
+        self.readingPreferences = readingPreferences
+    }
 
     private var editorMode: ArticleEditorMode {
         workspaceLayout.editorMode
@@ -706,6 +647,7 @@ struct ArticleEditorView: View {
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 0) {
                         titleSection
+                            .disabled(model.isMarkdownSourceReadOnly)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, ArticleEditorLayout.titleVerticalInset)
 
@@ -741,6 +683,7 @@ struct ArticleEditorView: View {
                             )
 
                         editorInspectorSidebar
+                        .disabled(model.isMarkdownSourceReadOnly)
                         .frame(width: settingsWidth)
                         .background(Color(nsColor: .controlBackgroundColor).opacity(0.34))
                     }
@@ -786,6 +729,12 @@ struct ArticleEditorView: View {
                             (model.editor.status == .published ? Color.green : Color.orange).opacity(0.12),
                             in: Capsule()
                         )
+                }
+
+                if model.isMarkdownSourceReadOnly {
+                    Label("只读挂载 · 可阅读和监听外部修改，不能在 LeonBook 中写回", systemImage: "lock.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.orange)
                 }
 
                 Text(model.editor.isNew ? "创建一篇新文章" : "继续编辑这篇文章")
@@ -858,6 +807,7 @@ struct ArticleEditorView: View {
             } label: {
                 Label("重构", systemImage: "point.3.connected.trianglepath.dotted")
             }
+            .disabled(model.isMarkdownSourceReadOnly)
             .help("提取、拆分或合并文章，并自动维护双链")
 
             Button {
@@ -880,6 +830,7 @@ struct ArticleEditorView: View {
             } label: {
                 Label("添加素材", systemImage: "paperclip")
             }
+            .disabled(model.isMarkdownSourceReadOnly)
             .help("添加封面、图片或视频")
 
             Button {
@@ -887,7 +838,7 @@ struct ArticleEditorView: View {
             } label: {
                 Label(model.isSaving ? "保存中…" : "保存草稿", systemImage: "tray.and.arrow.down")
             }
-            .disabled(model.isSaving)
+            .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
 
             Button {
                 model.executeCommand(.publishArticle)
@@ -895,7 +846,7 @@ struct ArticleEditorView: View {
                 Label("发布", systemImage: "paperplane.fill")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(model.isSaving)
+            .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
         }
         .controlSize(.large)
         .padding(.horizontal, ArticleEditorLayout.contentInset)
@@ -917,13 +868,13 @@ struct ArticleEditorView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tint)
 
-            TextField("给这篇文章起个标题", text: $model.editor.title)
+            TextField("给这篇文章起个标题", text: $editorSession.draft.title)
                 .font(.system(size: 40, weight: .bold, design: .serif))
                 .textFieldStyle(.plain)
 
             Divider()
 
-            TextField("写一句摘要，让读者快速了解这篇文章（可选）", text: $model.editor.excerpt, axis: .vertical)
+            TextField("写一句摘要，让读者快速了解这篇文章（可选）", text: $editorSession.draft.excerpt, axis: .vertical)
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .textFieldStyle(.plain)
@@ -1091,8 +1042,9 @@ struct ArticleEditorView: View {
             }
 
             NativeBodyEditor(
-                text: $model.editor.body,
-                selectedRange: $model.editorBodySelection,
+                text: $editorSession.draft.body,
+                selectedRange: $editorSession.bodySelection,
+                isEditable: !model.isMarkdownSourceReadOnly,
                 linkController: articleLinkController,
                 slashController: slashCommandController,
                 appearance: appearance,
@@ -1224,9 +1176,9 @@ struct ArticleEditorView: View {
 
             EditorCard(title: "分类与标签", systemImage: "tag") {
                 VStack(alignment: .leading, spacing: 10) {
-                    TextField("分类", text: $model.editor.category)
+                    TextField("分类", text: $editorSession.draft.category)
                         .textFieldStyle(.roundedBorder)
-                    TextField("标签，例如 #Swift #随笔", text: $model.editor.tags)
+                    TextField("标签，例如 #Swift #随笔", text: $editorSession.draft.tags)
                         .textFieldStyle(.roundedBorder)
 
                     if !tagSuggestions.isEmpty {

@@ -9,16 +9,7 @@ struct MarkdownOutlineItem: Hashable, Identifiable {
 
 enum MarkdownOutline {
     static func items(in source: String) -> [MarkdownOutlineItem] {
-        var items: [MarkdownOutlineItem] = []
-        for block in MarkdownParser.parse(source) {
-            guard case let .heading(level, title) = block else { continue }
-            items.append(MarkdownOutlineItem(
-                id: anchorID(for: items.count),
-                level: level,
-                title: title
-            ))
-        }
-        return items
+        NativeParsedMarkdownDocument(source: source).outline
     }
 
     static func anchorID(for headingIndex: Int) -> String {
@@ -26,9 +17,28 @@ enum MarkdownOutline {
     }
 }
 
+struct NativeParsedMarkdownDocument {
+    let blocks: [MarkdownBlock]
+    let outline: [MarkdownOutlineItem]
+
+    init(source: String, lineOffset: Int = 0) {
+        blocks = MarkdownParser.parse(source, lineOffset: lineOffset)
+        var headings: [MarkdownOutlineItem] = []
+        for block in blocks {
+            guard case let .heading(level, title) = block else { continue }
+            headings.append(MarkdownOutlineItem(
+                id: MarkdownOutline.anchorID(for: headings.count),
+                level: level,
+                title: title
+            ))
+        }
+        outline = headings
+    }
+}
+
 /// Renders CommonMark/GFM. Local `/media` URLs are resolved by `MarkdownArticleBody`.
 struct MarkdownDocumentView: View {
-    let markdown: String
+    let blocks: [MarkdownBlock]
     let articleLinks: [NativeArticleSummary]
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
     let onToggleTask: ((Int, Bool) -> Void)?
@@ -44,7 +54,7 @@ struct MarkdownDocumentView: View {
         headingIDs: [String] = [],
         lineOffset: Int = 0
     ) {
-        self.markdown = markdown
+        blocks = MarkdownParser.parse(markdown, lineOffset: lineOffset)
         self.articleLinks = articleLinks
         self.onOpenArticle = onOpenArticle
         self.onToggleTask = onToggleTask
@@ -52,8 +62,20 @@ struct MarkdownDocumentView: View {
         self.lineOffset = lineOffset
     }
 
-    private var blocks: [MarkdownBlock] {
-        MarkdownParser.parse(markdown, lineOffset: lineOffset)
+    init(
+        blocks: [MarkdownBlock],
+        articleLinks: [NativeArticleSummary],
+        onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void,
+        onToggleTask: ((Int, Bool) -> Void)? = nil,
+        headingIDs: [String] = [],
+        lineOffset: Int = 0
+    ) {
+        self.blocks = blocks
+        self.articleLinks = articleLinks
+        self.onOpenArticle = onOpenArticle
+        self.onToggleTask = onToggleTask
+        self.headingIDs = headingIDs
+        self.lineOffset = lineOffset
     }
 
     private var anchoredBlocks: [(block: MarkdownBlock, headingID: String?)] {
@@ -228,7 +250,7 @@ enum MarkdownWebEmbedParser {
     }
 }
 
-private enum MarkdownBlock {
+enum MarkdownBlock {
     case heading(level: Int, text: String)
     case paragraph(String)
     case list([MarkdownListItem])
@@ -242,7 +264,7 @@ private enum MarkdownBlock {
     case footnotes([(id: String, text: String)])
 }
 
-private struct MarkdownListItem {
+struct MarkdownListItem {
     let depth: Int
     let marker: String
     let text: String
@@ -250,7 +272,7 @@ private struct MarkdownListItem {
     let sourceLine: Int
 }
 
-private struct MarkdownCallout {
+struct MarkdownCallout {
     let kind: String
     let title: String
     let body: String
@@ -293,7 +315,7 @@ private struct MarkdownCallout {
     }
 }
 
-private enum MarkdownTableAlignment {
+enum MarkdownTableAlignment {
     case leading
     case center
     case trailing

@@ -1,4 +1,5 @@
 import AppKit
+import LeonBookBackupModule
 import SwiftUI
 
 public struct NativeSettingsView: View {
@@ -123,10 +124,62 @@ public struct NativeSettingsView: View {
                 NativeCommandSettingsPanel(model: model)
             }
 
-            Section("Obsidian Vault 导入") {
-                LabeledContent("同步策略") {
-                    Text("单向导入 · 复制后的 Markdown 为权威数据")
-                        .foregroundStyle(.secondary)
+            Section("第一方模块") {
+                ForEach(model.firstPartyModules) { module in
+                    Toggle(isOn: Binding(
+                        get: { model.isFirstPartyModuleEnabled(module.id) },
+                        set: { model.setFirstPartyModuleEnabled($0, moduleID: module.id) }
+                    )) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(module.name)
+                                Text(module.summary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: module.systemImage)
+                        }
+                    }
+                    Text("权限：\(model.firstPartyPermissionLabels(module))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if let event = model.latestFirstPartyModuleEvent,
+                   let module = model.firstPartyModules.first(where: { $0.id == event.moduleID }) {
+                    LabeledContent("最近事件") {
+                        Text("\(module.name) · \(event.name)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("停用后，该模块拥有的命令会从命令面板消失，直接入口也会经过同一权限门禁。模块状态保存在本机。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Markdown 工作区 / Obsidian Vault") {
+                Picker("使用方式", selection: $model.selectedMarkdownWorkspaceMode) {
+                    ForEach(NativeMarkdownWorkspaceMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(model.isScanningObsidianVault || model.isImportingObsidianVault)
+
+                Text(model.selectedMarkdownWorkspaceMode.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                LabeledContent("当前模式") {
+                    Text(model.activeMarkdownWorkspaceMode.title)
+                        .foregroundStyle(model.isMarkdownSourceReadOnly ? .orange : .secondary)
+                }
+                LabeledContent("Markdown 目录") {
+                    Text(model.markdownSourceDirectoryPath)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
                 }
                 LabeledContent("状态") {
                     HStack(spacing: 8) {
@@ -144,9 +197,18 @@ public struct NativeSettingsView: View {
                             .textSelection(.enabled)
                     }
                     HStack(spacing: 18) {
-                        Label("\(preview.importableCount) 篇可导入", systemImage: "doc.badge.plus")
-                        Label("\(preview.attachmentCount) 个附件", systemImage: "paperclip")
-                        if preview.conflictCount > 0 {
+                        Label(
+                            model.selectedMarkdownWorkspaceMode == .copyImport
+                                ? "\(preview.importableCount) 篇可复制"
+                                : "\(preview.notes.count) 篇 Markdown",
+                            systemImage: model.selectedMarkdownWorkspaceMode == .copyImport
+                                ? "doc.badge.plus"
+                                : "folder"
+                        )
+                        if model.selectedMarkdownWorkspaceMode == .copyImport {
+                            Label("\(preview.attachmentCount) 个附件", systemImage: "paperclip")
+                        }
+                        if model.selectedMarkdownWorkspaceMode == .copyImport, preview.conflictCount > 0 {
                             Label("\(preview.conflictCount) 篇冲突跳过", systemImage: "shield.lefthalf.filled")
                                 .foregroundStyle(.orange)
                         }
@@ -161,7 +223,11 @@ public struct NativeSettingsView: View {
                                         .foregroundStyle(note.canImport ? .green : .orange)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(note.title).lineLimit(1)
-                                        Text(note.conflictReason ?? "\(note.relativePath) → \(note.slug)")
+                                        Text(
+                                            model.selectedMarkdownWorkspaceMode == .copyImport
+                                                ? note.conflictReason ?? "\(note.relativePath) → \(note.slug)"
+                                                : note.relativePath
+                                        )
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(2)
@@ -188,22 +254,25 @@ public struct NativeSettingsView: View {
                     }
 
                     HStack {
-                        Button("确认导入 \(preview.importableCount) 篇") {
+                        Button(markdownSourceConfirmationTitle(preview)) {
                             model.confirmObsidianImport()
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(preview.importableCount == 0 || model.isImportingObsidianVault)
+                        .disabled(
+                            (model.selectedMarkdownWorkspaceMode == .copyImport && preview.importableCount == 0)
+                                || model.isImportingObsidianVault
+                        )
                         Button("取消") { model.cancelObsidianImport() }
                             .disabled(model.isImportingObsidianVault)
                     }
                 } else {
-                    Button("选择并扫描 Obsidian Vault…") {
+                    Button("选择并扫描 Markdown 文件夹…") {
                         model.chooseObsidianVault()
                     }
                     .disabled(model.isScanningObsidianVault || model.isImportingObsidianVault || !model.storageReady)
                 }
 
-                Text("兼容常见 YAML Properties、[[双链]]、别名、标题锚点和本地附件。导入前只读扫描；导入时附件会复制到当前工作空间。不会监听、覆盖或回写 Obsidian Vault，现有 SQLite 文章冲突时默认跳过。")
+                Text("挂载模式会持续监听普通文件夹或 Obsidian Vault 中的 Markdown；SQLite、评论、版本、布局和应用媒体仍保存在 LeonBook 工作区。只读挂载不会改写原目录；直接编辑会原子写回。工作区备份只包含 LeonBook 内部数据，不复制外部挂载目录。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -382,6 +451,14 @@ public struct NativeSettingsView: View {
                     .monospacedDigit()
                     .frame(width: 56, alignment: .trailing)
             }
+        }
+    }
+
+    private func markdownSourceConfirmationTitle(_ preview: NativeObsidianImportPreview) -> String {
+        switch model.selectedMarkdownWorkspaceMode {
+        case .copyImport: return "确认复制 \(preview.importableCount) 篇"
+        case .readOnlyMount: return "只读挂载此文件夹"
+        case .directEdit: return "直接编辑此文件夹"
         }
     }
 }
