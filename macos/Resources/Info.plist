@@ -10,6 +10,19 @@
     <string>LeonBook</string>
     <key>CFBundleIdentifier</key>
     <string>com.leon-book.macos</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>com.leon-book.macos.automation</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>leonbook</string>
+            </array>
+        </dict>
+    </array>
     <key>CFBundleIconFile</key>
     <string>Notes.icns</string>
     <key>CFBundleInfoDictionaryVersion</key>

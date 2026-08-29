@@ -10,7 +10,20 @@ The app is built with SwiftUI and stores data directly on the local filesystem. 
 
 - Read, edit, and publish articles
 - Automatically save recovery snapshots after 3 seconds of inactivity, with version diffs and restore
-- Search articles, excerpts, bodies, and moments with SQLite FTS5, filter syntax, `⌘O` quick open, and a `⌘P` command palette
+- Search articles, typed properties, excerpts, bodies, and moments with SQLite FTS5, `[property:value]` filters, `⌘O` quick open, and a `⌘P` command palette with fuzzy matching, recents, pins, and configurable hotkeys
+- Save smart collections that SQLite filters and sorts directly, combining status, category, property, date, and numeric conditions with multi-sort, grouping, and list, table, or card layouts
+- Bookmark articles, headings, searches, and the global graph as shortcuts in the sidebar
+- Use the reader's right inspector for the outline, backlinks, outgoing links, convertible unlinked mentions, a local graph, and hover previews
+- Filter, zoom, and degree-clip the global graph before rendering large workspaces
+- Incrementally update link and mention indexes when a body changes; the inspector queries only the current article's candidate relations, while the global graph reuses indexed edges instead of rescanning every body
+- Follow `[[wiki links]]` by title, slug, or alias; create missing targets from a click and jump through `[[note#heading]]` links
+- Automate new articles, article opening, search, and today's moments through `leonbook://` URLs or macOS Shortcuts/App Intents
+- Navigate with per-tab back/forward history, recent articles, pinned tabs, and `⌘-click` to open a new tab
+- Comment on a dragged or double-clicked text selection, with quotes and replies collected in the right sidebar
+- Edit text, list, number, date, checkbox, and tag properties; rename a property across the workspace; switch among Settings, Properties, Outline, and Links; and save per-user Writing, Reading, and Reviewing layouts
+- Keep the current article, tabs, and back/forward navigation independent in every macOS window
+- Mount only the selected main page and retain lightweight page state instead of prewarming full view trees
+- Scan and one-way import an Obsidian Vault from Settings, including YAML properties, `[[wiki links]]`, local attachments, and a conflict preview
 - Embed remote HTTP(S) webpages directly in article bodies
 - Save drafts locally with independent workspaces for multiple users
 - Manage image and video assets
@@ -80,7 +93,17 @@ LEON_BOOK_WORKDIR=/Volumes/T7Shield/myblog ./scripts/leonblog open
 
 When the multi-user structure is initialized, existing articles, drafts, media, moments, and activity records in the root directory are automatically moved into the default `leon` workspace. Uninstalling the app does not remove local data; back up the directory like any other local files.
 
+### Configure a separate backup location
+
+Choose a different disk or independent directory under **Settings → Backups**. Data changes are coalesced and, by default, produce at most one timestamped, logically complete snapshot per hour. Unchanged files use APFS copy-on-write clones when available and otherwise reuse the preceding snapshot or fall back to copying, so large media is not blindly duplicated after every change.
+
+The default policy retains snapshots for 90 days, caps the set at 60 snapshots, and preserves at least 10 GB of free space; all values are configurable. Settings shows the source size, estimated additional storage, and available capacity. You can browse snapshots in Finder, verify version 2 snapshots with SHA-256, or restore the entire data directory. Restore first creates a safety snapshot of the current workspace, then swaps a staged copy into place atomically and rolls back on failure.
+
+The backup destination cannot be inside the live data directory. Backups remain local, unencrypted files and are never uploaded automatically; use a FileVault-protected APFS volume, encrypted external disk, or access-controlled folder for sensitive content.
+
 SQLite is the source of truth for structured records. JSON and Markdown files are kept as readable local exports and for compatibility with existing workspaces; images and videos remain ordinary local files under `media/`. Existing JSON records are imported into SQLite automatically on first launch.
+
+Obsidian Vault import is deliberately one-way: the app reads the selected Vault and copies confirmed notes and attachments into the current user workspace, but never watches or writes back to the Vault. SQLite remains authoritative after import, and an existing article with the same slug is skipped to prevent cross-source overwrites.
 
 ## Development
 

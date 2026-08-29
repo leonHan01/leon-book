@@ -5,122 +5,1006 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
-private enum ArticleEditorLayout {
-    static let contentInset: CGFloat = 20
-    static let titleVerticalInset: CGFloat = 24
-}
-
 struct ArticleReaderView: View {
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
+    @ObservedObject var readingPreferences: NativeReadingPreferences
+    @Environment(\.colorScheme) private var systemColorScheme
     @State private var isPresentingHistory = false
+    @State private var isPresentingCompactInspector = false
+    @State private var readerInspectorDragStart: Double?
 
     var body: some View {
-        Group {
-            if let article = model.selectedArticle {
-                let outline = MarkdownOutline.items(in: article.body)
-                ScrollViewReader { scrollProxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 24) {
-                        HStack {
-                            Label(article.status.label, systemImage: article.status == .published ? "checkmark.circle.fill" : "pencil.circle.fill")
-                                .foregroundStyle(article.status == .published ? .green : .orange)
-                            Spacer()
-                            Button("版本历史") {
-                                model.refreshArticleHistory()
-                                isPresentingHistory = true
-                            }
-                            Button("编辑") { model.editSelected() }
-                            Button("移入回收站", role: .destructive) { Task { await model.deleteSelected() } }
-                        }
+        VStack(spacing: 0) {
+            if !model.articleTabs.isEmpty {
+                ArticleTabBar(model: model)
+                Divider()
+            }
 
-                        Text(article.title)
-                            .font(.system(size: 38, weight: .bold, design: .serif))
-                        HStack(spacing: 12) {
-                            Text(article.category)
-                            Text("·")
-                            Text("更新于 \(article.updatedAt.nativeDateLabel)")
-                            if let wordCount = article.wordCount { Text("· \(wordCount) 字") }
-                            Text("· \(article.pageViews) PV")
-                        }
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+            Group {
+                if let article = model.selectedArticle {
+                    let outline = MarkdownOutline.items(in: article.body)
+                    GeometryReader { proxy in
+                        let usesCompactInspector = proxy.size.width < 980
+                        ScrollViewReader { scrollProxy in
+                            HStack(spacing: 0) {
+                                articleScroll(
+                                    article: article,
+                                    usesCompactInspector: usesCompactInspector
+                                )
 
-                        if !article.tags.isEmpty {
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Image(systemName: "tag.fill")
-                                    .foregroundStyle(.tint)
-                                ForEach(article.tags, id: \.self) { tag in
-                                    Button {
-                                        model.showArticles(tag: tag)
-                                    } label: {
-                                        Text("#\(tag)")
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                    .help("查看标签 #\(tag) 的文章")
+                                if !usesCompactInspector && workspaceLayout.isReaderInspectorVisible {
+                                    Rectangle()
+                                        .fill(Color.secondary.opacity(0.18))
+                                        .frame(width: 7)
+                                        .contentShape(Rectangle())
+                                        .onHover { hovering in
+                                            if hovering { NSCursor.resizeLeftRight.push() }
+                                            else { NSCursor.pop() }
+                                        }
+                                        .gesture(
+                                            DragGesture()
+                                                .onChanged { value in
+                                                    if readerInspectorDragStart == nil {
+                                                        readerInspectorDragStart = workspaceLayout.readerInspectorWidth
+                                                    }
+                                                    let start = readerInspectorDragStart
+                                                        ?? workspaceLayout.readerInspectorWidth
+                                                    workspaceLayout.readerInspectorWidth = min(
+                                                        max(start - Double(value.translation.width), 260),
+                                                        480
+                                                    )
+                                                }
+                                                .onEnded { _ in readerInspectorDragStart = nil }
+                                        )
+                                    ArticleInspectorView(
+                                        model: model,
+                                        selectedPane: $workspaceLayout.readerInspectorPane,
+                                        article: article,
+                                        outline: outline,
+                                        relations: model.selectedArticleRelations,
+                                        globalGraph: model.articleGraph,
+                                        onSelectOutline: { item in
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                scrollProxy.scrollTo(item.id, anchor: .top)
+                                            }
+                                        },
+                                        onSelectCommentAnchor: { anchorID in
+                                            withAnimation(.easeInOut(duration: 0.2)) {
+                                                scrollProxy.scrollTo(anchorID, anchor: .top)
+                                            }
+                                        },
+                                        onOpenArticle: model.openArticleLink,
+                                        onConvertUnlinkedMention: model.convertUnlinkedMention
+                                    )
+                                    .frame(width: CGFloat(workspaceLayout.readerInspectorWidth))
                                 }
                             }
-                        }
-
-                        if !article.excerpt.isEmpty {
-                            Text(article.excerpt)
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if let banner = article.banner {
-                            NativeImageView(url: banner.url, alt: banner.alt, store: model.store)
-                        }
-
-                            if !outline.isEmpty {
-                                ArticleTableOfContents(items: outline) { item in
+                            .onChange(of: model.articleScrollRevision) { _ in
+                                guard let anchorID = model.consumePendingArticleScrollAnchor() else { return }
+                                DispatchQueue.main.async {
                                     withAnimation(.easeInOut(duration: 0.2)) {
-                                        scrollProxy.scrollTo(item.id, anchor: .top)
+                                        scrollProxy.scrollTo(anchorID, anchor: .top)
                                     }
                                 }
                             }
-
-                            Divider()
-                            MarkdownArticleBody(
-                                body: article.body,
-                                store: model.store,
-                                articleLinks: model.articles,
-                                onOpenArticle: model.openArticleLink
-                            )
-
-                        if !model.selectedArticleRelations.isEmpty {
-                            Divider()
-                            ArticleRelationsSection(
-                                relations: model.selectedArticleRelations,
-                                onOpenArticle: model.openArticleLink
-                            )
-                        }
-
-                        let attachmentMedia = article.media.filter {
-                            !MarkdownArticleBody.imageURLs(in: article.body).contains($0.url)
-                        }
-                        if !attachmentMedia.isEmpty {
-                            Divider()
-                            Text("媒体").font(.headline)
-                            ForEach(attachmentMedia) { media in
-                                if media.isVideo {
-                                    InlineVideoPlayer(media: media, store: model.store)
-                                } else {
-                                    NativeImageView(url: media.url, alt: media.name, store: model.store)
-                                }
+                            .sheet(isPresented: $isPresentingCompactInspector) {
+                                ArticleInspectorView(
+                                    model: model,
+                                    selectedPane: $workspaceLayout.readerInspectorPane,
+                                    article: article,
+                                    outline: outline,
+                                    relations: model.selectedArticleRelations,
+                                    globalGraph: model.articleGraph,
+                                    onSelectOutline: { item in
+                                        isPresentingCompactInspector = false
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            scrollProxy.scrollTo(item.id, anchor: .top)
+                                        }
+                                    },
+                                    onSelectCommentAnchor: { anchorID in
+                                        isPresentingCompactInspector = false
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            scrollProxy.scrollTo(anchorID, anchor: .top)
+                                        }
+                                    },
+                                    onOpenArticle: { slug in
+                                        isPresentingCompactInspector = false
+                                        model.openArticleLink(slug)
+                                    },
+                                    onConvertUnlinkedMention: model.convertUnlinkedMention
+                                )
+                                .frame(width: 390, height: 680)
                             }
                         }
-                        }
-                        .frame(maxWidth: 800, alignment: .leading)
-                        .padding(42)
                     }
+                } else {
+                    EmptyState(title: "选择一篇文章", message: "从左侧打开文章，或创建一篇新笔记。", actionTitle: "新文章") { model.newArticle() }
                 }
-            } else {
-                EmptyState(title: "选择一篇文章", message: "从左侧打开文章，或创建一篇新笔记。", actionTitle: "新文章") { model.newArticle() }
             }
         }
         .sheet(isPresented: $isPresentingHistory) {
             ArticleHistoryView(model: model)
+        }
+    }
+
+    private func articleScroll(article: NativeArticle, usesCompactInspector: Bool) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                HStack {
+                    Label(
+                        article.status.label,
+                        systemImage: article.status == .published
+                            ? "checkmark.circle.fill" : "pencil.circle.fill"
+                    )
+                    .foregroundStyle(article.status == .published ? .green : .orange)
+                    Spacer()
+                    if let summary = model.articles.first(where: { $0.slug == article.slug }) {
+                        Button {
+                            model.toggleArticleBookmark(summary)
+                        } label: {
+                            Label(
+                                model.isBookmarked(.article(slug: article.slug)) ? "取消收藏" : "收藏文章",
+                                systemImage: model.isBookmarked(.article(slug: article.slug)) ? "bookmark.fill" : "bookmark"
+                            )
+                        }
+                    }
+                    NativeWorkspaceLayoutMenu(model: model, workspaceLayout: workspaceLayout)
+                    let outline = MarkdownOutline.items(in: article.body)
+                    if !outline.isEmpty {
+                        Menu {
+                            ForEach(outline) { heading in
+                                Button {
+                                    model.bookmarkHeading(article: article, heading: heading)
+                                } label: {
+                                    let target = NativeBookmarkTarget.heading(
+                                        slug: article.slug,
+                                        heading: heading.title,
+                                        anchorID: heading.id
+                                    )
+                                    Label(
+                                        heading.title,
+                                        systemImage: model.isBookmarked(target) ? "bookmark.fill" : "textformat.size"
+                                    )
+                                }
+                            }
+                        } label: {
+                            Label("收藏标题", systemImage: "textformat.size")
+                        }
+                    }
+                    Button {
+                        if usesCompactInspector {
+                            isPresentingCompactInspector = true
+                        } else {
+                            workspaceLayout.isReaderInspectorVisible.toggle()
+                        }
+                    } label: {
+                        Label(
+                            usesCompactInspector || !workspaceLayout.isReaderInspectorVisible ? "文章面板" : "隐藏面板",
+                            systemImage: "sidebar.right"
+                        )
+                    }
+                    .help(usesCompactInspector || !workspaceLayout.isReaderInspectorVisible ? "打开文章大纲与关系" : "隐藏文章大纲与关系")
+                    Button("版本历史") {
+                        model.refreshArticleHistory()
+                        isPresentingHistory = true
+                    }
+                    Button("编辑") { model.editSelected() }
+                    Button("移入回收站", role: .destructive) { Task { await model.deleteSelected() } }
+                }
+
+                Text(article.title)
+                    .font(readingPreferences.profile.bodyFont.swiftUIFont(size: 38, weight: .bold))
+                    .id(NativeArticleCommentAnchor.articleTopID)
+                HStack(spacing: 12) {
+                    Text(article.category)
+                    Text("·")
+                    Text("更新于 \(article.updatedAt.nativeDateLabel)")
+                    if let wordCount = article.wordCount { Text("· \(wordCount) 字") }
+                    Text("· \(article.pageViews) PV")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+                if !article.tags.isEmpty {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "tag.fill")
+                            .foregroundStyle(.tint)
+                        ForEach(article.tags, id: \.self) { tag in
+                            Button {
+                                model.showArticles(tag: tag)
+                            } label: {
+                                Text("#\(tag)")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("查看标签 #\(tag) 的文章")
+                        }
+                    }
+                }
+
+                if !article.excerpt.isEmpty {
+                    Text(article.excerpt)
+                        .font(readingPreferences.profile.bodyFont.swiftUIFont(
+                            size: readingPreferences.typography.fontSize + 2
+                        ))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let banner = article.banner {
+                    NativeImageView(url: banner.url, alt: banner.alt, store: model.store)
+                }
+
+                Divider()
+                MarkdownArticleBody(
+                    body: article.body,
+                    store: model.store,
+                    articleLinks: model.articles,
+                    rootArticleSlug: article.slug,
+                    onOpenArticle: model.openArticleLink,
+                    onToggleTask: { lineIndex, completed in
+                        model.toggleArticleTask(
+                            article: article,
+                            lineIndex: lineIndex,
+                            completed: completed
+                        )
+                    }
+                )
+                .background {
+                    ArticleTextSelectionObserver { selectedText in
+                        guard model.selectedArticle?.slug == article.slug else { return }
+                        model.prepareArticleComment(from: selectedText, in: article.body)
+                        if usesCompactInspector {
+                            isPresentingCompactInspector = true
+                        } else {
+                            workspaceLayout.isReaderInspectorVisible = true
+                        }
+                        workspaceLayout.readerInspectorPane = .comments
+                    }
+                }
+
+                let attachmentMedia = article.media.filter {
+                    !MarkdownArticleBody.imageURLs(in: article.body).contains($0.url)
+                }
+                if !attachmentMedia.isEmpty {
+                    Divider()
+                    Text("媒体").font(.headline)
+                    ForEach(attachmentMedia) { media in
+                        if media.isVideo {
+                            InlineVideoPlayer(media: media, store: model.store)
+                        } else if media.isImage {
+                            NativeImageView(url: media.url, alt: media.name, store: model.store)
+                        } else {
+                            Button {
+                                model.openMedia(media)
+                            } label: {
+                                Label(media.name, systemImage: "doc.fill")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(12)
+                                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
+                            .help("打开导入的附件")
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: CGFloat(readingPreferences.profile.readingWidth), alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(42)
+        }
+        .background(readingPreferences.profile.theme.background(system: systemColorScheme))
+        .environment(
+            \.colorScheme,
+            readingPreferences.profile.theme.colorScheme(system: systemColorScheme)
+        )
+        .environment(\.nativeReadingTypography, readingPreferences.typography)
+    }
+}
+
+private struct ArticleTabBar: View {
+    @ObservedObject var model: NativeAppModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: model.navigateArticleBack) {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!model.canNavigateArticleBack)
+            .help("后退（⌘[）")
+
+            Button(action: model.navigateArticleForward) {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!model.canNavigateArticleForward)
+            .help("前进（⌘]）")
+
+            Menu {
+                if model.recentArticles.isEmpty {
+                    Text("还没有最近文章")
+                } else {
+                    ForEach(model.recentArticles) { article in
+                        Menu(article.title) {
+                            Button("在当前标签页打开") { model.openArticleLink(article.slug) }
+                            Button("在新标签页打开") {
+                                model.openArticleLinkInNewTab(article.slug)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Label("最近文章", systemImage: "clock.arrow.circlepath")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("打开最近浏览的文章")
+
+            Divider().frame(height: 22)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(model.articleTabs) { tab in
+                        ArticleTabItem(
+                            tab: tab,
+                            title: model.articles.first(where: { $0.slug == tab.slug })?.title ?? tab.slug,
+                            isActive: tab.id == model.activeArticleTabID,
+                            onActivate: { model.activateArticleTab(tab.id) },
+                            onTogglePin: { model.toggleArticleTabPin(tab.id) },
+                            onClose: { model.closeArticleTab(tab.id) }
+                        )
+                    }
+                }
+                .padding(.vertical, 5)
+            }
+
+            Divider().frame(height: 22)
+
+            Button(action: model.toggleActiveArticleTabPin) {
+                Image(systemName: model.isActiveArticleTabPinned ? "pin.slash" : "pin")
+            }
+            .buttonStyle(.borderless)
+            .help(model.isActiveArticleTabPinned ? "取消固定当前标签页" : "固定当前标签页")
+
+            Button(action: model.closeActiveArticleTab) {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("关闭当前标签页")
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+private struct ArticleTabItem: View {
+    let tab: NativeArticleTab
+    let title: String
+    let isActive: Bool
+    let onActivate: () -> Void
+    let onTogglePin: () -> Void
+    let onClose: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: onActivate) {
+                HStack(spacing: 6) {
+                    if tab.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.tint)
+                    }
+                    Text(title)
+                        .lineLimit(1)
+                        .frame(maxWidth: 150, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title)\(tab.isPinned ? "，已固定" : "")")
+            .accessibilityAddTraits(isActive ? .isSelected : [])
+
+            if isHovered || isActive {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .help("关闭标签页")
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 10)
+        .frame(height: 28)
+        .background(
+            isActive ? Color.accentColor.opacity(0.17) : Color.primary.opacity(isHovered ? 0.08 : 0.04),
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(isActive ? Color.accentColor.opacity(0.35) : .clear)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .onHover { isHovered = $0 }
+        .contextMenu {
+            Button(tab.isPinned ? "取消固定" : "固定标签页", action: onTogglePin)
+            Button("关闭标签页", action: onClose)
+        }
+        .help(tab.isPinned ? "已固定；打开其他文章时不会替换此标签页" : title)
+    }
+}
+
+private struct ArticleInspectorView: View {
+    @ObservedObject var model: NativeAppModel
+    @Binding var selectedPane: ArticleInspectorPane
+    let article: NativeArticle
+    let outline: [MarkdownOutlineItem]
+    let relations: NativeArticleRelations
+    let globalGraph: NativeArticleGraph
+    let onSelectOutline: (MarkdownOutlineItem) -> Void
+    let onSelectCommentAnchor: (String) -> Void
+    let onOpenArticle: (String) -> Void
+    let onConvertUnlinkedMention: (NativeArticleMention) -> Void
+    private var localGraph: NativeArticleGraph {
+        let relatedSlugs = Set(
+            [article.slug]
+                + relations.incoming.map(\.slug)
+                + relations.outgoing.map(\.slug)
+        )
+        let nodes = globalGraph.nodes.filter { relatedSlugs.contains($0.slug) }
+        let edges = globalGraph.edges.filter {
+            relatedSlugs.contains($0.sourceSlug) && relatedSlugs.contains($0.targetSlug)
+        }
+        return NativeArticleGraph(nodes: nodes, edges: edges)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 9) {
+                HStack(alignment: .firstTextBaseline) {
+                    Label("阅读面板", systemImage: "sidebar.right")
+                        .font(.headline)
+                    Spacer()
+                    Text(selectedPane == .comments ? "划词评论" : "上下文导航")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Picker("阅读面板", selection: $selectedPane) {
+                    Text("评论 \(model.articleComments.count)").tag(ArticleInspectorPane.comments)
+                    Text("文章").tag(ArticleInspectorPane.context)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            if selectedPane == .comments {
+                ArticleCommentsSidebar(
+                    model: model,
+                    article: article,
+                    onSelectAnchor: onSelectCommentAnchor
+                )
+            } else {
+                contextNavigation
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .onChange(of: model.articleCommentSelectionRevision) { _ in
+            if model.pendingArticleCommentSelection != nil {
+                selectedPane = .comments
+            }
+        }
+    }
+
+    private var contextNavigation: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                ArticleInspectorSection(
+                    title: "大纲",
+                    systemImage: "list.bullet.indent",
+                    count: outline.count
+                ) {
+                    if outline.isEmpty {
+                        ArticleInspectorEmpty(message: "正文中还没有标题")
+                    } else {
+                        ArticleTableOfContents(items: outline, onSelect: onSelectOutline)
+                    }
+                }
+
+                ArticleInspectorSection(
+                    title: "反向链接",
+                    systemImage: "arrow.uturn.backward",
+                    count: relations.incoming.count
+                ) {
+                    articleLinks(relations.incoming, emptyMessage: "还没有文章链接到这里")
+                }
+
+                ArticleInspectorSection(
+                    title: "出链",
+                    systemImage: "arrow.up.forward",
+                    count: relations.outgoing.count
+                ) {
+                    articleLinks(relations.outgoing, emptyMessage: "正文中还没有有效双链")
+                }
+
+                ArticleInspectorSection(
+                    title: "未链接提及",
+                    systemImage: "text.magnifyingglass",
+                    count: relations.unlinkedMentions.count
+                ) {
+                    if relations.unlinkedMentions.isEmpty {
+                        ArticleInspectorEmpty(message: "其他文章尚未直接提及本文标题")
+                    } else {
+                        ForEach(relations.unlinkedMentions) { mention in
+                            ArticleUnlinkedMentionRow(
+                                mention: mention,
+                                onOpen: { onOpenArticle(mention.article.slug) },
+                                onConvert: { onConvertUnlinkedMention(mention) }
+                            )
+                        }
+                    }
+                }
+
+                ArticleInspectorSection(
+                    title: "局部关系图",
+                    systemImage: "point.3.connected.trianglepath.dotted",
+                    count: max(0, localGraph.nodes.count - 1)
+                ) {
+                    ArticleLocalGraphView(
+                        graph: localGraph,
+                        selectedSlug: article.slug,
+                        onOpenArticle: onOpenArticle
+                    )
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    @ViewBuilder
+    private func articleLinks(_ articles: [NativeArticleSummary], emptyMessage: String) -> some View {
+        if articles.isEmpty {
+            ArticleInspectorEmpty(message: emptyMessage)
+        } else {
+            ForEach(articles) { relatedArticle in
+                ArticleInspectorLinkRow(article: relatedArticle) {
+                    onOpenArticle(relatedArticle.slug)
+                }
+            }
+        }
+    }
+}
+
+private struct ArticleCommentsSidebar: View {
+    @ObservedObject var model: NativeAppModel
+    let article: NativeArticle
+    let onSelectAnchor: (String) -> Void
+    @State private var commentText = ""
+    @State private var replyingTo: NativeArticleComment?
+    @State private var commentPendingDeletion: NativeArticleComment?
+    @FocusState private var isComposerFocused: Bool
+
+    private var commentsByID: [String: NativeArticleComment] {
+        Dictionary(uniqueKeysWithValues: model.articleComments.map { ($0.id, $0) })
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            commentComposer
+                .padding(12)
+
+            Divider()
+
+            if model.articleComments.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "text.bubble")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.secondary)
+                    Text("还没有评论")
+                        .font(.headline)
+                    Text("拖选或双击正文中的文字，即可针对原文发表评论；也可以直接评论整篇文章。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(24)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(model.articleComments) { comment in
+                            ArticleCommentRow(
+                                comment: comment,
+                                parent: comment.parentID.flatMap { commentsByID[$0] },
+                                canDelete: comment.authorName == model.currentUser.name,
+                                onSelectSelection: { selection in
+                                    let currentAnchor = NativeArticleCommentAnchor.selection(
+                                        for: selection.quote,
+                                        in: article.body
+                                    )?.anchorID ?? selection.anchorID
+                                    onSelectAnchor(currentAnchor)
+                                },
+                                onReply: {
+                                    model.clearPendingArticleCommentSelection()
+                                    replyingTo = comment
+                                    isComposerFocused = true
+                                },
+                                onDelete: { commentPendingDeletion = comment }
+                            )
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+        }
+        .onAppear {
+            guard model.pendingArticleCommentSelection != nil else { return }
+            DispatchQueue.main.async { isComposerFocused = true }
+        }
+        .onChange(of: model.articleCommentSelectionRevision) { _ in
+            guard model.pendingArticleCommentSelection != nil else { return }
+            replyingTo = nil
+            isComposerFocused = true
+        }
+        .onChange(of: article.slug) { _ in
+            commentText = ""
+            replyingTo = nil
+        }
+        .alert(item: $commentPendingDeletion) { comment in
+            Alert(
+                title: Text("删除这条评论？"),
+                message: Text("该评论下的回复也会一并删除。"),
+                primaryButton: .destructive(Text("删除")) {
+                    Task { await model.deleteArticleComment(comment) }
+                },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
+    private var commentComposer: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if let replyingTo {
+                HStack(spacing: 7) {
+                    Image(systemName: "arrowshape.turn.up.left")
+                        .foregroundStyle(.tint)
+                    Text("回复 \(replyingTo.authorName)")
+                        .font(.caption.weight(.semibold))
+                    Spacer()
+                    Button {
+                        self.replyingTo = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .help("取消回复")
+                }
+            } else if let selection = model.pendingArticleCommentSelection {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("评论所选原文", systemImage: "quote.opening")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tint)
+                        Spacer()
+                        Button(action: model.clearPendingArticleCommentSelection) {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .help("改为评论整篇文章")
+                    }
+                    Text(selection.quote)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(9)
+                .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
+            } else {
+                Label("评论整篇文章", systemImage: "text.bubble")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            TextEditor(text: $commentText)
+                .font(.callout)
+                .frame(minHeight: 62, maxHeight: 96)
+                .padding(5)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.secondary.opacity(0.2))
+                }
+                .focused($isComposerFocused)
+                .onChange(of: commentText) { value in
+                    if value.count > 2_000 {
+                        commentText = String(value.prefix(2_000))
+                    }
+                }
+
+            HStack {
+                Text("\(commentText.count)/2000")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if model.isSavingArticleComment {
+                    ProgressView().controlSize(.small)
+                }
+                Button(replyingTo == nil ? "发表评论" : "回复") {
+                    let parentID = replyingTo?.id
+                    Task {
+                        if await model.createArticleComment(text: commentText, parentID: parentID) {
+                            commentText = ""
+                            replyingTo = nil
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(
+                    commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || model.isSavingArticleComment
+                )
+            }
+        }
+    }
+}
+
+private struct ArticleCommentRow: View {
+    let comment: NativeArticleComment
+    let parent: NativeArticleComment?
+    let canDelete: Bool
+    let onSelectSelection: (NativeArticleCommentSelection) -> Void
+    let onReply: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(String(comment.authorName.prefix(1)).uppercased())
+                    .font(.caption.bold())
+                    .frame(width: 24, height: 24)
+                    .background(Color.accentColor.opacity(0.17), in: Circle())
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(comment.authorName)
+                        .font(.caption.weight(.semibold))
+                    Text(comment.createdAt.nativeDateLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Menu {
+                    Button("回复", action: onReply)
+                    if canDelete {
+                        Divider()
+                        Button("删除", role: .destructive, action: onDelete)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+
+            if let parent {
+                Label("回复 \(parent.authorName)", systemImage: "arrowshape.turn.up.left")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let selection = comment.selection {
+                Button {
+                    onSelectSelection(selection)
+                } label: {
+                    HStack(alignment: .top, spacing: 7) {
+                        Rectangle()
+                            .fill(Color.accentColor.opacity(0.65))
+                            .frame(width: 3)
+                        Text(selection.quote)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(8)
+                    .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(.plain)
+                .help("回到评论对应的原文")
+            }
+
+            Text(comment.text)
+                .font(.callout)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button("回复", action: onReply)
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.tint)
+        }
+        .padding(11)
+        .padding(.leading, comment.parentID == nil ? 0 : 14)
+        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.secondary.opacity(0.13))
+        }
+    }
+}
+
+private struct ArticleTextSelectionObserver: NSViewRepresentable {
+    let onSelection: (String) -> Void
+
+    func makeNSView(context: Context) -> ArticleTextSelectionObserverView {
+        ArticleTextSelectionObserverView(onSelection: onSelection)
+    }
+
+    func updateNSView(_ nsView: ArticleTextSelectionObserverView, context: Context) {
+        nsView.onSelection = onSelection
+    }
+
+    static func dismantleNSView(_ nsView: ArticleTextSelectionObserverView, coordinator: ()) {
+        nsView.stopMonitoring()
+    }
+}
+
+private final class ArticleTextSelectionObserverView: NSView {
+    var onSelection: (String) -> Void
+    private var eventMonitor: Any?
+    private var mouseDownLocation: NSPoint?
+
+    init(onSelection: @escaping (String) -> Void) {
+        self.onSelection = onSelection
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopMonitoring()
+        guard window != nil else { return }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseUp]
+        ) { [weak self] event in
+            self?.handle(event)
+            return event
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    func stopMonitoring() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+        mouseDownLocation = nil
+    }
+
+    private func handle(_ event: NSEvent) {
+        guard let window, event.window === window else { return }
+        let localPoint = convert(event.locationInWindow, from: nil)
+        switch event.type {
+        case .leftMouseDown:
+            mouseDownLocation = bounds.contains(localPoint) ? localPoint : nil
+        case .leftMouseUp:
+            guard let start = mouseDownLocation, bounds.contains(localPoint) else {
+                mouseDownLocation = nil
+                return
+            }
+            mouseDownLocation = nil
+            let dragged = hypot(localPoint.x - start.x, localPoint.y - start.y) >= 3
+            guard dragged || event.clickCount >= 2 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self, weak window] in
+                guard let self, let window,
+                      let selection = NativeReadableTextSelection.read(in: window) else { return }
+                self.onSelection(selection)
+            }
+        default:
+            break
+        }
+    }
+}
+
+private enum NativeReadableTextSelection {
+    static func read(in window: NSWindow) -> String? {
+        if let textView = window.firstResponder as? NSTextView {
+            let range = textView.selectedRange()
+            guard range.length > 0, NSMaxRange(range) <= (textView.string as NSString).length else {
+                return nil
+            }
+            return normalized((textView.string as NSString).substring(with: range))
+        }
+
+        let pasteboard = NSPasteboard.general
+        let snapshot = NativePasteboardSnapshot(pasteboard: pasteboard)
+        let previousChangeCount = pasteboard.changeCount
+        guard NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil),
+              pasteboard.changeCount != previousChangeCount else { return nil }
+        let selectedText = pasteboard.string(forType: .string)
+        snapshot.restore(to: pasteboard)
+        return selectedText.flatMap(normalized)
+    }
+
+    private static func normalized(_ text: String) -> String? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+}
+
+private struct NativePasteboardSnapshot {
+    let items: [[NSPasteboard.PasteboardType: Data]]
+
+    init(pasteboard: NSPasteboard) {
+        items = pasteboard.pasteboardItems?.map { item in
+            Dictionary(uniqueKeysWithValues: item.types.compactMap { type in
+                item.data(forType: type).map { (type, $0) }
+            })
+        } ?? []
+    }
+
+    func restore(to pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        let restoredItems = items.map { values -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            for (type, data) in values {
+                item.setData(data, forType: type)
+            }
+            return item
+        }
+        if !restoredItems.isEmpty {
+            pasteboard.writeObjects(restoredItems)
+        }
+    }
+}
+
+private struct ArticleInspectorSection<Content: View>: View {
+    let title: String
+    let systemImage: String
+    let count: Int
+    @ViewBuilder let content: () -> Content
+    @State private var isExpanded = true
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                content()
+            }
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(.tint)
+                    .frame(width: 18)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: Capsule())
+            }
+        }
+        .padding(11)
+        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.secondary.opacity(0.13))
         }
     }
 }
@@ -134,104 +1018,322 @@ private struct ArticleTableOfContents: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("目录", systemImage: "list.bullet.indent")
-                .font(.headline)
-
+        VStack(alignment: .leading, spacing: 3) {
             ForEach(items) { item in
                 Button {
                     onSelect(item)
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 7) {
                         Circle()
                             .fill(Color.secondary.opacity(0.55))
                             .frame(width: 4, height: 4)
                         Text(item.title)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .padding(.leading, CGFloat(max(0, item.level - baseLevel)) * 16)
+                .padding(.leading, CGFloat(max(0, item.level - baseLevel)) * 12)
+                .padding(.vertical, 4)
                 .help("跳转到“\(item.title)”")
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.secondary.opacity(0.16))
-        }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("文章目录")
+        .accessibilityLabel("文章大纲")
     }
 }
 
-private struct ArticleRelationsSection: View {
-    let relations: NativeArticleRelations
-    let onOpenArticle: (String) -> Void
+struct ArticleInspectorLinkRow: View {
+    let article: NativeArticleSummary
+    let onOpen: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Label("文章双链", systemImage: "arrow.triangle.branch")
-                .font(.headline)
-
-            if !relations.outgoing.isEmpty {
-                relationList(title: "引用的文章", articles: relations.outgoing)
+        Button(action: onOpen) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: article.status == .published ? "doc.text" : "doc.text.fill")
+                    .foregroundStyle(article.status == .published ? Color.accentColor : .orange)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(article.title)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(2)
+                    Text("\(article.status.label) · \(article.updatedAt.nativeDateLabel)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
             }
-
-            if !relations.incoming.isEmpty {
-                relationList(title: "被引用于", articles: relations.incoming)
-            }
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("文章双链")
+        .buttonStyle(.plain)
+        .articleHoverPreview(article)
+        .accessibilityLabel("打开文章：\(article.title)")
+    }
+}
+
+struct ArticleUnlinkedMentionRow: View {
+    let mention: NativeArticleMention
+    let onOpen: () -> Void
+    let onConvert: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Button(action: onOpen) {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "quote.bubble")
+                            .foregroundStyle(.purple)
+                        Text(mention.article.title)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                        Spacer()
+                        Text("\(mention.count) 处")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(mention.snippet)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .articleHoverPreview(mention.article)
+
+            Button(action: onConvert) {
+                Label("将 \(mention.count) 处提及转为双链", systemImage: "link.badge.plus")
+                    .font(.caption.weight(.medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.vertical, 6)
+        .accessibilityLabel("未链接提及来自：\(mention.article.title)，共 \(mention.count) 处")
+    }
+}
+
+struct ArticleInspectorEmpty: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 5)
+    }
+}
+
+private struct ArticleLocalGraphView: View {
+    let graph: NativeArticleGraph
+    let selectedSlug: String
+    let onOpenArticle: (String) -> Void
+
+    private var displayedNodes: [NativeArticleSummary] {
+        guard let selected = graph.nodes.first(where: { $0.slug == selectedSlug }) else {
+            return Array(graph.nodes.prefix(9))
+        }
+        let neighbors = graph.nodes
+            .filter { $0.slug != selectedSlug }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        return [selected] + Array(neighbors.prefix(8))
     }
 
-    @ViewBuilder
-    private func relationList(title: String, articles: [NativeArticleSummary]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("\(title)（\(articles.count)）")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+    private var displayedEdges: [NativeArticleGraphEdge] {
+        let slugs = Set(displayedNodes.map(\.slug))
+        return graph.edges.filter { slugs.contains($0.sourceSlug) && slugs.contains($0.targetSlug) }
+    }
 
-            ForEach(articles) { article in
-                Button {
-                    onOpenArticle(article.slug)
-                } label: {
-                    HStack(spacing: 10) {
-                        if article.status == .published {
-                            Image(systemName: "doc.text")
-                                .foregroundStyle(.tint)
-                        } else {
-                            Image(systemName: "doc.text.fill")
-                                .foregroundStyle(.orange)
+    var body: some View {
+        if displayedNodes.isEmpty {
+            ArticleInspectorEmpty(message: "当前文章尚未进入关系图")
+        } else {
+            GeometryReader { proxy in
+                let positions = ArticleLocalGraphLayout.positions(
+                    for: displayedNodes,
+                    selectedSlug: selectedSlug,
+                    in: proxy.size
+                )
+                ZStack {
+                    Canvas { context, _ in
+                        for edge in displayedEdges {
+                            guard let source = positions[edge.sourceSlug],
+                                  let target = positions[edge.targetSlug] else { continue }
+                            var path = Path()
+                            path.move(to: source)
+                            path.addLine(to: target)
+                            let color: Color
+                            if edge.sourceSlug == selectedSlug {
+                                color = .accentColor
+                            } else if edge.targetSlug == selectedSlug {
+                                color = .orange
+                            } else {
+                                color = .secondary
+                            }
+                            context.stroke(path, with: .color(color.opacity(0.55)), lineWidth: 1.2)
                         }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(article.title)
-                                .font(.body.weight(.medium))
-                            Text("\(article.status.label) · 更新于 \(article.updatedAt.nativeDateLabel)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tertiary)
                     }
-                    .contentShape(Rectangle())
+
+                    ForEach(displayedNodes) { node in
+                        if let position = positions[node.slug] {
+                            ArticleLocalGraphNode(
+                                article: node,
+                                isSelected: node.slug == selectedSlug
+                            ) {
+                                if node.slug != selectedSlug { onOpenArticle(node.slug) }
+                            }
+                            .position(position)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
-                .padding(.vertical, 4)
             }
+            .frame(height: 250)
+            .overlay(alignment: .bottomTrailing) {
+                if graph.nodes.count > displayedNodes.count {
+                    Text("另有 \(graph.nodes.count - displayedNodes.count) 个邻居")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("局部关系图，共 \(graph.nodes.count) 个文章节点")
         }
     }
 }
 
-private struct ArticleHistoryView: View {
+private struct ArticleLocalGraphNode: View {
+    let article: NativeArticleSummary
+    let isSelected: Bool
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            Text(article.title)
+                .font(.caption2.weight(isSelected ? .bold : .medium))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(width: isSelected ? 96 : 80, height: isSelected ? 42 : 36)
+                .background(
+                    isSelected ? Color.accentColor.opacity(0.2) : Color(nsColor: .windowBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(
+                            isSelected ? Color.accentColor.opacity(0.7) : Color.secondary.opacity(0.28)
+                        )
+                }
+        }
+        .buttonStyle(.plain)
+        .articleHoverPreview(article)
+        .help(isSelected ? "当前文章" : "打开文章：\(article.title)")
+    }
+}
+
+private enum ArticleLocalGraphLayout {
+    static func positions(
+        for nodes: [NativeArticleSummary],
+        selectedSlug: String,
+        in size: CGSize
+    ) -> [String: CGPoint] {
+        guard !nodes.isEmpty else { return [:] }
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        var positions: [String: CGPoint] = [:]
+        let selected = nodes.first(where: { $0.slug == selectedSlug }) ?? nodes[0]
+        positions[selected.slug] = center
+        let neighbors = nodes.filter { $0.slug != selected.slug }
+        guard !neighbors.isEmpty else { return positions }
+
+        let radiusX = max(76, size.width / 2 - 46)
+        let radiusY = max(72, size.height / 2 - 32)
+        for (index, node) in neighbors.enumerated() {
+            let angle = -Double.pi / 2 + Double(index) * 2 * Double.pi / Double(neighbors.count)
+            positions[node.slug] = CGPoint(
+                x: center.x + radiusX * CGFloat(cos(angle)),
+                y: center.y + radiusY * CGFloat(sin(angle))
+            )
+        }
+        return positions
+    }
+}
+
+private struct ArticleHoverPreviewModifier: ViewModifier {
+    let article: NativeArticleSummary
+    @State private var isPresented = false
+    @State private var hoverTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { isHovering in
+                hoverTask?.cancel()
+                guard isHovering else {
+                    isPresented = false
+                    return
+                }
+                hoverTask = Task {
+                    try? await Task.sleep(nanoseconds: 320_000_000)
+                    guard !Task.isCancelled else { return }
+                    isPresented = true
+                }
+            }
+            .popover(isPresented: $isPresented, arrowEdge: .leading) {
+                ArticleHoverPreviewCard(article: article)
+            }
+            .onDisappear { hoverTask?.cancel() }
+    }
+}
+
+private struct ArticleHoverPreviewCard: View {
+    let article: NativeArticleSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: article.status == .published ? "doc.text" : "doc.text.fill")
+                    .foregroundStyle(article.status == .published ? Color.accentColor : .orange)
+                Text(article.status.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(article.updatedAt.nativeDateLabel)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Text(article.title)
+                .font(.headline)
+            Text(article.excerpt.isEmpty ? "暂无摘要" : article.excerpt)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(6)
+            if !article.tags.isEmpty {
+                Text(article.tags.prefix(5).map { "#\($0)" }.joined(separator: "  "))
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+            }
+            HStack(spacing: 10) {
+                Label(article.category, systemImage: "folder")
+                Label("\(article.wordCount) 字", systemImage: "character.cursor.ibeam")
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .frame(width: 300, alignment: .leading)
+    }
+}
+
+private extension View {
+    func articleHoverPreview(_ article: NativeArticleSummary) -> some View {
+        modifier(ArticleHoverPreviewModifier(article: article))
+    }
+}
+
+struct ArticleHistoryView: View {
     @ObservedObject var model: NativeAppModel
     @Environment(\.dismiss) private var dismiss
     @State private var selectedRevisionID: Int?
@@ -456,41 +1558,67 @@ private struct ArticleRevisionCodeColumn: View {
 
 private enum MarkdownArticleBlock {
     case image(url: String, alt: String)
-    case text(markdown: String, headingIDs: [String])
+    case base(reference: String)
+    case transclusion(reference: String)
+    case text(markdown: String, headingIDs: [String], lineOffset: Int)
 }
 
-private struct MarkdownArticleBody: View {
+struct MarkdownArticleBody: View {
     let markdown: String
     let store: LocalBlogStore
     let articleLinks: [NativeArticleSummary]
-    let onOpenArticle: (String) -> Void
+    let onOpenArticle: (NativeArticleLinkDestination) -> Void
+    let onToggleTask: ((Int, Bool) -> Void)?
+    let embeddedSlugs: Set<String>
+    @Environment(\.nativeReadingTypography) private var typography
 
     init(
         body: String,
         store: LocalBlogStore,
         articleLinks: [NativeArticleSummary] = [],
-        onOpenArticle: @escaping (String) -> Void = { _ in }
+        rootArticleSlug: String? = nil,
+        embeddedSlugs: Set<String> = [],
+        onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void = { _ in },
+        onToggleTask: ((Int, Bool) -> Void)? = nil
     ) {
         markdown = body
         self.store = store
         self.articleLinks = articleLinks
         self.onOpenArticle = onOpenArticle
+        self.onToggleTask = onToggleTask
+        self.embeddedSlugs = rootArticleSlug.map { embeddedSlugs.union([$0]) } ?? embeddedSlugs
     }
 
     private var blocks: [MarkdownArticleBlock] { Self.markdownBlocks(in: markdown) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: max(12, typography.paragraphSpacing)) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case let .image(url, alt):
                     NativeImageView(url: url, alt: alt, store: store)
-                case let .text(markdown, headingIDs):
+                case let .base(reference):
+                    SmartCollectionEmbedView(
+                        reference: reference,
+                        store: store,
+                        onOpenArticle: onOpenArticle
+                    )
+                case let .transclusion(reference):
+                    MarkdownArticleTransclusionView(
+                        reference: reference,
+                        store: store,
+                        articleLinks: articleLinks,
+                        embeddedSlugs: embeddedSlugs,
+                        onOpenArticle: onOpenArticle
+                    )
+                case let .text(markdown, headingIDs, lineOffset):
                     MarkdownDocumentView(
                         markdown: markdown,
                         articleLinks: articleLinks,
                         onOpenArticle: onOpenArticle,
-                        headingIDs: headingIDs
+                        onToggleTask: onToggleTask,
+                        headingIDs: headingIDs,
+                        lineOffset: lineOffset
                     )
                 }
             }
@@ -506,37 +1634,149 @@ private struct MarkdownArticleBody: View {
 
     private static func markdownBlocks(in markdown: String) -> [MarkdownArticleBlock] {
         var nextHeadingIndex = 0
-        func textBlock(_ source: String) -> MarkdownArticleBlock {
+        func textBlock(_ source: String, lineOffset: Int) -> MarkdownArticleBlock {
             let headingCount = MarkdownOutline.items(in: source).count
             let headingIDs = (0..<headingCount).map { offset in
                 MarkdownOutline.anchorID(for: nextHeadingIndex + offset)
             }
             nextHeadingIndex += headingCount
-            return .text(markdown: source, headingIDs: headingIDs)
+            return .text(markdown: source, headingIDs: headingIDs, lineOffset: lineOffset)
         }
 
-        let expression = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)"#)
+        let expression = try! NSRegularExpression(
+            pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)|!\[\[([^\[\]\r\n]+)\]\]|(?s:```base[^\r\n]*\r?\n(.*?)\r?\n```)"#
+        )
         let searchRange = NSRange(markdown.startIndex..., in: markdown)
         let matches = expression.matches(in: markdown, range: searchRange)
         guard !matches.isEmpty else {
-            return markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [textBlock(markdown)]
+            return markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? [] : [textBlock(markdown, lineOffset: 0)]
         }
 
         var blocks: [MarkdownArticleBlock] = []
         var cursor = markdown.startIndex
         for match in matches {
-            guard let matchRange = Range(match.range, in: markdown),
-                  let altRange = Range(match.range(at: 1), in: markdown),
-                  let urlRange = Range(match.range(at: 2), in: markdown) else { continue }
-            let textBefore = String(markdown[cursor..<matchRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !textBefore.isEmpty { blocks.append(textBlock(textBefore)) }
-            blocks.append(.image(url: String(markdown[urlRange]), alt: String(markdown[altRange])))
+            guard let matchRange = Range(match.range, in: markdown) else { continue }
+            let rawText = String(markdown[cursor..<matchRange.lowerBound])
+            let textBefore = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !textBefore.isEmpty {
+                let baseLine = markdown[..<cursor].filter { $0 == "\n" }.count
+                let leadingLines = rawText.prefix { $0.isWhitespace }.filter { $0 == "\n" }.count
+                blocks.append(textBlock(textBefore, lineOffset: baseLine + leadingLines))
+            }
+            if let baseRange = Range(match.range(at: 4), in: markdown) {
+                let config = String(markdown[baseRange])
+                let reference = config.components(separatedBy: .newlines).compactMap { line -> String? in
+                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let colon = trimmed.firstIndex(of: ":") else { return nil }
+                    let key = trimmed[..<colon].lowercased()
+                    guard key == "id" || key == "name" || key == "source" else { return nil }
+                    return String(trimmed[trimmed.index(after: colon)...])
+                        .trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
+                }.first ?? config.trimmingCharacters(in: .whitespacesAndNewlines)
+                blocks.append(.base(reference: reference.hasSuffix(".base") ? reference : "\(reference).base"))
+            } else if let referenceRange = Range(match.range(at: 3), in: markdown) {
+                let reference = String(markdown[referenceRange])
+                let target = NativeArticleLink.Reference(rawValue: reference).target
+                if URL(fileURLWithPath: target).pathExtension.caseInsensitiveCompare("base") == .orderedSame {
+                    blocks.append(.base(reference: reference))
+                } else {
+                    blocks.append(.transclusion(reference: reference))
+                }
+            } else if let altRange = Range(match.range(at: 1), in: markdown),
+                      let urlRange = Range(match.range(at: 2), in: markdown) {
+                blocks.append(.image(url: String(markdown[urlRange]), alt: String(markdown[altRange])))
+            }
             cursor = matchRange.upperBound
         }
 
-        let trailingText = String(markdown[cursor...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trailingText.isEmpty { blocks.append(textBlock(trailingText)) }
+        let rawTrailingText = String(markdown[cursor...])
+        let trailingText = rawTrailingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trailingText.isEmpty {
+            let baseLine = markdown[..<cursor].filter { $0 == "\n" }.count
+            let leadingLines = rawTrailingText.prefix { $0.isWhitespace }.filter { $0 == "\n" }.count
+            blocks.append(textBlock(trailingText, lineOffset: baseLine + leadingLines))
+        }
         return blocks
+    }
+}
+
+private struct MarkdownArticleTransclusionView: View {
+    let reference: String
+    let store: LocalBlogStore
+    let articleLinks: [NativeArticleSummary]
+    let embeddedSlugs: Set<String>
+    let onOpenArticle: (NativeArticleLinkDestination) -> Void
+    @State private var article: NativeArticle?
+    @State private var errorMessage: String?
+
+    private var parsed: NativeArticleLink.Reference { .init(rawValue: reference) }
+    private var target: NativeArticleSummary? { NativeArticleLink.resolve(reference, in: articleLinks) }
+
+    var body: some View {
+        Group {
+            if let target, embeddedSlugs.contains(target.slug) {
+                transclusionMessage("检测到循环嵌入：\(target.title)", systemImage: "arrow.triangle.2.circlepath")
+            } else if let article {
+                VStack(alignment: .leading, spacing: 12) {
+                    Button {
+                        if let destination = NativeArticleLink.destination(for: reference, in: articleLinks) {
+                            onOpenArticle(destination)
+                        }
+                    } label: {
+                        Label(article.title, systemImage: "doc.text")
+                            .font(.headline)
+                    }
+                    .buttonStyle(.plain)
+
+                    if let fragment = NativeArticleEmbed.fragment(
+                        in: article.body,
+                        selector: parsed.heading
+                    ) {
+                        AnyView(MarkdownArticleBody(
+                            body: fragment,
+                            store: store,
+                            articleLinks: articleLinks,
+                            embeddedSlugs: embeddedSlugs.union([article.slug]),
+                            onOpenArticle: onOpenArticle
+                        ))
+                    } else {
+                        transclusionMessage("未找到嵌入片段 #\(parsed.heading ?? "")", systemImage: "questionmark.folder")
+                    }
+                }
+                .padding(16)
+                .background(Color.accentColor.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor.opacity(0.24))
+                }
+            } else if let errorMessage {
+                transclusionMessage(errorMessage, systemImage: "exclamationmark.triangle")
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在载入嵌入…").foregroundStyle(.secondary)
+                }
+            }
+        }
+        .task(id: target?.slug) {
+            guard article == nil else { return }
+            guard let target else {
+                errorMessage = "找不到嵌入文章：\(parsed.target)"
+                return
+            }
+            guard !embeddedSlugs.contains(target.slug) else { return }
+            do { article = try await store.getArticle(slug: target.slug) }
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private func transclusionMessage(_ message: String, systemImage: String) -> some View {
+        Label(message, systemImage: systemImage)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -749,7 +1989,7 @@ private struct MarkdownEmbeddedWebView: NSViewRepresentable {
     }
 }
 
-private struct NativeImageView: View {
+struct NativeImageView: View {
     let url: String
     let alt: String
     let store: LocalBlogStore
@@ -867,919 +2107,5 @@ private struct NativeAVPlayerView: NSViewRepresentable {
     static func dismantleNSView(_ playerView: AVPlayerView, coordinator: ()) {
         playerView.player?.pause()
         playerView.player = nil
-    }
-}
-
-@MainActor
-private final class ArticleLinkAutocompleteController: ObservableObject {
-    private weak var textView: NSTextView?
-    @Published private(set) var activeLinkQuery: String?
-
-    func attach(to textView: NSTextView) {
-        self.textView = textView
-    }
-
-    func completeSuggestion(_ article: NativeArticleSummary) {
-        guard let textView,
-              let context = linkContext(in: textView.string, selectedRange: textView.selectedRange()) else {
-            return
-        }
-
-        let replacement = "[[\(article.title)]]"
-        guard textView.shouldChangeText(in: context.range, replacementString: replacement) else { return }
-        textView.textStorage?.replaceCharacters(in: context.range, with: replacement)
-        let cursor = context.range.location + (replacement as NSString).length
-        textView.setSelectedRange(NSRange(location: cursor, length: 0))
-        textView.didChangeText()
-        activeLinkQuery = nil
-        textView.window?.makeFirstResponder(textView)
-    }
-
-    func dismissSuggestions() {
-        activeLinkQuery = nil
-    }
-
-    fileprivate func updateLinkQuery(from textView: NSTextView) {
-        activeLinkQuery = linkContext(in: textView.string, selectedRange: textView.selectedRange())?.query
-    }
-
-    private func linkContext(in text: String, selectedRange: NSRange) -> (range: NSRange, query: String)? {
-        guard selectedRange.length == 0 else { return nil }
-        let source = text as NSString
-        guard selectedRange.location <= source.length else { return nil }
-        let prefix = source.substring(to: selectedRange.location) as NSString
-        let opening = prefix.range(of: "[[", options: .backwards)
-        guard opening.location != NSNotFound else { return nil }
-
-        let queryRange = NSRange(
-            location: opening.location + opening.length,
-            length: selectedRange.location - opening.location - opening.length
-        )
-        let query = source.substring(with: queryRange)
-        guard !query.contains("["),
-              !query.contains("]"),
-              !query.contains(where: { $0.isNewline }) else {
-            return nil
-        }
-        return (NSRange(location: opening.location, length: selectedRange.location - opening.location), query)
-    }
-}
-
-private struct NativeBodyEditor: NSViewRepresentable {
-    @Binding var text: String
-    let linkController: ArticleLinkAutocompleteController
-    let onPasteImage: (NSImage, String) -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.autohidesScrollers = true
-        scrollView.borderType = .noBorder
-        scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = true
-
-        let textView = PastingTextView()
-        textView.allowsUndo = true
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.autoresizingMask = [.width]
-        textView.backgroundColor = .textBackgroundColor
-        textView.delegate = context.coordinator
-        textView.font = .systemFont(ofSize: 18, weight: .regular)
-        textView.isHorizontallyResizable = false
-        textView.isRichText = false
-        textView.isVerticallyResizable = true
-        textView.string = text
-        textView.textColor = .labelColor
-        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        // The editor itself has a 10-point outer inset and its placeholder has
-        // an 18-point inset. Keep the editable glyphs (and therefore caret)
-        // on that same 18-point leading edge.
-        textView.textContainer?.lineFragmentPadding = 8
-        textView.textContainer?.widthTracksTextView = true
-        textView.registerForDraggedTypes([.fileURL, .png, .tiff])
-        textView.onPasteImage = { [weak textView, weak coordinator = context.coordinator] image, selectedRange in
-            guard let textView else { return }
-            coordinator?.insertPastedImage(image, at: selectedRange, into: textView)
-        }
-        linkController.attach(to: textView)
-
-        scrollView.documentView = textView
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.parent = self
-        guard let textView = scrollView.documentView as? NSTextView else { return }
-        linkController.attach(to: textView)
-        guard textView.string != text else { return }
-        textView.string = text
-    }
-
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: NativeBodyEditor
-
-        init(parent: NativeBodyEditor) {
-            self.parent = parent
-        }
-
-        func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
-            parent.text = textView.string
-            parent.linkController.updateLinkQuery(from: textView)
-        }
-
-        func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
-            parent.linkController.updateLinkQuery(from: textView)
-        }
-
-        func insertPastedImage(_ image: NSImage, at selectedRange: NSRange, into textView: NSTextView) {
-            let placeholder = "[[正在上传图片:\(UUID().uuidString.lowercased())]]"
-            textView.insertText(placeholder, replacementRange: selectedRange)
-            parent.text = textView.string
-            parent.onPasteImage(image, placeholder)
-        }
-    }
-}
-
-private final class PastingTextView: NSTextView {
-    var onPasteImage: ((NSImage, NSRange) -> Void)?
-    private var requestedInitialFocus = false
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window != nil, !requestedInitialFocus else { return }
-        requestedInitialFocus = true
-
-        // NSViewRepresentable creates the editor before it has a window. Wait
-        // until it is attached, then focus it once so a new writing view accepts
-        // keyboard input without requiring an extra click.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let window = self.window else { return }
-            window.makeFirstResponder(self)
-        }
-    }
-
-    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        var types = super.readablePasteboardTypes
-        for imageType in [.png, .tiff, .fileURL] as [NSPasteboard.PasteboardType] where !types.contains(imageType) {
-            types.append(imageType)
-        }
-        return types
-    }
-
-    override func paste(_ sender: Any?) {
-        if insertPastedImage(from: .general, at: selectedRange()) { return }
-        super.paste(sender)
-    }
-
-    override func pasteAsPlainText(_ sender: Any?) {
-        if insertPastedImage(from: .general, at: selectedRange()) { return }
-        super.pasteAsPlainText(sender)
-    }
-
-    override func readSelection(
-        from pasteboard: NSPasteboard,
-        type: NSPasteboard.PasteboardType
-    ) -> Bool {
-        if insertPastedImage(from: pasteboard, at: selectedRange()) { return true }
-        return super.readSelection(from: pasteboard, type: type)
-    }
-
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        pastedImage(from: sender.draggingPasteboard) == nil ? [] : .copy
-    }
-
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        draggingEntered(sender)
-    }
-
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let dropPoint = convert(sender.draggingLocation, from: nil)
-        let location = characterIndexForInsertion(at: dropPoint)
-        guard insertPastedImage(
-            from: sender.draggingPasteboard,
-            at: NSRange(location: location, length: 0)
-        ) else {
-            return super.performDragOperation(sender)
-        }
-        return true
-    }
-
-    @discardableResult
-    private func insertPastedImage(from pasteboard: NSPasteboard, at range: NSRange) -> Bool {
-        guard let image = pastedImage(from: pasteboard), let onPasteImage else { return false }
-        onPasteImage(image, range)
-        return true
-    }
-
-    private func pastedImage(from pasteboard: NSPasteboard) -> NSImage? {
-        // Some apps expose copied images as an NSImage object instead of
-        // advertising a concrete PNG/TIFF representation.
-        if let image = pasteboard
-            .readObjects(forClasses: [NSImage.self])?
-            .compactMap({ $0 as? NSImage })
-            .first {
-            return image
-        }
-
-        // Prefer the original image representation so JPEG, HEIC, WebP,
-        // and other image formats copied by browsers/design tools work too.
-        for item in pasteboard.pasteboardItems ?? [] {
-            for type in item.types {
-                guard let uniformType = UTType(type.rawValue),
-                      uniformType.conforms(to: .image),
-                      let data = item.data(forType: type),
-                      let image = NSImage(data: data) else { continue }
-                return image
-            }
-        }
-
-        // Keep the explicit AppKit fallbacks for screenshots and older apps
-        // that provide data lazily through these pasteboard types.
-        for type in [NSPasteboard.PasteboardType.png, .tiff] {
-            if let data = pasteboard.data(forType: type), let image = NSImage(data: data) {
-                return image
-            }
-        }
-
-        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
-        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL]
-        return urls?.lazy.compactMap(NSImage.init(contentsOf:)).first
-    }
-}
-
-private struct MarkdownPreview: View {
-    let markdown: String
-    let store: LocalBlogStore
-    let articleLinks: [NativeArticleSummary]
-    let onOpenArticle: (String) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("实时预览", systemImage: "eye")
-                    .font(.headline)
-                Spacer()
-                Text("随输入更新")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            ScrollView {
-                if markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "text.document")
-                            .font(.title2)
-                            .foregroundStyle(.secondary)
-                        Text("开始输入 Markdown")
-                            .font(.headline)
-                        Text("标题、强调、链接和图片会在这里实时渲染。")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 280)
-                } else {
-                    MarkdownArticleBody(
-                        body: markdown,
-                        store: store,
-                        articleLinks: articleLinks,
-                        onOpenArticle: onOpenArticle
-                    )
-                        .padding(.vertical, 4)
-                }
-            }
-            .padding(16)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-        }
-        .padding(ArticleEditorLayout.contentInset)
-        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-}
-
-struct ArticleEditorView: View {
-    @ObservedObject var model: NativeAppModel
-    @StateObject private var articleLinkController = ArticleLinkAutocompleteController()
-    @State private var isPresentingHistory = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            editorHeader
-            Divider()
-
-            GeometryReader { proxy in
-                let settingsWidth = min(max(proxy.size.width * 0.22, 260), 340)
-
-                HStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        titleSection
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, ArticleEditorLayout.titleVerticalInset)
-
-                        writingSection
-                    }
-                    .frame(width: proxy.size.width - settingsWidth - 1, alignment: .leading)
-
-                    Divider()
-
-                    ScrollView {
-                        editorSidebar
-                            .padding(ArticleEditorLayout.contentInset)
-                    }
-                    .frame(width: settingsWidth)
-                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.34))
-                }
-            }
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .onChange(of: model.editor) { _ in
-            model.scheduleEditorAutosave()
-        }
-        .sheet(isPresented: $isPresentingHistory) {
-            ArticleHistoryView(model: model)
-        }
-    }
-
-    private var editorHeader: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Image(systemName: "square.and.pencil")
-                        .foregroundStyle(.tint)
-                    Text("写作工作台")
-                        .font(.headline)
-
-                    Text(model.editor.status.label)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(model.editor.status == .published ? .green : .orange)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(
-                            (model.editor.status == .published ? Color.green : Color.orange).opacity(0.12),
-                            in: Capsule()
-                        )
-                }
-
-                Text(model.editor.isNew ? "创建一篇新文章" : "继续编辑这篇文章")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 6) {
-                    if model.isEditorAutosaving {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "checkmark.circle")
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(model.editorAutosaveStatus)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .help("编辑内容停止变化 3 秒后自动保存恢复快照")
-            }
-
-            Spacer()
-
-            Button {
-                model.refreshArticleHistory()
-                isPresentingHistory = true
-            } label: {
-                Label("版本历史", systemImage: "clock.arrow.circlepath")
-            }
-
-            Menu {
-                Button("添加封面") {
-                    model.chooseAndUpload(kind: "image", forArticle: model.editor.slug, banner: true)
-                }
-                Button("添加图片") {
-                    model.chooseAndUpload(kind: "image", forArticle: model.editor.slug)
-                }
-                Button("添加视频") {
-                    model.chooseAndUpload(kind: "video", forArticle: model.editor.slug)
-                }
-            } label: {
-                Label("添加素材", systemImage: "paperclip")
-            }
-            .help("添加封面、图片或视频")
-
-            Button {
-                Task { await model.saveEditor(as: .draft) }
-            } label: {
-                Label(model.isSaving ? "保存中…" : "保存草稿", systemImage: "tray.and.arrow.down")
-            }
-            .disabled(model.isSaving)
-
-            Button {
-                Task { await model.saveEditor(as: .published) }
-            } label: {
-                Label("发布", systemImage: "paperplane.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.isSaving)
-        }
-        .controlSize(.large)
-        .padding(.horizontal, ArticleEditorLayout.contentInset)
-        .padding(.vertical, 14)
-    }
-
-    private var titleSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(model.editor.isNew ? "新文章" : "编辑文章")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tint)
-
-            TextField("给这篇文章起个标题", text: $model.editor.title)
-                .font(.system(size: 40, weight: .bold, design: .serif))
-                .textFieldStyle(.plain)
-
-            Divider()
-
-            TextField("写一句摘要，让读者快速了解这篇文章（可选）", text: $model.editor.excerpt, axis: .vertical)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .textFieldStyle(.plain)
-                .lineLimit(2...4)
-        }
-        .padding(.horizontal, ArticleEditorLayout.contentInset)
-    }
-
-    private var writingSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Label("正文", systemImage: "text.alignleft")
-                        .font(.headline)
-                    Text("使用 Markdown 写作，右侧会同步显示效果")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                HStack(spacing: 12) {
-                    Label("\(wordCount) 字", systemImage: "character.cursor.ibeam")
-                    Label("约 \(readingMinutes) 分钟", systemImage: "clock")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, ArticleEditorLayout.contentInset)
-            .padding(.vertical, 14)
-
-            Divider()
-
-            HSplitView {
-                editorPane
-                    .frame(minWidth: 230, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-                MarkdownPreview(
-                    markdown: model.editor.body,
-                    store: model.store,
-                    articleLinks: model.articles,
-                    onOpenArticle: model.openArticleLink
-                )
-                    .frame(minWidth: 230, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
-            .frame(minHeight: 440)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Image(systemName: "info.circle")
-                    Text("支持标题、列表、引用、代码、表格、加粗、斜体、删除线、链接和图片。复制或拖入图片后可直接加入正文。")
-                }
-
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "safari")
-                    Text("网页嵌入：单独一行粘贴 <iframe src=\"…\"></iframe>，或使用 ```embed 代码块放入网页 URL。")
-                }
-
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    Text("HTML 组件：使用 ```html-render height=360 代码块；组件支持 CSS 和 JavaScript。")
-                }
-
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: "link")
-                    Text("文章关联：输入 [[ 后按标题联想，选择后会插入 [[文章标题]]。")
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, ArticleEditorLayout.contentInset)
-            .padding(.vertical, 11)
-        }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.48), in: RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(.quaternary)
-        }
-    }
-
-    private var editorPane: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Label("Markdown 编辑", systemImage: "pencil.line")
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-                Button {
-                    insertHTMLComponentTemplate()
-                } label: {
-                    Label("HTML 组件", systemImage: "chevron.left.forwardslash.chevron.right")
-                }
-                .buttonStyle(.borderless)
-                .help("插入可直接渲染的 HTML 组件")
-                Text("⌘Z 可撤销")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-
-            NativeBodyEditor(
-                text: $model.editor.body,
-                linkController: articleLinkController
-            ) { image, placeholder in
-                model.uploadPastedImage(image, placeholder: placeholder)
-            }
-            .padding(10)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(.quaternary)
-            }
-            .overlay(alignment: .topLeading) {
-                if model.editor.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("从这里开始写……")
-                        .font(.system(size: 18))
-                        .foregroundStyle(.secondary)
-                        // Text's CJK glyphs begin slightly inside their layout
-                        // box, while the NSTextView caret does not. Offset the
-                        // prompt by 6 points so its visible first glyph aligns
-                        // with the caret.
-                        .padding(.leading, 12)
-                        // The caret spans the full line height while the text
-                        // glyph itself is shorter. Center the prompt vertically
-                        // within that line rather than aligning its top edge.
-                        .padding(.top, 12)
-                        .allowsHitTesting(false)
-                }
-            }
-
-            if let query = articleLinkController.activeLinkQuery, !articleLinkSuggestions.isEmpty {
-                ArticleLinkSuggestionMenu(
-                    query: query,
-                    articles: articleLinkSuggestions,
-                    onSelect: articleLinkController.completeSuggestion,
-                    onDismiss: articleLinkController.dismissSuggestions
-                )
-            }
-        }
-        .padding(ArticleEditorLayout.contentInset)
-    }
-
-    private var editorSidebar: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("文章设置")
-                .font(.title3.weight(.semibold))
-
-            EditorCard(title: "发布状态", systemImage: "paperplane") {
-                HStack(spacing: 10) {
-                    Image(systemName: model.editor.status == .published ? "checkmark.circle.fill" : "pencil.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(model.editor.status == .published ? .green : .orange)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(model.editor.status == .published ? "已发布" : "草稿")
-                            .font(.subheadline.weight(.semibold))
-                        if let updatedAt = model.editor.updatedAt {
-                            Text("最近保存：\(updatedAt.nativeDateLabel)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("尚未保存")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                Text("保存草稿后可以继续编辑，发布后文章会出现在博客中。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            EditorCard(title: "分类与标签", systemImage: "tag") {
-                VStack(alignment: .leading, spacing: 10) {
-                    TextField("分类", text: $model.editor.category)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("标签，例如 #Swift #随笔", text: $model.editor.tags)
-                        .textFieldStyle(.roundedBorder)
-
-                    if !tagSuggestions.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 6) {
-                                ForEach(tagSuggestions, id: \.self) { tag in
-                                    Button("#\(tag)") {
-                                        appendTag(tag)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                }
-                            }
-                        }
-                    }
-
-                    Text("输入 #标签，使用空格继续添加；也兼容原来的逗号分隔。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            EditorCard(title: "封面图", systemImage: "photo") {
-                if let banner = model.editor.banner {
-                    HStack(spacing: 10) {
-                        NativeImageView(url: banner.url, alt: banner.alt, store: model.store)
-                            .frame(width: 64, height: 52)
-                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(banner.name)
-                                .font(.caption.weight(.medium))
-                                .lineLimit(2)
-                            Text("已添加")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer(minLength: 0)
-                    }
-                } else {
-                    Button {
-                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug, banner: true)
-                    } label: {
-                        VStack(spacing: 6) {
-                            Image(systemName: "photo.badge.plus")
-                                .font(.title3)
-                            Text("添加一张封面图")
-                                .font(.caption.weight(.medium))
-                            Text("推荐横向图片")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 10)
-                                .strokeBorder(.quaternary, style: StrokeStyle(lineWidth: 1, dash: [5]))
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                if model.editor.banner != nil {
-                    Button("更换封面") {
-                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug, banner: true)
-                    }
-                    .font(.caption)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-            }
-
-            EditorCard(title: "附件", systemImage: "paperclip") {
-                if model.editor.media.isEmpty {
-                    Text("还没有图片或视频附件")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    VStack(spacing: 8) {
-                        ForEach(model.editor.media) { media in
-                            EditorAttachmentRow(media: media) {
-                                model.removeEditorMedia(media)
-                            }
-                        }
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    Button("图片") {
-                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Button("视频") {
-                        model.chooseAndUpload(kind: "video", forArticle: model.editor.slug)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-            }
-
-            EditorCard(title: "文章概览", systemImage: "chart.bar") {
-                HStack {
-                    EditorMetric(value: "\(wordCount)", label: "字")
-                    Divider().frame(height: 26)
-                    EditorMetric(value: "\(model.editor.media.count)", label: "个附件")
-                }
-            }
-        }
-    }
-
-    private var wordCount: Int {
-        NativeWritingMetrics.characterCount(of: model.editor.body)
-    }
-
-    private var readingMinutes: Int {
-        max(1, Int(ceil(Double(max(wordCount, 1)) / 500)))
-    }
-
-    private var tagSuggestions: [String] {
-        let chosen = NativeArticleTag.parse(model.editor.tags)
-        return model.availableArticleTags.filter { suggestion in
-            !chosen.contains { $0.caseInsensitiveCompare(suggestion) == .orderedSame }
-        }
-    }
-
-    private var articleLinkSuggestions: [NativeArticleSummary] {
-        guard let query = articleLinkController.activeLinkQuery else { return [] }
-        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.articles.filter { article in
-            normalized.isEmpty
-                || article.title.localizedCaseInsensitiveContains(normalized)
-                || article.slug.localizedCaseInsensitiveContains(normalized)
-        }
-        .prefix(8)
-        .map { $0 }
-    }
-
-    private func appendTag(_ tag: String) {
-        guard !NativeArticleTag.parse(model.editor.tags).contains(where: {
-            $0.caseInsensitiveCompare(tag) == .orderedSame
-        }) else {
-            return
-        }
-        let separator = model.editor.tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
-        model.editor.tags += "\(separator)#\(tag)"
-    }
-
-    private func insertHTMLComponentTemplate() {
-        let template = """
-        ```html-render height=360
-        <div style="padding: 20px; border-radius: 12px; background: #2563eb; color: white;">
-          <h2 style="margin-top: 0;">HTML 组件</h2>
-          <p>在这里输入 HTML、CSS 或 JavaScript。</p>
-        </div>
-        ```
-        """
-        let separator = model.editor.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? ""
-            : (model.editor.body.hasSuffix("\n") ? "\n" : "\n\n")
-        model.editor.body += separator + template
-    }
-}
-
-private struct ArticleLinkSuggestionMenu: View {
-    let query: String
-    let articles: [NativeArticleSummary]
-    let onSelect: (NativeArticleSummary) -> Void
-    let onDismiss: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Label(
-                    query.isEmpty ? "关联到文章" : "匹配的文章",
-                    systemImage: "link"
-                )
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                Spacer()
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 22)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help("关闭文章联想")
-            }
-
-            ForEach(articles) { article in
-                Button {
-                    onSelect(article)
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "doc.text.fill")
-                            .foregroundStyle(.tint)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(article.title)
-                                .font(.callout.weight(.medium))
-                            Text("\(article.category) · \(article.slug)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text("插入")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .contentShape(RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-                .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: 420, alignment: .leading)
-        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(.quaternary)
-        }
-        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("文章关联建议")
-    }
-}
-
-private struct EditorCard<Content: View>: View {
-    let title: String
-    let systemImage: String
-    let content: Content
-
-    init(title: String, systemImage: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.systemImage = systemImage
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: systemImage)
-                .font(.subheadline.weight(.semibold))
-
-            content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(.quaternary)
-        }
-    }
-}
-
-private struct EditorAttachmentRow: View {
-    let media: NativeMedia
-    let onRemove: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: media.isVideo ? "video.fill" : "photo.fill")
-                .font(.caption)
-                .foregroundStyle(.tint)
-                .frame(width: 24, height: 24)
-                .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-
-            Text(media.name)
-                .font(.caption)
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
-
-            Button(action: onRemove) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("移除附件")
-        }
-    }
-}
-
-private struct EditorMetric: View {
-    let value: String
-    let label: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(value)
-                .font(.headline.monospacedDigit())
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

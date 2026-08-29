@@ -52,6 +52,130 @@ final class NativeModelsTests {
         XCTAssertNil(NativeTimestamp.date(from: "not-a-timestamp"))
     }
 
+    func testAutomationURLsParseActionsAndEncodedParameters() throws {
+        XCTAssertEqual(
+            try NativeAutomationURL.route(from: URL(
+                string: "leonbook://new?title=Web%20Clip&content=hello%20world&url=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1"
+            )!),
+            .newArticle(
+                title: "Web Clip",
+                content: "hello world",
+                sourceURL: "https://example.com/a?b=1"
+            )
+        )
+        XCTAssertEqual(
+            try NativeAutomationURL.route(from: URL(string: "leonbook://open?slug=road-map")!),
+            .openArticle(slug: "road-map")
+        )
+        XCTAssertEqual(
+            try NativeAutomationURL.route(from: URL(string: "leonbook://search?q=Swift%20SQLite")!),
+            .search(query: "Swift SQLite")
+        )
+        XCTAssertEqual(
+            try NativeAutomationURL.route(from: URL(string: "leonbook://today")!),
+            .today
+        )
+        XCTAssertEqual(
+            try NativeAutomationURL.route(from: URL(string: "leonbook://search")!),
+            .search(query: "")
+        )
+        XCTAssertEqual(
+            try NativeAutomationURL.command(from: URL(string: "leonbook://search?q=统一命令")!),
+            .search(query: "统一命令")
+        )
+
+        do {
+            _ = try NativeAutomationURL.route(from: URL(string: "leonbook://open")!)
+            XCTFail("open automation should require a slug")
+        } catch let error as NativeAutomationURLError {
+            XCTAssertEqual(error, .missingParameter("slug"))
+        }
+        do {
+            _ = try NativeAutomationURL.route(from: URL(string: "https://example.com")!)
+            XCTFail("automation parser should reject foreign URL schemes")
+        } catch let error as NativeAutomationURLError {
+            XCTAssertEqual(error, .unsupportedScheme)
+        }
+
+        _ = NativeAutomationInbox.drain()
+        NativeAutomationInbox.enqueue(.today)
+        NativeAutomationInbox.enqueue(.search(query: "queued"))
+        XCTAssertEqual(NativeAutomationInbox.drain(), [.today, .search(query: "queued")])
+        XCTAssertTrue(NativeAutomationInbox.drain().isEmpty)
+    }
+
+    func testCommandRegistryFuzzyMatchingRankingAndAvailability() {
+        let registry = NativeCommandRegistry.builtIn
+        let regularContext = NativeCommandContext(storageReady: true)
+        let matches = registry.matches("快速文", on: .palette, context: regularContext)
+        XCTAssertEqual(matches.first?.id, .quickOpen)
+
+        let ranked = registry.matches(
+            "",
+            on: .palette,
+            context: regularContext,
+            ranking: NativeCommandRanking(
+                pinned: [.settings],
+                recent: [.newArticle, .globalSearch]
+            )
+        )
+        XCTAssertEqual(ranked.first?.id, .settings)
+        XCTAssertEqual(ranked.dropFirst().first?.id, .newArticle)
+
+        XCTAssertFalse(ranked.contains(where: { $0.id == .saveDraft }))
+        let editorMatches = registry.matches(
+            "保存",
+            on: .palette,
+            context: NativeCommandContext(storageReady: true, isArticleEditor: true)
+        )
+        XCTAssertEqual(editorMatches.first?.id, .saveDraft)
+
+        let slashMatches = registry.matches(
+            "todo",
+            on: .editorSlash,
+            context: NativeCommandContext(storageReady: true, isArticleEditor: true)
+        )
+        XCTAssertEqual(slashMatches.first?.id, .insertTask)
+        XCTAssertEqual(
+            registry.definition(for: .insertWikiLink)?.textInsertion,
+            NativeCommandTextInsertion(text: "[[]]", cursorOffset: 2)
+        )
+    }
+
+    func testCommandPreferencesPersistPinsRecentsAndRejectConflicts() async {
+        await MainActor.run {
+            let suiteName = "leon-book-command-tests-\(UUID().uuidString)"
+            guard let defaults = UserDefaults(suiteName: suiteName) else {
+                XCTFail("expected isolated defaults suite")
+                return
+            }
+            defer { defaults.removePersistentDomain(forName: suiteName) }
+
+            let key = "command-preferences"
+            let preferences = NativeCommandPreferences(defaults: defaults, defaultsKey: key)
+            let custom = NativeCommandShortcut(key: "g", modifiers: [.command, .option])
+            XCTAssertNil(preferences.setShortcut(custom, for: .globalSearch))
+            XCTAssertEqual(preferences.shortcut(for: .globalSearch), custom)
+            XCTAssertEqual(preferences.setShortcut(custom, for: .quickOpen), .globalSearch)
+
+            preferences.togglePinned(.globalSearch)
+            preferences.recordUse(.newArticle)
+
+            let restored = NativeCommandPreferences(defaults: defaults, defaultsKey: key)
+            XCTAssertEqual(restored.shortcut(for: .globalSearch), custom)
+            XCTAssertTrue(restored.isPinned(.globalSearch))
+            XCTAssertEqual(restored.ranking.recent.first, .newArticle)
+
+            XCTAssertNil(restored.setShortcut(nil, for: .globalSearch))
+            XCTAssertNil(restored.shortcut(for: .globalSearch))
+            restored.resetShortcut(for: .globalSearch)
+            XCTAssertEqual(
+                restored.shortcut(for: .globalSearch),
+                NativeCommandShortcut(key: "f", modifiers: [.command, .shift])
+            )
+        }
+    }
+
     func testMomentFeedTimestampBatchStaysResponsive() {
         let timestamps = (0..<48).map { second in
             String(format: "2026-08-23T10:00:%02d.123Z", second)
@@ -129,7 +253,7 @@ final class NativeModelsTests {
 
     func testArticleLinksExtractAndResolveTitlesOrSlugs() throws {
         XCTAssertEqual(
-            NativeArticleLink.references(in: "先看 [[路线图]]，再看 [[hello-world]]。"),
+            NativeArticleLink.references(in: "先看 [[路线图#目标|规划]]，再看 [[hello-world]]，忽略 ![[图片.png]]。"),
             ["路线图", "hello-world"]
         )
 
@@ -137,6 +261,7 @@ final class NativeModelsTests {
             [NativeArticleSummary].self,
             from: Data("""
             [{
+              "aliases": ["Road Map"],
               "banner": null,
               "category": "Notes",
               "excerpt": "",
@@ -152,9 +277,109 @@ final class NativeModelsTests {
         )
 
         XCTAssertEqual(articles.first?.pageViews, 0)
+        XCTAssertEqual(articles.first?.aliases, ["Road Map"])
+        XCTAssertEqual(
+            NativeArticleLink.Reference(rawValue: "路线图#目标|规划"),
+            NativeArticleLink.Reference(rawValue: " 路线图#目标 | 规划 ")
+        )
         XCTAssertEqual(NativeArticleLink.resolve("路线图", in: articles)?.slug, "roadmap")
+        XCTAssertEqual(NativeArticleLink.resolve("路线图#目标|规划", in: articles)?.slug, "roadmap")
         XCTAssertEqual(NativeArticleLink.resolve("ROADMAP", in: articles)?.title, "路线图")
+        XCTAssertEqual(NativeArticleLink.resolve("road map#目标", in: articles)?.slug, "roadmap")
         XCTAssertNil(NativeArticleLink.resolve("不存在", in: articles))
+        XCTAssertEqual(
+            NativeArticleLink.destination(for: "不存在#开端|新文", in: articles),
+            NativeArticleLinkDestination(
+                target: "不存在",
+                resolvedSlug: nil,
+                heading: "开端",
+                label: "新文"
+            )
+        )
+        XCTAssertEqual(
+            NativeArticleLink.destination(for: "#目标", in: articles)?.heading,
+            "目标"
+        )
+
+        let converted = NativeArticleLink.linkingUnlinkedMentions(
+            of: "基础",
+            to: "foundation",
+            in: "基础正文；[[基础]]、`基础` 和 [基础](https://example.com) 不变。\n```\n基础\n```"
+        )
+        XCTAssertEqual(converted.count, 1)
+        XCTAssertTrue(converted.body.hasPrefix("[[foundation|基础]]正文"))
+        XCTAssertTrue(converted.body.contains("[[基础]]、`基础`"))
+        XCTAssertTrue(converted.body.contains("[基础](https://example.com)"))
+    }
+
+    func testArticleEmbedsSelectWholeNotesHeadingsAndBlocks() {
+        let body = """
+        导言
+
+        ## 方案
+
+        第一段 ^decision
+
+        - 条目一
+        - 条目二
+        ^list-block
+
+        ## 结论
+
+        完成
+        """
+        XCTAssertEqual(NativeArticleEmbed.fragment(in: body), body)
+        XCTAssertEqual(
+            NativeArticleEmbed.fragment(in: body, selector: "方案"),
+            "第一段 ^decision\n\n- 条目一\n- 条目二\n^list-block"
+        )
+        XCTAssertEqual(NativeArticleEmbed.fragment(in: body, selector: "^decision"), "第一段")
+        XCTAssertEqual(NativeArticleEmbed.fragment(in: body, selector: "^list-block"), "- 条目一\n- 条目二")
+        XCTAssertNil(NativeArticleEmbed.fragment(in: body, selector: "^missing"))
+    }
+
+    func testArticleTabMaintainsIndependentBackAndForwardHistory() throws {
+        var tab = NativeArticleTab(slug: "one", isPinned: true)
+        tab.navigate(to: "two")
+        tab.navigate(to: "three")
+
+        XCTAssertTrue(tab.canGoBack)
+        XCTAssertFalse(tab.canGoForward)
+        XCTAssertEqual(tab.goBack(), "two")
+        XCTAssertEqual(tab.slug, "two")
+        XCTAssertTrue(tab.canGoForward)
+        XCTAssertEqual(tab.goForward(), "three")
+
+        XCTAssertEqual(tab.goBack(), "two")
+        tab.navigate(to: "four")
+        XCTAssertEqual(tab.slug, "four")
+        XCTAssertFalse(tab.canGoForward, "a new navigation should clear forward history")
+
+        let restored = try JSONDecoder().decode(
+            NativeArticleTab.self,
+            from: JSONEncoder().encode(tab)
+        )
+        XCTAssertEqual(restored, tab)
+        XCTAssertTrue(restored.isPinned)
+    }
+
+    func testArticleCommentSelectionAnchorsToNearestHeading() {
+        let markdown = """
+        开场内容。
+
+        ## 第一节
+        这里有 **需要讨论** 的结论。
+
+        ## 第二节
+        其他内容。
+        """
+        let selection = NativeArticleCommentAnchor.selection(for: "需要讨论", in: markdown)
+        XCTAssertEqual(selection?.quote, "需要讨论")
+        XCTAssertEqual(selection?.anchorID, "markdown-heading-0")
+
+        let introduction = NativeArticleCommentAnchor.selection(for: "开场内容", in: markdown)
+        XCTAssertEqual(introduction?.anchorID, NativeArticleCommentAnchor.articleTopID)
+        XCTAssertNil(NativeArticleCommentAnchor.selection(for: "   ", in: markdown))
     }
 
     func testArticleLineDiffMarksAddedAndRemovedLines() {
@@ -167,6 +392,15 @@ final class NativeModelsTests {
         XCTAssertEqual(diff.addedLineOffsets, [1, 3])
         XCTAssertFalse(diff.isEmpty)
         XCTAssertTrue(NativeArticleLineDiff(previous: "相同", current: "相同").isEmpty)
+    }
+
+    func testLegacyRevisionSnapshotDefaultsObsidianProperties() throws {
+        let snapshot = try JSONDecoder().decode(
+            NativeArticleRevisionSnapshot.self,
+            from: Data(#"{"body":"旧正文","category":"Notes","excerpt":"","media":[],"status":"draft","tags":[],"title":"旧版本","articleUpdatedAt":null}"#.utf8)
+        )
+        XCTAssertEqual(snapshot.properties, [:])
+        XCTAssertEqual(snapshot.body, "旧正文")
     }
 
     func testMomentSearchAndFilterMatchTextTagsDatesAndFavorites() {
@@ -228,11 +462,220 @@ final class NativeModelsTests {
         XCTAssertEqual(query.tags, ["Swift"])
         XCTAssertEqual(query.status, .draft)
         XCTAssertEqual(query.types, [.article])
+        XCTAssertTrue(query.propertyFilters.isEmpty)
         XCTAssertEqual(query.after, calendar.date(from: DateComponents(year: 2026, month: 8, day: 23)))
         XCTAssertEqual(query.before, calendar.date(from: DateComponents(year: 2026, month: 8, day: 24)))
 
         let fallback = NativeGlobalSearchQuery("unknown:value")
         XCTAssertEqual(fallback.textTerms, ["unknown:value"])
+        XCTAssertEqual(NativeGlobalSearchQuery("date:2026-02-31").textTerms, ["date:2026-02-31"])
+
+        let propertyQuery = NativeGlobalSearchQuery(#"[review status:in progress] [rating:4.5]"#)
+        XCTAssertEqual(propertyQuery.propertyFilters, [
+            NativeArticlePropertyFilter(key: "review status", value: "in progress"),
+            NativeArticlePropertyFilter(key: "rating", value: "4.5"),
+        ])
+        XCTAssertTrue(propertyQuery.textTerms.isEmpty)
+    }
+
+    func testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename() throws {
+        let legacy = #"{"aliases":"[\"Idea Board\"]","rating":"4.5","reviewed":"true","due":"2026-08-24"}"#
+        let decoded = try JSONDecoder().decode(
+            [String: NativeArticlePropertyValue].self,
+            from: Data(legacy.utf8)
+        )
+        XCTAssertEqual(decoded["aliases"]?.kind, .list)
+        XCTAssertEqual(decoded["aliases"]?.listValues, ["Idea Board"])
+        XCTAssertEqual(decoded["rating"]?.kind, .number)
+        XCTAssertEqual(decoded["reviewed"]?.kind, .checkbox)
+        XCTAssertEqual(decoded["due"]?.kind, .date)
+        XCTAssertEqual(
+            NativeArticlePropertyValue.fromYAML(#"[alpha, "beta gamma"]"#).listValues,
+            ["alpha", "beta gamma"]
+        )
+
+        let properties: [String: NativeArticlePropertyValue] = [
+            "rating": .number(4.5),
+            "topics": .tags(["Swift", "SQLite"]),
+            "published": .checkbox(true),
+        ]
+        let renamed = try NativeArticleProperties.renaming("topics", to: "技术标签", in: properties)
+        XCTAssertNil(renamed["topics"])
+        XCTAssertEqual(renamed["技术标签"]?.listValues, ["Swift", "SQLite"])
+        do {
+            _ = try NativeArticleProperties.renaming("rating", to: "published", in: properties)
+            XCTFail("renaming onto a different existing value should fail")
+        } catch {
+            XCTAssertEqual(error as? NativeArticlePropertyError, .destinationExists("published"))
+        }
+
+        let roundTrip = try JSONDecoder().decode(
+            [String: NativeArticlePropertyValue].self,
+            from: JSONEncoder().encode(renamed)
+        )
+        XCTAssertEqual(roundTrip, renamed)
+    }
+
+    func testSmartCollectionCombinesPropertiesDatesAndMultiSort() {
+        let source = [
+            smartCollectionArticle(
+                slug: "older",
+                title: "Alpha",
+                status: .published,
+                category: "Research",
+                updatedAt: "2026-08-10T00:00:00Z",
+                pageViews: 30,
+                properties: ["rating": "5"]
+            ),
+            smartCollectionArticle(
+                slug: "newer",
+                title: "Beta",
+                status: .published,
+                category: "Research",
+                updatedAt: "2026-08-20T00:00:00Z",
+                pageViews: 50,
+                properties: ["rating": "5"]
+            ),
+            smartCollectionArticle(
+                slug: "draft",
+                title: "Gamma",
+                status: .draft,
+                category: "Research",
+                updatedAt: "2026-08-22T00:00:00Z",
+                pageViews: 80,
+                properties: ["rating": "5"]
+            ),
+        ]
+        let collection = NativeSmartCollection(
+            name: "近期研究",
+            rules: [
+                NativeSmartCollectionRule(field: .status, comparison: .equals, value: "published"),
+                NativeSmartCollectionRule(field: .category, comparison: .equals, value: "research"),
+                NativeSmartCollectionRule(field: .property, comparison: .equals, value: "5", propertyKey: "rating"),
+                NativeSmartCollectionRule(field: .updatedAt, comparison: .after, value: "2026-08-01"),
+            ],
+            sorts: [
+                NativeArticleSortDescriptor(field: .pageViews, ascending: false),
+                NativeArticleSortDescriptor(field: .title, ascending: true),
+            ],
+            groupBy: .category,
+            layout: .table
+        )
+
+        let result = NativeSmartCollectionEvaluator.articles(from: source, matching: collection)
+        XCTAssertEqual(result.map(\.slug), ["newer", "older"])
+    }
+
+    func testBaseFormulasCalculatePropertiesDatesAndSummaries() {
+        let now = NativeTimestamp.date(from: "2026-08-24T12:00:00Z")!
+        let first = NativeArticleSummary(
+            banner: nil,
+            category: "Books",
+            excerpt: "",
+            properties: [
+                "price": .number(12.5),
+                "months": .number(4),
+                "due date": .date("2026-08-20"),
+            ],
+            publishedAt: nil,
+            slug: "first",
+            status: .draft,
+            tags: [],
+            title: "第一本",
+            updatedAt: "2026-08-24T00:00:00Z",
+            wordCount: 10
+        )
+        let second = NativeArticleSummary(
+            banner: nil,
+            category: "Books",
+            excerpt: "",
+            properties: ["price": .number(7.5), "months": .number(2)],
+            publishedAt: nil,
+            slug: "second",
+            status: .draft,
+            tags: [],
+            title: "第二本",
+            updatedAt: "2026-08-23T00:00:00Z",
+            wordCount: 10
+        )
+        let collection = NativeSmartCollection(
+            name: "阅读",
+            columns: [
+                NativeSmartCollectionColumn(source: .formula, key: "cost", title: "总价", summary: .sum),
+                NativeSmartCollectionColumn(source: .formula, key: "overdue", title: "逾期天数"),
+                NativeSmartCollectionColumn(source: .formula, key: "state", title: "状态"),
+            ],
+            formulas: [
+                NativeSmartCollectionFormula(key: "cost", name: "总价", expression: "price * months"),
+                NativeSmartCollectionFormula(key: "overdue", name: "逾期", expression: "today() - prop(\"due date\")"),
+                NativeSmartCollectionFormula(key: "state", name: "状态", expression: "if(formula.overdue > 0, \"late\", \"ok\")"),
+            ]
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.formulaValue("cost", article: first, collection: collection, now: now),
+            .number(50)
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.formulaValue("overdue", article: first, collection: collection, now: now),
+            .number(4)
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.formulaValue("state", article: first, collection: collection, now: now),
+            .string("late")
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.summary(
+                .sum,
+                column: collection.columns[0],
+                articles: [first, second],
+                collection: collection,
+                now: now
+            ),
+            .number(65)
+        )
+    }
+
+    func testArticleGraphProjectionFiltersOrphansAndClipsByDegree() {
+        var nodes: [NativeArticleSummary] = []
+        for index in 0..<12 {
+            let title = index == 0 ? "Roadmap" : "Note \(index)"
+            let status: NativeArticleStatus = index == 11 ? .draft : .published
+            let aliases = index == 0 ? ["路线图"] : []
+            nodes.append(graphArticle(
+                slug: "note-\(index)",
+                title: title,
+                status: status,
+                aliases: aliases,
+                updatedAt: String(format: "2026-08-%02dT00:00:00Z", index + 1)
+            ))
+        }
+        let edges = (1..<11).map { NativeArticleGraphEdge(sourceSlug: "note-0", targetSlug: "note-\($0)") }
+        let source = NativeArticleGraph(nodes: nodes, edges: edges)
+
+        let connected = NativeArticleGraphProjector.project(
+            source,
+            query: NativeArticleGraphQuery(includesOrphans: false, nodeLimit: 10)
+        )
+        XCTAssertEqual(connected.matchingNodeCount, 11)
+        XCTAssertEqual(connected.graph.nodes.count, 10)
+        XCTAssertEqual(connected.graph.nodes.first?.slug, "note-0")
+        XCTAssertEqual(connected.clippedNodeCount, 1)
+        let visibleSlugs = Set(connected.graph.nodes.map { $0.slug })
+        XCTAssertTrue(connected.graph.edges.allSatisfy {
+            visibleSlugs.contains($0.sourceSlug) && visibleSlugs.contains($0.targetSlug)
+        })
+
+        let aliasMatch = NativeArticleGraphProjector.project(
+            source,
+            query: NativeArticleGraphQuery(searchText: "路线图", status: .published)
+        )
+        XCTAssertEqual(aliasMatch.graph.nodes.map { $0.slug }, ["note-0"])
+
+        let drafts = NativeArticleGraphProjector.project(
+            source,
+            query: NativeArticleGraphQuery(status: .draft)
+        )
+        XCTAssertEqual(drafts.graph.nodes.map { $0.slug }, ["note-11"])
     }
 }
 
@@ -377,6 +820,100 @@ final class LocalBlogStoreTests {
         XCTAssertEqual(try await store.getArticle(slug: saved.slug).tags, ["Swift", "随笔", "macOS"])
     }
 
+    func testIncrementalMarkdownRefreshReadsChangedFilesAndHandlesDeletion() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let first = try await store.saveArticle(article(
+            slug: "first-note",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "first body",
+            title: "First"
+        ))
+        let second = try await store.saveArticle(article(
+            slug: "second-note",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "second body",
+            title: "Second"
+        ))
+        let articlesURL = root.appendingPathComponent("articles", isDirectory: true)
+        let externalFirst = """
+        ---
+        title: First externally edited
+        slug: first-note
+        status: draft
+        ---
+        changed body
+        """
+        try Data(externalFirst.utf8).write(
+            to: articlesURL.appendingPathComponent(first.sourceRelativePath),
+            options: .atomic
+        )
+
+        let updated = try await store.refreshMarkdownSources(
+            changedRelativePaths: [first.sourceRelativePath]
+        )
+        XCTAssertEqual(updated.updatedCount, 1)
+        XCTAssertEqual(try await store.getArticle(slug: first.slug).body, "changed body")
+        XCTAssertEqual(try await store.getArticle(slug: second.slug).body, "second body")
+
+        let inboxURL = articlesURL.appendingPathComponent("inbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: inboxURL, withIntermediateDirectories: true)
+        try Data("# New nested note\n\nnested body".utf8).write(
+            to: inboxURL.appendingPathComponent("nested.md")
+        )
+        let inserted = try await store.refreshMarkdownSources(
+            changedRelativePaths: [],
+            changedDirectoryPrefixes: ["inbox"]
+        )
+        XCTAssertEqual(inserted.insertedCount, 1)
+        XCTAssertTrue(try await store.listArticles().contains {
+            $0.sourceRelativePath == "inbox/nested.md"
+        })
+
+        try FileManager.default.removeItem(
+            at: articlesURL.appendingPathComponent(second.sourceRelativePath)
+        )
+        let deleted = try await store.refreshMarkdownSources(
+            changedRelativePaths: [second.sourceRelativePath]
+        )
+        XCTAssertEqual(deleted.deletedCount, 1)
+        XCTAssertFalse(try await store.listArticles().contains { $0.slug == second.slug })
+    }
+
+    func testIncrementalMarkdownRefreshPreservesIdentityAcrossRename() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let saved = try await store.saveArticle(article(
+            slug: "rename-me",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "stable content",
+            title: "Rename me"
+        ))
+        let articlesURL = root.appendingPathComponent("articles", isDirectory: true)
+        let destinationPath = "archive/renamed.md"
+        let destinationURL = articlesURL.appendingPathComponent(destinationPath)
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.moveItem(
+            at: articlesURL.appendingPathComponent(saved.sourceRelativePath),
+            to: destinationURL
+        )
+
+        let result = try await store.refreshMarkdownSources(
+            changedRelativePaths: [saved.sourceRelativePath, destinationPath]
+        )
+        XCTAssertEqual(result.movedCount, 1)
+        XCTAssertEqual(try await store.getArticle(slug: saved.slug).sourceRelativePath, destinationPath)
+        XCTAssertEqual(try await store.listArticles().map(\.slug), [saved.slug])
+    }
+
     func testArticleAutosavesRollWithinFiveMinutesAndCreateHistoryBuckets() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -449,18 +986,24 @@ final class LocalBlogStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = LocalBlogStore(rootURL: root)
 
-        let linked = try await store.saveArticle(article(
+        let linked = try await store.saveArticle(NativeSaveArticle(
+            banner: nil,
+            body: "## 目标\n想法正文",
+            category: "Notes",
+            excerpt: "",
+            media: [],
             slug: "idea",
             status: .published,
+            tags: [],
+            title: "想法",
             expectedUpdatedAt: nil,
-            body: "想法正文",
-            title: "想法"
+            properties: ["aliases": .list(["Idea Board"])]
         ))
         let current = try await store.saveArticle(article(
             slug: "foundation",
             status: .published,
             expectedUpdatedAt: nil,
-            body: "参见 [[想法]]、[[idea]]、[[想法]] 和 [[不存在]]。",
+            body: "参见 [[想法]]、[[idea]]、[[Idea Board#目标|计划]] 和 [[不存在]]。",
             title: "基础"
         ))
         let titleBacklink = try await store.saveArticle(article(
@@ -477,17 +1020,200 @@ final class LocalBlogStoreTests {
             body: "来自 [[foundation]] 的引用",
             title: "按地址引用"
         ))
+        let unlinkedMention = try await store.saveArticle(article(
+            slug: "plain-mention",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "这里直接讨论基础的设计原则，`基础` 与 [基础](https://example.com) 不计；稍后还会继续补充基础内容。",
+            title: "未链接讨论"
+        ))
 
         let relations = try await store.articleRelations(for: current.slug)
         XCTAssertEqual(relations.outgoing.map(\.slug), [linked.slug])
         XCTAssertEqual(Set(relations.incoming.map(\.slug)), Set([titleBacklink.slug, slugBacklink.slug]))
+        XCTAssertEqual(relations.unlinkedMentions.map(\.article.slug), [unlinkedMention.slug])
+        XCTAssertEqual(relations.unlinkedMentions.first?.count, 2)
+        XCTAssertTrue(relations.unlinkedMentions.first?.snippet.contains("基础") == true)
+        XCTAssertEqual(
+            try await store.articleRelations(for: linked.slug).incoming.map(\.slug),
+            [current.slug],
+            "indexed backlink candidates should deduplicate title, slug, and alias references"
+        )
 
         let graph = try await store.articleGraph()
-        XCTAssertEqual(Set(graph.nodes.map(\.slug)), Set([linked.slug, current.slug, titleBacklink.slug, slugBacklink.slug]))
+        XCTAssertEqual(
+            Set(graph.nodes.map(\.slug)),
+            Set([linked.slug, current.slug, titleBacklink.slug, slugBacklink.slug, unlinkedMention.slug])
+        )
         XCTAssertEqual(
             Set(graph.edges.map(\.id)),
             Set(["foundation->idea", "by-title->foundation", "by-slug->foundation"])
         )
+
+        let converted = try await store.convertUnlinkedMention(
+            sourceSlug: unlinkedMention.slug,
+            targetSlug: current.slug,
+            expectedUpdatedAt: unlinkedMention.updatedAt
+        )
+        XCTAssertEqual(converted.body.components(separatedBy: "[[foundation|基础]]").count - 1, 2)
+        XCTAssertTrue(converted.body.contains("`基础`"))
+        XCTAssertTrue(converted.body.contains("[基础](https://example.com)"))
+        XCTAssertTrue(try await store.articleRelations(for: current.slug).unlinkedMentions.isEmpty)
+        XCTAssertTrue(
+            try await store.articleGraph().edges.contains(where: {
+                $0.sourceSlug == unlinkedMention.slug && $0.targetSlug == current.slug
+            }),
+            "saving one changed body should update its graph edges without rebuilding the vault"
+        )
+        do {
+            _ = try await store.convertUnlinkedMention(
+                sourceSlug: unlinkedMention.slug,
+                targetSlug: current.slug,
+                expectedUpdatedAt: unlinkedMention.updatedAt
+            )
+            XCTFail("a stale unlinked-mention conversion should fail")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("其他窗口中更新"))
+        }
+
+        _ = try await store.saveArticle(NativeSaveArticle(
+            banner: current.banner,
+            body: "链接已经移除。",
+            category: current.category,
+            excerpt: current.excerpt,
+            media: current.media,
+            slug: current.slug,
+            status: current.status,
+            tags: current.tags,
+            title: current.title,
+            expectedUpdatedAt: current.updatedAt,
+            properties: current.properties
+        ))
+        XCTAssertFalse(
+            try await store.articleGraph().edges.contains(where: { $0.id == "foundation->idea" }),
+            "changing one body should remove its stale indexed links"
+        )
+    }
+
+    func testObsidianVaultImportPreservesPropertiesLinksAndAttachments() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vault = root.appendingPathComponent("vault", isDirectory: true)
+        let attachments = vault.appendingPathComponent("Assets", isDirectory: true)
+        let storeRoot = root.appendingPathComponent("store", isDirectory: true)
+        try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
+        try Data([0x89, 0x50, 0x4e, 0x47]).write(to: attachments.appendingPathComponent("图.png"))
+        try Data("PDF".utf8).write(to: attachments.appendingPathComponent("资料.pdf"))
+        try Data("""
+        ---
+        title: 路线图
+        aliases:
+          - Road Map
+        tags: [Swift, "知识管理"]
+        category: Research
+        status: published
+        date: 2026-08-20
+        cssclasses:
+          - wide-page
+        ---
+        参见 [[第二篇#细节|详情]]。
+
+        ![[Assets/图.png]]
+        ![[Assets/资料.pdf]]
+        """.utf8).write(to: vault.appendingPathComponent("路线图.md"))
+        try Data("""
+        ---
+        title: 第二篇
+        ---
+        ## 细节
+        内容。
+        """.utf8).write(to: vault.appendingPathComponent("第二篇.md"))
+
+        let preview = try NativeObsidianVaultImporter.scan(vaultURL: vault)
+        XCTAssertEqual(preview.notes.count, 2)
+        XCTAssertEqual(preview.importableCount, 2)
+        XCTAssertEqual(preview.attachmentCount, 2)
+        guard let roadmap = preview.notes.first(where: { $0.title == "路线图" }) else {
+            XCTFail("expected the roadmap note")
+            return
+        }
+        XCTAssertEqual(roadmap.tags, ["Swift", "知识管理"])
+        XCTAssertEqual(roadmap.category, "Research")
+        XCTAssertEqual(roadmap.status, .published)
+        XCTAssertTrue(roadmap.properties["aliases"]?.contains("Road Map") == true)
+        XCTAssertTrue(roadmap.properties["cssclasses"]?.contains("wide-page") == true)
+        guard let secondNote = preview.notes.first(where: { $0.title == "第二篇" }) else {
+            XCTFail("expected the second note")
+            return
+        }
+        XCTAssertTrue(roadmap.body.contains("[[\(secondNote.slug)#细节|详情]]"))
+
+        let store = LocalBlogStore(rootURL: storeRoot)
+        let result = try await store.importObsidianVault(preview)
+        XCTAssertEqual(result.importedCount, 2)
+        XCTAssertEqual(result.skippedCount, 0)
+        XCTAssertEqual(result.attachmentCount, 2)
+
+        let imported = try await store.getArticle(slug: roadmap.slug)
+        XCTAssertEqual(imported.properties, roadmap.properties)
+        XCTAssertEqual(imported.media.map(\.kind).sorted(), ["file", "image"])
+        XCTAssertTrue(imported.body.contains("/media/\(roadmap.slug)/"))
+        let markdown = try String(
+            contentsOf: storeRoot.appendingPathComponent("articles/\(roadmap.slug).md"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(markdown.contains("aliases: [\"Road Map\"]"))
+        XCTAssertTrue(markdown.contains("cssclasses: [\"wide-page\"]"))
+        XCTAssertEqual(try await store.listArticles().first(where: { $0.slug == roadmap.slug })?.aliases, ["Road Map"])
+        XCTAssertEqual(
+            try await store.search("Road Map", restrictingTo: [.article]).map(\.documentID),
+            [roadmap.slug]
+        )
+
+        let conflicting = try NativeObsidianVaultImporter.scan(
+            vaultURL: vault,
+            existingSlugs: [roadmap.slug]
+        )
+        XCTAssertEqual(conflicting.conflictCount, 1)
+        XCTAssertTrue(conflicting.notes.first(where: { $0.slug == roadmap.slug })?.canImport == false)
+    }
+
+    func testArticleCommentsPersistQuotesRepliesAndCascadeDeletion() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let saved = try await store.saveArticle(article(
+            slug: "commented",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "## 结论\n值得讨论的原文"
+        ))
+        let selection = NativeArticleCommentSelection(
+            quote: "值得讨论的原文",
+            anchorID: "markdown-heading-0"
+        )
+        let parent = try await store.createArticleComment(
+            articleSlug: saved.slug,
+            authorName: "leon",
+            text: "这里需要补充证据。",
+            selection: selection,
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let reply = try await store.createArticleComment(
+            articleSlug: saved.slug,
+            authorName: "reader",
+            text: "已经补充。",
+            parentID: parent.id,
+            at: Date(timeIntervalSince1970: 1_700_000_010)
+        )
+
+        let comments = try await store.listArticleComments(articleSlug: saved.slug)
+        XCTAssertEqual(comments.map(\.id), [parent.id, reply.id])
+        XCTAssertEqual(comments.first?.selection, selection)
+        XCTAssertEqual(comments.last?.parentID, parent.id)
+
+        try await store.deleteArticleComment(id: parent.id, articleSlug: saved.slug)
+        XCTAssertTrue(try await store.listArticleComments(articleSlug: saved.slug).isEmpty)
     }
 
     func testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments() async throws {
@@ -501,6 +1227,422 @@ final class LocalBlogStoreTests {
         )
         XCTAssertNil(await store.mediaURL(for: "/media/notes/../secret.png"))
         XCTAssertNil(await store.mediaURL(for: "/other/notes/photo.png"))
+    }
+
+    func testSmartCollectionsAndBookmarksPersistInSQLite() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let savedArticle = try await store.saveArticle(article(
+            slug: "saved-note",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "collection body",
+            title: "收藏文章"
+        ))
+        let collection = NativeSmartCollection(
+            id: "published-base",
+            name: "已发布",
+            rules: [NativeSmartCollectionRule(field: .status, comparison: .equals, value: "published")],
+            layout: .cards,
+            columns: [
+                .system(.title, width: 240),
+                NativeSmartCollectionColumn(
+                    source: .property,
+                    key: "rating",
+                    title: "评分",
+                    width: 110,
+                    propertyKind: .number,
+                    summary: .average
+                ),
+                NativeSmartCollectionColumn(source: .formula, key: "double_rating", title: "双倍评分"),
+            ],
+            formulas: [
+                NativeSmartCollectionFormula(
+                    key: "double_rating",
+                    name: "双倍评分",
+                    expression: "rating * 2"
+                ),
+            ]
+        )
+        let savedCollection = try await store.saveSmartCollection(collection)
+        XCTAssertEqual(try await store.listSmartCollections(), [savedCollection])
+        XCTAssertEqual(try await store.listArticles(in: savedCollection).map(\.slug), ["saved-note"])
+        let baseURL = root.appendingPathComponent("bases/published-base.base")
+        let baseSource = try String(contentsOf: baseURL, encoding: .utf8)
+        XCTAssertTrue(baseSource.contains("formulas:"))
+        XCTAssertTrue(baseSource.contains("double_rating"))
+        XCTAssertTrue(baseSource.contains("summaries:"))
+        XCTAssertTrue(baseSource.contains("leonBookColumnWidths:"))
+        let externallyEditedBase = baseSource
+            .replacingOccurrences(of: "double_rating: 'rating * 2'", with: "double_rating: 'rating * 3'")
+            .replacingOccurrences(of: "note.rating: 110", with: "note.rating: 180")
+        try Data(externallyEditedBase.utf8).write(to: baseURL, options: .atomic)
+        let externallyReloaded = try await store.listSmartCollections().first
+        XCTAssertEqual(externallyReloaded?.formulas.first?.expression, "rating * 3")
+        XCTAssertEqual(
+            externallyReloaded?.columns.first(where: { $0.key == "rating" })?.width,
+            180
+        )
+
+        let propertyUpdated = try await store.setArticleProperty(
+            slug: savedArticle.slug,
+            expectedUpdatedAt: savedArticle.updatedAt,
+            key: "rating",
+            value: .number(4.5)
+        )
+        XCTAssertEqual(propertyUpdated.properties["rating"], .number(4.5))
+        XCTAssertEqual(
+            try await store.listArticles(in: savedCollection).first?.properties["rating"],
+            .number(4.5)
+        )
+        let markdown = try String(
+            contentsOf: root.appendingPathComponent("articles/saved-note.md"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(markdown.contains("rating: 4.5"))
+
+        let bookmarks = [
+            NativeBookmark(title: "收藏文章", target: .article(slug: "saved-note")),
+            NativeBookmark(
+                title: "收藏标题",
+                target: .heading(slug: "saved-note", heading: "结论", anchorID: "markdown-heading-0")
+            ),
+            NativeBookmark(title: "待办搜索", target: .search(query: "tag:todo")),
+            NativeBookmark(title: "关系图", target: .graph),
+        ]
+        for bookmark in bookmarks { _ = try await store.saveBookmark(bookmark) }
+        XCTAssertEqual(try await store.listBookmarks().map(\.target), bookmarks.map(\.target))
+
+        try await store.deleteBookmark(id: bookmarks[1].id)
+        XCTAssertEqual(try await store.listBookmarks().count, 3)
+        try await store.deleteSmartCollection(id: savedCollection.id)
+        XCTAssertTrue(try await store.listSmartCollections().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: baseURL.path))
+    }
+
+    func testSmartCollectionSQLMatchesTheInMemoryEvaluator() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+
+        func payload(
+            slug: String,
+            title: String,
+            body: String,
+            status: NativeArticleStatus,
+            tags: [String],
+            properties: [String: NativeArticlePropertyValue]
+        ) -> NativeSaveArticle {
+            NativeSaveArticle(
+                banner: nil,
+                body: body,
+                category: status == .published ? "Engineering" : "Notes",
+                excerpt: "摘要 \(body)",
+                media: [],
+                slug: slug,
+                status: status,
+                tags: tags,
+                title: title,
+                expectedUpdatedAt: nil,
+                properties: properties
+            )
+        }
+
+        var articles = [
+            try await store.saveArticle(payload(
+                slug: "alpha",
+                title: "Alpha",
+                body: "SQLite roadmap and query plan",
+                status: .published,
+                tags: ["Swift", "Database"],
+                properties: [
+                    "topics": .list(["SQLite", "FTS"]),
+                    "featured": .checkbox(true),
+                ]
+            )),
+            try await store.saveArticle(payload(
+                slug: "beta",
+                title: "Beta",
+                body: "Small release note",
+                status: .published,
+                tags: ["Release"],
+                properties: ["topics": .list(["Shipping"])]
+            )),
+            try await store.saveArticle(payload(
+                slug: "gamma",
+                title: "Gamma",
+                body: "UI roadmap draft",
+                status: .draft,
+                tags: ["Swift"],
+                properties: ["topics": .list(["Design"])]
+            )),
+        ]
+        articles[0] = try await store.incrementArticlePageViews(slug: articles[0].slug)
+        articles[0] = try await store.incrementArticlePageViews(slug: articles[0].slug)
+        articles[1] = try await store.incrementArticlePageViews(slug: articles[1].slug)
+
+        let collections = [
+            NativeSmartCollection(
+                name: "全部条件",
+                rules: [
+                    NativeSmartCollectionRule(field: .content, comparison: .contains, value: "ROADMAP"),
+                    NativeSmartCollectionRule(field: .tag, comparison: .equals, value: "swift"),
+                    NativeSmartCollectionRule(
+                        field: .property,
+                        comparison: .contains,
+                        value: "sql",
+                        propertyKey: "TOPICS"
+                    ),
+                    NativeSmartCollectionRule(field: .wordCount, comparison: .greaterThan, value: "5"),
+                ],
+                sorts: [
+                    NativeArticleSortDescriptor(field: .pageViews, ascending: false),
+                    NativeArticleSortDescriptor(field: .title, ascending: true),
+                ]
+            ),
+            NativeSmartCollection(
+                name: "任一条件",
+                matchMode: .any,
+                rules: [
+                    NativeSmartCollectionRule(field: .title, comparison: .equals, value: "beta"),
+                    NativeSmartCollectionRule(
+                        field: .property,
+                        comparison: .equals,
+                        value: "true",
+                        propertyKey: "featured"
+                    ),
+                ],
+                sorts: [NativeArticleSortDescriptor(field: .title, ascending: true)]
+            ),
+            NativeSmartCollection(
+                name: "日期与数值",
+                rules: [
+                    NativeSmartCollectionRule(field: .publishedAt, comparison: .isNotEmpty, value: ""),
+                    NativeSmartCollectionRule(field: .updatedAt, comparison: .after, value: "2020-01-01"),
+                    NativeSmartCollectionRule(field: .pageViews, comparison: .greaterThan, value: "0"),
+                ],
+                sorts: [
+                    NativeArticleSortDescriptor(field: .pageViews, ascending: false),
+                    NativeArticleSortDescriptor(field: .wordCount, ascending: true),
+                ]
+            ),
+            NativeSmartCollection(
+                name: "缺少属性",
+                rules: [
+                    NativeSmartCollectionRule(
+                        field: .property,
+                        comparison: .isEmpty,
+                        value: "",
+                        propertyKey: "featured"
+                    ),
+                ],
+                sorts: [NativeArticleSortDescriptor(field: .title, ascending: true)]
+            ),
+        ]
+
+        for collection in collections {
+            let expected = NativeSmartCollectionEvaluator
+                .articles(from: articles, matching: collection)
+                .map(\.slug)
+            XCTAssertEqual(
+                try await store.listArticles(in: collection).map(\.slug),
+                expected,
+                "SQLite collection query should preserve evaluator semantics for \(collection.name)"
+            )
+        }
+    }
+
+    func testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+
+        func payload(
+            slug: String,
+            status: NativeArticleStatus,
+            category: String
+        ) -> NativeSaveArticle {
+            NativeSaveArticle(
+                banner: nil,
+                body: "\(slug) body",
+                category: category,
+                excerpt: "",
+                media: [],
+                slug: slug,
+                status: status,
+                tags: ["Swift"],
+                title: slug.capitalized,
+                expectedUpdatedAt: nil,
+                properties: ["rating": .number(status == .published ? 5 : 3)]
+            )
+        }
+
+        _ = try await store.saveArticle(payload(slug: "published-note", status: .published, category: "Guide"))
+        _ = try await store.saveArticle(payload(slug: "draft-note", status: .draft, category: "Notes"))
+        let bases = root.appendingPathComponent("bases", isDirectory: true)
+        try FileManager.default.createDirectory(at: bases, withIntermediateDirectories: true)
+        let baseURL = bases.appendingPathComponent("standard.base")
+        let source = """
+        filters:
+          and:
+            - 'file.hasTag("Swift")'
+            - or:
+                - 'note.status == "published"'
+                - not:
+                    - 'note.category == "Archived"'
+        formulas:
+          doubled: 'note.rating * 2'
+        properties:
+          note.rating:
+            displayName: Rating
+            icon: star
+        customTopLevel:
+          plugin: enabled
+        views:
+          - type: table
+            name: Published
+            limit: 10
+            filters:
+              and:
+                - 'note.status == "published"'
+            order:
+              - file.name
+              - note.rating
+              - formula.doubled
+            summaries:
+              note.rating: Median
+            pluginViewState:
+              color: blue
+          - type: cards
+            name: Drafts
+            filters:
+              and:
+                - 'note.status == "draft"'
+            order:
+              - file.name
+        """
+        try Data(source.utf8).write(to: baseURL, options: .atomic)
+
+        let imported = try await store.listSmartCollections()
+        XCTAssertEqual(imported.count, 1)
+        guard var collection = imported.first else { return XCTFail("standard Base should load") }
+        XCTAssertEqual(collection.id, "standard")
+        XCTAssertEqual(collection.views.map(\.name), ["Published", "Drafts"])
+        XCTAssertEqual(collection.formulas.first?.expression, "note.rating * 2")
+        XCTAssertEqual(collection.columns.first(where: { $0.key == "rating" })?.title, "Rating")
+
+        let published = collection.materialized(viewID: collection.views[0].id)
+        XCTAssertEqual(try await store.listArticles(in: published).map(\.slug), ["published-note"])
+        let drafts = collection.materialized(viewID: collection.views[1].id)
+        XCTAssertEqual(try await store.listArticles(in: drafts).map(\.slug), ["draft-note"])
+
+        collection = published
+        collection.layout = .cards
+        _ = try await store.saveSmartCollection(collection)
+        let rewritten = try String(contentsOf: baseURL, encoding: .utf8)
+        XCTAssertTrue(rewritten.contains("customTopLevel:"))
+        XCTAssertTrue(rewritten.contains("plugin: enabled"))
+        XCTAssertTrue(rewritten.contains("icon: star"))
+        XCTAssertTrue(rewritten.contains("pluginViewState:"))
+        XCTAssertTrue(rewritten.contains("color: blue"))
+        XCTAssertTrue(rewritten.contains("note.rating: Median"))
+        XCTAssertFalse(rewritten.contains("leonBookConfig"))
+        let reloaded = try await store.listSmartCollections().first
+        XCTAssertEqual(reloaded?.views.count, 2)
+        XCTAssertEqual(reloaded?.views.first?.layout, .cards)
+    }
+
+    func testTwoWindowStoresCanShareOneWorkspaceInTheSameProcess() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstWindowStore = LocalBlogStore(rootURL: root)
+        let secondWindowStore = LocalBlogStore(rootURL: root)
+
+        let saved = try await firstWindowStore.saveArticle(article(
+            slug: "shared-window-note",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "shared body",
+            title: "多窗口笔记"
+        ))
+
+        XCTAssertEqual(try await secondWindowStore.listArticles().map(\.slug), [saved.slug])
+    }
+
+    func testArticleRefactorsPersistMarkdownAndRepairIncomingLinks() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let source = try await store.saveArticle(article(
+            slug: "source-note",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "开头\n\n## 第一节\n\n要提取的内容 ^idea\n\n## 第二节\n\n- [ ] 待办",
+            title: "来源文章"
+        ))
+        let extractText = "要提取的内容 ^idea"
+        let extractRange = (source.body as NSString).range(of: extractText)
+        let extraction = try await store.extractArticleSelection(
+            sourceSlug: source.slug,
+            expectedUpdatedAt: source.updatedAt,
+            sourceBody: source.body,
+            selectedRange: extractRange,
+            newTitle: "提取结果",
+            replacement: .embed
+        )
+        XCTAssertEqual(extraction.createdArticles.count, 1)
+        XCTAssertTrue(extraction.primaryArticle.body.contains("![[\(extraction.createdArticles[0].slug)]]"))
+        XCTAssertEqual(extraction.createdArticles[0].body, extractText)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("articles/\(extraction.createdArticles[0].slug).md").path
+        ))
+
+        let split = try await store.splitArticleByLevel2Headings(
+            sourceSlug: source.slug,
+            expectedUpdatedAt: extraction.primaryArticle.updatedAt,
+            sourceBody: extraction.primaryArticle.body,
+            replacement: .link
+        )
+        XCTAssertEqual(split.createdArticles.map(\.title), ["第一节", "第二节"])
+        XCTAssertTrue(split.primaryArticle.body.contains("[["))
+
+        let mergeSource = split.createdArticles[0]
+        let mergeDestination = split.createdArticles[1]
+        let backlink = try await store.saveArticle(article(
+            slug: "incoming-link",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "[[\(mergeSource.slug)#标题|别名]]\n\n![[\(mergeSource.slug)#^idea]]",
+            title: "入链"
+        ))
+        let merge = try await store.mergeArticle(
+            sourceSlug: mergeSource.slug,
+            destinationSlug: mergeDestination.slug,
+            expectedSourceUpdatedAt: mergeSource.updatedAt,
+            expectedDestinationUpdatedAt: mergeDestination.updatedAt,
+            position: .end
+        )
+        XCTAssertTrue(merge.primaryArticle.body.contains("## \(mergeSource.title)"))
+        let repaired = try await store.getArticle(slug: backlink.slug)
+        XCTAssertTrue(repaired.body.contains("[[\(mergeDestination.slug)#标题|别名]]"))
+        XCTAssertTrue(repaired.body.contains("![[\(mergeDestination.slug)#^idea]]"))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("articles/\(mergeSource.slug).md").path
+        ))
+
+        let taskLine = merge.primaryArticle.body.components(separatedBy: .newlines)
+            .firstIndex(where: { $0.contains("[ ] 待办") })
+        XCTAssertNotNil(taskLine)
+        if let taskLine {
+            let toggled = try await store.toggleArticleTask(
+                slug: merge.primaryArticle.slug,
+                expectedUpdatedAt: merge.primaryArticle.updatedAt,
+                lineIndex: taskLine,
+                completed: true
+            )
+            XCTAssertTrue(toggled.body.contains("[x] 待办"))
+        }
     }
 }
 
@@ -518,6 +1660,19 @@ final class UserWorkspaceStoreTests {
         XCTAssertEqual(persisted.activeUser, initial.activeUser)
         XCTAssertEqual(persisted.users, initial.users)
         XCTAssertEqual(persisted.workspaceURL, initial.workspaceURL)
+    }
+
+    func testTwoWindowRegistriesCanShareTheDataRootInTheSameProcess() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstWindowStore = UserWorkspaceStore(rootURL: root)
+        let secondWindowStore = UserWorkspaceStore(rootURL: root)
+
+        let first = try await firstWindowStore.prepare()
+        let second = try await secondWindowStore.prepare()
+
+        XCTAssertEqual(first.activeUser, second.activeUser)
+        XCTAssertEqual(first.workspaceURL, second.workspaceURL)
     }
 }
 
@@ -561,6 +1716,130 @@ final class LocalBackupManagerTests {
             // Expected recursive-destination validation.
         }
     }
+
+    func testManagedSnapshotsReuseUnchangedFilesAndValidateChecksums() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source", isDirectory: true)
+        let destination = root.appendingPathComponent("backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: source.appendingPathComponent("articles"), withIntermediateDirectories: true)
+        try Data("database".utf8).write(to: source.appendingPathComponent("leon-book.sqlite"))
+        try Data("hello".utf8).write(to: source.appendingPathComponent("articles/note.md"))
+
+        let policy = NativeBackupPolicy(
+            automaticInterval: 60,
+            retentionDays: 30,
+            maximumSnapshotCount: 10,
+            minimumFreeSpaceBytes: 0
+        )
+        let first = try LocalBackupManager.createManagedSnapshot(
+            source: source,
+            destination: destination,
+            policy: policy
+        )
+        let second = try LocalBackupManager.createManagedSnapshot(
+            source: source,
+            destination: destination,
+            policy: policy
+        )
+
+        XCTAssertTrue(second.reusedFileCount >= 2, "unchanged files should be reused from the preceding snapshot")
+        XCTAssertEqual(try LocalBackupManager.validateSnapshot(at: first.snapshot.url).checkedFileCount, 2)
+        XCTAssertEqual(try LocalBackupManager.validateSnapshot(at: second.snapshot.url).checkedFileCount, 2)
+
+        try Data("corrupt".utf8).write(to: second.snapshot.url.appendingPathComponent("articles/note.md"))
+        do {
+            _ = try LocalBackupManager.validateSnapshot(at: second.snapshot.url)
+            XCTFail("checksum validation should reject modified snapshot content")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("校验失败"))
+        }
+    }
+
+    func testRetentionKeepsNewestSnapshotsWithinCountLimit() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source", isDirectory: true)
+        let destination = root.appendingPathComponent("backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try Data("database".utf8).write(to: source.appendingPathComponent("leon-book.sqlite"))
+        let policy = NativeBackupPolicy(
+            automaticInterval: 60,
+            retentionDays: 365,
+            maximumSnapshotCount: 2,
+            minimumFreeSpaceBytes: 0
+        )
+
+        for value in ["one", "two", "three"] {
+            try Data(value.utf8).write(to: source.appendingPathComponent("value.txt"))
+            _ = try LocalBackupManager.createManagedSnapshot(
+                source: source,
+                destination: destination,
+                policy: policy
+            )
+        }
+
+        let snapshots = try LocalBackupManager.listSnapshots(in: destination)
+        XCTAssertEqual(snapshots.count, 2)
+        XCTAssertEqual(
+            try String(contentsOf: snapshots[0].url.appendingPathComponent("value.txt"), encoding: .utf8),
+            "three"
+        )
+    }
+
+    func testRestoreReplacesWholeDataRootWithoutRestoringBackupMetadata() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = root.appendingPathComponent("live", isDirectory: true)
+        let destination = root.appendingPathComponent("backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: live.appendingPathComponent("workspaces/leon"), withIntermediateDirectories: true)
+        try Data("original".utf8).write(to: live.appendingPathComponent("leon-book.sqlite"))
+        try Data("article".utf8).write(to: live.appendingPathComponent("workspaces/leon/note.md"))
+        let snapshot = try LocalBackupManager.createManagedSnapshot(
+            source: live,
+            destination: destination,
+            policy: NativeBackupPolicy(minimumFreeSpaceBytes: 0)
+        ).snapshot
+
+        try Data("changed".utf8).write(to: live.appendingPathComponent("leon-book.sqlite"))
+        try Data("extra".utf8).write(to: live.appendingPathComponent("extra.txt"))
+        try LocalBackupManager.restoreSnapshot(
+            at: snapshot.url,
+            to: live,
+            minimumFreeSpaceBytes: 0
+        )
+
+        XCTAssertEqual(
+            try String(contentsOf: live.appendingPathComponent("leon-book.sqlite"), encoding: .utf8),
+            "original"
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: live.appendingPathComponent("extra.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: live.appendingPathComponent("backup-manifest.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: live.appendingPathComponent(".leon-book.lock").path))
+    }
+
+    func testCapacityGuardPreservesConfiguredFreeSpace() throws {
+        do {
+            try LocalBackupManager.ensureSufficientCapacity(
+                availableBytes: 12_000,
+                estimatedAdditionalBytes: 5_000,
+                minimumFreeSpaceBytes: 8_000
+            )
+            XCTFail("backup should not consume the configured free-space reserve")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("剩余空间"))
+        }
+
+        do {
+            try LocalBackupManager.ensureSufficientCapacity(
+                availableBytes: 12_000,
+                estimatedAdditionalBytes: 3_000,
+                minimumFreeSpaceBytes: 8_000
+            )
+        } catch {
+            XCTFail("backup should fit while preserving the configured reserve")
+        }
+    }
 }
 
 private func makeTemporaryDirectory() throws -> URL {
@@ -575,27 +1854,52 @@ struct LeonBookUnitTests {
     static func main() async {
         let tests: [(String, () async throws -> Void)] = [
             ("NativeModelsTests.testWritingMetricsAndTimestampRoundTrip", { NativeModelsTests().testWritingMetricsAndTimestampRoundTrip() }),
+            ("NativeModelsTests.testAutomationURLsParseActionsAndEncodedParameters", { try NativeModelsTests().testAutomationURLsParseActionsAndEncodedParameters() }),
+            ("NativeModelsTests.testCommandRegistryFuzzyMatchingRankingAndAvailability", { NativeModelsTests().testCommandRegistryFuzzyMatchingRankingAndAvailability() }),
+            ("NativeModelsTests.testCommandPreferencesPersistPinsRecentsAndRejectConflicts", { await NativeModelsTests().testCommandPreferencesPersistPinsRecentsAndRejectConflicts() }),
             ("NativeModelsTests.testMomentFeedTimestampBatchStaysResponsive", { NativeModelsTests().testMomentFeedTimestampBatchStaysResponsive() }),
             ("NativeModelsTests.testLegacyMediaJSONUsesSafeDefaults", { try NativeModelsTests().testLegacyMediaJSONUsesSafeDefaults() }),
             ("NativeModelsTests.testMomentTagsAreExtractedDeduplicatedAndRemovedFromDisplayContent", { NativeModelsTests().testMomentTagsAreExtractedDeduplicatedAndRemovedFromDisplayContent() }),
             ("NativeModelsTests.testArticleHashtagsNormalizeAndPreserveLegacyCommaTags", { NativeModelsTests().testArticleHashtagsNormalizeAndPreserveLegacyCommaTags() }),
             ("NativeModelsTests.testArticleLinksExtractAndResolveTitlesOrSlugs", { try NativeModelsTests().testArticleLinksExtractAndResolveTitlesOrSlugs() }),
+            ("NativeModelsTests.testArticleEmbedsSelectWholeNotesHeadingsAndBlocks", { NativeModelsTests().testArticleEmbedsSelectWholeNotesHeadingsAndBlocks() }),
+            ("NativeModelsTests.testArticleTabMaintainsIndependentBackAndForwardHistory", { try NativeModelsTests().testArticleTabMaintainsIndependentBackAndForwardHistory() }),
+            ("NativeModelsTests.testArticleCommentSelectionAnchorsToNearestHeading", { NativeModelsTests().testArticleCommentSelectionAnchorsToNearestHeading() }),
             ("NativeModelsTests.testArticleLineDiffMarksAddedAndRemovedLines", { NativeModelsTests().testArticleLineDiffMarksAddedAndRemovedLines() }),
+            ("NativeModelsTests.testLegacyRevisionSnapshotDefaultsObsidianProperties", { try NativeModelsTests().testLegacyRevisionSnapshotDefaultsObsidianProperties() }),
             ("NativeModelsTests.testMomentSearchAndFilterMatchTextTagsDatesAndFavorites", { NativeModelsTests().testMomentSearchAndFilterMatchTextTagsDatesAndFavorites() }),
             ("NativeModelsTests.testDateFiltersUseTheProvidedCalendarAndNow", { NativeModelsTests().testDateFiltersUseTheProvidedCalendarAndNow() }),
             ("NativeModelsTests.testGlobalSearchQueryParsesPhrasesAndFilters", { NativeModelsTests().testGlobalSearchQueryParsesPhrasesAndFilters() }),
+            ("NativeModelsTests.testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename", { try NativeModelsTests().testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename() }),
+            ("NativeModelsTests.testSmartCollectionCombinesPropertiesDatesAndMultiSort", { NativeModelsTests().testSmartCollectionCombinesPropertiesDatesAndMultiSort() }),
+            ("NativeModelsTests.testBaseFormulasCalculatePropertiesDatesAndSummaries", { NativeModelsTests().testBaseFormulasCalculatePropertiesDatesAndSummaries() }),
+            ("NativeModelsTests.testArticleGraphProjectionFiltersOrphansAndClipsByDegree", { NativeModelsTests().testArticleGraphProjectionFiltersOrphansAndClipsByDegree() }),
             ("LocalBlogStoreTests.testMomentLifecycleNormalizesInputFiltersAndRecordsActivity", { try await LocalBlogStoreTests().testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() }),
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),
             ("LocalBlogStoreTests.testArticleLifecycleSupportsDraftPublishingAndConflictProtection", { try await LocalBlogStoreTests().testArticleLifecycleSupportsDraftPublishingAndConflictProtection() }),
             ("LocalBlogStoreTests.testArticleDeleteHidesRecord", { try await LocalBlogStoreTests().testArticleDeleteHidesRecord() }),
             ("LocalBlogStoreTests.testArticleHashtagsPersistAsNormalizedTags", { try await LocalBlogStoreTests().testArticleHashtagsPersistAsNormalizedTags() }),
+            ("LocalBlogStoreTests.testIncrementalMarkdownRefreshReadsChangedFilesAndHandlesDeletion", { try await LocalBlogStoreTests().testIncrementalMarkdownRefreshReadsChangedFilesAndHandlesDeletion() }),
+            ("LocalBlogStoreTests.testIncrementalMarkdownRefreshPreservesIdentityAcrossRename", { try await LocalBlogStoreTests().testIncrementalMarkdownRefreshPreservesIdentityAcrossRename() }),
             ("LocalBlogStoreTests.testArticleAutosavesRollWithinFiveMinutesAndCreateHistoryBuckets", { try await LocalBlogStoreTests().testArticleAutosavesRollWithinFiveMinutesAndCreateHistoryBuckets() }),
             ("LocalBlogStoreTests.testManualArticleSaveKeepsThePreviousVersion", { try await LocalBlogStoreTests().testManualArticleSaveKeepsThePreviousVersion() }),
             ("LocalBlogStoreTests.testArticleRelationsResolveAndDeduplicateWikiLinks", { try await LocalBlogStoreTests().testArticleRelationsResolveAndDeduplicateWikiLinks() }),
+            ("LocalBlogStoreTests.testObsidianVaultImportPreservesPropertiesLinksAndAttachments", { try await LocalBlogStoreTests().testObsidianVaultImportPreservesPropertiesLinksAndAttachments() }),
+            ("LocalBlogStoreTests.testArticleCommentsPersistQuotesRepliesAndCascadeDeletion", { try await LocalBlogStoreTests().testArticleCommentsPersistQuotesRepliesAndCascadeDeletion() }),
             ("LocalBlogStoreTests.testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments", { try await LocalBlogStoreTests().testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments() }),
+            ("LocalBlogStoreTests.testSmartCollectionsAndBookmarksPersistInSQLite", { try await LocalBlogStoreTests().testSmartCollectionsAndBookmarksPersistInSQLite() }),
+            ("LocalBlogStoreTests.testSmartCollectionSQLMatchesTheInMemoryEvaluator", { try await LocalBlogStoreTests().testSmartCollectionSQLMatchesTheInMemoryEvaluator() }),
+            ("LocalBlogStoreTests.testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields", { try await LocalBlogStoreTests().testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields() }),
+            ("LocalBlogStoreTests.testTwoWindowStoresCanShareOneWorkspaceInTheSameProcess", { try await LocalBlogStoreTests().testTwoWindowStoresCanShareOneWorkspaceInTheSameProcess() }),
+            ("LocalBlogStoreTests.testArticleRefactorsPersistMarkdownAndRepairIncomingLinks", { try await LocalBlogStoreTests().testArticleRefactorsPersistMarkdownAndRepairIncomingLinks() }),
             ("UserWorkspaceStoreTests.testWorkspacePreparationCreatesAndPersistsDefaultUser", { try await UserWorkspaceStoreTests().testWorkspacePreparationCreatesAndPersistsDefaultUser() }),
+            ("UserWorkspaceStoreTests.testTwoWindowRegistriesCanShareTheDataRootInTheSameProcess", { try await UserWorkspaceStoreTests().testTwoWindowRegistriesCanShareTheDataRootInTheSameProcess() }),
             ("LocalBackupManagerTests.testSnapshotCopiesDataWritesManifestAndSkipsLockFile", { try LocalBackupManagerTests().testSnapshotCopiesDataWritesManifestAndSkipsLockFile() }),
             ("LocalBackupManagerTests.testBackupDestinationCannotBeTheSourceOrInsideIt", { try LocalBackupManagerTests().testBackupDestinationCannotBeTheSourceOrInsideIt() }),
+            ("LocalBackupManagerTests.testManagedSnapshotsReuseUnchangedFilesAndValidateChecksums", { try LocalBackupManagerTests().testManagedSnapshotsReuseUnchangedFilesAndValidateChecksums() }),
+            ("LocalBackupManagerTests.testRetentionKeepsNewestSnapshotsWithinCountLimit", { try LocalBackupManagerTests().testRetentionKeepsNewestSnapshotsWithinCountLimit() }),
+            ("LocalBackupManagerTests.testRestoreReplacesWholeDataRootWithoutRestoringBackupMetadata", { try LocalBackupManagerTests().testRestoreReplacesWholeDataRootWithoutRestoringBackupMetadata() }),
+            ("LocalBackupManagerTests.testCapacityGuardPreservesConfiguredFreeSpace", { try LocalBackupManagerTests().testCapacityGuardPreservesConfiguredFreeSpace() }),
         ]
 
         for (name, test) in tests {
@@ -640,6 +1944,28 @@ private func article(
     )
 }
 
+private func graphArticle(
+    slug: String,
+    title: String,
+    status: NativeArticleStatus,
+    aliases: [String] = [],
+    updatedAt: String
+) -> NativeArticleSummary {
+    NativeArticleSummary(
+        aliases: aliases,
+        banner: nil,
+        category: "Notes",
+        excerpt: "",
+        publishedAt: status == .published ? updatedAt : nil,
+        slug: slug,
+        status: status,
+        tags: ["Knowledge"],
+        title: title,
+        updatedAt: updatedAt,
+        wordCount: 10
+    )
+}
+
 private func revisionSnapshot(body: String) -> NativeArticleRevisionSnapshot {
     NativeArticleRevisionSnapshot(
         banner: nil,
@@ -651,5 +1977,32 @@ private func revisionSnapshot(body: String) -> NativeArticleRevisionSnapshot {
         tags: [],
         title: "恢复草稿",
         articleUpdatedAt: nil
+    )
+}
+
+private func smartCollectionArticle(
+    slug: String,
+    title: String,
+    status: NativeArticleStatus,
+    category: String,
+    updatedAt: String,
+    pageViews: Int,
+    properties: [String: NativeArticlePropertyValue]
+) -> NativeArticle {
+    NativeArticle(
+        banner: nil,
+        body: "正文",
+        category: category,
+        excerpt: "",
+        media: [],
+        slug: slug,
+        status: status,
+        tags: ["Knowledge"],
+        title: title,
+        updatedAt: updatedAt,
+        publishedAt: status == .published ? updatedAt : nil,
+        wordCount: 2,
+        pageViews: pageViews,
+        properties: properties
     )
 }

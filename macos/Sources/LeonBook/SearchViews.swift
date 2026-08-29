@@ -25,7 +25,7 @@ private struct NativeSearchResultsView: View {
 
     private var title: String { articlesOnly ? "快速打开" : "全文搜索" }
     private var prompt: String {
-        articlesOnly ? "输入文章标题或正文…" : "搜索文章、摘要、正文和微博…"
+        articlesOnly ? "输入文章标题、正文或属性…" : "搜索文章、属性、摘要、正文和微博…"
     }
 
     var body: some View {
@@ -57,7 +57,7 @@ private struct NativeSearchResultsView: View {
                 .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
 
                 if !articlesOnly {
-                    Text("过滤：tag:标签  status:draft  type:article  date:2026-08-23  after:日期  before:日期")
+                    Text("过滤：tag:标签  status:draft  [属性名:值]  type:article  date:2026-08-23")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -74,7 +74,7 @@ private struct NativeSearchResultsView: View {
                         .foregroundStyle(.secondary)
                     Text(query.isEmpty ? "没有可打开的内容" : "没有搜索结果")
                         .font(.headline)
-                    Text(query.isEmpty ? "创建文章或微博后会显示在这里。" : "尝试减少关键词，或使用 tag:、status: 和日期过滤。")
+                    Text(query.isEmpty ? "创建文章或微博后会显示在这里。" : "尝试减少关键词，或使用 tag:、status:、[属性名:值] 和日期过滤。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -98,6 +98,18 @@ private struct NativeSearchResultsView: View {
                 Text(title)
                     .fontWeight(.semibold)
                 Spacer()
+                if !articlesOnly, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let target = NativeBookmarkTarget.search(query: query.trimmingCharacters(in: .whitespacesAndNewlines))
+                    Button {
+                        model.bookmarkSearch(query)
+                    } label: {
+                        Label(
+                            model.isBookmarked(target) ? "取消收藏搜索" : "收藏搜索",
+                            systemImage: model.isBookmarked(target) ? "bookmark.fill" : "bookmark"
+                        )
+                    }
+                    .buttonStyle(.borderless)
+                }
                 Text("↩ 打开  ·  Esc 关闭")
                     .foregroundStyle(.secondary)
             }
@@ -227,22 +239,23 @@ private struct NativeSearchResultRow: View {
 
 private struct NativeCommandPaletteView: View {
     @ObservedObject var model: NativeAppModel
+    @ObservedObject private var preferences: NativeCommandPreferences
     @State private var query = ""
     @State private var selection: NativeCommandID?
     @FocusState private var isSearchFocused: Bool
 
-    private var commands: [NativeCommandDescriptor] {
-        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return NativeCommandDescriptor.all }
-        return NativeCommandDescriptor.all.filter {
-            [$0.title, $0.detail, $0.keywords].contains { value in
-                value.range(
-                    of: normalized,
-                    options: [.caseInsensitive, .diacriticInsensitive],
-                    locale: .current
-                ) != nil
-            }
-        }
+    init(model: NativeAppModel) {
+        self.model = model
+        _preferences = ObservedObject(wrappedValue: model.commandPreferences)
+    }
+
+    private var commands: [NativeCommandMatch] {
+        model.commandRegistry.matches(
+            query,
+            on: .palette,
+            context: model.commandContext,
+            ranking: preferences.ranking
+        )
     }
 
     var body: some View {
@@ -264,18 +277,37 @@ private struct NativeCommandPaletteView: View {
             List(selection: $selection) {
                 ForEach(commands) { command in
                     HStack(spacing: 12) {
-                        Image(systemName: command.icon)
+                        Image(systemName: command.definition.systemImage)
                             .frame(width: 22)
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(command.title).fontWeight(.medium)
-                            Text(command.detail)
+                            HStack(spacing: 6) {
+                                Text(command.definition.title).fontWeight(.medium)
+                                if command.isPinned {
+                                    Image(systemName: "pin.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tint)
+                                } else if command.isRecent && query.isEmpty {
+                                    Text("最近")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                            Text(command.definition.detail)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if let shortcut = command.shortcut {
-                            Text(shortcut)
+                        Button {
+                            preferences.togglePinned(command.id)
+                        } label: {
+                            Image(systemName: command.isPinned ? "pin.slash" : "pin")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(command.isPinned ? "取消固定" : "固定到命令面板顶部")
+                        if let shortcut = preferences.shortcut(for: command.definition) {
+                            Text(shortcut.displayLabel)
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.tertiary)
                         }
@@ -284,7 +316,7 @@ private struct NativeCommandPaletteView: View {
                     .tag(command.id)
                     .contentShape(Rectangle())
                     .simultaneousGesture(TapGesture(count: 2).onEnded {
-                        model.performCommand(command.id)
+                        model.executeCommand(command.id)
                     })
                 }
             }
@@ -320,9 +352,9 @@ private struct NativeCommandPaletteView: View {
 
     private func runSelection() {
         if let selection, commands.contains(where: { $0.id == selection }) {
-            model.performCommand(selection)
+            model.executeCommand(selection)
         } else if let first = commands.first {
-            model.performCommand(first.id)
+            model.executeCommand(first.id)
         }
     }
 
@@ -332,26 +364,4 @@ private struct NativeCommandPaletteView: View {
         let current = selection.flatMap { ids.firstIndex(of: $0) } ?? (offset > 0 ? -1 : ids.count)
         selection = ids[min(max(current + offset, 0), ids.count - 1)]
     }
-}
-
-private struct NativeCommandDescriptor: Identifiable {
-    let id: NativeCommandID
-    let title: String
-    let detail: String
-    let keywords: String
-    let icon: String
-    let shortcut: String?
-
-    static let all: [NativeCommandDescriptor] = [
-        .init(id: .globalSearch, title: "全文搜索", detail: "搜索文章正文、摘要和微博", keywords: "查找 find search", icon: "magnifyingglass", shortcut: "⌘⇧F"),
-        .init(id: .quickOpen, title: "快速打开文章", detail: "按标题或正文切换文章", keywords: "open switch article", icon: "doc.text.magnifyingglass", shortcut: "⌘O"),
-        .init(id: .newArticle, title: "新建文章", detail: "打开空白写作页", keywords: "create write", icon: "square.and.pencil", shortcut: "⌘N"),
-        .init(id: .dashboard, title: "前往概览", detail: "打开活动概览", keywords: "home dashboard", icon: "rectangle.grid.2x2", shortcut: nil),
-        .init(id: .articles, title: "前往全部文章", detail: "浏览文章列表", keywords: "notes article", icon: "doc.text", shortcut: nil),
-        .init(id: .graph, title: "前往关系图", detail: "查看文章链接关系", keywords: "graph link", icon: "point.3.connected.trianglepath.dotted", shortcut: nil),
-        .init(id: .moments, title: "前往微博", detail: "浏览和发布微博", keywords: "moment post", icon: "rectangle.3.group", shortcut: nil),
-        .init(id: .trash, title: "前往回收站", detail: "恢复或彻底删除内容", keywords: "delete restore", icon: "trash", shortcut: nil),
-        .init(id: .settings, title: "前往设置", detail: "管理资料库和备份", keywords: "preferences backup", icon: "gearshape", shortcut: "⌘,"),
-        .init(id: .reload, title: "刷新资料库", detail: "重新读取本地文章和微博", keywords: "reload refresh", icon: "arrow.clockwise", shortcut: "⌘R"),
-    ]
 }

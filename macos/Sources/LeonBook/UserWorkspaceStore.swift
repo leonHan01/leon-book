@@ -30,6 +30,12 @@ public actor UserWorkspaceStore {
         try db().execute("PRAGMA wal_checkpoint(TRUNCATE)")
     }
 
+    public func closeForRestore() {
+        database?.close()
+        database = nil
+        directoryLock = nil
+    }
+
     public func prepare() throws -> NativeWorkspaceState {
         do {
             try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)

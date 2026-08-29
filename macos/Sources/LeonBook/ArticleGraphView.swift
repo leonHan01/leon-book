@@ -2,29 +2,99 @@ import SwiftUI
 
 struct ArticleGraphView: View {
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var pageState: NativeArticleGraphPageState
 
-    private var graph: NativeArticleGraph { model.articleGraph }
+    private var projection: NativeArticleGraphProjection {
+        NativeArticleGraphProjector.project(
+            model.articleGraph,
+            query: NativeArticleGraphQuery(
+                searchText: pageState.searchText,
+                status: pageState.statusFilter,
+                includesOrphans: pageState.includesOrphans,
+                nodeLimit: pageState.nodeLimit
+            )
+        )
+    }
+
+    private var graph: NativeArticleGraph { projection.graph }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("文章关系图", systemImage: "point.3.connected.trianglepath.dotted")
-                        .font(.title2.weight(.semibold))
-                    Text("箭头从引用文章指向被引用文章，包含已发布文章和草稿。")
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("文章关系图", systemImage: "point.3.connected.trianglepath.dotted")
+                            .font(.title2.weight(.semibold))
+                        Text("箭头从引用文章指向被引用文章；筛选和节点裁剪在绘制前完成。")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text(graphSummary)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                    Button {
+                        model.bookmarkGraph()
+                    } label: {
+                        Label(
+                            model.isBookmarked(.graph) ? "取消收藏" : "收藏图谱",
+                            systemImage: model.isBookmarked(.graph) ? "bookmark.fill" : "bookmark"
+                        )
+                    }
                 }
-                Spacer()
-                Text("\(graph.nodes.count) 篇文章 · \(graph.edges.count) 条引用")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 12) {
+                    TextField("筛选标题、slug、标签或别名", text: $pageState.searchText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 210, idealWidth: 280, maxWidth: 360)
+
+                    Picker("状态", selection: $pageState.statusFilter) {
+                        ForEach(NativeArticleGraphStatusFilter.allCases) { status in
+                            Text(status.title).tag(status)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+
+                    Toggle("显示孤立节点", isOn: $pageState.includesOrphans)
+                        .toggleStyle(.checkbox)
+                        .fixedSize()
+
+                    Picker("节点上限", selection: $pageState.nodeLimit) {
+                        Text("50 节点").tag(50)
+                        Text("100 节点").tag(100)
+                        Text("200 节点").tag(200)
+                        Text("500 节点").tag(500)
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+
+                    Spacer(minLength: 8)
+
+                    Button(action: pageState.zoomOut) {
+                        Image(systemName: "minus.magnifyingglass")
+                    }
+                    .disabled(pageState.zoom <= 0.5)
+                    Slider(value: $pageState.zoom, in: 0.5...1.8, step: 0.1)
+                        .frame(width: 110)
+                    Text("\(Int((pageState.zoom * 100).rounded()))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 42, alignment: .trailing)
+                    Button(action: pageState.zoomIn) {
+                        Image(systemName: "plus.magnifyingglass")
+                    }
+                    .disabled(pageState.zoom >= 1.8)
+                    Button("重置", action: pageState.resetView)
+                        .buttonStyle(.borderless)
+                }
+                .controlSize(.small)
             }
             .padding(22)
 
             Divider()
 
-            if graph.nodes.isEmpty {
+            if model.articleGraph.nodes.isEmpty {
                 EmptyState(
                     title: "还没有文章可显示",
                     message: "创建文章并使用 [[文章标题]] 建立引用后，关系图会自动更新。",
@@ -32,18 +102,38 @@ struct ArticleGraphView: View {
                 ) {
                     model.newArticle()
                 }
+            } else if graph.nodes.isEmpty {
+                EmptyState(
+                    title: "没有匹配的图谱节点",
+                    message: "请放宽关键词或状态筛选，或重新显示孤立节点。",
+                    actionTitle: "重置筛选",
+                    action: pageState.resetView
+                )
             } else {
                 ScrollView([.horizontal, .vertical]) {
+                    let canvasSize = ArticleGraphLayout.canvasSize(for: graph.nodes.count)
                     ArticleGraphCanvas(graph: graph, onOpenArticle: model.openArticleLink)
                         .frame(
-                            width: ArticleGraphLayout.canvasSize(for: graph.nodes.count).width,
-                            height: ArticleGraphLayout.canvasSize(for: graph.nodes.count).height
+                            width: canvasSize.width,
+                            height: canvasSize.height
+                        )
+                        .scaleEffect(pageState.zoom, anchor: .topLeading)
+                        .frame(
+                            width: canvasSize.width * pageState.zoom,
+                            height: canvasSize.height * pageState.zoom,
+                            alignment: .topLeading
                         )
                         .padding(36)
                 }
                 .background(Color(nsColor: .windowBackgroundColor))
             }
         }
+    }
+
+    private var graphSummary: String {
+        var value = "\(graph.nodes.count) / \(projection.matchingNodeCount) 篇 · \(graph.edges.count) 条引用"
+        if projection.isClipped { value += " · 已裁剪 \(projection.clippedNodeCount) 篇" }
+        return value
     }
 }
 

@@ -875,7 +875,12 @@ func testUnifiedFTSSearchIndexesAndTracksArticlesAndMoments() async throws {
             status: .draft,
             tags: ["Swift", "本地优先"],
             title: "搜索架构",
-            expectedUpdatedAt: nil
+            expectedUpdatedAt: nil,
+            properties: [
+                "review status": .text("in progress"),
+                "rating": .number(4.5),
+                "topics": .tags(["SQLite", "知识管理"]),
+            ]
         ))
         let moment = try await store.saveMoment(
             text: "午后跑步记录 #生活",
@@ -896,8 +901,45 @@ func testUnifiedFTSSearchIndexesAndTracksArticlesAndMoments() async throws {
 
         let filtered = try await store.search("tag:Swift status:draft type:article")
         expect(filtered.map(\.documentID) == [article.slug], "tag, status, and type filters should compose")
+        let propertyTerm = try await store.search("知识管理")
+        expect(propertyTerm.map(\.documentID) == [article.slug], "FTS should index typed property values")
+        let propertyFilter = try await store.search("[review status:in progress] [rating:4.5]")
+        expect(propertyFilter.map(\.documentID) == [article.slug], "property filters should compose by key and value")
+        let listPropertyFilter = try await store.search("[topics:SQLite]")
+        expect(listPropertyFilter.map(\.documentID) == [article.slug], "property filters should match an exact list item")
+        let wrongProperty = try await store.search("[rating:5]")
+        expect(wrongProperty.isEmpty, "property filters should not match another value")
         let conflictingScope = try await store.search("type:moment", restrictingTo: [.article])
         expect(conflictingScope.isEmpty, "quick-open article scope should honor conflicting type filters")
+
+        let renamedCount = try await store.renameArticleProperty(from: "review status", to: "workflow")
+        expect(renamedCount == 1, "workspace property rename should report affected articles")
+        let oldPropertyResults = try await store.search("[review status:in progress]")
+        let renamedPropertyResults = try await store.search("[workflow:in progress]")
+        expect(oldPropertyResults.isEmpty, "old property name should leave the search index")
+        expect(renamedPropertyResults.map(\.documentID) == [article.slug], "renamed property should be searchable immediately")
+        let renamedArticle = try await store.getArticle(slug: article.slug)
+
+        let conflictArticle = try await store.saveArticle(NativeSaveArticle(
+            banner: nil,
+            body: "属性重命名冲突保护",
+            category: "Engineering",
+            excerpt: "",
+            media: [],
+            slug: "property-conflict",
+            status: .draft,
+            tags: [],
+            title: "属性冲突",
+            expectedUpdatedAt: nil,
+            properties: ["source": .text("A"), "destination": .text("B")]
+        ))
+        do {
+            _ = try await store.renameArticleProperty(from: "source", to: "destination")
+            fail("workspace property rename should reject a conflicting destination")
+        } catch {}
+        let preservedConflictArticle = try await store.getArticle(slug: conflictArticle.slug)
+        expect(preservedConflictArticle.properties["source"]?.value == "A", "failed property rename should preserve the source")
+        expect(preservedConflictArticle.properties["destination"]?.value == "B", "failed property rename should preserve the destination")
 
         let updated = try await store.saveArticle(NativeSaveArticle(
             banner: article.banner,
@@ -909,7 +951,8 @@ func testUnifiedFTSSearchIndexesAndTracksArticlesAndMoments() async throws {
             status: article.status,
             tags: article.tags,
             title: article.title,
-            expectedUpdatedAt: article.updatedAt
+            expectedUpdatedAt: renamedArticle.updatedAt,
+            properties: renamedArticle.properties
         ))
         let staleResults = try await store.search("离线知识库")
         let updatedResults = try await store.search("同步机制")
@@ -919,6 +962,102 @@ func testUnifiedFTSSearchIndexesAndTracksArticlesAndMoments() async throws {
         try await store.deleteMoment(id: moment.id)
         let deletedMomentResults = try await store.search("跑步记录")
         expect(deletedMomentResults.isEmpty, "soft-deleted moments should leave the FTS index")
+    }
+}
+
+func testMarkdownIsPrimaryArticleSource() async throws {
+    try await withWorkspace { root in
+        let store = LocalBlogStore(rootURL: root)
+        let saved = try await store.saveArticle(NativeSaveArticle(
+            banner: nil,
+            body: "数据库最初正文",
+            category: "Notes",
+            excerpt: "初始摘要",
+            media: [],
+            slug: "markdown-source",
+            status: .draft,
+            tags: ["local-first"],
+            title: "Markdown 真源",
+            expectedUpdatedAt: nil,
+            properties: ["reviewed": .checkbox(false)]
+        ))
+        let sourceURL = root.appendingPathComponent("articles/markdown-source.md")
+        expect(FileManager.default.fileExists(atPath: sourceURL.path), "saving should create the canonical Markdown source")
+        expect(saved.sourceRelativePath == "markdown-source.md", "saved article should expose its source-relative path")
+        expect(saved.sourceContentHash?.isEmpty == false, "saved article should persist a source content hash")
+        expect(saved.sourceImportedAt != nil, "saved article should persist the last source import timestamp")
+        _ = try await store.createArticleComment(
+            articleSlug: saved.slug,
+            authorName: "Tester",
+            text: "SQLite 派生数据应保留"
+        )
+        let referringArticle = try await store.saveArticle(NativeSaveArticle(
+            banner: nil,
+            body: "参见 [[markdown-source.md#背景|真源说明]]。",
+            category: "Notes",
+            excerpt: "",
+            media: [],
+            slug: "markdown-reference",
+            status: .draft,
+            tags: [],
+            title: "路径双链",
+            expectedUpdatedAt: nil
+        ))
+
+        var markdown = try String(contentsOf: sourceURL, encoding: .utf8)
+        markdown = markdown.replacingOccurrences(of: "数据库最初正文", with: "来自 VS Code 的外部正文")
+        try markdown.write(to: sourceURL, atomically: true, encoding: .utf8)
+        let updatedResult = try await store.refreshMarkdownSources()
+        let externallyUpdated = try await store.getArticle(slug: saved.slug)
+        expect(updatedResult.updatedCount == 1, "an external Markdown edit should update one derived article row")
+        expect(externallyUpdated.body == "来自 VS Code 的外部正文", "SQLite content should follow the Markdown source")
+        expect(externallyUpdated.updatedAt != saved.updatedAt, "an external edit should advance optimistic concurrency")
+        let preservedComments = try await store.listArticleComments(articleSlug: saved.slug)
+        expect(preservedComments.count == 1, "source refresh should preserve comments")
+
+        var rejectedStaleSave = false
+        do {
+            _ = try await store.saveArticle(NativeSaveArticle(
+                banner: nil,
+                body: "过期编辑器正文",
+                category: "Notes",
+                excerpt: "",
+                media: [],
+                slug: saved.slug,
+                status: .draft,
+                tags: [],
+                title: saved.title,
+                expectedUpdatedAt: saved.updatedAt
+            ))
+        } catch {
+            rejectedStaleSave = true
+        }
+        expect(rejectedStaleSave, "a stale editor save should conflict after an external Markdown edit")
+
+        let folderURL = root.appendingPathComponent("articles/Projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        let movedURL = folderURL.appendingPathComponent("renamed.md")
+        try FileManager.default.moveItem(at: sourceURL, to: movedURL)
+        let movedResult = try await store.refreshMarkdownSources()
+        let moved = try await store.getArticle(slug: saved.slug)
+        expect(movedResult.movedCount == 1, "a filesystem rename should be detected by the stored content hash")
+        expect(moved.sourceRelativePath == "Projects/renamed.md", "a filesystem rename should preserve slug and update the source path")
+        let repairedReference = try await store.getArticle(slug: referringArticle.slug)
+        expect(
+            repairedReference.body.contains("[[Projects/renamed.md#背景|真源说明]]"),
+            "moving a source file should repair path-based wiki links"
+        )
+
+        try FileManager.default.removeItem(at: movedURL)
+        let deletedResult = try await store.refreshMarkdownSources()
+        expect(deletedResult.deletedCount == 1, "deleting the Markdown source should soft-delete the derived article")
+        let liveArticles = try await store.listArticles()
+        expect(!liveArticles.contains(where: { $0.slug == saved.slug }), "a missing source should disappear from live articles")
+        let trashIndex = try String(
+            contentsOf: root.appendingPathComponent("trash/index.json"),
+            encoding: .utf8
+        )
+        expect(trashIndex.contains(saved.slug), "an externally deleted source should remain recoverable in trash")
     }
 }
 
@@ -952,6 +1091,7 @@ let checks: [(String, () async throws -> Void)] = [
     ("moment favorites can be toggled and persist", testMomentFavoriteCanBeToggledAndPersists),
     ("article and moment page views persist across edits", testArticleAndMomentPageViewsPersistAcrossEdits),
     ("unified FTS search indexes and tracks content", testUnifiedFTSSearchIndexesAndTracksArticlesAndMoments),
+    ("Markdown is the primary article source", testMarkdownIsPrimaryArticleSource),
     ("purging an article keeps media referenced by another article", testPurgingArticleKeepsMediaReferencedByAnotherArticle),
     ("legacy article slug cannot escape workspace", testLegacyArticleSlugCannotEscapeWorkspace),
     ("invalid legacy user ID is not imported", testInvalidLegacyUserIDIsNotImported),

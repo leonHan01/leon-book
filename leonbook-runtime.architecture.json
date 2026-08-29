@@ -1,0 +1,350 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LeonBook 运行时架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/leonHan01/leon-book.git",
+      "revision": "f87e4bf94fade4b95e2e60b185824ea773a451c6"
+    },
+    "viewBox": [1390, 840]
+  },
+  "components": [
+    {
+      "id": "swiftui_ui",
+      "type": "frontend",
+      "label": "SwiftUI 编辑与阅读界面",
+    "sublabel": "SwiftUI / WebKit / 搜索",
+      "tag": "入口",
+      "sources": [
+        { "path": "macos/Sources/LeonBook/ContentView.swift" },
+        { "path": "macos/Sources/LeonBook/ArticleViews.swift" },
+        { "path": "macos/Sources/LeonBook/SearchViews.swift" }
+      ],
+      "pos": [270, 160],
+      "size": [190, 100]
+    },
+    {
+      "id": "app_model",
+      "type": "backend",
+      "label": "NativeAppModel 应用编排",
+    "sublabel": "状态与生命周期",
+      "tag": "编排",
+      "sources": [
+        { "path": "macos/Sources/LeonBook/NativeAppModel.swift" },
+        { "path": "macos/Sources/LeonBook/NativeModels.swift" },
+        { "path": "macos/Sources/LeonBook/UserWorkspaceStore.swift" }
+      ],
+      "pos": [500, 160],
+      "size": [190, 100]
+    },
+    {
+      "id": "local_blog_store",
+      "type": "backend",
+      "label": "LocalBlogStore 持久化服务",
+    "sublabel": "文章与集合读写",
+      "tag": "领域服务",
+      "sources": [
+        { "path": "macos/Sources/LeonBook/LocalBlogStore.swift" },
+        { "path": "macos/Sources/LeonBook/SQLiteDatabase.swift" }
+      ],
+      "pos": [730, 160],
+      "size": [190, 100]
+    },
+    {
+      "id": "sqlite_db",
+      "type": "database",
+      "label": "SQLite 工作区",
+    "sublabel": "事务与索引",
+      "tag": "持久化",
+      "sources": [
+        { "path": "macos/Sources/LeonBook/SQLiteDatabase.swift" },
+        { "path": "macos/Sources/LeonBook/LocalBlogStore.swift" }
+      ],
+      "pos": [960, 160],
+      "size": [190, 100]
+    },
+    {
+      "id": "local_markdown_files",
+      "type": "external",
+      "label": "应用工作区文件系统",
+    "sublabel": "Markdown / JSON / 媒体",
+      "tag": "本地文件",
+      "sources": [
+        { "path": "macos/Sources/LeonBook/LocalBlogStore.swift" },
+        { "path": "macos/README.md" }
+      ],
+      "pos": [1170, 160],
+      "size": [190, 100]
+    },
+    {
+      "id": "obsidian_vault",
+      "type": "external",
+      "label": "用户选择的 Obsidian Vault",
+    "sublabel": "只读 Markdown / 附件",
+      "tag": "外部输入",
+      "sources": [
+        { "path": "macos/README.md" },
+        { "path": "macos/Sources/LeonBook/NativeAppModel.swift" },
+        { "path": "macos/Sources/LeonBook/UserWorkspaceStore.swift" }
+      ],
+      "pos": [40, 420],
+      "size": [190, 100]
+    },
+    {
+      "id": "command_automation",
+      "type": "backend",
+      "label": "命令与自动化路由",
+    "sublabel": "菜单 / 快捷键 / Intent",
+      "tag": "侧路",
+      "sources": [
+        { "path": "macos/Sources/LeonBookApp/LeonBookApp.swift" },
+        { "path": "macos/Sources/LeonBook/NativeAppModel.swift" },
+        { "path": "macos/README.md" }
+      ],
+      "pos": [270, 420],
+      "size": [190, 100]
+    },
+    {
+      "id": "knowledge_pipeline",
+      "type": "backend",
+      "label": "Markdown 解析与知识投影",
+    "sublabel": "导入 / 渲染 / 链接",
+      "tag": "侧路",
+      "sources": [
+        { "path": "macos/Sources/LeonBook/LocalBlogStore.swift" },
+        { "path": "macos/Sources/LeonBook/MarkdownRenderer.swift" },
+        { "path": "macos/Sources/LeonBook/ArticleViews.swift" }
+      ],
+      "pos": [730, 420],
+      "size": [190, 100]
+    },
+    {
+      "id": "smart_collection_engine",
+      "type": "backend",
+      "label": "Smart Collection 查询引擎",
+    "sublabel": "规则编译与求值",
+      "tag": "侧路",
+      "sources": [
+        { "path": "macos/Sources/LeonBook/LocalBlogStore.swift" },
+        { "path": "macos/Sources/LeonBook/NativeModels.swift" },
+        { "path": "macos/README.md" }
+      ],
+      "pos": [500, 420],
+      "size": [190, 100]
+    },
+    {
+      "id": "backup_manager",
+      "type": "backend",
+      "label": "备份与恢复编排",
+    "sublabel": "快照与恢复",
+      "tag": "侧路",
+      "sources": [
+        { "path": "macos/Sources/LeonBook/LocalBackupManager.swift" },
+        { "path": "macos/Sources/LeonBook/NativeAppModel.swift" },
+        { "path": "macos/README.md" }
+      ],
+      "pos": [960, 420],
+      "size": [190, 100]
+    },
+    {
+      "id": "macos_platform",
+      "type": "external",
+      "label": "macOS 系统框架",
+    "sublabel": "事件 / Intent / 文件",
+      "tag": "平台依赖",
+      "sources": [
+        { "path": "macos/Sources/LeonBookApp/LeonBookApp.swift" },
+        { "path": "macos/Sources/LeonBook/NativeAppModel.swift" },
+        { "path": "macos/Package.swift" }
+      ],
+      "pos": [40, 160],
+      "size": [190, 100]
+    },
+    {
+      "id": "remote_web_content",
+      "type": "external",
+      "label": "远程 HTTP(S) 网页",
+    "sublabel": "Web embed 内容",
+      "tag": "网络依赖",
+      "sources": [
+        { "path": "macos/Sources/LeonBook/ArticleViews.swift" },
+        { "path": "macos/Sources/LeonBook/MarkdownRenderer.swift" },
+        { "path": "macos/README.md" }
+      ],
+      "pos": [1170, 420],
+      "size": [190, 100]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "LeonBook 本地应用信任边界",
+      "wraps": [
+        "swiftui_ui",
+        "app_model",
+        "local_blog_store",
+        "sqlite_db",
+        "command_automation",
+        "knowledge_pipeline",
+        "smart_collection_engine",
+        "backup_manager"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "security-group",
+      "label": "用户选择的数据源边界",
+      "wraps": ["obsidian_vault", "macos_platform"],
+      "pad": 24
+    },
+    {
+      "kind": "security-group",
+      "label": "本地文件与网络内容边界",
+      "wraps": ["local_markdown_files", "remote_web_content"],
+      "pad": 24
+    }
+  ],
+  "connections": [
+    {
+      "id": "ui_to_model",
+      "from": "swiftui_ui",
+      "to": "app_model",
+      "label": "用户操作 / UI state",
+      "route": "straight",
+      "variant": "emphasis",
+      "width": 2.5,
+      "labelAt": [420, 275]
+    },
+    {
+      "id": "model_to_store",
+      "from": "app_model",
+      "to": "local_blog_store",
+      "label": "CRUD / search / autosave",
+      "route": "straight",
+      "variant": "emphasis",
+      "width": 2.5,
+      "labelAt": [750, 275]
+    },
+    {
+      "id": "store_to_sqlite",
+      "from": "local_blog_store",
+      "to": "sqlite_db",
+      "label": "参数化 SQL / transaction",
+      "route": "straight",
+      "variant": "emphasis",
+      "width": 2.5,
+      "labelAt": [1060, 140]
+    },
+    {
+      "id": "obsidian_to_pipeline",
+      "from": "obsidian_vault",
+      "to": "knowledge_pipeline",
+      "label": "只读扫描 / attachments",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [[135, 600], [710, 600], [710, 470]],
+      "labelAt": [420, 600]
+    },
+    {
+      "id": "pipeline_to_store",
+      "from": "knowledge_pipeline",
+      "to": "local_blog_store",
+      "label": "normalized article / graph",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [830, 340]
+    },
+    {
+      "id": "ui_to_commands",
+      "from": "swiftui_ui",
+      "to": "command_automation",
+      "label": "menu / shortcut dispatch",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [370, 340]
+    },
+    {
+      "id": "commands_to_model",
+      "from": "command_automation",
+      "to": "app_model",
+      "label": "NativeCommandInvocation / inbox",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [[365, 560], [480, 560], [480, 210]],
+      "labelAt": [425, 560]
+    },
+    {
+      "id": "platform_to_commands",
+      "from": "macos_platform",
+      "to": "command_automation",
+      "label": "URL scheme / App Intent",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[260, 210], [260, 470]],
+      "labelAt": [250, 350]
+    },
+    {
+      "id": "model_to_collections",
+      "from": "app_model",
+      "to": "smart_collection_engine",
+      "label": "load / execute collection",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [600, 340]
+    },
+    {
+      "id": "backup_to_sqlite",
+      "from": "backup_manager",
+      "to": "sqlite_db",
+      "label": "snapshot / restore",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [1060, 340]
+    },
+    {
+      "id": "store_to_files",
+      "from": "local_blog_store",
+      "to": "local_markdown_files",
+      "label": "Markdown / JSON / media write",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [[936, 210], [936, 80], [1265, 80]],
+      "labelAt": [1100, 80]
+    },
+    {
+      "id": "ui_to_web",
+      "from": "swiftui_ui",
+      "to": "remote_web_content",
+      "label": "WebKit HTTP(S) embed",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right",
+      "via": [[476, 210], [476, 40], [1380, 40], [1380, 470]],
+      "labelAt": [900, 40]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "主调用路径",
+      "items": ["SwiftUI → NativeAppModel → LocalBlogStore → SQLite", "编辑自动保存与搜索都在本地事务边界内完成"]
+    },
+    {
+      "dot": "violet",
+      "title": "内容进入路径",
+      "items": ["Markdown / Obsidian 文件 → 解析与知识投影 → LocalBlogStore", "文件事件与 Intent 从外部系统跨边界进入"]
+    },
+    {
+      "dot": "amber",
+      "title": "信任边界",
+      "items": ["应用进程拥有规范化文章与查询状态", "工作区文件、文件事件和系统自动化视为外部输入"]
+    }
+  ]
+}

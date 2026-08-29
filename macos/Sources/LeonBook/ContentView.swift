@@ -2,38 +2,52 @@ import SwiftUI
 
 public struct ContentView: View {
     @ObservedObject var model: NativeAppModel
+    @StateObject private var workspaceLayout: NativeWorkspaceLayoutState
+    @StateObject private var readingPreferences: NativeReadingPreferences
+    @StateObject private var pageStateCache: NativeNavigationPageStateCache
     @State private var isPresentingNewUser = false
 
     public init(model: NativeAppModel) {
         self.model = model
+        _workspaceLayout = StateObject(wrappedValue: NativeWorkspaceLayoutState())
+        _readingPreferences = StateObject(wrappedValue: NativeReadingPreferences())
+        _pageStateCache = StateObject(wrappedValue: NativeNavigationPageStateCache())
     }
 
     public var body: some View {
         NavigationSplitView {
             NativeSidebar(model: model, navigation: model.navigation, isPresentingNewUser: $isPresentingNewUser)
-                .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 320)
+                .navigationSplitViewColumnWidth(
+                    min: 210,
+                    ideal: CGFloat(workspaceLayout.navigationSidebarWidth),
+                    max: 380
+                )
         } detail: {
-            NativeNavigationDetail(model: model, navigation: model.navigation)
+            NativeNavigationDetail(
+                model: model,
+                navigation: model.navigation,
+                workspaceLayout: workspaceLayout,
+                readingPreferences: readingPreferences,
+                pageStateCache: pageStateCache
+            )
         }
         .frame(minWidth: 1_080, minHeight: 680)
         .toolbar {
             ToolbarItemGroup {
-                Button { model.presentGlobalSearch() } label: {
+                Button { model.executeCommand(.globalSearch) } label: {
                     Label("搜索", systemImage: "magnifyingglass")
                 }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
 
-                Button { Task { try? await model.reload() } } label: {
+                Button { model.executeCommand(.reload) } label: {
                     Label("刷新", systemImage: "arrow.clockwise")
                 }
                 .disabled(model.isLoading)
 
-                Button { model.newArticle() } label: {
+                Button { model.executeCommand(.newArticle) } label: {
                     Label("新文章", systemImage: "square.and.pencil")
                 }
-                .keyboardShortcut("n", modifiers: .command)
 
-                Button { model.section = .moments } label: {
+                Button { model.executeCommand(.moments) } label: {
                     Label("发微博", systemImage: "square.grid.2x2")
                 }
             }
@@ -61,6 +75,78 @@ public struct ContentView: View {
         .sheet(item: $model.searchPresentation) { presentation in
             NativeSearchSheet(model: model, presentation: presentation)
         }
+        .sheet(item: $model.articleSourceConflict) { conflict in
+            ArticleSourceConflictSheet(model: model, conflict: conflict)
+        }
+        .focusedSceneObject(model)
+        .task {
+            workspaceLayout.prepare(for: model.currentUser.id)
+            readingPreferences.prepare(for: model.currentUser.id)
+        }
+        .onChange(of: model.currentUser.id) { userID in
+            workspaceLayout.prepare(for: userID)
+            readingPreferences.prepare(for: userID)
+        }
+        .onOpenURL(perform: model.handleAutomationURL)
+    }
+}
+
+private struct ArticleSourceConflictSheet: View {
+    @ObservedObject var model: NativeAppModel
+    let conflict: NativeArticleSourceConflict
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Markdown 修改冲突").font(.title2.weight(.semibold))
+                Text("外部文件 \(conflict.external.sourceRelativePath) 在编辑期间发生变化。比较后再决定，不会自动覆盖任何版本。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+            Divider()
+            HStack(spacing: 0) {
+                conflictVersion(
+                    title: "编辑器中的版本",
+                    subtitle: conflict.local.title,
+                    body: conflict.local.body
+                )
+                Divider()
+                conflictVersion(
+                    title: "外部 Markdown 版本",
+                    subtitle: conflict.external.title,
+                    body: conflict.external.body
+                )
+            }
+            Divider()
+            HStack {
+                Button("保留两份") { model.resolveArticleSourceConflictAsCopy() }
+                Spacer()
+                Button("使用外部版本") { model.resolveArticleSourceConflictUsingExternal() }
+                Button("用编辑器版本覆盖") { model.resolveArticleSourceConflictByOverwriting() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(16)
+        }
+        .frame(minWidth: 860, minHeight: 580)
+    }
+
+    private func conflictVersion(title: String, subtitle: String, body: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.headline)
+            Text(subtitle).font(.callout.weight(.medium)).lineLimit(2)
+            ScrollView {
+                Text(body)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(12)
+            }
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -68,6 +154,7 @@ private struct NativeSidebar: View {
     @ObservedObject var model: NativeAppModel
     @ObservedObject var navigation: NativeNavigationState
     @Binding var isPresentingNewUser: Bool
+    @State private var smartCollectionEditorRequest: SmartCollectionEditorRequest?
 
     var body: some View {
         List {
@@ -97,11 +184,87 @@ private struct NativeSidebar: View {
 
             Section("leon-book") {
                 sidebarButton(.dashboard, title: "概览", icon: "rectangle.grid.2x2")
-                sidebarButton(.articles, title: "全部文章", icon: "doc.text")
+                articleLibraryButton
                 sidebarButton(.graph, title: "关系图", icon: "point.3.connected.trianglepath.dotted")
                 sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
                 sidebarButton(.editor, title: "写作", icon: "square.and.pencil")
                 sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
+            }
+
+            if !model.availableArticleFolderFilters.isEmpty {
+                Section("文件夹") {
+                    ForEach(model.availableArticleFolderFilters) { folder in
+                        Button {
+                            model.showArticleFolder(folder.path)
+                        } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: "folder")
+                                Text(folder.name).lineLimit(1)
+                                Spacer()
+                                Text("\(folder.count)").foregroundStyle(.secondary)
+                            }
+                            .padding(.leading, CGFloat(folder.depth) * 14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(SidebarNavigationButtonStyle(
+                            isSelected: navigation.section == .articles
+                                && model.selectedArticleFolderPath == folder.path
+                        ))
+                    }
+                }
+            }
+
+            Section("智能集合") {
+                ForEach(model.smartCollections) { collection in
+                    Button {
+                        model.showSmartCollection(collection)
+                    } label: {
+                        Label(collection.name, systemImage: "rectangle.stack.badge.play")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(SidebarNavigationButtonStyle(
+                        isSelected: navigation.section == .articles
+                            && model.selectedSmartCollectionID == collection.id
+                    ))
+                    .contextMenu {
+                        Button("编辑") {
+                            smartCollectionEditorRequest = SmartCollectionEditorRequest(collection: collection)
+                        }
+                        Button("删除", role: .destructive) {
+                            Task { await model.deleteSmartCollection(collection) }
+                        }
+                    }
+                }
+                Button {
+                    smartCollectionEditorRequest = SmartCollectionEditorRequest(collection: nil)
+                } label: {
+                    Label("新建智能集合…", systemImage: "plus")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if !model.bookmarks.isEmpty {
+                Section("收藏") {
+                    ForEach(model.bookmarks) { bookmark in
+                        Button {
+                            model.openBookmark(bookmark)
+                        } label: {
+                            Label(bookmark.title, systemImage: bookmark.target.systemImage)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("移除收藏", role: .destructive) {
+                                model.deleteBookmark(bookmark)
+                            }
+                        }
+                    }
+                }
             }
 
             Section("状态") {
@@ -122,6 +285,30 @@ private struct NativeSidebar: View {
         }
         .listStyle(.sidebar)
         .frame(minWidth: 210)
+        .sheet(item: $smartCollectionEditorRequest) { request in
+            SmartCollectionEditorSheet(model: model, collection: request.collection)
+        }
+    }
+
+    private var articleLibraryButton: some View {
+        Button {
+            model.showAllArticles()
+        } label: {
+            Label("全部文章", systemImage: "doc.text")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(SidebarNavigationButtonStyle(
+            isSelected: navigation.section == .articles
+                && model.selectedSmartCollectionID == nil
+                && model.selectedArticleFolderPath == nil
+        ))
+        .foregroundStyle(
+            navigation.section == .articles
+                && model.selectedSmartCollectionID == nil
+                && model.selectedArticleFolderPath == nil
+                ? Color.accentColor : .primary
+        )
     }
 
     @ViewBuilder
@@ -177,153 +364,33 @@ private struct SidebarNavigationButtonBody: View {
 private struct NativeNavigationDetail: View {
     let model: NativeAppModel
     @ObservedObject var navigation: NativeNavigationState
-    @State private var retainedSections: Set<NativeSection> = [.dashboard]
+    @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
+    @ObservedObject var readingPreferences: NativeReadingPreferences
+    @ObservedObject var pageStateCache: NativeNavigationPageStateCache
 
     var body: some View {
-        ZStack {
-            retainedNavigationDetail(.dashboard)
-            retainedNavigationDetail(.articles)
-            retainedNavigationDetail(.graph)
-            retainedNavigationDetail(.moments)
-            retainedNavigationDetail(.editor)
-            retainedNavigationDetail(.trash)
-            retainedNavigationDetail(.settings)
-
-            if navigation.section == .reader {
-                ArticleReaderView(model: model)
-            } else if !retainedSections.contains(navigation.section) {
-                NavigationDestinationPlaceholder(section: navigation.section)
-            }
-        }
-        .task(id: navigation.section) {
-            guard navigation.section != .reader,
-                  !retainedSections.contains(navigation.section) else { return }
-            try? await Task.sleep(nanoseconds: 10_000_000)
-            guard !Task.isCancelled else { return }
-            retainNavigationSection(navigation.section)
-        }
-        .task {
-            await prewarmNavigationSections()
-        }
-    }
-
-    @ViewBuilder
-    private func retainedNavigationDetail(_ section: NativeSection) -> some View {
-        if retainedSections.contains(section) {
-            RetainedNavigationPage(isVisible: navigation.section == section) {
-                navigationDetail(for: section)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    @ViewBuilder
-    private func navigationDetail(for section: NativeSection) -> some View {
-        switch section {
+        switch navigation.section {
         case .dashboard: DashboardView(model: model)
         case .articles: ArticleListView(model: model)
-        case .graph: ArticleGraphView(model: model)
-        case .moments: MomentFeedView(model: model, navigation: model.navigation)
-        case .reader: ArticleReaderView(model: model)
-        case .editor: ArticleEditorView(model: model)
+        case .graph: ArticleGraphView(model: model, pageState: pageStateCache.graph)
+        case .moments:
+            MomentFeedView(
+                model: model,
+                navigation: model.navigation,
+                pageState: pageStateCache.moments
+            )
+        case .reader: ArticleReaderView(
+            model: model,
+            workspaceLayout: workspaceLayout,
+            readingPreferences: readingPreferences
+        )
+        case .editor: ArticleEditorView(
+            model: model,
+            workspaceLayout: workspaceLayout,
+            readingPreferences: readingPreferences
+        )
         case .trash: TrashView(model: model)
-        case .settings: NativeSettingsView(model: model)
-        }
-    }
-
-    private func retainNavigationSection(_ section: NativeSection) {
-        guard section != .reader else { return }
-        retainedSections.insert(section)
-    }
-
-    @MainActor
-    private func prewarmNavigationSections() async {
-        try? await Task.sleep(nanoseconds: 600_000_000)
-        let sections: [NativeSection] = [.moments, .editor, .articles, .graph, .trash, .settings]
-
-        for section in sections where !retainedSections.contains(section) {
-            guard !Task.isCancelled else { return }
-            retainNavigationSection(section)
-            await Task.yield()
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-    }
-}
-
-private struct RetainedNavigationPage<Content: View>: NSViewRepresentable {
-    let isVisible: Bool
-    let rootView: Content
-
-    init(isVisible: Bool, @ViewBuilder content: () -> Content) {
-        self.isVisible = isVisible
-        rootView = content()
-    }
-
-    func makeNSView(context: Context) -> RetainedNavigationHostingView<Content> {
-        let view = RetainedNavigationHostingView(rootView: rootView)
-        view.setVisible(isVisible)
-        return view
-    }
-
-    func updateNSView(_ nsView: RetainedNavigationHostingView<Content>, context: Context) {
-        nsView.setVisible(isVisible)
-    }
-}
-
-private final class RetainedNavigationHostingView<Content: View>: NSView {
-    private let hostingView: NSHostingView<Content>
-
-    init(rootView: Content) {
-        hostingView = NSHostingView(rootView: rootView)
-        super.init(frame: .zero)
-
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(hostingView)
-        NSLayoutConstraint.activate([
-            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            hostingView.topAnchor.constraint(equalTo: topAnchor),
-            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func setVisible(_ isVisible: Bool) {
-        let shouldHide = !isVisible
-        guard isHidden != shouldHide else { return }
-        isHidden = shouldHide
-    }
-}
-
-private struct NavigationDestinationPlaceholder: View {
-    let section: NativeSection
-
-    var body: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.small)
-            Text("正在准备\(title)…")
-                .font(.callout.weight(.medium))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    private var title: String {
-        switch section {
-        case .dashboard: "概览"
-        case .articles: "全部文章"
-        case .graph: "关系图"
-        case .moments: "微博"
-        case .reader: "文章"
-        case .editor: "写作"
-        case .trash: "回收站"
-        case .settings: "设置"
+        case .settings: NativeSettingsView(model: model, readingPreferences: readingPreferences)
         }
     }
 }
@@ -569,41 +636,7 @@ struct ArticleListView: View {
     @ObservedObject var model: NativeAppModel
 
     var body: some View {
-        let filteredArticles = model.filteredArticles
-        let availableArticleTagFilters = model.availableArticleTagFilters
-
-        VStack(spacing: 0) {
-            HStack {
-                Text("全部文章").font(.title2.weight(.semibold))
-                Spacer()
-                TextField("搜索标题、分类或标签", text: $model.searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 260)
-                if model.isFilteringArticles {
-                    Button("清除筛选") { model.clearArticleFilters() }
-                        .buttonStyle(.bordered)
-                }
-            }
-            .padding(22)
-
-            if !availableArticleTagFilters.isEmpty {
-                ArticleTagFilterBar(model: model, tagFilters: availableArticleTagFilters)
-                    .padding(.horizontal, 22)
-                    .padding(.bottom, 14)
-            }
-            Divider()
-
-            if filteredArticles.isEmpty {
-                EmptyState(title: "没有匹配的文章", message: "试试其他搜索词，或者开始写一篇新文章。", actionTitle: "新文章") { model.newArticle() }
-            } else {
-                List(filteredArticles) { article in
-                    ArticleRow(article: article) { model.selectSlug(article.slug) }
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 5, leading: 18, bottom: 5, trailing: 18))
-                }
-                .listStyle(.plain)
-            }
-        }
+        SmartArticleLibraryView(model: model)
     }
 }
 

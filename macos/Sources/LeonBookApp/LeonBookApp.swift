@@ -3,31 +3,100 @@ import SwiftUI
 
 @main
 struct LeonBookApp: App {
-    @StateObject private var model = NativeAppModel()
-
     var body: some Scene {
         WindowGroup("leon-book") {
-            ContentView(model: model)
+            LeonBookWindowRoot()
         }
         .defaultSize(width: 1280, height: 820)
         .commands {
-            CommandMenu("笔记") {
-                Button("快速打开…", action: model.presentQuickSwitcher)
-                    .keyboardShortcut("o", modifiers: .command)
-                Button("命令面板…", action: model.presentCommandPalette)
-                    .keyboardShortcut("p", modifiers: .command)
-                Button("全文搜索…", action: model.presentGlobalSearch)
-                    .keyboardShortcut("f", modifiers: [.command, .shift])
-                Divider()
-                Button("新文章", action: model.newArticle)
-                    .keyboardShortcut("n", modifiers: .command)
-                Button("刷新文章", action: { Task { try? await model.reload() } })
-                    .keyboardShortcut("r", modifiers: .command)
-            }
+            LeonBookCommands()
         }
 
         Settings {
-            NativeSettingsView(model: model)
+            LeonBookSettingsRoot()
         }
+    }
+}
+
+private struct LeonBookWindowRoot: View {
+    @SceneStorage("leon-book.window-id") private var windowID = UUID().uuidString.lowercased()
+
+    var body: some View {
+        LeonBookWindowModelHost(windowID: windowID)
+            .id(windowID)
+    }
+}
+
+private struct LeonBookWindowModelHost: View {
+    @StateObject private var model: NativeAppModel
+
+    init(windowID: String) {
+        _model = StateObject(wrappedValue: NativeAppModel(navigationScopeID: windowID))
+    }
+
+    var body: some View {
+        ContentView(model: model)
+    }
+}
+
+private struct LeonBookSettingsRoot: View {
+    @StateObject private var model = NativeAppModel(navigationScopeID: "settings")
+
+    var body: some View {
+        NativeSettingsView(model: model)
+    }
+}
+
+private struct LeonBookCommands: Commands {
+    @FocusedObject private var model: NativeAppModel?
+    @ObservedObject private var preferences = NativeCommandPreferences.shared
+
+    var body: some Commands {
+        CommandMenu("笔记") {
+            ForEach(menuCommands) { definition in
+                Button(definition.title) {
+                    model?.executeCommand(definition.id)
+                }
+                .modifier(NativeOptionalKeyboardShortcut(
+                    shortcut: preferences.shortcut(for: definition)
+                ))
+                .disabled(model?.canExecuteCommand(definition.id) != true)
+            }
+        }
+    }
+
+    private var menuCommands: [NativeCommandDefinition] {
+        NativeCommandRegistry.builtIn.commands(
+            on: .menu,
+            context: model?.commandContext ?? NativeCommandContext(storageReady: false),
+            includingUnavailable: true
+        )
+    }
+}
+
+private struct NativeOptionalKeyboardShortcut: ViewModifier {
+    let shortcut: NativeCommandShortcut?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let shortcut, shortcut.isValid, let character = shortcut.key.first {
+            content.keyboardShortcut(
+                KeyEquivalent(character),
+                modifiers: eventModifiers(for: shortcut.modifiers)
+            )
+        } else {
+            content
+        }
+    }
+
+    private func eventModifiers(
+        for modifiers: Set<NativeCommandShortcut.Modifier>
+    ) -> EventModifiers {
+        var result: EventModifiers = []
+        if modifiers.contains(.command) { result.insert(.command) }
+        if modifiers.contains(.option) { result.insert(.option) }
+        if modifiers.contains(.shift) { result.insert(.shift) }
+        if modifiers.contains(.control) { result.insert(.control) }
+        return result
     }
 }

@@ -60,10 +60,11 @@ public struct NativeGlobalSearchQuery: Equatable {
     public let types: Set<NativeSearchDocumentType>
     public let after: Date?
     public let before: Date?
+    public let propertyFilters: [NativeArticlePropertyFilter]
 
     public var isEmpty: Bool {
         textTerms.isEmpty && tags.isEmpty && status == nil && types.isEmpty
-            && after == nil && before == nil
+            && after == nil && before == nil && propertyFilters.isEmpty
     }
 
     public init(_ rawValue: String, calendar: Calendar = .current) {
@@ -74,8 +75,21 @@ public struct NativeGlobalSearchQuery: Equatable {
         var types = Set<NativeSearchDocumentType>()
         var after: Date?
         var before: Date?
+        var propertyFilters: [NativeArticlePropertyFilter] = []
 
         for token in Self.tokens(in: rawValue) {
+            if token.hasPrefix("["), token.hasSuffix("]") {
+                let expression = String(token.dropFirst().dropLast())
+                if let separator = expression.firstIndex(of: ":") {
+                    let key = String(expression[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let value = String(expression[expression.index(after: separator)...])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if NativeArticleProperties.isValidKey(key), !value.isEmpty {
+                        propertyFilters.append(NativeArticlePropertyFilter(key: key, value: value))
+                        continue
+                    }
+                }
+            }
             guard let separator = token.firstIndex(of: ":") else {
                 if !token.isEmpty { textTerms.append(token) }
                 continue
@@ -136,6 +150,7 @@ public struct NativeGlobalSearchQuery: Equatable {
         self.types = types
         self.after = after
         self.before = before
+        self.propertyFilters = propertyFilters
     }
 
     private static func tokens(in source: String) -> [String] {
@@ -143,6 +158,7 @@ public struct NativeGlobalSearchQuery: Equatable {
         var token = ""
         var quote: Character?
         var isEscaping = false
+        var bracketDepth = 0
 
         func finishToken() {
             if !token.isEmpty { tokens.append(token) }
@@ -163,7 +179,13 @@ public struct NativeGlobalSearchQuery: Equatable {
                 }
             } else if character == "\"" || character == "'" {
                 quote = character
-            } else if character.isWhitespace {
+            } else if character == "[" {
+                bracketDepth += 1
+                token.append(character)
+            } else if character == "]", bracketDepth > 0 {
+                bracketDepth -= 1
+                token.append(character)
+            } else if character.isWhitespace, bracketDepth == 0 {
                 finishToken()
             } else {
                 token.append(character)
@@ -175,18 +197,30 @@ public struct NativeGlobalSearchQuery: Equatable {
     }
 
     private static func day(_ value: String, calendar: Calendar) -> Date? {
-        let components = value.split(separator: "-").compactMap { Int($0) }
-        guard components.count == 3,
-              components[0] >= 1,
-              (1...12).contains(components[1]),
-              (1...31).contains(components[2]) else {
+        let segments = value.split(separator: "-", omittingEmptySubsequences: false)
+        guard segments.count == 3,
+              let year = Int(segments[0]),
+              let month = Int(segments[1]),
+              let day = Int(segments[2]),
+              year >= 1,
+              (1...12).contains(month),
+              (1...31).contains(day),
+              let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
             return nil
         }
-        return calendar.date(from: DateComponents(
-            year: components[0],
-            month: components[1],
-            day: components[2]
-        ))
+        let resolved = calendar.dateComponents([.year, .month, .day], from: date)
+        guard resolved.year == year, resolved.month == month, resolved.day == day else { return nil }
+        return date
+    }
+}
+
+public struct NativeArticlePropertyFilter: Equatable, Hashable {
+    public let key: String
+    public let value: String
+
+    public init(key: String, value: String) {
+        self.key = key
+        self.value = value
     }
 }
 
@@ -260,6 +294,8 @@ public struct NativeMedia: Codable, Hashable, Identifiable {
     public var id: String { url }
 
     public var isVideo: Bool { kind == "video" }
+    public var isImage: Bool { kind == "image" }
+    public var isFile: Bool { !isVideo && !isImage }
 
     public init(kind: String, name: String, size: Int, url: String) {
         self.kind = kind
@@ -292,12 +328,15 @@ public struct NativeBanner: Codable, Hashable {
 }
 
 public struct NativeArticleSummary: Codable, Hashable, Identifiable {
+    public let aliases: [String]
     public let banner: NativeBanner?
     public let category: String
     public let excerpt: String
     public var pageViews: Int
+    public let properties: [String: NativeArticlePropertyValue]
     public let publishedAt: String?
     public let slug: String
+    public let sourceRelativePath: String
     public let status: NativeArticleStatus
     public let tags: [String]
     public let title: String
@@ -307,24 +346,30 @@ public struct NativeArticleSummary: Codable, Hashable, Identifiable {
     public var id: String { slug }
 
     public init(
+        aliases: [String] = [],
         banner: NativeBanner?,
         category: String,
         excerpt: String,
         pageViews: Int = 0,
+        properties: [String: NativeArticlePropertyValue] = [:],
         publishedAt: String?,
         slug: String,
+        sourceRelativePath: String = "",
         status: NativeArticleStatus,
         tags: [String],
         title: String,
         updatedAt: String,
         wordCount: Int
     ) {
+        self.aliases = NativeArticleAlias.normalized(aliases)
         self.banner = banner
         self.category = category
         self.excerpt = excerpt
         self.pageViews = max(0, pageViews)
+        self.properties = properties
         self.publishedAt = publishedAt
         self.slug = slug
+        self.sourceRelativePath = sourceRelativePath.isEmpty ? "\(slug).md" : sourceRelativePath
         self.status = status
         self.tags = NativeArticleTag.normalized(tags)
         self.title = title
@@ -335,12 +380,15 @@ public struct NativeArticleSummary: Codable, Hashable, Identifiable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
+            aliases: try container.decodeIfPresent([String].self, forKey: .aliases) ?? [],
             banner: try container.decodeIfPresent(NativeBanner.self, forKey: .banner),
             category: try container.decodeIfPresent(String.self, forKey: .category) ?? "Uncategorized",
             excerpt: try container.decodeIfPresent(String.self, forKey: .excerpt) ?? "",
             pageViews: try container.decodeIfPresent(Int.self, forKey: .pageViews) ?? 0,
+            properties: try container.decodeIfPresent([String: NativeArticlePropertyValue].self, forKey: .properties) ?? [:],
             publishedAt: try container.decodeIfPresent(String.self, forKey: .publishedAt),
             slug: try container.decodeIfPresent(String.self, forKey: .slug) ?? "",
+            sourceRelativePath: try container.decodeIfPresent(String.self, forKey: .sourceRelativePath) ?? "",
             status: try container.decodeIfPresent(NativeArticleStatus.self, forKey: .status) ?? .published,
             tags: try container.decodeIfPresent([String].self, forKey: .tags) ?? [],
             title: try container.decodeIfPresent(String.self, forKey: .title) ?? "Untitled note",
@@ -348,21 +396,278 @@ public struct NativeArticleSummary: Codable, Hashable, Identifiable {
             wordCount: try container.decodeIfPresent(Int.self, forKey: .wordCount) ?? 0
         )
     }
+
+    public var sourceFolderPath: String {
+        sourceRelativePath.split(separator: "/").dropLast().joined(separator: "/")
+    }
+}
+
+public struct NativeMarkdownSyncResult: Equatable {
+    public let insertedCount: Int
+    public let updatedCount: Int
+    public let movedCount: Int
+    public let deletedCount: Int
+    public let unchangedCount: Int
+    public let warnings: [String]
+
+    public var didChange: Bool {
+        insertedCount + updatedCount + movedCount + deletedCount > 0
+    }
+
+    public init(
+        insertedCount: Int = 0,
+        updatedCount: Int = 0,
+        movedCount: Int = 0,
+        deletedCount: Int = 0,
+        unchangedCount: Int = 0,
+        warnings: [String] = []
+    ) {
+        self.insertedCount = insertedCount
+        self.updatedCount = updatedCount
+        self.movedCount = movedCount
+        self.deletedCount = deletedCount
+        self.unchangedCount = unchangedCount
+        self.warnings = warnings
+    }
+}
+
+public struct NativeArticleTab: Codable, Hashable, Identifiable {
+    public let id: UUID
+    public private(set) var slug: String
+    public var isPinned: Bool
+    public private(set) var backStack: [String]
+    public private(set) var forwardStack: [String]
+
+    public var canGoBack: Bool { !backStack.isEmpty }
+    public var canGoForward: Bool { !forwardStack.isEmpty }
+
+    public init(
+        id: UUID = UUID(),
+        slug: String,
+        isPinned: Bool = false,
+        backStack: [String] = [],
+        forwardStack: [String] = []
+    ) {
+        self.id = id
+        self.slug = slug
+        self.isPinned = isPinned
+        self.backStack = Array(backStack.suffix(50))
+        self.forwardStack = Array(forwardStack.suffix(50))
+    }
+
+    public mutating func navigate(to nextSlug: String) {
+        guard !nextSlug.isEmpty, nextSlug != slug else { return }
+        backStack.append(slug)
+        backStack = Array(backStack.suffix(50))
+        slug = nextSlug
+        forwardStack = []
+    }
+
+    @discardableResult
+    public mutating func goBack() -> String? {
+        guard let previousSlug = backStack.popLast() else { return nil }
+        forwardStack.append(slug)
+        forwardStack = Array(forwardStack.suffix(50))
+        slug = previousSlug
+        return previousSlug
+    }
+
+    @discardableResult
+    public mutating func goForward() -> String? {
+        guard let nextSlug = forwardStack.popLast() else { return nil }
+        backStack.append(slug)
+        backStack = Array(backStack.suffix(50))
+        slug = nextSlug
+        return nextSlug
+    }
+}
+
+public struct NativeArticleCommentSelection: Codable, Hashable {
+    public let quote: String
+    public let anchorID: String
+
+    public init(quote: String, anchorID: String) {
+        self.quote = quote
+        self.anchorID = anchorID
+    }
+}
+
+public enum NativeArticleCommentAnchor {
+    public static let articleTopID = "article-comment-top"
+
+    public static func selection(for rawQuote: String, in markdown: String) -> NativeArticleCommentSelection? {
+        let quote = rawQuote
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        guard !quote.isEmpty else { return nil }
+
+        let storedQuote = String(quote.prefix(800))
+        let normalizedQuote = normalizedText(storedQuote)
+        guard !normalizedQuote.isEmpty else { return nil }
+        let searchNeedle = String(normalizedQuote.prefix(120))
+
+        var sections: [(anchorID: String, source: String)] = []
+        var currentAnchorID = articleTopID
+        var currentLines: [String] = []
+        var headingIndex = 0
+
+        let lines = markdown.components(separatedBy: .newlines)
+        var lineIndex = 0
+        var activeFence: (marker: Character, length: Int)?
+        while lineIndex < lines.count {
+            let line = lines[lineIndex]
+            if let fence = activeFence {
+                currentLines.append(line)
+                if closesFence(line, fence: fence) {
+                    activeFence = nil
+                }
+                lineIndex += 1
+                continue
+            }
+            if let fence = opensFence(line) {
+                activeFence = fence
+                currentLines.append(line)
+                lineIndex += 1
+                continue
+            }
+
+            let isSetextHeading = lineIndex + 1 < lines.count
+                && !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && isSetextMarker(lines[lineIndex + 1])
+            if isHeading(line) || isSetextHeading {
+                if !currentLines.isEmpty {
+                    sections.append((currentAnchorID, currentLines.joined(separator: "\n")))
+                }
+                currentAnchorID = "markdown-heading-\(headingIndex)"
+                headingIndex += 1
+                currentLines = [line]
+                if isSetextHeading {
+                    currentLines.append(lines[lineIndex + 1])
+                    lineIndex += 1
+                }
+            } else {
+                currentLines.append(line)
+            }
+            lineIndex += 1
+        }
+        sections.append((currentAnchorID, currentLines.joined(separator: "\n")))
+
+        let anchorID = sections.first(where: {
+            normalizedText($0.source).contains(searchNeedle)
+        })?.anchorID ?? articleTopID
+        return NativeArticleCommentSelection(quote: storedQuote, anchorID: anchorID)
+    }
+
+    private static func isHeading(_ line: String) -> Bool {
+        line.range(of: #"^#{1,6}[ \t]+\S"#, options: .regularExpression) != nil
+    }
+
+    private static func isSetextMarker(_ line: String) -> Bool {
+        let marker = line.trimmingCharacters(in: .whitespaces)
+        return !marker.isEmpty && (marker.allSatisfy { $0 == "=" } || marker.allSatisfy { $0 == "-" })
+    }
+
+    private static func opensFence(_ line: String) -> (marker: Character, length: Int)? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
+        let run = trimmed.prefix { $0 == marker }
+        return run.count >= 3 ? (marker, run.count) : nil
+    }
+
+    private static func closesFence(_ line: String, fence: (marker: Character, length: Int)) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let run = trimmed.prefix { $0 == fence.marker }
+        return run.count >= fence.length
+            && trimmed.dropFirst(run.count).trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private static func normalizedText(_ source: String) -> String {
+        var result = source
+        let replacements: [(String, String)] = [
+            (#"!\[([^\]]*)\]\([^)]*\)"#, "$1"),
+            (#"\[\[([^\]]+)\]\]"#, "$1"),
+            (#"\[([^\]]+)\]\([^)]*\)"#, "$1"),
+            (#"(?m)^[ \t]*(?:#{1,6}|>|[-+*]|\d+[.)])[ \t]+"#, ""),
+            (#"[*_~`]"#, ""),
+        ]
+        for (pattern, template) in replacements {
+            result = result.replacingOccurrences(
+                of: pattern,
+                with: template,
+                options: .regularExpression
+            )
+        }
+        return result
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+}
+
+public struct NativeArticleComment: Codable, Hashable, Identifiable {
+    public let id: String
+    public let articleSlug: String
+    public let parentID: String?
+    public let authorName: String
+    public let text: String
+    public let selection: NativeArticleCommentSelection?
+    public let createdAt: String
+    public let updatedAt: String
+
+    public init(
+        id: String,
+        articleSlug: String,
+        parentID: String?,
+        authorName: String,
+        text: String,
+        selection: NativeArticleCommentSelection?,
+        createdAt: String,
+        updatedAt: String
+    ) {
+        self.id = id
+        self.articleSlug = articleSlug
+        self.parentID = parentID
+        self.authorName = authorName
+        self.text = text
+        self.selection = selection
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
 }
 
 public struct NativeArticleRelations: Equatable {
     public let outgoing: [NativeArticleSummary]
     public let incoming: [NativeArticleSummary]
+    public let unlinkedMentions: [NativeArticleMention]
 
-    public static let empty = NativeArticleRelations(outgoing: [], incoming: [])
+    public static let empty = NativeArticleRelations(outgoing: [], incoming: [], unlinkedMentions: [])
 
     public var isEmpty: Bool {
-        outgoing.isEmpty && incoming.isEmpty
+        outgoing.isEmpty && incoming.isEmpty && unlinkedMentions.isEmpty
     }
 
-    public init(outgoing: [NativeArticleSummary], incoming: [NativeArticleSummary]) {
+    public init(
+        outgoing: [NativeArticleSummary],
+        incoming: [NativeArticleSummary],
+        unlinkedMentions: [NativeArticleMention] = []
+    ) {
         self.outgoing = outgoing
         self.incoming = incoming
+        self.unlinkedMentions = unlinkedMentions
+    }
+}
+
+public struct NativeArticleMention: Equatable, Hashable, Identifiable {
+    public let article: NativeArticleSummary
+    public let count: Int
+    public let snippet: String
+
+    public var id: String { article.slug }
+
+    public init(article: NativeArticleSummary, count: Int, snippet: String) {
+        self.article = article
+        self.count = max(1, count)
+        self.snippet = snippet
     }
 }
 
@@ -391,13 +696,43 @@ public struct NativeArticleGraphEdge: Hashable, Identifiable {
 }
 
 public enum NativeArticleLink {
+    public struct Reference: Equatable, Hashable {
+        public let target: String
+        public let heading: String?
+        public let label: String
+
+        public init(rawValue: String) {
+            let components = rawValue.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+            let destination = String(components[0]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let destinationComponents = destination.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            target = String(destinationComponents[0]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if destinationComponents.count == 2 {
+                let value = String(destinationComponents[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+                heading = value.isEmpty ? nil : value
+            } else {
+                heading = nil
+            }
+            if components.count == 2 {
+                let alias = String(components[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+                label = alias.isEmpty ? target : alias
+            } else if let heading {
+                label = target.isEmpty ? "#\(heading)" : "\(target)#\(heading)"
+            } else {
+                label = target
+            }
+        }
+    }
+
     public static func references(in text: String) -> [String] {
-        let expression = try! NSRegularExpression(pattern: #"\[\[([^\[\]\r\n]+)\]\]"#)
+        parsedReferences(in: text).compactMap { $0.target.isEmpty ? nil : $0.target }
+    }
+
+    public static func parsedReferences(in text: String) -> [Reference] {
+        let expression = try! NSRegularExpression(pattern: #"(?<!!)\[\[([^\[\]\r\n]+)\]\]"#)
         let searchRange = NSRange(text.startIndex..., in: text)
         return expression.matches(in: text, range: searchRange).compactMap { match in
             guard let range = Range(match.range(at: 1), in: text) else { return nil }
-            let reference = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-            return reference.isEmpty ? nil : reference
+            return Reference(rawValue: String(text[range]))
         }
     }
 
@@ -405,13 +740,217 @@ public enum NativeArticleLink {
         _ reference: String,
         in articles: [NativeArticleSummary]
     ) -> NativeArticleSummary? {
-        let normalized = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = Reference(rawValue: reference).target
         guard !normalized.isEmpty else { return nil }
 
-        return articles.first {
+        if let direct = articles.first(where: {
             $0.title.caseInsensitiveCompare(normalized) == .orderedSame
-        } ?? articles.first {
+        }) ?? articles.first(where: {
             $0.slug.caseInsensitiveCompare(normalized) == .orderedSame
+        }) {
+            return direct
+        }
+
+        let normalizedPath = normalized
+            .replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let normalizedPathWithoutExtension = normalizedPath.lowercased().hasSuffix(".md")
+            ? String(normalizedPath.dropLast(3)) : normalizedPath
+        let pathMatches = articles.filter { article in
+            let sourcePath = article.sourceRelativePath
+                .replacingOccurrences(of: "\\", with: "/")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let sourceWithoutExtension = sourcePath.lowercased().hasSuffix(".md")
+                ? String(sourcePath.dropLast(3)) : sourcePath
+            return sourcePath.caseInsensitiveCompare(normalizedPath) == .orderedSame
+                || sourceWithoutExtension.caseInsensitiveCompare(normalizedPathWithoutExtension) == .orderedSame
+        }
+        if pathMatches.count == 1 { return pathMatches[0] }
+
+        let aliasMatches = articles.filter { article in
+            article.aliases.contains { $0.caseInsensitiveCompare(normalized) == .orderedSame }
+        }
+        return aliasMatches.count == 1 ? aliasMatches[0] : nil
+    }
+
+    public static func retargetingWikiLinks(
+        in body: String,
+        from oldSourcePath: String,
+        to newSourcePath: String
+    ) -> String {
+        func normalized(_ path: String) -> String {
+            path.replacingOccurrences(of: "\\", with: "/")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "./"))
+        }
+        func withoutMarkdownExtension(_ path: String) -> String {
+            path.lowercased().hasSuffix(".md") ? String(path.dropLast(3)) : path
+        }
+
+        let oldPath = normalized(oldSourcePath)
+        let oldPathWithoutExtension = withoutMarkdownExtension(oldPath)
+        let newPath = normalized(newSourcePath)
+        let newPathWithoutExtension = withoutMarkdownExtension(newPath)
+        let expression = try! NSRegularExpression(pattern: #"!?\[\[([^\[\]\r\n]+)\]\]"#)
+        let output = NSMutableString(string: body)
+        let matches = expression.matches(in: body, range: NSRange(body.startIndex..., in: body))
+
+        for match in matches.reversed() {
+            guard let innerRange = Range(match.range(at: 1), in: body) else { continue }
+            let inner = String(body[innerRange])
+            let aliasParts = inner.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+            let destination = String(aliasParts[0])
+            let headingParts = destination.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            let target = normalized(String(headingParts[0]))
+            let targetWithoutExtension = withoutMarkdownExtension(target)
+            guard target.caseInsensitiveCompare(oldPath) == .orderedSame
+                    || targetWithoutExtension.caseInsensitiveCompare(oldPathWithoutExtension) == .orderedSame else {
+                continue
+            }
+
+            let keepsExtension = target.lowercased().hasSuffix(".md")
+            var replacement = keepsExtension ? newPath : newPathWithoutExtension
+            if headingParts.count == 2 { replacement += "#\(headingParts[1])" }
+            if aliasParts.count == 2 { replacement += "|\(aliasParts[1])" }
+            output.replaceCharacters(in: match.range(at: 1), with: replacement)
+        }
+        return output as String
+    }
+
+    public static func destination(
+        for rawReference: String,
+        in articles: [NativeArticleSummary]
+    ) -> NativeArticleLinkDestination? {
+        let reference = Reference(rawValue: rawReference)
+        guard !reference.target.isEmpty || reference.heading != nil else { return nil }
+        return NativeArticleLinkDestination(
+            target: reference.target,
+            resolvedSlug: resolve(rawReference, in: articles)?.slug,
+            heading: reference.heading,
+            label: reference.label
+        )
+    }
+
+    public static func linkingUnlinkedMentions(
+        of rawTitle: String,
+        to targetSlug: String,
+        in body: String
+    ) -> (body: String, count: Int) {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title.count >= 2, !targetSlug.isEmpty else { return (body, 0) }
+
+        let protectedExpression = try! NSRegularExpression(
+            pattern: #"(?s)```.*?```|~~~.*?~~~|`[^`\r\n]*`|\[\[[^\[\]\r\n]+\]\]|\[[^\]\r\n]+\]\([^\)\r\n]+\)"#
+        )
+        let protectedMatches = protectedExpression.matches(
+            in: body,
+            range: NSRange(body.startIndex..., in: body)
+        )
+        var output = ""
+        var cursor = body.startIndex
+        var count = 0
+
+        func isASCIIWord(_ character: Character) -> Bool {
+            character.unicodeScalars.allSatisfy {
+                ($0.value >= 48 && $0.value <= 57)
+                    || ($0.value >= 65 && $0.value <= 90)
+                    || ($0.value >= 97 && $0.value <= 122)
+                    || $0.value == 95
+            }
+        }
+
+        func replace(in segment: Substring) -> String {
+            var remaining = String(segment)
+            var result = ""
+            while let range = remaining.range(
+                of: title,
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            ) {
+                let before = range.lowerBound > remaining.startIndex
+                    ? remaining[remaining.index(before: range.lowerBound)] : nil
+                let after = range.upperBound < remaining.endIndex ? remaining[range.upperBound] : nil
+                let requiresBoundary = title.first.map(isASCIIWord) == true
+                let hasValidStart = !requiresBoundary || before.map { !isASCIIWord($0) } != false
+                let requiresEndBoundary = title.last.map(isASCIIWord) == true
+                let hasValidEnd = !requiresEndBoundary || after.map { !isASCIIWord($0) } != false
+
+                result += remaining[..<range.lowerBound]
+                if hasValidStart && hasValidEnd {
+                    let label = String(remaining[range])
+                    result += "[[\(targetSlug)|\(label)]]"
+                    count += 1
+                    remaining = String(remaining[range.upperBound...])
+                } else {
+                    result.append(remaining[range.lowerBound])
+                    remaining = String(remaining[remaining.index(after: range.lowerBound)...])
+                }
+            }
+            return result + remaining
+        }
+
+        for match in protectedMatches {
+            guard let range = Range(match.range, in: body) else { continue }
+            output += replace(in: body[cursor..<range.lowerBound])
+            output += body[range]
+            cursor = range.upperBound
+        }
+        output += replace(in: body[cursor...])
+        return (output, count)
+    }
+}
+
+public struct NativeArticleLinkDestination: Equatable, Hashable {
+    public let target: String
+    public let resolvedSlug: String?
+    public let heading: String?
+    public let label: String
+
+    public init(target: String, resolvedSlug: String?, heading: String?, label: String) {
+        self.target = target
+        self.resolvedSlug = resolvedSlug
+        self.heading = heading
+        self.label = label
+    }
+}
+
+public enum NativeArticleAlias {
+    public static func values(from properties: [String: NativeArticlePropertyValue]) -> [String] {
+        normalized(properties.compactMap { key, value in
+            ["alias", "aliases"].contains(key.lowercased()) ? value : nil
+        }.flatMap { value in
+            switch value.kind {
+            case .list, .tags: return value.listValues
+            default: return parse(value.value)
+            }
+        })
+    }
+
+    public static func normalized(_ aliases: [String]) -> [String] {
+        var result: [String] = []
+        for alias in aliases {
+            let value = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty,
+                  !result.contains(where: { $0.caseInsensitiveCompare(value) == .orderedSame }) else {
+                continue
+            }
+            result.append(value)
+        }
+        return Array(result.prefix(40))
+    }
+
+    private static func parse(_ rawValue: String) -> [String] {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let decoded = try? JSONDecoder().decode([String].self, from: Data(value.utf8)) {
+            return decoded
+        }
+        if let decoded = try? JSONDecoder().decode(String.self, from: Data(value.utf8)) {
+            return [decoded]
+        }
+        return value.components(separatedBy: .newlines).flatMap { line in
+            line.trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+                .split(separator: ",")
+                .map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: " -\t\"'")) }
         }
     }
 }
@@ -499,7 +1038,11 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
     public let excerpt: String
     public let media: [NativeMedia]
     public let pageViews: Int
+    public let properties: [String: NativeArticlePropertyValue]
     public let slug: String
+    public let sourceContentHash: String?
+    public let sourceImportedAt: String?
+    public let sourceRelativePath: String
     public let status: NativeArticleStatus
     public let tags: [String]
     public let title: String
@@ -522,7 +1065,11 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
         updatedAt: String,
         publishedAt: String?,
         wordCount: Int?,
-        pageViews: Int = 0
+        pageViews: Int = 0,
+        properties: [String: NativeArticlePropertyValue] = [:],
+        sourceRelativePath: String = "",
+        sourceContentHash: String? = nil,
+        sourceImportedAt: String? = nil
     ) {
         self.banner = banner
         self.body = body
@@ -530,7 +1077,11 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
         self.excerpt = excerpt
         self.media = media
         self.pageViews = max(0, pageViews)
+        self.properties = properties
         self.slug = slug
+        self.sourceContentHash = sourceContentHash
+        self.sourceImportedAt = sourceImportedAt
+        self.sourceRelativePath = sourceRelativePath.isEmpty ? "\(slug).md" : sourceRelativePath
         self.status = status
         self.tags = NativeArticleTag.normalized(tags)
         self.title = title
@@ -547,13 +1098,21 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
         excerpt = try container.decodeIfPresent(String.self, forKey: .excerpt) ?? ""
         media = try container.decodeIfPresent([NativeMedia].self, forKey: .media) ?? []
         pageViews = max(0, try container.decodeIfPresent(Int.self, forKey: .pageViews) ?? 0)
+        properties = try container.decodeIfPresent([String: NativeArticlePropertyValue].self, forKey: .properties) ?? [:]
         slug = try container.decodeIfPresent(String.self, forKey: .slug) ?? ""
+        sourceContentHash = try container.decodeIfPresent(String.self, forKey: .sourceContentHash)
+        sourceImportedAt = try container.decodeIfPresent(String.self, forKey: .sourceImportedAt)
+        sourceRelativePath = try container.decodeIfPresent(String.self, forKey: .sourceRelativePath) ?? "\(slug).md"
         status = try container.decodeIfPresent(NativeArticleStatus.self, forKey: .status) ?? .published
         tags = NativeArticleTag.normalized(try container.decodeIfPresent([String].self, forKey: .tags) ?? [])
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Untitled note"
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
         publishedAt = try container.decodeIfPresent(String.self, forKey: .publishedAt)
         wordCount = try container.decodeIfPresent(Int.self, forKey: .wordCount)
+    }
+
+    public var sourceFolderPath: String {
+        sourceRelativePath.split(separator: "/").dropLast().joined(separator: "/")
     }
 }
 
@@ -563,6 +1122,7 @@ public struct NativeSaveArticle: Encodable {
     public let category: String
     public let excerpt: String
     public let media: [NativeMedia]
+    public let properties: [String: NativeArticlePropertyValue]
     public let slug: String
     public let status: NativeArticleStatus
     public let tags: [String]
@@ -579,13 +1139,15 @@ public struct NativeSaveArticle: Encodable {
         status: NativeArticleStatus,
         tags: [String],
         title: String,
-        expectedUpdatedAt: String?
+        expectedUpdatedAt: String?,
+        properties: [String: NativeArticlePropertyValue] = [:]
     ) {
         self.banner = banner
         self.body = body
         self.category = category
         self.excerpt = excerpt
         self.media = media
+        self.properties = properties
         self.slug = slug
         self.status = status
         self.tags = tags
@@ -612,6 +1174,7 @@ public struct NativeArticleRevisionSnapshot: Codable, Hashable {
     public let category: String
     public let excerpt: String
     public let media: [NativeMedia]
+    public let properties: [String: NativeArticlePropertyValue]
     public let status: NativeArticleStatus
     public let tags: [String]
     public let title: String
@@ -626,13 +1189,15 @@ public struct NativeArticleRevisionSnapshot: Codable, Hashable {
         status: NativeArticleStatus,
         tags: [String],
         title: String,
-        articleUpdatedAt: String?
+        articleUpdatedAt: String?,
+        properties: [String: NativeArticlePropertyValue] = [:]
     ) {
         self.banner = banner
         self.body = body
         self.category = category
         self.excerpt = excerpt
         self.media = media
+        self.properties = properties
         self.status = status
         self.tags = NativeArticleTag.normalized(tags)
         self.title = title
@@ -649,8 +1214,23 @@ public struct NativeArticleRevisionSnapshot: Codable, Hashable {
             status: article.status,
             tags: article.tags,
             title: article.title,
-            articleUpdatedAt: article.updatedAt
+            articleUpdatedAt: article.updatedAt,
+            properties: article.properties
         )
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        banner = try container.decodeIfPresent(NativeBanner.self, forKey: .banner)
+        body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
+        category = try container.decodeIfPresent(String.self, forKey: .category) ?? "Notes"
+        excerpt = try container.decodeIfPresent(String.self, forKey: .excerpt) ?? ""
+        media = try container.decodeIfPresent([NativeMedia].self, forKey: .media) ?? []
+        properties = try container.decodeIfPresent([String: NativeArticlePropertyValue].self, forKey: .properties) ?? [:]
+        status = try container.decodeIfPresent(NativeArticleStatus.self, forKey: .status) ?? .draft
+        tags = NativeArticleTag.normalized(try container.decodeIfPresent([String].self, forKey: .tags) ?? [])
+        title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Untitled note"
+        articleUpdatedAt = try container.decodeIfPresent(String.self, forKey: .articleUpdatedAt)
     }
 }
 
@@ -1143,6 +1723,7 @@ struct NativeEditorDraft: Equatable {
     var body = ""
     var banner: NativeBanner?
     var media: [NativeMedia] = []
+    var properties: [String: NativeArticlePropertyValue] = [:]
     var status: NativeArticleStatus = .draft
     var updatedAt: String?
 
@@ -1168,27 +1749,16 @@ enum NativeSearchPresentation: String, Identifiable {
     var id: String { rawValue }
 }
 
-enum NativeCommandID: String, CaseIterable, Identifiable {
-    case globalSearch
-    case quickOpen
-    case newArticle
-    case dashboard
-    case articles
-    case graph
-    case moments
-    case trash
-    case settings
-    case reload
-
-    var id: String { rawValue }
-}
-
 enum NativeStoreError: LocalizedError {
     case conflict
     case reservedSlug
     case slugTaken
     case invalidArticle
+    case invalidArticleSelection
+    case noLevel2Sections
+    case invalidArticleMerge
     case invalidMoment
+    case invalidComment
     case invalidUser
     case notFound
     case userAlreadyExists
@@ -1204,8 +1774,16 @@ enum NativeStoreError: LocalizedError {
             return "已有相同地址的文章，包括回收站中的文章。"
         case .invalidArticle:
             return "标题和正文不能为空。"
+        case .invalidArticleSelection:
+            return "请先在正文中选择要提取的非空文字。"
+        case .noLevel2Sections:
+            return "正文中没有可拆分的二级标题（##）。"
+        case .invalidArticleMerge:
+            return "不能将文章合并到自身，或合并目标已经不存在。"
         case .invalidMoment:
             return "微博需要文字或至少一张图片。"
+        case .invalidComment:
+            return "评论需要 1 到 2000 个字符。"
         case .invalidUser:
             return "请输入 1 到 40 个字符的用户名。"
         case .notFound:

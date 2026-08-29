@@ -7,10 +7,8 @@ private let momentFeedMaximumWidth: CGFloat = 1_760
 struct MomentFeedView: View {
     @ObservedObject var model: NativeAppModel
     @ObservedObject var navigation: NativeNavigationState
+    @ObservedObject var pageState: NativeMomentFeedPageState
     @State private var imageBrowser: MomentImageBrowserState?
-    @State private var collapsedTimelineDays: Set<String> = []
-    @State private var recordedPageViewIDs: Set<String> = []
-    @State private var pageViewSessionID = UUID()
     @AppStorage("momentFeedLayout") private var momentFeedLayoutRawValue = MomentFeedLayout.singleColumn.rawValue
 
     private var momentFeedLayout: MomentFeedLayout {
@@ -18,11 +16,7 @@ struct MomentFeedView: View {
     }
 
     private func toggleTimelineDay(_ dayID: String) {
-        if collapsedTimelineDays.contains(dayID) {
-            collapsedTimelineDays.remove(dayID)
-        } else {
-            collapsedTimelineDays.insert(dayID)
-        }
+        pageState.toggleTimelineDay(dayID)
     }
 
     var body: some View {
@@ -273,7 +267,7 @@ struct MomentFeedView: View {
                                                 )
                                             )
                                             .frame(width: 2)
-                                            .frame(minHeight: collapsedTimelineDays.contains(group.id) ? 52 : 112)
+                                            .frame(minHeight: pageState.collapsedTimelineDays.contains(group.id) ? 52 : 112)
                                             .frame(maxHeight: .infinity)
                                             .padding(.top, 6)
                                     }
@@ -291,7 +285,7 @@ struct MomentFeedView: View {
                                                 HStack(spacing: 6) {
                                                     Label("\(group.moments.count) 条微博", systemImage: "rectangle.3.group")
                                                     Text(
-                                                        collapsedTimelineDays.contains(group.id)
+                                                        pageState.collapsedTimelineDays.contains(group.id)
                                                             ? "点击展开"
                                                             : "点击折叠"
                                                     )
@@ -302,7 +296,7 @@ struct MomentFeedView: View {
 
                                             Spacer(minLength: 8)
 
-                                            Image(systemName: collapsedTimelineDays.contains(group.id) ? "chevron.right" : "chevron.down")
+                                            Image(systemName: pageState.collapsedTimelineDays.contains(group.id) ? "chevron.right" : "chevron.down")
                                                 .font(.caption.weight(.bold))
                                                 .foregroundStyle(.secondary)
                                                 .frame(width: 28, height: 28)
@@ -318,10 +312,10 @@ struct MomentFeedView: View {
                                         .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
-                                    .help(collapsedTimelineDays.contains(group.id) ? "展开 \(group.label) 的微博" : "折叠 \(group.label) 的微博")
-                                    .accessibilityLabel(collapsedTimelineDays.contains(group.id) ? "展开 \(group.label) 的微博" : "折叠 \(group.label) 的微博")
+                                    .help(pageState.collapsedTimelineDays.contains(group.id) ? "展开 \(group.label) 的微博" : "折叠 \(group.label) 的微博")
+                                    .accessibilityLabel(pageState.collapsedTimelineDays.contains(group.id) ? "展开 \(group.label) 的微博" : "折叠 \(group.label) 的微博")
 
-                                    if collapsedTimelineDays.contains(group.id) {
+                                    if pageState.collapsedTimelineDays.contains(group.id) {
                                         Label("已折叠 \(group.moments.count) 条微博", systemImage: "rectangle.stack")
                                             .font(.caption.weight(.medium))
                                             .foregroundStyle(.secondary)
@@ -375,11 +369,7 @@ struct MomentFeedView: View {
                 store: model.store
             )
         }
-        .onChange(of: navigation.section) { section in
-            guard section == .moments else { return }
-            recordedPageViewIDs.removeAll()
-            pageViewSessionID = UUID()
-        }
+        .onDisappear { pageState.endVisit() }
     }
 
     @ViewBuilder
@@ -402,7 +392,7 @@ struct MomentFeedView: View {
             .onAppear {
                 recordPageViewIfVisible(for: moment)
             }
-            .onChange(of: pageViewSessionID) { _ in
+            .onChange(of: pageState.pageViewSessionID) { _ in
                 recordPageViewIfVisible(for: moment)
             }
         }
@@ -410,7 +400,7 @@ struct MomentFeedView: View {
 
     private func recordPageViewIfVisible(for moment: NativeMoment) {
         guard navigation.section == .moments,
-              recordedPageViewIDs.insert(moment.id).inserted else { return }
+              pageState.shouldRecordPageView(for: moment.id) else { return }
         model.recordMomentPageView(moment)
     }
 

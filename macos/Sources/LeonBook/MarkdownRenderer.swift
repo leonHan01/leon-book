@@ -30,23 +30,30 @@ enum MarkdownOutline {
 struct MarkdownDocumentView: View {
     let markdown: String
     let articleLinks: [NativeArticleSummary]
-    let onOpenArticle: (String) -> Void
+    let onOpenArticle: (NativeArticleLinkDestination) -> Void
+    let onToggleTask: ((Int, Bool) -> Void)?
     let headingIDs: [String]
+    let lineOffset: Int
+    @Environment(\.nativeReadingTypography) private var typography
 
     init(
         markdown: String,
         articleLinks: [NativeArticleSummary],
-        onOpenArticle: @escaping (String) -> Void,
-        headingIDs: [String] = []
+        onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void,
+        onToggleTask: ((Int, Bool) -> Void)? = nil,
+        headingIDs: [String] = [],
+        lineOffset: Int = 0
     ) {
         self.markdown = markdown
         self.articleLinks = articleLinks
         self.onOpenArticle = onOpenArticle
+        self.onToggleTask = onToggleTask
         self.headingIDs = headingIDs
+        self.lineOffset = lineOffset
     }
 
     private var blocks: [MarkdownBlock] {
-        MarkdownParser.parse(markdown)
+        MarkdownParser.parse(markdown, lineOffset: lineOffset)
     }
 
     private var anchoredBlocks: [(block: MarkdownBlock, headingID: String?)] {
@@ -60,7 +67,7 @@ struct MarkdownDocumentView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: typography.paragraphSpacing) {
             ForEach(Array(anchoredBlocks.enumerated()), id: \.offset) { _, anchoredBlock in
                 if let headingID = anchoredBlock.headingID {
                     markdownBlockView(anchoredBlock.block)
@@ -71,15 +78,25 @@ struct MarkdownDocumentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .font(typography.bodyFont.swiftUIFont(size: typography.fontSize))
         .textSelection(.enabled)
         .environment(\.openURL, OpenURLAction { url in
             guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                   components.scheme == "leonbook",
-                  components.host == "article",
-                  let slug = components.queryItems?.first(where: { $0.name == "slug" })?.value else {
+                  components.host == "article" else {
                 return .systemAction
             }
-            onOpenArticle(slug)
+            let target = components.queryItems?.first(where: { $0.name == "target" })?.value
+                ?? components.queryItems?.first(where: { $0.name == "slug" })?.value
+                ?? ""
+            let heading = components.queryItems?.first(where: { $0.name == "heading" })?.value
+            guard !target.isEmpty || heading?.isEmpty == false else { return .systemAction }
+            onOpenArticle(NativeArticleLinkDestination(
+                target: target,
+                resolvedSlug: components.queryItems?.first(where: { $0.name == "slug" })?.value,
+                heading: heading,
+                label: target
+            ))
             return .handled
         })
     }
@@ -88,7 +105,8 @@ struct MarkdownDocumentView: View {
         MarkdownBlockView(
             block: block,
             articleLinks: articleLinks,
-            onOpenArticle: onOpenArticle
+            onOpenArticle: onOpenArticle,
+            onToggleTask: onToggleTask
         )
     }
 }
@@ -215,11 +233,13 @@ private enum MarkdownBlock {
     case paragraph(String)
     case list([MarkdownListItem])
     case blockQuote(String)
+    case callout(MarkdownCallout)
     case codeBlock(language: String?, code: String)
     case htmlComponent(MarkdownHTMLComponent)
     case webEmbed(MarkdownWebEmbed)
     case thematicBreak
     case table(headers: [String], alignments: [MarkdownTableAlignment], rows: [[String]])
+    case footnotes([(id: String, text: String)])
 }
 
 private struct MarkdownListItem {
@@ -227,6 +247,50 @@ private struct MarkdownListItem {
     let marker: String
     let text: String
     let taskState: Bool?
+    let sourceLine: Int
+}
+
+private struct MarkdownCallout {
+    let kind: String
+    let title: String
+    let body: String
+    let foldState: Character?
+
+    static func parse(_ source: String) -> MarkdownCallout? {
+        let lines = source.components(separatedBy: .newlines)
+        guard let first = lines.first else { return nil }
+        let expression = try! NSRegularExpression(
+            pattern: #"^\[!([A-Za-z0-9_-]+)\]([+-])?[ \t]*(.*)$"#,
+            options: .caseInsensitive
+        )
+        guard let match = expression.firstMatch(
+            in: first,
+            range: NSRange(first.startIndex..., in: first)
+        ), let kindRange = Range(match.range(at: 1), in: first) else { return nil }
+        let kind = String(first[kindRange]).lowercased()
+        let title = Range(match.range(at: 3), in: first).map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let foldState = Range(match.range(at: 2), in: first).flatMap { first[$0].first }
+        return MarkdownCallout(
+            kind: kind,
+            title: title?.isEmpty == false ? title! : defaultTitle(for: kind),
+            body: lines.dropFirst().joined(separator: "\n"),
+            foldState: foldState
+        )
+    }
+
+    private static func defaultTitle(for kind: String) -> String {
+        switch kind {
+        case "note": return "笔记"
+        case "tip", "hint", "important": return "提示"
+        case "warning", "caution", "attention": return "注意"
+        case "danger", "error", "bug", "failure": return "警告"
+        case "question", "help", "faq": return "问题"
+        case "success", "check", "done": return "完成"
+        case "quote", "cite": return "引用"
+        default: return kind.capitalized
+        }
+    }
 }
 
 private enum MarkdownTableAlignment {
@@ -238,7 +302,10 @@ private enum MarkdownTableAlignment {
 private struct MarkdownBlockView: View {
     let block: MarkdownBlock
     let articleLinks: [NativeArticleSummary]
-    let onOpenArticle: (String) -> Void
+    let onOpenArticle: (NativeArticleLinkDestination) -> Void
+    let onToggleTask: ((Int, Bool) -> Void)?
+    @Environment(\.nativeReadingTypography) private var typography
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         switch block {
@@ -249,14 +316,18 @@ private struct MarkdownBlockView: View {
 
         case let .paragraph(text):
             inlineMarkdownText(text, articleLinks: articleLinks)
-                .font(.system(size: 18, design: .serif))
-                .lineSpacing(6)
+                .font(typography.bodyFont.swiftUIFont(size: typography.fontSize))
+                .lineSpacing(typography.lineSpacing)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case let .list(items):
-            MarkdownListView(items: items, articleLinks: articleLinks)
-                .font(.system(size: 18, design: .serif))
-                .lineSpacing(6)
+            MarkdownListView(
+                items: items,
+                articleLinks: articleLinks,
+                onToggleTask: onToggleTask
+            )
+                .font(typography.bodyFont.swiftUIFont(size: typography.fontSize))
+                .lineSpacing(typography.lineSpacing)
 
         case let .blockQuote(source):
             HStack(alignment: .top, spacing: 12) {
@@ -266,11 +337,20 @@ private struct MarkdownBlockView: View {
                 MarkdownDocumentView(
                     markdown: source,
                     articleLinks: articleLinks,
-                    onOpenArticle: onOpenArticle
+                    onOpenArticle: onOpenArticle,
+                    onToggleTask: nil
                 )
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, 3)
+
+        case let .callout(callout):
+            MarkdownCalloutView(
+                callout: callout,
+                articleLinks: articleLinks,
+                onOpenArticle: onOpenArticle,
+                onToggleTask: onToggleTask
+            )
 
         case let .codeBlock(language, code):
             VStack(alignment: .leading, spacing: 8) {
@@ -281,13 +361,13 @@ private struct MarkdownBlockView: View {
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     Text(code.isEmpty ? " " : code)
-                        .font(.system(.body, design: .monospaced))
+                        .font(typography.codeFont.swiftUIFont(size: max(11, typography.fontSize - 2)))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding(14)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .background(typography.theme.codeBackground(system: colorScheme), in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.secondary.opacity(0.2))
@@ -309,17 +389,120 @@ private struct MarkdownBlockView: View {
                 rows: rows,
                 articleLinks: articleLinks
             )
+
+        case let .footnotes(notes):
+            VStack(alignment: .leading, spacing: 8) {
+                Divider()
+                ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("[\(note.id)]")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.tint)
+                        inlineMarkdownText(note.text, articleLinks: articleLinks)
+                            .font(.footnote)
+                    }
+                }
+            }
         }
     }
 
     private func headingFont(for level: Int) -> Font {
+        let scale: CGFloat
+        let weight: Font.Weight
         switch level {
-        case 1: .system(size: 32, weight: .bold, design: .serif)
-        case 2: .system(size: 26, weight: .bold, design: .serif)
-        case 3: .system(size: 22, weight: .semibold, design: .serif)
-        case 4: .system(size: 19, weight: .semibold, design: .serif)
-        case 5: .system(size: 17, weight: .semibold, design: .serif)
-        default: .system(size: 16, weight: .semibold, design: .serif)
+        case 1: scale = 1.78; weight = .bold
+        case 2: scale = 1.45; weight = .bold
+        case 3: scale = 1.23; weight = .semibold
+        case 4: scale = 1.08; weight = .semibold
+        case 5: scale = 0.98; weight = .semibold
+        default: scale = 0.92; weight = .semibold
+        }
+        return typography.bodyFont.swiftUIFont(
+            size: max(13, typography.fontSize * scale),
+            weight: weight
+        )
+    }
+}
+
+private struct MarkdownCalloutView: View {
+    let callout: MarkdownCallout
+    let articleLinks: [NativeArticleSummary]
+    let onOpenArticle: (NativeArticleLinkDestination) -> Void
+    let onToggleTask: ((Int, Bool) -> Void)?
+    @State private var isExpanded: Bool
+
+    init(
+        callout: MarkdownCallout,
+        articleLinks: [NativeArticleSummary],
+        onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void,
+        onToggleTask: ((Int, Bool) -> Void)?
+    ) {
+        self.callout = callout
+        self.articleLinks = articleLinks
+        self.onOpenArticle = onOpenArticle
+        self.onToggleTask = onToggleTask
+        _isExpanded = State(initialValue: callout.foldState != "-")
+    }
+
+    private var tint: Color {
+        switch callout.kind {
+        case "warning", "caution", "attention": return .orange
+        case "danger", "error", "bug", "failure": return .red
+        case "success", "check", "done": return .green
+        case "question", "help", "faq": return .purple
+        case "tip", "hint", "important": return .mint
+        default: return .blue
+        }
+    }
+
+    private var icon: String {
+        switch callout.kind {
+        case "warning", "caution", "attention": return "exclamationmark.triangle.fill"
+        case "danger", "error", "bug", "failure": return "xmark.octagon.fill"
+        case "success", "check", "done": return "checkmark.circle.fill"
+        case "question", "help", "faq": return "questionmark.circle.fill"
+        case "tip", "hint", "important": return "lightbulb.fill"
+        case "quote", "cite": return "quote.opening"
+        default: return "info.circle.fill"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if callout.foldState == nil {
+                label
+                content
+            } else {
+                DisclosureGroup(isExpanded: $isExpanded) {
+                    content.padding(.top, 8)
+                } label: {
+                    label
+                }
+            }
+        }
+        .padding(14)
+        .background(tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(tint.opacity(0.85))
+                .frame(width: 4)
+        }
+    }
+
+    private var label: some View {
+        Label(callout.title, systemImage: icon)
+            .font(.headline)
+            .foregroundStyle(tint)
+    }
+
+    @ViewBuilder private var content: some View {
+        if !callout.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            MarkdownDocumentView(
+                markdown: callout.body,
+                articleLinks: articleLinks,
+                onOpenArticle: onOpenArticle,
+                onToggleTask: nil
+            )
         }
     }
 }
@@ -327,6 +510,7 @@ private struct MarkdownBlockView: View {
 private struct MarkdownListView: View {
     let items: [MarkdownListItem]
     let articleLinks: [NativeArticleSummary]
+    let onToggleTask: ((Int, Bool) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -334,8 +518,15 @@ private struct MarkdownListView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Group {
                         if let taskState = item.taskState {
-                            Image(systemName: taskState ? "checkmark.square.fill" : "square")
-                                .foregroundStyle(taskState ? Color.accentColor : .secondary)
+                            Button {
+                                onToggleTask?(item.sourceLine, !taskState)
+                            } label: {
+                                Image(systemName: taskState ? "checkmark.square.fill" : "square")
+                                    .foregroundStyle(taskState ? Color.accentColor : .secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(onToggleTask == nil)
+                            .accessibilityLabel(taskState ? "标记为未完成" : "标记为已完成")
                         } else {
                             Text(item.marker)
                                 .frame(minWidth: 20, alignment: .trailing)
@@ -415,8 +606,9 @@ private struct MarkdownTableView: View {
 }
 
 private enum MarkdownParser {
-    static func parse(_ source: String) -> [MarkdownBlock] {
-        let lines = source.components(separatedBy: .newlines)
+    static func parse(_ source: String, lineOffset: Int = 0) -> [MarkdownBlock] {
+        let extracted = extractFootnotes(from: source.components(separatedBy: .newlines))
+        let lines = extracted.lines
         var blocks: [MarkdownBlock] = []
         var index = 0
 
@@ -478,13 +670,17 @@ private enum MarkdownParser {
 
             if isBlockQuote(lines[index]) {
                 let result = consumeBlockQuote(lines, from: index)
-                blocks.append(.blockQuote(result.source))
+                if let callout = MarkdownCallout.parse(result.source) {
+                    blocks.append(.callout(callout))
+                } else {
+                    blocks.append(.blockQuote(result.source))
+                }
                 index = result.nextIndex
                 continue
             }
 
-            if listItem(in: lines[index]) != nil {
-                let result = consumeList(lines, from: index)
+            if listItem(in: lines[index], sourceLine: lineOffset + index) != nil {
+                let result = consumeList(lines, from: index, lineOffset: lineOffset)
                 blocks.append(.list(result.items))
                 index = result.nextIndex
                 continue
@@ -503,7 +699,28 @@ private enum MarkdownParser {
             index = result.nextIndex
         }
 
+        if !extracted.notes.isEmpty { blocks.append(.footnotes(extracted.notes)) }
+
         return blocks
+    }
+
+    private static func extractFootnotes(
+        from sourceLines: [String]
+    ) -> (lines: [String], notes: [(id: String, text: String)]) {
+        let expression = try! NSRegularExpression(pattern: #"^\[\^([^\]]+)\]:[ \t]*(.*)$"#)
+        var lines = sourceLines
+        var notes: [(id: String, text: String)] = []
+        for index in sourceLines.indices {
+            let line = sourceLines[index]
+            guard let match = expression.firstMatch(
+                in: line,
+                range: NSRange(line.startIndex..., in: line)
+            ), let idRange = Range(match.range(at: 1), in: line),
+               let textRange = Range(match.range(at: 2), in: line) else { continue }
+            notes.append((String(line[idRange]), String(line[textRange])))
+            lines[index] = ""
+        }
+        return (lines, notes)
     }
 
     private static func atxHeading(in line: String) -> (level: Int, text: String)? {
@@ -602,7 +819,7 @@ private enum MarkdownParser {
         return (quoteLines.joined(separator: "\n"), index)
     }
 
-    private static func listItem(in line: String) -> MarkdownListItem? {
+    private static func listItem(in line: String, sourceLine: Int = 0) -> MarkdownListItem? {
         let expandedTabs = line.replacingOccurrences(of: "\t", with: "    ")
         let indentation = expandedTabs.prefix { $0 == " " }.count
         let content = expandedTabs.dropFirst(indentation)
@@ -633,14 +850,24 @@ private enum MarkdownParser {
             text.removeFirst(3)
             if text.first == " " { text.removeFirst() }
         }
-        return MarkdownListItem(depth: indentation / 2, marker: marker, text: text, taskState: taskState)
+        return MarkdownListItem(
+            depth: indentation / 2,
+            marker: marker,
+            text: text,
+            taskState: taskState,
+            sourceLine: sourceLine
+        )
     }
 
-    private static func consumeList(_ lines: [String], from start: Int) -> (items: [MarkdownListItem], nextIndex: Int) {
+    private static func consumeList(
+        _ lines: [String],
+        from start: Int,
+        lineOffset: Int
+    ) -> (items: [MarkdownListItem], nextIndex: Int) {
         var index = start
         var items: [MarkdownListItem] = []
         while index < lines.count {
-            if let item = listItem(in: lines[index]) {
+            if let item = listItem(in: lines[index], sourceLine: lineOffset + index) {
                 items.append(item)
                 index += 1
                 continue
@@ -659,7 +886,13 @@ private enum MarkdownParser {
             guard indentation > 0, !items.isEmpty else { break }
             let last = items.removeLast()
             let continuation = lines[index].trimmingCharacters(in: .whitespaces)
-            items.append(MarkdownListItem(depth: last.depth, marker: last.marker, text: "\(last.text)\n\(continuation)", taskState: last.taskState))
+            items.append(MarkdownListItem(
+                depth: last.depth,
+                marker: last.marker,
+                text: "\(last.text)\n\(continuation)",
+                taskState: last.taskState,
+                sourceLine: last.sourceLine
+            ))
             index += 1
         }
         return (items, index)
@@ -727,25 +960,59 @@ private enum MarkdownParser {
 }
 
 private func inlineMarkdownText(_ source: String, articleLinks: [NativeArticleSummary]) -> Text {
+    let highlighted = source.components(separatedBy: "==")
+    let highlightDelimiterCount = highlighted.count - 1
+    if highlightDelimiterCount >= 2, highlightDelimiterCount.isMultiple(of: 2) {
+        return highlighted.enumerated().reduce(Text("")) { rendered, fragment in
+            rendered + strikethroughMarkdownText(
+                fragment.element,
+                articleLinks: articleLinks,
+                highlighted: !fragment.offset.isMultiple(of: 2)
+            )
+        }
+    }
+    return strikethroughMarkdownText(source, articleLinks: articleLinks, highlighted: false)
+}
+
+private func strikethroughMarkdownText(
+    _ source: String,
+    articleLinks: [NativeArticleSummary],
+    highlighted: Bool
+) -> Text {
     let fragments = source.components(separatedBy: "~~")
     let delimiterCount = fragments.count - 1
 
     // Strikethrough is a GFM extension. Parse it explicitly so that its
     // presentation does not depend on the system Markdown parser version.
     guard delimiterCount >= 2, delimiterCount.isMultiple(of: 2) else {
-        return markdownInlineFragment(source, articleLinks: articleLinks)
+        return markdownInlineFragment(
+            source,
+            articleLinks: articleLinks,
+            highlighted: highlighted
+        )
     }
 
     return fragments.enumerated().reduce(Text("")) { rendered, fragment in
-        let text = markdownInlineFragment(fragment.element, articleLinks: articleLinks)
+        let text = markdownInlineFragment(
+            fragment.element,
+            articleLinks: articleLinks,
+            highlighted: highlighted
+        )
         return rendered + (fragment.offset.isMultiple(of: 2) ? text : text.strikethrough())
     }
 }
 
-private func markdownInlineFragment(_ source: String, articleLinks: [NativeArticleSummary]) -> Text {
-    let normalizedSource = MarkdownTypography.normalizedCJKSpacing(in: source)
+private func markdownInlineFragment(
+    _ source: String,
+    articleLinks: [NativeArticleSummary],
+    highlighted: Bool
+) -> Text {
+    let normalizedSource = MarkdownTypography.normalizedFootnotes(
+        in: MarkdownTypography.normalizedCJKSpacing(in: source)
+    )
     let resolvedSource = MarkdownArticleLinkRenderer.markdown(from: normalizedSource, articleLinks: articleLinks)
-    if let attributed = try? AttributedString(markdown: resolvedSource) {
+    if var attributed = try? AttributedString(markdown: resolvedSource) {
+        if highlighted { attributed.backgroundColor = Color.yellow.opacity(0.35) }
         return Text(attributed)
     }
     return Text(resolvedSource)
@@ -763,11 +1030,25 @@ private enum MarkdownTypography {
             withTemplate: "$1"
         )
     }
+
+    static func normalizedFootnotes(in source: String) -> String {
+        source
+            .replacingOccurrences(
+                of: #"\^\[([^\]\r\n]+)\]"#,
+                with: "（$1）",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"\[\^([^\]\r\n]+)\]"#,
+                with: "〔$1〕",
+                options: .regularExpression
+            )
+    }
 }
 
 private enum MarkdownArticleLinkRenderer {
     static func markdown(from source: String, articleLinks: [NativeArticleSummary]) -> String {
-        let expression = try! NSRegularExpression(pattern: #"\[\[([^\[\]\r\n]+)\]\]"#)
+        let expression = try! NSRegularExpression(pattern: #"(?<!!)\[\[([^\[\]\r\n]+)\]\]"#)
         let searchRange = NSRange(source.startIndex..., in: source)
         let matches = expression.matches(in: source, range: searchRange)
         guard !matches.isEmpty else { return source }
@@ -775,27 +1056,35 @@ private enum MarkdownArticleLinkRenderer {
         var rendered = ""
         var cursor = source.startIndex
         for match in matches {
-            guard let matchRange = Range(match.range, in: source),
-                  let referenceRange = Range(match.range(at: 1), in: source),
-                  let article = NativeArticleLink.resolve(String(source[referenceRange]), in: articleLinks),
-                  let url = internalURL(slug: article.slug) else {
-                continue
-            }
-
+            guard let matchRange = Range(match.range, in: source) else { continue }
             rendered += source[cursor..<matchRange.lowerBound]
-            let label = String(source[referenceRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            rendered += "[\(escapedLabel(label))](\(url))"
+            if let referenceRange = Range(match.range(at: 1), in: source),
+               let destination = NativeArticleLink.destination(
+                for: String(source[referenceRange]),
+                in: articleLinks
+               ),
+               let url = internalURL(destination) {
+                rendered += "[\(escapedLabel(destination.label))](\(url))"
+            } else {
+                rendered += source[matchRange]
+            }
             cursor = matchRange.upperBound
         }
         rendered += source[cursor...]
         return rendered
     }
 
-    private static func internalURL(slug: String) -> String? {
+    private static func internalURL(_ destination: NativeArticleLinkDestination) -> String? {
         var components = URLComponents()
         components.scheme = "leonbook"
         components.host = "article"
-        components.queryItems = [URLQueryItem(name: "slug", value: slug)]
+        components.queryItems = [URLQueryItem(name: "target", value: destination.target)]
+        if let slug = destination.resolvedSlug {
+            components.queryItems?.append(URLQueryItem(name: "slug", value: slug))
+        }
+        if let heading = destination.heading {
+            components.queryItems?.append(URLQueryItem(name: "heading", value: heading))
+        }
         return components.string
     }
 

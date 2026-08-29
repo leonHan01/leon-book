@@ -8,6 +8,7 @@ public actor LocalBlogStore {
     private static let maximumArticleRevisionsPerDraft = 100
     private static let savedWorkDirectoryKey = "leonBook.workDirectoryPath"
     private static let savedBackupDirectoryKey = "leonBook.backupDirectoryPath"
+    private static let savedBackupPolicyKey = "leonBook.backupPolicy.v2"
 
     public static let defaultWorkDirectoryURL = URL(
         fileURLWithPath: "/Volumes/T7Shield/myblog",
@@ -60,6 +61,19 @@ public actor LocalBlogStore {
         UserDefaults.standard.removeObject(forKey: savedBackupDirectoryKey)
     }
 
+    public static var savedBackupPolicy: NativeBackupPolicy {
+        guard let data = UserDefaults.standard.data(forKey: savedBackupPolicyKey),
+              let policy = try? JSONDecoder().decode(NativeBackupPolicy.self, from: data) else {
+            return .standard
+        }
+        return policy
+    }
+
+    public static func rememberBackupPolicy(_ policy: NativeBackupPolicy) {
+        guard let data = try? JSONEncoder().encode(policy) else { return }
+        UserDefaults.standard.set(data, forKey: savedBackupPolicyKey)
+    }
+
     let rootURL: URL
     private var database: SQLiteDatabase?
     private var jsonBackupVerified = false
@@ -67,11 +81,15 @@ public actor LocalBlogStore {
 
     private var databaseURL: URL { rootURL.appendingPathComponent("leon-book.sqlite") }
     private var articlesURL: URL { rootURL.appendingPathComponent("articles", isDirectory: true) }
+    private var articleSidecarsMarkerURL: URL { articlesURL.appendingPathComponent(".sidecars-v1") }
     private var draftsURL: URL { rootURL.appendingPathComponent("drafts", isDirectory: true) }
     private var mediaURL: URL { rootURL.appendingPathComponent("media", isDirectory: true) }
     private var momentsURL: URL { rootURL.appendingPathComponent("moments", isDirectory: true) }
+    private var basesURL: URL { rootURL.appendingPathComponent("bases", isDirectory: true) }
+    private var basesMarkerURL: URL { basesURL.appendingPathComponent(".files-v1") }
     private var momentsIndexURL: URL { momentsURL.appendingPathComponent("index.json") }
     private var momentSidecarsMarkerURL: URL { momentsURL.appendingPathComponent(".sidecars-v1") }
+    private var jsonExportStampURL: URL { rootURL.appendingPathComponent(".json-exports-v1") }
     private var activityURL: URL { rootURL.appendingPathComponent("activity", isDirectory: true) }
     private var trashURL: URL { rootURL.appendingPathComponent("trash", isDirectory: true) }
     private var trashIndexURL: URL { trashURL.appendingPathComponent("index.json") }
@@ -86,6 +104,12 @@ public actor LocalBlogStore {
         try exportJsonBackupIfNeeded()
     }
 
+    public func closeForRestore() {
+        database?.close()
+        database = nil
+        directoryLock = nil
+    }
+
     func prepare() throws {
         do {
             let fileManager = FileManager.default
@@ -94,6 +118,7 @@ public actor LocalBlogStore {
             try fileManager.createDirectory(at: draftsURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: mediaURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: momentsURL, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: basesURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: activityURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: trashURL, withIntermediateDirectories: true)
 
@@ -108,6 +133,8 @@ public actor LocalBlogStore {
             }
             try migrateLegacyDataIfNeeded()
             try migrateMomentTagsIfNeeded()
+            try migrateMarkdownSourcesIfNeeded()
+            try migrateArticleDerivedIndexesIfNeeded()
             try exportJsonBackupIfNeeded()
             try purgeExpiredTrash()
             try purgeExpiredArticleRevisions()
@@ -121,16 +148,730 @@ public actor LocalBlogStore {
     public func listArticles(includeDrafts: Bool = true) throws -> [NativeArticleSummary] {
         try prepare()
         let sql = """
-        \(articleSelect)
+        \(articleSummarySelect)
         WHERE deleted_at IS NULL
         \(includeDrafts ? "" : "AND status = 'published'")
         ORDER BY updated_at DESC
         """
         var articles: [NativeArticleSummary] = []
         try db().query(sql) { row in
-            articles.append(summary(for: try decodeArticle(row)))
+            articles.append(try decodeArticleSummary(row))
         }
         return articles
+    }
+
+    /// Reconciles ordinary Markdown files into SQLite-derived indexes. Paths are
+    /// matched first, then stable frontmatter slugs, then content hashes so an
+    /// external filesystem rename does not change the article identity.
+    @discardableResult
+    public func refreshMarkdownSources() throws -> NativeMarkdownSyncResult {
+        try prepare()
+        let records = try MarkdownArticleSource.scan(in: articlesURL)
+        let activeArticles = try allArticles()
+        let allStoredArticles = try allArticles(includingDeleted: true)
+        let activeSlugs = Set(activeArticles.map(\.slug))
+        let deletedArticles = allStoredArticles.filter { article in
+            !activeSlugs.contains(article.slug)
+        }
+        return try reconcileMarkdownSources(
+            records: records,
+            activeArticles: activeArticles,
+            knownSlugs: Set(allStoredArticles.map(\.slug)),
+            deletedSlugs: Set(deletedArticles.map(\.slug)),
+            deletedPaths: Set(deletedArticles.map(\.sourceRelativePath)),
+            affectedPaths: nil
+        )
+    }
+
+    /// Reconciles only paths reported by the filesystem event stream. Existing
+    /// directory paths are scanned recursively, while deleted paths are matched
+    /// against SQLite without rereading unrelated Markdown files.
+    @discardableResult
+    public func refreshMarkdownSources(
+        changedRelativePaths: Set<String>,
+        changedDirectoryPrefixes: Set<String> = []
+    ) throws -> NativeMarkdownSyncResult {
+        try prepare()
+        let paths = try Set(changedRelativePaths.map(MarkdownArticleSource.validatedRelativePath))
+        let directories = try Set(
+            changedDirectoryPrefixes.map(MarkdownArticleSource.validatedRelativeDirectoryPath)
+        )
+        if directories.contains("") { return try refreshMarkdownSources() }
+        guard !paths.isEmpty || !directories.isEmpty else { return NativeMarkdownSyncResult() }
+
+        var recordsByPath: [String: MarkdownArticleSourceRecord] = [:]
+        for path in paths {
+            if let record = try MarkdownArticleSource.readIfPresent(
+                relativePath: path,
+                in: articlesURL
+            ) {
+                recordsByPath[record.relativePath] = record
+            }
+        }
+        for directory in directories {
+            for record in try MarkdownArticleSource.scan(in: articlesURL, beneath: directory) {
+                recordsByPath[record.relativePath] = record
+            }
+        }
+        let records = recordsByPath.values.sorted {
+            $0.relativePath.localizedCaseInsensitiveCompare($1.relativePath) == .orderedAscending
+        }
+        let candidates = try markdownSyncCandidates(
+            records: records,
+            changedPaths: paths,
+            changedDirectories: directories
+        )
+        let deletedIdentities = try deletedArticleSourceIdentities()
+        let affectedPaths: (String) -> Bool = { path in
+            paths.contains(path) || directories.contains { path.hasPrefix($0 + "/") }
+        }
+        return try reconcileMarkdownSources(
+            records: records,
+            activeArticles: candidates,
+            knownSlugs: try storedArticleSlugs(),
+            deletedSlugs: deletedIdentities.slugs,
+            deletedPaths: deletedIdentities.paths,
+            affectedPaths: affectedPaths
+        )
+    }
+
+    private func reconcileMarkdownSources(
+        records: [MarkdownArticleSourceRecord],
+        activeArticles: [NativeArticle],
+        knownSlugs initialKnownSlugs: Set<String>,
+        deletedSlugs: Set<String>,
+        deletedPaths: Set<String>,
+        affectedPaths: ((String) -> Bool)?
+    ) throws -> NativeMarkdownSyncResult {
+        let scannedPaths = Set(records.map(\.relativePath))
+
+        var byPath = Dictionary(uniqueKeysWithValues: activeArticles.map { ($0.sourceRelativePath, $0) })
+        let bySlug = Dictionary(uniqueKeysWithValues: activeArticles.map { ($0.slug, $0) })
+        var byHash: [String: [NativeArticle]] = [:]
+        for article in activeArticles {
+            if let hash = article.sourceContentHash { byHash[hash, default: []].append(article) }
+        }
+
+        var matchedSlugs = Set<String>()
+        var knownSlugs = initialKnownSlugs
+        var insertedCount = 0
+        var updatedCount = 0
+        var movedCount = 0
+        var unchangedCount = 0
+        var warnings: [String] = []
+        var changes: [(previous: NativeArticle?, updated: NativeArticle)] = []
+        var sourceMoves: [(oldPath: String, newPath: String)] = []
+
+        for record in records {
+            if deletedPaths.contains(record.relativePath)
+                || record.slug.map(deletedSlugs.contains) == true {
+                warnings.append("\(record.relativePath)：对应文章仍在回收站，已跳过")
+                continue
+            }
+
+            let hashMatch = byHash[record.contentHash]?.filter { article in
+                !matchedSlugs.contains(article.slug)
+                    && !FileManager.default.fileExists(
+                        atPath: articlesURL.appendingPathComponent(article.sourceRelativePath).path
+                    )
+            }
+            let slugMatch = record.slug.flatMap { bySlug[$0] }.flatMap {
+                !matchedSlugs.contains($0.slug)
+                    && !FileManager.default.fileExists(
+                        atPath: articlesURL.appendingPathComponent($0.sourceRelativePath).path
+                    ) ? $0 : nil
+            }
+            let matched = byPath[record.relativePath].flatMap {
+                matchedSlugs.contains($0.slug) ? nil : $0
+            } ?? slugMatch ?? (hashMatch?.count == 1 ? hashMatch?.first : nil)
+
+            if let matched {
+                matchedSlugs.insert(matched.slug)
+                if matched.sourceContentHash == record.contentHash,
+                   matched.sourceRelativePath == record.relativePath {
+                    unchangedCount += 1
+                    continue
+                }
+                let wasMoved = matched.sourceRelativePath != record.relativePath
+                let updated = article(from: record, preserving: matched)
+                changes.append((matched, updated))
+                byPath[record.relativePath] = updated
+                if wasMoved {
+                    movedCount += 1
+                    sourceMoves.append((matched.sourceRelativePath, record.relativePath))
+                } else {
+                    updatedCount += 1
+                }
+                continue
+            }
+
+            let slug = uniqueSourceSlug(for: record, knownSlugs: &knownSlugs)
+            let inserted = article(from: record, slug: slug)
+            matchedSlugs.insert(slug)
+            changes.append((nil, inserted))
+            insertedCount += 1
+        }
+
+        let missingArticles = activeArticles.filter { article in
+            !matchedSlugs.contains(article.slug)
+                && !scannedPaths.contains(article.sourceRelativePath)
+                && (affectedPaths?(article.sourceRelativePath) ?? true)
+        }
+        let deletedAt = timestamp(from: Date())
+        let expiresAt = timestamp(afterDays: Self.trashRetentionDays)
+        try db().transaction {
+            for change in changes {
+                if let previous = change.previous {
+                    _ = try insertArticleRevision(
+                        draftKey: previous.slug,
+                        articleSlug: previous.slug,
+                        reason: .savedVersion,
+                        snapshot: NativeArticleRevisionSnapshot(article: previous),
+                        createdAt: change.updated.updatedAt,
+                        updatedAt: change.updated.updatedAt
+                    )
+                }
+                try insertArticle(change.updated, into: db())
+            }
+            for article in missingArticles {
+                try db().execute(
+                    "UPDATE articles SET deleted_at = ?, delete_expires_at = ? WHERE slug = ?",
+                    values: [.text(deletedAt), .text(expiresAt), .text(article.slug)]
+                )
+            }
+        }
+        let repairedBacklinks = try repairBacklinks(after: sourceMoves)
+        updatedCount += repairedBacklinks.count
+
+        if !changes.isEmpty || !missingArticles.isEmpty || !repairedBacklinks.isEmpty {
+            do {
+                for change in changes { try writeArticleJSONSidecars(change.updated) }
+                for article in repairedBacklinks { try writeArticleJSONSidecars(article) }
+                for article in missingArticles { removeArticleJSONSidecars(for: article.slug) }
+                try rebuildIndex()
+                try writeTrashBackup()
+            } catch {
+                markJSONBackupNeedsRebuild()
+                warnings.append("Markdown 已同步，但 JSON 备份需要稍后重建")
+            }
+        }
+        return NativeMarkdownSyncResult(
+            insertedCount: insertedCount,
+            updatedCount: updatedCount,
+            movedCount: movedCount,
+            deletedCount: missingArticles.count,
+            unchangedCount: unchangedCount,
+            warnings: warnings
+        )
+    }
+
+    private func markdownSyncCandidates(
+        records: [MarkdownArticleSourceRecord],
+        changedPaths: Set<String>,
+        changedDirectories: Set<String>
+    ) throws -> [NativeArticle] {
+        var articlesBySlug: [String: NativeArticle] = [:]
+        func append(where clause: String, values: [SQLiteValue]) throws {
+            try db().query(
+                articleSelect + " WHERE deleted_at IS NULL AND (\(clause))",
+                values: values
+            ) { row in
+                let article = try decodeArticle(row)
+                articlesBySlug[article.slug] = article
+            }
+        }
+        func appendChunks(values: [String], column: String) throws {
+            let chunkSize = 200
+            for start in stride(from: 0, to: values.count, by: chunkSize) {
+                let chunk = Array(values[start..<min(start + chunkSize, values.count)])
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+                try append(
+                    where: "\(column) IN (\(placeholders))",
+                    values: chunk.map(SQLiteValue.text)
+                )
+            }
+        }
+
+        try appendChunks(
+            values: Array(changedPaths.union(records.map(\.relativePath))),
+            column: "source_relative_path"
+        )
+        try appendChunks(
+            values: Array(Set(records.compactMap(\.slug))),
+            column: "slug"
+        )
+        try appendChunks(
+            values: Array(Set(records.map(\.contentHash))),
+            column: "source_content_hash"
+        )
+        for directory in changedDirectories {
+            try append(
+                where: "instr(source_relative_path, ?) = 1",
+                values: [.text(directory + "/")]
+            )
+        }
+        return Array(articlesBySlug.values)
+    }
+
+    private func storedArticleSlugs() throws -> Set<String> {
+        var result = Set<String>()
+        try db().query("SELECT slug FROM articles") { row in
+            if let slug = row.text(at: 0) { result.insert(slug) }
+        }
+        return result
+    }
+
+    private func deletedArticleSourceIdentities() throws -> (slugs: Set<String>, paths: Set<String>) {
+        var slugs = Set<String>()
+        var paths = Set<String>()
+        try db().query(
+            "SELECT slug, source_relative_path FROM articles WHERE deleted_at IS NOT NULL"
+        ) { row in
+            if let slug = row.text(at: 0) { slugs.insert(slug) }
+            if let path = row.text(at: 1) { paths.insert(path) }
+        }
+        return (slugs, paths)
+    }
+
+    private func repairBacklinks(
+        after moves: [(oldPath: String, newPath: String)]
+    ) throws -> [NativeArticle] {
+        guard !moves.isEmpty else { return [] }
+        var changes: [(previous: NativeArticle, updated: NativeArticle)] = []
+        for article in try allArticles() {
+            var body = article.body
+            for move in moves {
+                body = NativeArticleLink.retargetingWikiLinks(
+                    in: body,
+                    from: move.oldPath,
+                    to: move.newPath
+                )
+            }
+            guard body != article.body else { continue }
+            let changed = NativeArticle(
+                banner: article.banner,
+                body: body,
+                category: article.category,
+                excerpt: article.excerpt,
+                media: article.media,
+                slug: article.slug,
+                status: article.status,
+                tags: article.tags,
+                title: article.title,
+                updatedAt: nextTimestamp(after: article.updatedAt),
+                publishedAt: article.publishedAt,
+                wordCount: wordCount(body),
+                pageViews: article.pageViews,
+                properties: article.properties,
+                sourceRelativePath: article.sourceRelativePath,
+                sourceContentHash: article.sourceContentHash,
+                sourceImportedAt: article.sourceImportedAt
+            )
+            let record = try MarkdownArticleSource.write(
+                changed,
+                relativePath: changed.sourceRelativePath,
+                in: articlesURL
+            )
+            changes.append((article, applyingSourceRecord(record, to: changed)))
+        }
+        try db().transaction {
+            for change in changes {
+                _ = try insertArticleRevision(
+                    draftKey: change.previous.slug,
+                    articleSlug: change.previous.slug,
+                    reason: .savedVersion,
+                    snapshot: NativeArticleRevisionSnapshot(article: change.previous),
+                    createdAt: change.updated.updatedAt,
+                    updatedAt: change.updated.updatedAt
+                )
+                try insertArticle(change.updated, into: db())
+            }
+        }
+        return changes.map(\.updated)
+    }
+
+    private func uniqueSourceSlug(
+        for record: MarkdownArticleSourceRecord,
+        knownSlugs: inout Set<String>
+    ) -> String {
+        let requested = record.slug.flatMap { try? requireSafeSegment($0, label: "文章 slug") }
+        var base = requested ?? slugify(record.title)
+        if Self.reservedMediaDirectories.contains(base) { base += "-note" }
+        var candidate = base
+        var suffix = 2
+        while knownSlugs.contains(candidate) {
+            candidate = "\(base)-\(suffix)"
+            suffix += 1
+        }
+        knownSlugs.insert(candidate)
+        return candidate
+    }
+
+    private func article(
+        from record: MarkdownArticleSourceRecord,
+        preserving previous: NativeArticle
+    ) -> NativeArticle {
+        let updatedAt: String
+        if let declared = record.declaredUpdatedAt,
+           let declaredDate = NativeTimestamp.date(from: declared),
+           let previousDate = NativeTimestamp.date(from: previous.updatedAt),
+           declaredDate > previousDate {
+            updatedAt = declared
+        } else {
+            updatedAt = nextTimestamp(after: previous.updatedAt)
+        }
+        return NativeArticle(
+            banner: record.banner.map(normalizeBanner),
+            body: normalizeBody(record.body),
+            category: record.category,
+            excerpt: record.excerpt,
+            media: record.media.map(normalizeMedia),
+            slug: previous.slug,
+            status: record.status,
+            tags: record.tags,
+            title: record.title,
+            updatedAt: updatedAt,
+            publishedAt: record.publishedAt ?? (record.status == .published ? previous.publishedAt ?? updatedAt : nil),
+            wordCount: wordCount(record.body),
+            pageViews: previous.pageViews,
+            properties: record.properties,
+            sourceRelativePath: record.relativePath,
+            sourceContentHash: record.contentHash,
+            sourceImportedAt: timestamp(from: Date())
+        )
+    }
+
+    private func article(from record: MarkdownArticleSourceRecord, slug: String) -> NativeArticle {
+        let updatedAt = record.declaredUpdatedAt.flatMap {
+            NativeTimestamp.date(from: $0) == nil ? nil : $0
+        } ?? record.modifiedAt
+        return NativeArticle(
+            banner: record.banner.map(normalizeBanner),
+            body: normalizeBody(record.body),
+            category: record.category,
+            excerpt: record.excerpt,
+            media: record.media.map(normalizeMedia),
+            slug: slug,
+            status: record.status,
+            tags: record.tags,
+            title: record.title,
+            updatedAt: updatedAt,
+            publishedAt: record.publishedAt ?? (record.status == .published ? updatedAt : nil),
+            wordCount: wordCount(record.body),
+            properties: record.properties,
+            sourceRelativePath: record.relativePath,
+            sourceContentHash: record.contentHash,
+            sourceImportedAt: timestamp(from: Date())
+        )
+    }
+
+    private func applyingSourceRecord(
+        _ record: MarkdownArticleSourceRecord,
+        to article: NativeArticle
+    ) -> NativeArticle {
+        NativeArticle(
+            banner: article.banner,
+            body: article.body,
+            category: article.category,
+            excerpt: article.excerpt,
+            media: article.media,
+            slug: article.slug,
+            status: article.status,
+            tags: article.tags,
+            title: article.title,
+            updatedAt: article.updatedAt,
+            publishedAt: article.publishedAt,
+            wordCount: article.wordCount,
+            pageViews: article.pageViews,
+            properties: article.properties,
+            sourceRelativePath: record.relativePath,
+            sourceContentHash: record.contentHash,
+            sourceImportedAt: timestamp(from: Date())
+        )
+    }
+
+    /// Renames one property key across every active article as a single SQLite transaction.
+    /// A destination with a different value aborts the whole operation instead of losing data.
+    @discardableResult
+    public func renameArticleProperty(from oldKey: String, to newKey: String) throws -> Int {
+        try prepare()
+        let sourceKey = oldKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let destinationKey = newKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard NativeArticleProperties.isValidKey(sourceKey) else {
+            throw NativeArticlePropertyError.invalidKey(oldKey)
+        }
+
+        var changes: [(previous: NativeArticle, updated: NativeArticle)] = []
+        for article in try allArticles() {
+            let properties = try NativeArticleProperties.renaming(
+                sourceKey,
+                to: destinationKey,
+                in: article.properties
+            )
+            guard properties != article.properties else { continue }
+            let updatedAt = nextTimestamp(after: article.updatedAt)
+            let changed = NativeArticle(
+                    banner: article.banner,
+                    body: article.body,
+                    category: article.category,
+                    excerpt: article.excerpt,
+                    media: article.media,
+                    slug: article.slug,
+                    status: article.status,
+                    tags: article.tags,
+                    title: article.title,
+                    updatedAt: updatedAt,
+                    publishedAt: article.publishedAt,
+                    wordCount: article.wordCount,
+                    pageViews: article.pageViews,
+                    properties: properties,
+                    sourceRelativePath: article.sourceRelativePath,
+                    sourceContentHash: article.sourceContentHash,
+                    sourceImportedAt: article.sourceImportedAt
+                )
+            let record = try MarkdownArticleSource.write(
+                changed,
+                relativePath: changed.sourceRelativePath,
+                in: articlesURL
+            )
+            changes.append((article, applyingSourceRecord(record, to: changed)))
+        }
+        try db().transaction {
+            for change in changes {
+                _ = try insertArticleRevision(
+                    draftKey: change.previous.slug,
+                    articleSlug: change.previous.slug,
+                    reason: .savedVersion,
+                    snapshot: NativeArticleRevisionSnapshot(article: change.previous),
+                    createdAt: change.updated.updatedAt,
+                    updatedAt: change.updated.updatedAt
+                )
+                try insertArticle(change.updated, into: db())
+            }
+        }
+        guard !changes.isEmpty else { return 0 }
+        do {
+            for change in changes { try writeArticleJSONSidecars(change.updated) }
+            try rebuildIndex()
+        } catch {
+            markJSONBackupNeedsRebuild()
+        }
+        return changes.count
+    }
+
+    public func listArticles(in collection: NativeSmartCollection) throws -> [NativeArticleSummary] {
+        try prepare()
+        let query = NativeSmartCollectionSQLCompiler.compile(collection)
+        let limit = collection.selectedView?.limit
+        let limitClause = limit == nil ? "" : " LIMIT ?"
+        let values = query.values + (limit.map { [.integer($0)] } ?? [])
+        var articles: [NativeArticleSummary] = []
+        try db().query(
+            "\(qualifiedArticleSummarySelect("a")) \(query.whereClause) \(query.orderClause)\(limitClause)",
+            values: values
+        ) { row in
+            articles.append(try decodeArticleSummary(row))
+        }
+        return articles
+    }
+
+    public func setArticleProperty(
+        slug: String,
+        expectedUpdatedAt: String,
+        key: String,
+        value: NativeArticlePropertyValue?
+    ) throws -> NativeArticle {
+        try prepare()
+        let article = try getArticle(slug: slug)
+        guard article.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
+        let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard NativeArticleProperties.isValidKey(normalizedKey) else {
+            throw NativeArticlePropertyError.invalidKey(key)
+        }
+        var properties = article.properties
+        if let existing = properties.keys.first(where: {
+            $0.caseInsensitiveCompare(normalizedKey) == .orderedSame
+        }) {
+            properties.removeValue(forKey: existing)
+        }
+        if let value { properties[normalizedKey] = value }
+        properties = try NativeArticleProperties.validated(properties)
+        return try saveArticle(NativeSaveArticle(
+            banner: article.banner,
+            body: article.body,
+            category: article.category,
+            excerpt: article.excerpt,
+            media: article.media,
+            slug: article.slug,
+            status: article.status,
+            tags: article.tags,
+            title: article.title,
+            expectedUpdatedAt: expectedUpdatedAt,
+            properties: properties
+        ))
+    }
+
+    public func listSmartCollections() throws -> [NativeSmartCollection] {
+        try prepare()
+        try migrateSmartCollectionFilesIfNeeded()
+        let collections = try NativeSmartCollectionFile.readAll(in: basesURL)
+        try db().transaction {
+            try db().execute("DELETE FROM smart_collections")
+            for collection in collections {
+                try db().execute(
+                    "INSERT INTO smart_collections(id, config_json, updated_at) VALUES (?, ?, ?)",
+                    values: [
+                        .text(collection.id),
+                        .text(try jsonString(collection)),
+                        .text(collection.updatedAt),
+                    ]
+                )
+            }
+        }
+        return collections.sorted {
+            $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt
+        }
+    }
+
+    @discardableResult
+    public func saveSmartCollection(_ collection: NativeSmartCollection) throws -> NativeSmartCollection {
+        try prepare()
+        var candidate = collection
+        candidate.synchronizeActiveView()
+        let name = candidate.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let formulaKeys = candidate.formulas.map {
+            $0.key.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        }
+        let columnsAreValid: ([NativeSmartCollectionColumn]) -> Bool = { columns in columns.allSatisfy { column in
+            switch column.source {
+            case .system: return NativeSmartCollectionSystemField(rawValue: column.key) != nil
+            case .property: return NativeArticleProperties.isValidKey(column.key)
+            case .formula:
+                return candidate.formulas.contains {
+                    $0.key.caseInsensitiveCompare(column.key) == .orderedSame
+                }
+            }
+        } }
+        let filters = [candidate.filter].compactMap { $0 } + candidate.views.compactMap(\.filter)
+        guard !name.isEmpty, name.count <= 80,
+              candidate.rules.count <= 20,
+              candidate.rules.allSatisfy(\.isValid),
+              filters.reduce(0, { $0 + $1.ruleCount + $1.expressionCount }) <= 100,
+              filters.allSatisfy(\.allRulesAreValid),
+              candidate.views.count <= 50,
+              candidate.sorts.count <= 3,
+              candidate.views.allSatisfy({ $0.sorts.count <= 3 && $0.columns.count <= 30 }),
+              candidate.columns.count <= 30,
+              candidate.formulas.count <= 20,
+              candidate.formulas.allSatisfy(\.isValid),
+              Set(formulaKeys).count == formulaKeys.count,
+              columnsAreValid(candidate.columns),
+              candidate.views.allSatisfy({ columnsAreValid($0.columns) }) else {
+            throw NativeStoreError.fileSystem("智能集合名称、筛选或排序数量无效")
+        }
+        try migrateSmartCollectionFilesIfNeeded()
+        var saved = candidate
+        saved.name = name
+        saved.sorts = Array(saved.sorts.prefix(3))
+        saved.columns = Array(saved.columns.prefix(30)).map { column in
+            var normalized = column
+            normalized.key = column.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            normalized.title = column.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            normalized.width = min(max(column.width, 80), 480)
+            return normalized
+        }
+        saved.formulas = Array(saved.formulas.prefix(20))
+        saved.updatedAt = timestamp(from: Date())
+        let previous = try NativeSmartCollectionFile.readAll(in: basesURL).first(where: { $0.id == saved.id })
+        _ = try NativeSmartCollectionFile.write(saved, in: basesURL)
+        guard let persisted = try NativeSmartCollectionFile.readAll(in: basesURL)
+            .first(where: { $0.id == saved.id }) else {
+            throw NativeStoreError.fileSystem("智能集合写入后无法重新读取")
+        }
+        saved = persisted
+        do {
+            try db().execute(
+                """
+                INSERT OR REPLACE INTO smart_collections(id, config_json, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                values: [.text(saved.id), .text(try jsonString(saved)), .text(saved.updatedAt)]
+            )
+        } catch {
+            if let previous { _ = try? NativeSmartCollectionFile.write(previous, in: basesURL) }
+            else { try? NativeSmartCollectionFile.remove(id: saved.id, in: basesURL) }
+            throw error
+        }
+        return saved
+    }
+
+    public func deleteSmartCollection(id: String) throws {
+        try prepare()
+        try migrateSmartCollectionFilesIfNeeded()
+        let previous = try NativeSmartCollectionFile.readAll(in: basesURL).first(where: { $0.id == id })
+        try NativeSmartCollectionFile.remove(id: id, in: basesURL)
+        do {
+            try db().execute("DELETE FROM smart_collections WHERE id = ?", values: [.text(id)])
+        } catch {
+            if let previous { _ = try? NativeSmartCollectionFile.write(previous, in: basesURL) }
+            throw error
+        }
+    }
+
+    private func migrateSmartCollectionFilesIfNeeded() throws {
+        guard !FileManager.default.fileExists(atPath: basesMarkerURL.path) else { return }
+        var collections: [NativeSmartCollection] = []
+        try db().query("SELECT config_json FROM smart_collections ORDER BY updated_at DESC, id") { row in
+            guard let json = row.text(at: 0) else {
+                throw NativeStoreError.fileSystem("SQLite：智能集合记录不完整")
+            }
+            collections.append(try decode(json))
+        }
+        for collection in collections { _ = try NativeSmartCollectionFile.write(collection, in: basesURL) }
+        try Data().write(to: basesMarkerURL, options: .atomic)
+    }
+
+    public func listBookmarks() throws -> [NativeBookmark] {
+        try prepare()
+        var bookmarks: [NativeBookmark] = []
+        try db().query("SELECT bookmark_json FROM bookmarks ORDER BY position, created_at, id") { row in
+            guard let json = row.text(at: 0) else {
+                throw NativeStoreError.fileSystem("SQLite：收藏记录不完整")
+            }
+            bookmarks.append(try decode(json))
+        }
+        return bookmarks
+    }
+
+    @discardableResult
+    public func saveBookmark(_ bookmark: NativeBookmark) throws -> NativeBookmark {
+        try prepare()
+        var saved = bookmark
+        saved.title = saved.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        saved.groupName = saved.groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !saved.title.isEmpty, saved.title.count <= 120, saved.groupName.count <= 80 else {
+            throw NativeStoreError.fileSystem("收藏标题或分组名称无效")
+        }
+        let nextPosition = (try db().integer("SELECT COALESCE(MAX(position), -1) + 1 FROM bookmarks")) ?? 0
+        try db().execute(
+            """
+            INSERT INTO bookmarks(id, bookmark_json, position, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET bookmark_json = excluded.bookmark_json
+            """,
+            values: [
+                .text(saved.id),
+                .text(try jsonString(saved)),
+                .integer(nextPosition),
+                .text(saved.createdAt),
+            ]
+        )
+        return saved
+    }
+
+    public func deleteBookmark(id: String) throws {
+        try prepare()
+        try db().execute("DELETE FROM bookmarks WHERE id = ?", values: [.text(id)])
     }
 
     public func search(
@@ -168,12 +909,14 @@ public actor LocalBlogStore {
         for term in shortTerms {
             predicates.append("""
             (instr(lower(title), lower(?)) > 0
+             OR instr(lower(aliases), lower(?)) > 0
              OR instr(lower(body), lower(?)) > 0
              OR instr(lower(excerpt), lower(?)) > 0
              OR instr(lower(tags), lower(?)) > 0
-             OR instr(lower(category), lower(?)) > 0)
+             OR instr(lower(category), lower(?)) > 0
+             OR instr(lower(properties), lower(?)) > 0)
             """)
-            values.append(contentsOf: Array(repeating: .text(term), count: 5))
+            values.append(contentsOf: Array(repeating: .text(term), count: 7))
         }
 
         for tag in query.tags {
@@ -199,11 +942,62 @@ public actor LocalBlogStore {
             predicates.append("created_at < ?")
             values.append(.text(NativeTimestamp.string(from: before)))
         }
+        for property in query.propertyFilters {
+            predicates.append("""
+            (document_type = 'article' AND EXISTS (
+                SELECT 1
+                FROM articles AS property_article,
+                     json_each(property_article.properties_json) AS property_value
+                WHERE property_article.slug = document_id
+                  AND property_article.deleted_at IS NULL
+                  AND lower(property_value.key) = lower(?)
+                  AND (
+                      (property_value.type = 'object'
+                       AND json_extract(property_value.value, '$.kind') IN ('list', 'tags')
+                       AND EXISTS (
+                           SELECT 1
+                           FROM json_each(json_extract(property_value.value, '$.value')) AS list_item
+                           WHERE lower(CAST(list_item.value AS TEXT)) = lower(?)
+                       ))
+                      OR
+                      (property_value.type = 'object'
+                       AND json_extract(property_value.value, '$.kind') NOT IN ('list', 'tags')
+                       AND lower(COALESCE(json_extract(property_value.value, '$.value'), '')) = lower(?))
+                      OR
+                      (property_value.type != 'object'
+                       AND json_valid(CAST(property_value.value AS TEXT))
+                       AND json_type(CASE
+                           WHEN json_valid(CAST(property_value.value AS TEXT))
+                           THEN CAST(property_value.value AS TEXT)
+                           ELSE 'null'
+                       END) = 'array'
+                       AND EXISTS (
+                           SELECT 1
+                           FROM json_each(CAST(property_value.value AS TEXT)) AS legacy_list_item
+                           WHERE lower(CAST(legacy_list_item.value AS TEXT)) = lower(?)
+                       ))
+                      OR
+                      (property_value.type != 'object'
+                       AND NOT (
+                           json_valid(CAST(property_value.value AS TEXT))
+                           AND json_type(CASE
+                               WHEN json_valid(CAST(property_value.value AS TEXT))
+                               THEN CAST(property_value.value AS TEXT)
+                               ELSE 'null'
+                           END) = 'array'
+                       )
+                       AND lower(CAST(property_value.value AS TEXT)) = lower(?))
+                  )
+            ))
+            """)
+            values.append(.text(property.key))
+            values.append(contentsOf: Array(repeating: .text(property.value), count: 4))
+        }
 
         let whereClause = predicates.isEmpty ? "" : "WHERE \(predicates.joined(separator: " AND "))"
         let ordering = indexedTerms.isEmpty
             ? "updated_at DESC"
-            : "bm25(content_search, 0.0, 0.0, 8.0, 3.0, 4.0, 2.0, 2.0) ASC, updated_at DESC"
+            : "bm25(content_search, 0.0, 0.0, 8.0, 7.0, 3.0, 4.0, 2.0, 2.0, 5.0, 0.0, 0.0, 0.0) ASC, updated_at DESC"
         values.append(.integer(min(max(limit, 1), 200)))
 
         var results: [NativeGlobalSearchResult] = []
@@ -253,33 +1047,135 @@ public actor LocalBlogStore {
         return results
     }
 
-    /// Derives wiki-style article links from the current article bodies, so title
-    /// changes and edits are reflected immediately without a second link index.
+    /// Reads incrementally maintained raw wiki-link references and resolves them
+    /// against current titles, slugs, paths, and aliases without loading bodies.
     public func articleRelations(for slug: String) throws -> NativeArticleRelations {
         try prepare()
         let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
-        let allArticles = try allArticles()
-        guard let article = allArticles.first(where: { $0.slug == safeSlug }) else {
+        let summaries = try allArticleSummaries()
+        guard let article = summaries.first(where: { $0.slug == safeSlug }) else {
             throw NativeStoreError.notFound
         }
 
-        let graph = articleGraph(from: allArticles)
-        let summariesBySlug = Dictionary(uniqueKeysWithValues: graph.nodes.map { ($0.slug, $0) })
-        let outgoing = graph.edges.compactMap { edge in
-            edge.sourceSlug == article.slug ? summariesBySlug[edge.targetSlug] : nil
+        let summariesBySlug = Dictionary(uniqueKeysWithValues: summaries.map { ($0.slug, $0) })
+        let resolver = NativeArticleLinkIdentityIndex(summaries)
+        let outgoing = try indexedOutgoingArticles(
+            from: article.slug,
+            summariesBySlug: summariesBySlug,
+            resolver: resolver
+        )
+        let incoming = try indexedIncomingArticles(
+            to: article,
+            summariesBySlug: summariesBySlug,
+            resolver: resolver
+        )
+
+        let unlinkedMentions = try mentionCandidates(
+            containing: article.title,
+            excluding: article.slug
+        ).compactMap { candidate -> NativeArticleMention? in
+            guard let mention = unlinkedMention(of: article.title, in: candidate.body),
+                  let summary = summariesBySlug[candidate.slug] else {
+                return nil
+            }
+            return NativeArticleMention(article: summary, count: mention.count, snippet: mention.snippet)
         }
-        let incoming = graph.edges.compactMap { edge in
-            edge.targetSlug == article.slug && edge.sourceSlug != article.slug
-                ? summariesBySlug[edge.sourceSlug]
-                : nil
+        .sorted {
+            if $0.count != $1.count { return $0.count > $1.count }
+            return $0.article.updatedAt > $1.article.updatedAt
         }
 
-        return NativeArticleRelations(outgoing: outgoing, incoming: incoming)
+        return NativeArticleRelations(
+            outgoing: outgoing,
+            incoming: incoming,
+            unlinkedMentions: unlinkedMentions
+        )
+    }
+
+    private func unlinkedMention(of title: String, in body: String) -> (count: Int, snippet: String)? {
+        let target = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard target.count >= 2 else { return nil }
+
+        let markerSlug = "__leon_unlinked_mention__"
+        let analysis = NativeArticleLink.linkingUnlinkedMentions(
+            of: target,
+            to: markerSlug,
+            in: body
+        )
+        let markerPrefix = "[[\(markerSlug)|"
+        guard analysis.count > 0,
+              let prefixRange = analysis.body.range(of: markerPrefix),
+              let closingRange = analysis.body.range(
+                of: "]]",
+                range: prefixRange.upperBound..<analysis.body.endIndex
+              ) else { return nil }
+        let lower = analysis.body.index(
+            prefixRange.lowerBound,
+            offsetBy: -72,
+            limitedBy: analysis.body.startIndex
+        ) ?? analysis.body.startIndex
+        let upper = analysis.body.index(
+            closingRange.upperBound,
+            offsetBy: 120,
+            limitedBy: analysis.body.endIndex
+        ) ?? analysis.body.endIndex
+        let markedSnippet = String(analysis.body[lower..<upper])
+        let markerExpression = try! NSRegularExpression(
+            pattern: #"\[\[__leon_unlinked_mention__\|([^\]]+)\]\]"#
+        )
+        let cleanedSnippet = markerExpression.stringByReplacingMatches(
+            in: markedSnippet,
+            range: NSRange(markedSnippet.startIndex..., in: markedSnippet),
+            withTemplate: "$1"
+        )
+        let compact = cleanedSnippet
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        let prefix = lower == analysis.body.startIndex ? "" : "…"
+        let suffix = upper == analysis.body.endIndex ? "" : "…"
+        return (analysis.count, prefix + compact + suffix)
+    }
+
+    @discardableResult
+    public func convertUnlinkedMention(
+        sourceSlug: String,
+        targetSlug: String,
+        expectedUpdatedAt: String
+    ) throws -> NativeArticle {
+        try prepare()
+        let safeSourceSlug = try requireSafeSegment(sourceSlug, label: "来源文章 slug")
+        let safeTargetSlug = try requireSafeSegment(targetSlug, label: "目标文章 slug")
+        guard let source = try storedArticle(withSlug: safeSourceSlug),
+              let target = try storedArticle(withSlug: safeTargetSlug) else {
+            throw NativeStoreError.notFound
+        }
+        guard source.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
+        let replacement = NativeArticleLink.linkingUnlinkedMentions(
+            of: target.title,
+            to: target.slug,
+            in: source.body
+        )
+        guard replacement.count > 0 else {
+            throw NativeStoreError.fileSystem("未找到可转换的未链接提及")
+        }
+        return try saveArticle(NativeSaveArticle(
+            banner: source.banner,
+            body: replacement.body,
+            category: source.category,
+            excerpt: source.excerpt,
+            media: source.media,
+            slug: source.slug,
+            status: source.status,
+            tags: source.tags,
+            title: source.title,
+            expectedUpdatedAt: source.updatedAt,
+            properties: source.properties
+        ))
     }
 
     public func articleGraph() throws -> NativeArticleGraph {
         try prepare()
-        return articleGraph(from: try allArticles())
+        return try indexedArticleGraph(nodes: allArticleSummaries())
     }
 
     public func listMoments() throws -> [NativeMoment] {
@@ -555,6 +1451,378 @@ public actor LocalBlogStore {
         return article
     }
 
+    public func extractArticleSelection(
+        sourceSlug: String,
+        expectedUpdatedAt: String,
+        sourceBody: String,
+        selectedRange: NSRange,
+        newTitle: String,
+        replacement: NativeArticleExtractionReplacement
+    ) throws -> NativeArticleRefactorResult {
+        try prepare()
+        let source = try getArticle(slug: sourceSlug)
+        guard source.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
+        let title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { throw NativeStoreError.invalidArticle }
+        let targetSlug = try allocateSlug(from: title)
+        let extraction = try ArticleKnowledgeComposer.extract(
+            from: sourceBody,
+            selectedRange: selectedRange,
+            targetSlug: targetSlug,
+            replacement: replacement
+        )
+        let sourceUpdated = refactoredArticle(
+            source,
+            body: extraction.sourceBody,
+            updatedAt: nextTimestamp(after: source.updatedAt)
+        )
+        let createdAt = nextTimestamp(after: sourceUpdated.updatedAt)
+        let extracted = NativeArticle(
+            banner: nil,
+            body: extraction.extractedBody,
+            category: source.category,
+            excerpt: "",
+            media: [],
+            slug: targetSlug,
+            status: .draft,
+            tags: source.tags,
+            title: title,
+            updatedAt: createdAt,
+            publishedAt: nil,
+            wordCount: wordCount(extraction.extractedBody),
+            properties: [:],
+            sourceRelativePath: MarkdownArticleSource.defaultRelativePath(for: targetSlug)
+        )
+        let saved = try persistArticleRefactor([
+            (previous: source, updated: sourceUpdated),
+            (previous: nil, updated: extracted),
+        ])
+        guard let primary = saved.first(where: { $0.slug == source.slug }),
+              let created = saved.first(where: { $0.slug == targetSlug }) else {
+            throw NativeStoreError.fileSystem("文章提取结果不完整")
+        }
+        return NativeArticleRefactorResult(primaryArticle: primary, createdArticles: [created])
+    }
+
+    public func splitArticleByLevel2Headings(
+        sourceSlug: String,
+        expectedUpdatedAt: String,
+        sourceBody: String,
+        replacement: NativeArticleExtractionReplacement
+    ) throws -> NativeArticleRefactorResult {
+        try prepare()
+        let source = try getArticle(slug: sourceSlug)
+        guard source.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
+        let split = ArticleKnowledgeComposer.level2Sections(in: sourceBody)
+        guard !split.sections.isEmpty else { throw NativeStoreError.noLevel2Sections }
+
+        var reservedSlugs = try existingArticleSlugs()
+        var targets: [(title: String, slug: String)] = []
+        for section in split.sections {
+            var suffix = 1
+            var slug = try allocateSlug(from: section.title)
+            while reservedSlugs.contains(slug) {
+                suffix += 1
+                slug = try allocateSlug(from: "\(section.title)-\(suffix)")
+            }
+            reservedSlugs.insert(slug)
+            targets.append((section.title, slug))
+        }
+
+        let indexBody = ArticleKnowledgeComposer.splitIndexBody(
+            preamble: split.preamble,
+            targets: targets,
+            replacement: replacement
+        )
+        let sourceUpdated = refactoredArticle(
+            source,
+            body: indexBody,
+            updatedAt: nextTimestamp(after: source.updatedAt)
+        )
+        var changes: [(previous: NativeArticle?, updated: NativeArticle)] = [
+            (previous: source, updated: sourceUpdated),
+        ]
+        var previousTimestamp = sourceUpdated.updatedAt
+        for (section, target) in zip(split.sections, targets) {
+            let updatedAt = nextTimestamp(after: previousTimestamp)
+            previousTimestamp = updatedAt
+            changes.append((previous: nil, updated: NativeArticle(
+                banner: nil,
+                body: section.body.isEmpty ? "_本节暂无正文。_" : section.body,
+                category: source.category,
+                excerpt: "",
+                media: [],
+                slug: target.slug,
+                status: .draft,
+                tags: source.tags,
+                title: target.title,
+                updatedAt: updatedAt,
+                publishedAt: nil,
+                wordCount: wordCount(section.body),
+                properties: [:],
+                sourceRelativePath: MarkdownArticleSource.defaultRelativePath(for: target.slug)
+            )))
+        }
+
+        let saved = try persistArticleRefactor(changes)
+        guard let primary = saved.first(where: { $0.slug == source.slug }) else {
+            throw NativeStoreError.fileSystem("文章拆分结果不完整")
+        }
+        let createdSlugs = Set(targets.map(\.slug))
+        let created = saved.filter { createdSlugs.contains($0.slug) }
+        return NativeArticleRefactorResult(primaryArticle: primary, createdArticles: created)
+    }
+
+    public func mergeArticle(
+        sourceSlug: String,
+        destinationSlug: String,
+        expectedSourceUpdatedAt: String,
+        expectedDestinationUpdatedAt: String,
+        position: NativeArticleMergePosition
+    ) throws -> NativeArticleRefactorResult {
+        try prepare()
+        guard sourceSlug != destinationSlug else { throw NativeStoreError.invalidArticleMerge }
+        let source = try getArticle(slug: sourceSlug)
+        let destination = try getArticle(slug: destinationSlug)
+        guard source.updatedAt == expectedSourceUpdatedAt,
+              destination.updatedAt == expectedDestinationUpdatedAt else {
+            throw NativeStoreError.conflict
+        }
+
+        let mergedBody = ArticleKnowledgeComposer.mergedBody(
+            source: source,
+            destination: destination,
+            position: position
+        )
+        var changes: [(previous: NativeArticle?, updated: NativeArticle)] = []
+        for article in try allArticles() where article.slug != source.slug {
+            let candidate = article.slug == destination.slug ? mergedBody : article.body
+            let retargeted = ArticleKnowledgeComposer.retargetingArticleReferences(
+                in: candidate,
+                source: source,
+                destinationSlug: destination.slug
+            )
+            guard retargeted != article.body || article.slug == destination.slug else { continue }
+            let media: [NativeMedia]? = article.slug == destination.slug
+                ? (destination.media + source.media).reduce(into: []) { result, item in
+                    if !result.contains(where: { $0.url == item.url }) { result.append(item) }
+                }
+                : nil
+            changes.append((previous: article, updated: refactoredArticle(
+                article,
+                body: retargeted,
+                updatedAt: nextTimestamp(after: article.updatedAt),
+                media: media
+            )))
+        }
+        let saved = try persistArticleRefactor(changes, removing: source)
+        guard let primary = saved.first(where: { $0.slug == destination.slug }) else {
+            throw NativeStoreError.fileSystem("文章合并结果不完整")
+        }
+        return NativeArticleRefactorResult(
+            primaryArticle: primary,
+            updatedArticleCount: saved.count,
+            removedSlugs: [source.slug]
+        )
+    }
+
+    public func toggleArticleTask(
+        slug: String,
+        expectedUpdatedAt: String,
+        lineIndex: Int,
+        completed: Bool
+    ) throws -> NativeArticle {
+        try prepare()
+        let article = try getArticle(slug: slug)
+        guard article.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
+        let body = try ArticleKnowledgeComposer.toggleTask(
+            in: article.body,
+            lineIndex: lineIndex,
+            completed: completed
+        )
+        let updated = refactoredArticle(
+            article,
+            body: body,
+            updatedAt: nextTimestamp(after: article.updatedAt)
+        )
+        guard let saved = try persistArticleRefactor([
+            (previous: article, updated: updated),
+        ]).first else { throw NativeStoreError.notFound }
+        return saved
+    }
+
+    private func refactoredArticle(
+        _ article: NativeArticle,
+        body: String,
+        updatedAt: String,
+        media: [NativeMedia]? = nil
+    ) -> NativeArticle {
+        NativeArticle(
+            banner: article.banner,
+            body: normalizeBody(body),
+            category: article.category,
+            excerpt: article.excerpt,
+            media: media ?? article.media,
+            slug: article.slug,
+            status: article.status,
+            tags: article.tags,
+            title: article.title,
+            updatedAt: updatedAt,
+            publishedAt: article.publishedAt,
+            wordCount: wordCount(body),
+            pageViews: article.pageViews,
+            properties: article.properties,
+            sourceRelativePath: article.sourceRelativePath,
+            sourceContentHash: article.sourceContentHash,
+            sourceImportedAt: article.sourceImportedAt
+        )
+    }
+
+    private func persistArticleRefactor(
+        _ changes: [(previous: NativeArticle?, updated: NativeArticle)],
+        removing removed: NativeArticle? = nil
+    ) throws -> [NativeArticle] {
+        var sourced: [(previous: NativeArticle?, updated: NativeArticle)] = []
+        do {
+            for change in changes {
+                let record = try MarkdownArticleSource.write(
+                    change.updated,
+                    relativePath: change.updated.sourceRelativePath,
+                    in: articlesURL
+                )
+                sourced.append((change.previous, applyingSourceRecord(record, to: change.updated)))
+            }
+            if let removed {
+                try MarkdownArticleSource.remove(relativePath: removed.sourceRelativePath, in: articlesURL)
+            }
+        } catch {
+            rollbackArticleRefactor(sourced, restoring: removed)
+            throw error
+        }
+
+        do {
+            try db().transaction {
+                for change in sourced {
+                    if let previous = change.previous {
+                        _ = try insertArticleRevision(
+                            draftKey: previous.slug,
+                            articleSlug: previous.slug,
+                            reason: .savedVersion,
+                            snapshot: NativeArticleRevisionSnapshot(article: previous),
+                            createdAt: change.updated.updatedAt,
+                            updatedAt: change.updated.updatedAt
+                        )
+                    }
+                    try insertArticle(change.updated, into: db())
+                }
+                if let removed {
+                    let deletedAt = timestamp(from: Date())
+                    let expiresAt = timestamp(afterDays: Self.trashRetentionDays)
+                    try db().execute(
+                        "UPDATE articles SET deleted_at = ?, delete_expires_at = ? WHERE slug = ?",
+                        values: [.text(deletedAt), .text(expiresAt), .text(removed.slug)]
+                    )
+                }
+            }
+        } catch {
+            rollbackArticleRefactor(sourced, restoring: removed)
+            throw error
+        }
+
+        for change in sourced { try? trimArticleRevisions(draftKey: change.updated.slug) }
+        do {
+            for change in sourced { try writeArticleJSONSidecars(change.updated) }
+            if let removed {
+                removeArticleJSONSidecars(for: removed.slug)
+                try writeTrashBackup()
+            }
+            try rebuildIndex()
+        } catch {
+            markJSONBackupNeedsRebuild()
+        }
+        return sourced.map(\.updated)
+    }
+
+    private func rollbackArticleRefactor(
+        _ changes: [(previous: NativeArticle?, updated: NativeArticle)],
+        restoring removed: NativeArticle?
+    ) {
+        for change in changes.reversed() {
+            if let previous = change.previous {
+                _ = try? MarkdownArticleSource.write(
+                    previous,
+                    relativePath: previous.sourceRelativePath,
+                    in: articlesURL
+                )
+            } else {
+                try? MarkdownArticleSource.remove(
+                    relativePath: change.updated.sourceRelativePath,
+                    in: articlesURL
+                )
+            }
+        }
+        if let removed {
+            _ = try? MarkdownArticleSource.write(
+                removed,
+                relativePath: removed.sourceRelativePath,
+                in: articlesURL
+            )
+        }
+    }
+
+    /// Moves or renames the source file without changing its stable slug, so
+    /// comments, revisions, page views, and slug-based backlinks remain valid.
+    public func moveArticleSource(
+        slug: String,
+        to relativePath: String,
+        expectedUpdatedAt: String
+    ) throws -> NativeArticle {
+        try prepare()
+        let article = try getArticle(slug: slug)
+        guard article.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
+        let destination = try MarkdownArticleSource.validatedRelativePath(relativePath)
+        guard destination != article.sourceRelativePath else { return article }
+        let occupied = try db().integer(
+            "SELECT COUNT(*) FROM articles WHERE source_relative_path = ? AND slug <> ?",
+            values: [.text(destination), .text(article.slug)]
+        ) ?? 0
+        guard occupied == 0 else {
+            throw NativeStoreError.fileSystem("目标 Markdown 路径已被另一篇文章占用")
+        }
+
+        let record = try MarkdownArticleSource.move(
+            from: article.sourceRelativePath,
+            to: destination,
+            in: articlesURL
+        )
+        let moved = applyingSourceRecord(record, to: article)
+        do {
+            try insertArticle(moved, into: db())
+        } catch {
+            _ = try? MarkdownArticleSource.move(
+                from: destination,
+                to: article.sourceRelativePath,
+                in: articlesURL
+            )
+            throw error
+        }
+        let repairedBacklinks = try repairBacklinks(after: [(
+            oldPath: article.sourceRelativePath,
+            newPath: destination,
+        )])
+        let finalMovedArticle = repairedBacklinks.first(where: { $0.slug == moved.slug }) ?? moved
+        do {
+            try writeArticleJSONSidecars(finalMovedArticle)
+            for repaired in repairedBacklinks where repaired.slug != moved.slug {
+                try writeArticleJSONSidecars(repaired)
+            }
+            try rebuildIndex()
+        } catch {
+            markJSONBackupNeedsRebuild()
+        }
+        return finalMovedArticle
+    }
+
     public func incrementArticlePageViews(slug: String) throws -> NativeArticle {
         try prepare()
         let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
@@ -564,7 +1832,7 @@ public actor LocalBlogStore {
         )
         guard let updated = try storedArticle(withSlug: safeSlug) else { throw NativeStoreError.notFound }
         do {
-            try writeArticleSidecars(updated)
+            try writeArticleJSONSidecars(updated)
             try rebuildIndex()
         } catch {
             markJSONBackupNeedsRebuild()
@@ -698,6 +1966,105 @@ public actor LocalBlogStore {
         }
     }
 
+    public func listArticleComments(articleSlug: String) throws -> [NativeArticleComment] {
+        try prepare()
+        let safeSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
+        var comments: [NativeArticleComment] = []
+        try db().query(
+            commentSelect + " WHERE article_slug = ? ORDER BY created_at, id",
+            values: [.text(safeSlug)]
+        ) { row in
+            comments.append(try decodeArticleComment(row))
+        }
+        return comments
+    }
+
+    public func createArticleComment(
+        articleSlug: String,
+        authorName: String,
+        text: String,
+        selection: NativeArticleCommentSelection? = nil,
+        parentID: String? = nil,
+        at date: Date = Date()
+    ) throws -> NativeArticleComment {
+        try prepare()
+        let safeSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
+        guard try storedArticle(withSlug: safeSlug) != nil else { throw NativeStoreError.notFound }
+
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedText.isEmpty, normalizedText.count <= 2_000 else {
+            throw NativeStoreError.invalidComment
+        }
+        let normalizedAuthor = String(
+            authorName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80)
+        )
+        guard !normalizedAuthor.isEmpty else { throw NativeStoreError.invalidComment }
+
+        let safeParentID = try parentID.map { try requireSafeSegment($0, label: "父评论标识") }
+        if let safeParentID {
+            let parentCount = try db().integer(
+                "SELECT COUNT(*) FROM article_comments WHERE id = ? AND article_slug = ?",
+                values: [.text(safeParentID), .text(safeSlug)]
+            ) ?? 0
+            guard parentCount == 1 else { throw NativeStoreError.notFound }
+        }
+
+        let normalizedSelection = selection.flatMap { value -> NativeArticleCommentSelection? in
+            let quote = value.quote.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !quote.isEmpty else { return nil }
+            let anchor = (try? requireSafeSegment(value.anchorID, label: "评论锚点"))
+                ?? NativeArticleCommentAnchor.articleTopID
+            return NativeArticleCommentSelection(quote: String(quote.prefix(800)), anchorID: anchor)
+        }
+        let id = UUID().uuidString.lowercased()
+        let createdAt = timestamp(from: date)
+        let comment = NativeArticleComment(
+            id: id,
+            articleSlug: safeSlug,
+            parentID: safeParentID,
+            authorName: normalizedAuthor,
+            text: normalizedText,
+            selection: normalizedSelection,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        try db().execute(
+            """
+            INSERT INTO article_comments(
+                id, article_slug, parent_id, author_name, text,
+                quoted_text, anchor_id, created_at, updated_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            values: [
+                .text(comment.id),
+                .text(comment.articleSlug),
+                comment.parentID.map(SQLiteValue.text) ?? .null,
+                .text(comment.authorName),
+                .text(comment.text),
+                comment.selection.map { .text($0.quote) } ?? .null,
+                comment.selection.map { .text($0.anchorID) } ?? .null,
+                .text(comment.createdAt),
+                .text(comment.updatedAt),
+            ]
+        )
+        return comment
+    }
+
+    public func deleteArticleComment(id: String, articleSlug: String) throws {
+        try prepare()
+        let safeID = try requireSafeSegment(id, label: "评论标识")
+        let safeSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
+        let existingCount = try db().integer(
+            "SELECT COUNT(*) FROM article_comments WHERE id = ? AND article_slug = ?",
+            values: [.text(safeID), .text(safeSlug)]
+        ) ?? 0
+        guard existingCount == 1 else { throw NativeStoreError.notFound }
+        try db().execute(
+            "DELETE FROM article_comments WHERE id = ? AND article_slug = ?",
+            values: [.text(safeID), .text(safeSlug)]
+        )
+    }
+
     public func allocateSlug(from title: String) throws -> String {
         try prepare()
         var base = slugify(title)
@@ -716,9 +2083,157 @@ public actor LocalBlogStore {
         return candidate
     }
 
+    public func existingArticleSlugs() throws -> Set<String> {
+        try prepare()
+        var slugs = Set<String>()
+        try db().query("SELECT slug FROM articles") { row in
+            if let slug = row.text(at: 0) { slugs.insert(slug) }
+        }
+        return slugs
+    }
+
+    public func importObsidianVault(
+        _ preview: NativeObsidianImportPreview
+    ) throws -> NativeObsidianImportResult {
+        try prepare()
+        var importedArticles: [NativeArticle] = []
+        var copiedMediaURLs: [URL] = []
+        var warnings = preview.warnings
+        var skippedCount = preview.conflictCount
+        var importedAttachmentPaths = Set<String>()
+
+        for note in preview.importableNotes {
+            if try storedArticle(withSlug: note.slug, includingDeleted: true) != nil {
+                skippedCount += 1
+                warnings.append("\(note.relativePath)：SQLite 中已存在 \(note.slug)，已跳过")
+                continue
+            }
+
+            var body = note.body
+            var media: [NativeMedia] = []
+            var uploadedBySourcePath: [String: NativeMedia] = [:]
+            for attachment in note.attachments {
+                let sourcePath = attachment.sourceURL.standardizedFileURL.path
+                let storedMedia: NativeMedia
+                if let uploaded = uploadedBySourcePath[sourcePath] {
+                    storedMedia = uploaded
+                } else {
+                    do {
+                        let uploaded = try uploadMedia(
+                            fileURL: attachment.sourceURL,
+                            kind: attachment.kind,
+                            slug: note.slug
+                        )
+                        storedMedia = NativeMedia(
+                            kind: uploaded.kind,
+                            name: uploaded.name,
+                            size: uploaded.size,
+                            url: uploaded.url
+                        )
+                        uploadedBySourcePath[sourcePath] = storedMedia
+                        if let copiedURL = mediaURL(for: uploaded.url) { copiedMediaURLs.append(copiedURL) }
+                    } catch {
+                        warnings.append("\(note.relativePath)：附件 \(attachment.sourceURL.lastPathComponent) 导入失败：\(error.localizedDescription)")
+                        continue
+                    }
+                }
+                if importedAttachmentPaths.insert("\(note.slug)\u{0}\(sourcePath)").inserted {
+                    media.append(storedMedia)
+                }
+                let replacement: String
+                let label = attachment.displayName
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "[", with: "\\[")
+                    .replacingOccurrences(of: "]", with: "\\]")
+                switch storedMedia.kind {
+                case "image":
+                    replacement = "![\(label)](\(storedMedia.url))"
+                case "video":
+                    replacement = "[视频：\(label)](\(storedMedia.url))"
+                default:
+                    replacement = "[附件：\(label)](\(storedMedia.url))"
+                }
+                body = body.replacingOccurrences(of: attachment.originalToken, with: replacement)
+            }
+
+            let updatedAt = note.updatedAt ?? timestamp(from: Date())
+            let article = NativeArticle(
+                banner: nil,
+                body: body,
+                category: note.category,
+                excerpt: note.excerpt,
+                media: media,
+                slug: note.slug,
+                status: note.status,
+                tags: note.tags,
+                title: note.title,
+                updatedAt: updatedAt,
+                publishedAt: note.status == .published ? note.publishedAt ?? updatedAt : nil,
+                wordCount: wordCount(body),
+                properties: try NativeArticleProperties.validated(note.properties)
+            )
+            importedArticles.append(article)
+        }
+
+        var sourcedImportedArticles: [NativeArticle] = []
+        do {
+            for article in importedArticles {
+                let record = try MarkdownArticleSource.write(
+                    article,
+                    relativePath: article.sourceRelativePath,
+                    in: articlesURL
+                )
+                sourcedImportedArticles.append(applyingSourceRecord(record, to: article))
+            }
+        } catch {
+            for article in sourcedImportedArticles {
+                try? MarkdownArticleSource.remove(relativePath: article.sourceRelativePath, in: articlesURL)
+            }
+            for url in copiedMediaURLs { try? FileManager.default.removeItem(at: url) }
+            throw error
+        }
+
+        do {
+            try db().transaction {
+                for article in sourcedImportedArticles {
+                    try insertArticle(article, into: db())
+                    if article.status == .published {
+                        try recordActivityEvent(
+                            type: "article_published",
+                            at: NativeTimestamp.date(from: article.publishedAt ?? article.updatedAt) ?? Date()
+                        )
+                    }
+                }
+            }
+        } catch {
+            for article in sourcedImportedArticles {
+                try? MarkdownArticleSource.remove(relativePath: article.sourceRelativePath, in: articlesURL)
+            }
+            for url in copiedMediaURLs { try? FileManager.default.removeItem(at: url) }
+            throw error
+        }
+
+        do {
+            for article in sourcedImportedArticles { try writeArticleJSONSidecars(article) }
+            try rebuildIndex()
+            try writeActivityEvents()
+        } catch {
+            markJSONBackupNeedsRebuild()
+            warnings.append("Markdown 已导入，但部分 JSON 备份需要在下次启动时重建")
+        }
+
+        return NativeObsidianImportResult(
+            importedCount: sourcedImportedArticles.count,
+            skippedCount: skippedCount,
+            attachmentCount: importedAttachmentPaths.count,
+            warnings: warnings
+        )
+    }
+
     public func saveArticle(_ article: NativeSaveArticle) throws -> NativeArticle {
         try prepare()
         let slug = try requireSafeSegment(article.slug, label: "文章 slug")
+        let properties = try NativeArticleProperties.validated(article.properties)
         if Self.reservedMediaDirectories.contains(slug) {
             throw NativeStoreError.reservedSlug
         }
@@ -759,8 +2274,18 @@ public actor LocalBlogStore {
             updatedAt: updatedAt,
             publishedAt: publishedAt,
             wordCount: wordCount(relocated.body),
-            pageViews: previous?.pageViews ?? 0
+            pageViews: previous?.pageViews ?? 0,
+            properties: properties,
+            sourceRelativePath: previous?.sourceRelativePath ?? MarkdownArticleSource.defaultRelativePath(for: slug),
+            sourceContentHash: previous?.sourceContentHash,
+            sourceImportedAt: previous?.sourceImportedAt
         )
+        let sourceRecord = try MarkdownArticleSource.write(
+            saved,
+            relativePath: saved.sourceRelativePath,
+            in: articlesURL
+        )
+        let sourcedSaved = applyingSourceRecord(sourceRecord, to: saved)
 
         let activityType = saved.status == .published && previous?.status != .published
             ? "article_published"
@@ -779,7 +2304,7 @@ public actor LocalBlogStore {
                     updatedAt: updatedAt
                 )
             }
-            try insertArticle(saved, into: db())
+            try insertArticle(sourcedSaved, into: db())
             if let activityType {
                 try recordActivityEvent(type: activityType, at: activityDate(from: updatedAt) ?? Date())
             }
@@ -787,26 +2312,30 @@ public actor LocalBlogStore {
         try trimArticleRevisions(draftKey: slug)
 
         do {
-            try writeArticleSidecars(saved)
+            try writeArticleJSONSidecars(sourcedSaved)
             try rebuildIndex()
             try writeActivityEvents()
         } catch {
             markJSONBackupNeedsRebuild()
         }
-        return saved
+        return sourcedSaved
     }
 
     public func deleteArticle(slug: String, expectedUpdatedAt: String) throws {
         let article = try getArticle(slug: slug)
         guard article.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
         let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
+        try MarkdownArticleSource.remove(
+            relativePath: article.sourceRelativePath,
+            in: articlesURL
+        )
         let deletedAt = timestamp(from: Date())
         let expiresAt = timestamp(afterDays: Self.trashRetentionDays)
         try db().execute(
             "UPDATE articles SET deleted_at = ?, delete_expires_at = ? WHERE slug = ?",
             values: [.text(deletedAt), .text(expiresAt), .text(safeSlug)]
         )
-        removeArticleExportFiles(for: safeSlug)
+        removeArticleJSONSidecars(for: safeSlug)
         try rebuildIndex()
         try writeTrashBackup()
         markJSONBackupNeedsRebuild()
@@ -872,13 +2401,24 @@ public actor LocalBlogStore {
         let safeKey = try requireSafeSegment(item.key, label: item.kind == .article ? "文章 slug" : "微博 ID")
         switch item.kind {
         case .article:
-            guard try storedArticle(withSlug: safeKey, includingDeleted: true) != nil else {
+            guard let restoring = try storedArticle(withSlug: safeKey, includingDeleted: true) else {
                 throw NativeStoreError.notFound
             }
-            try db().execute(
-                "UPDATE articles SET deleted_at = NULL, delete_expires_at = NULL WHERE slug = ? AND deleted_at IS NOT NULL",
-                values: [.text(safeKey)]
-            )
+            try db().transaction {
+                try db().execute(
+                    "UPDATE articles SET deleted_at = NULL, delete_expires_at = NULL WHERE slug = ? AND deleted_at IS NOT NULL",
+                    values: [.text(safeKey)]
+                )
+                try db().execute(
+                    "DELETE FROM article_link_references WHERE source_slug = ?",
+                    values: [.text(safeKey)]
+                )
+                try insertArticleLinkReferences(
+                    sourceSlug: safeKey,
+                    body: restoring.body,
+                    into: db()
+                )
+            }
             if let restored = try storedArticle(withSlug: safeKey) {
                 try? writeArticleSidecars(restored)
             }
@@ -905,10 +2445,11 @@ public actor LocalBlogStore {
         let safeKey = try requireSafeSegment(item.key, label: item.kind == .article ? "文章 slug" : "微博 ID")
         switch item.kind {
         case .article:
-            guard try storedArticle(withSlug: safeKey, includingDeleted: true) != nil,
+            guard let article = try storedArticle(withSlug: safeKey, includingDeleted: true),
                   try db().text("SELECT deleted_at FROM articles WHERE slug = ?", values: [.text(safeKey)]) != nil else {
                 throw NativeStoreError.notFound
             }
+            try MarkdownArticleSource.remove(relativePath: article.sourceRelativePath, in: articlesURL)
             try db().transaction {
                 try db().execute("DELETE FROM articles WHERE slug = ? AND deleted_at IS NOT NULL", values: [.text(safeKey)])
                 try db().execute(
@@ -933,11 +2474,13 @@ public actor LocalBlogStore {
 
     func emptyTrash() throws {
         try prepare()
-        var articleSlugs: [String] = []
+        var articlesToDelete: [(slug: String, sourcePath: String)] = []
         var momentsToDelete: [(id: String, images: [NativeMedia])] = []
 
-        try db().query("SELECT slug FROM articles WHERE deleted_at IS NOT NULL") { row in
-            if let slug = row.text(at: 0) { articleSlugs.append(slug) }
+        try db().query("SELECT slug, source_relative_path FROM articles WHERE deleted_at IS NOT NULL") { row in
+            if let slug = row.text(at: 0) {
+                articlesToDelete.append((slug, row.text(at: 1) ?? "\(slug).md"))
+            }
         }
         try db().query("SELECT id, images_json FROM moments WHERE deleted_at IS NOT NULL") { row in
             guard let id = row.text(at: 0), let imagesJSON = row.text(at: 1) else { return }
@@ -947,14 +2490,16 @@ public actor LocalBlogStore {
         try db().transaction {
             try db().execute("DELETE FROM articles WHERE deleted_at IS NOT NULL")
             try db().execute("DELETE FROM moments WHERE deleted_at IS NOT NULL")
-            for slug in articleSlugs {
+            for article in articlesToDelete {
                 try db().execute(
                     "DELETE FROM article_revisions WHERE article_slug = ? OR draft_key = ?",
-                    values: [.text(slug), .text(slug)]
+                    values: [.text(article.slug), .text(article.slug)]
                 )
             }
         }
-        for slug in articleSlugs { removeArticleFiles(for: slug) }
+        for article in articlesToDelete {
+            removeArticleFiles(for: article.slug, sourceRelativePath: article.sourcePath)
+        }
         for moment in momentsToDelete {
             try removeUnreferencedMomentImages(moment.images, includingDeleted: true)
             removeMomentSidecar(id: moment.id)
@@ -965,14 +2510,16 @@ public actor LocalBlogStore {
 
     private func purgeExpiredTrash() throws {
         let now = timestamp(from: Date())
-        var articleSlugs: [String] = []
+        var articlesToDelete: [(slug: String, sourcePath: String)] = []
         var momentsToDelete: [(id: String, images: [NativeMedia])] = []
 
         try db().query(
-            "SELECT slug FROM articles WHERE deleted_at IS NOT NULL AND delete_expires_at <= ?",
+            "SELECT slug, source_relative_path FROM articles WHERE deleted_at IS NOT NULL AND delete_expires_at <= ?",
             values: [.text(now)]
         ) { row in
-            if let slug = row.text(at: 0) { articleSlugs.append(slug) }
+            if let slug = row.text(at: 0) {
+                articlesToDelete.append((slug, row.text(at: 1) ?? "\(slug).md"))
+            }
         }
         try db().query(
             "SELECT id, images_json FROM moments WHERE deleted_at IS NOT NULL AND delete_expires_at <= ?",
@@ -981,7 +2528,7 @@ public actor LocalBlogStore {
             guard let id = row.text(at: 0), let imagesJSON = row.text(at: 1) else { return }
             momentsToDelete.append((id: id, images: try decode(imagesJSON)))
         }
-        guard !articleSlugs.isEmpty || !momentsToDelete.isEmpty else { return }
+        guard !articlesToDelete.isEmpty || !momentsToDelete.isEmpty else { return }
 
         try db().transaction {
             try db().execute(
@@ -992,14 +2539,16 @@ public actor LocalBlogStore {
                 "DELETE FROM moments WHERE deleted_at IS NOT NULL AND delete_expires_at <= ?",
                 values: [.text(now)]
             )
-            for slug in articleSlugs {
+            for article in articlesToDelete {
                 try db().execute(
                     "DELETE FROM article_revisions WHERE article_slug = ? OR draft_key = ?",
-                    values: [.text(slug), .text(slug)]
+                    values: [.text(article.slug), .text(article.slug)]
                 )
             }
         }
-        for slug in articleSlugs { removeArticleFiles(for: slug) }
+        for article in articlesToDelete {
+            removeArticleFiles(for: article.slug, sourceRelativePath: article.sourcePath)
+        }
         for moment in momentsToDelete {
             try removeUnreferencedMomentImages(moment.images, includingDeleted: true)
             removeMomentSidecar(id: moment.id)
@@ -1116,24 +2665,47 @@ public actor LocalBlogStore {
         )
     }
 
-    private func removeArticleExportFiles(for slug: String) {
+    private func removeArticleJSONSidecars(for slug: String) {
         guard let safeSlug = try? requireSafeSegment(slug, label: "文章 slug") else { return }
         let fileManager = FileManager.default
         try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(safeSlug).json"))
-        try? fileManager.removeItem(at: articlesURL.appendingPathComponent("\(safeSlug).md"))
         try? fileManager.removeItem(at: draftsURL.appendingPathComponent("\(safeSlug).json"))
     }
 
     private func writeArticleSidecars(_ article: NativeArticle) throws {
+        let record = try MarkdownArticleSource.write(
+            article,
+            relativePath: article.sourceRelativePath,
+            in: articlesURL
+        )
+        let sourced = applyingSourceRecord(record, to: article)
+        try db().execute(
+            "UPDATE articles SET source_relative_path = ?, source_content_hash = ?, source_imported_at = ? WHERE slug = ?",
+            values: [
+                .text(sourced.sourceRelativePath),
+                sourced.sourceContentHash.map(SQLiteValue.text) ?? .null,
+                sourced.sourceImportedAt.map(SQLiteValue.text) ?? .null,
+                .text(sourced.slug),
+            ]
+        )
+        try writeArticleJSONSidecars(sourced)
+    }
+
+    private func writeArticleJSONSidecars(_ article: NativeArticle) throws {
         let safeSlug = try requireSafeSegment(article.slug, label: "文章 slug")
         try writeJSON(article, to: articlesURL.appendingPathComponent("\(safeSlug).json"))
         try writeJSON(article, to: draftsURL.appendingPathComponent("\(safeSlug).json"))
-        try writeMarkdown(article, to: articlesURL.appendingPathComponent("\(safeSlug).md"))
+        if !FileManager.default.fileExists(atPath: articleSidecarsMarkerURL.path) {
+            try Data().write(to: articleSidecarsMarkerURL, options: .atomic)
+        }
     }
 
-    private func removeArticleFiles(for slug: String) {
+    private func removeArticleFiles(for slug: String, sourceRelativePath: String? = nil) {
         guard let safeSlug = try? requireSafeSegment(slug, label: "文章 slug") else { return }
-        removeArticleExportFiles(for: safeSlug)
+        removeArticleJSONSidecars(for: safeSlug)
+        if let sourceRelativePath {
+            try? MarkdownArticleSource.remove(relativePath: sourceRelativePath, in: articlesURL)
+        }
         guard !Self.reservedMediaDirectories.contains(safeSlug) else { return }
         let articleMediaURL = mediaURL.appendingPathComponent(safeSlug, isDirectory: true)
         guard let files = try? FileManager.default.contentsOfDirectory(
@@ -1212,7 +2784,7 @@ public actor LocalBlogStore {
         do {
             try FileManager.default.copyItem(at: fileURL, to: targetURL)
             let size = try FileManager.default.attributesOfItem(atPath: targetURL.path)[.size] as? Int ?? 0
-            let mediaKind = kind == "video" ? "video" : "image"
+            let mediaKind = ["image", "video", "file"].contains(kind) ? kind : "file"
             if mediaKind == "image" { try recordActivity(type: "image_published", at: Date()) }
             return NativeUploadedMedia(
                 key: "\(targetSlug)/\(filename)",
@@ -1301,7 +2873,11 @@ public actor LocalBlogStore {
             word_count INTEGER NOT NULL,
             page_views INTEGER NOT NULL DEFAULT 0,
             deleted_at TEXT,
-            delete_expires_at TEXT
+            delete_expires_at TEXT,
+            properties_json TEXT NOT NULL DEFAULT '{}',
+            source_relative_path TEXT,
+            source_content_hash TEXT,
+            source_imported_at TEXT
         );
         CREATE INDEX IF NOT EXISTS articles_updated_at_idx ON articles(updated_at DESC);
         CREATE TABLE IF NOT EXISTS article_revisions (
@@ -1317,6 +2893,49 @@ public actor LocalBlogStore {
             ON article_revisions(article_slug, updated_at DESC);
         CREATE INDEX IF NOT EXISTS article_revisions_draft_idx
             ON article_revisions(draft_key, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS article_comments (
+            id TEXT PRIMARY KEY NOT NULL,
+            article_slug TEXT NOT NULL,
+            parent_id TEXT,
+            author_name TEXT NOT NULL,
+            text TEXT NOT NULL,
+            quoted_text TEXT,
+            anchor_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(article_slug) REFERENCES articles(slug) ON DELETE CASCADE,
+            FOREIGN KEY(parent_id) REFERENCES article_comments(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS article_comments_article_idx
+            ON article_comments(article_slug, created_at, id);
+        CREATE INDEX IF NOT EXISTS article_comments_parent_idx
+            ON article_comments(parent_id, created_at, id);
+        CREATE TABLE IF NOT EXISTS article_link_references (
+            source_slug TEXT NOT NULL,
+            target_reference TEXT NOT NULL,
+            target_identity TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            PRIMARY KEY(source_slug, target_reference),
+            FOREIGN KEY(source_slug) REFERENCES articles(slug) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS article_link_references_source_idx
+            ON article_link_references(source_slug, position);
+        CREATE TABLE IF NOT EXISTS smart_collections (
+            id TEXT PRIMARY KEY NOT NULL,
+            config_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS smart_collections_updated_idx
+            ON smart_collections(updated_at DESC);
+        CREATE TABLE IF NOT EXISTS bookmarks (
+            id TEXT PRIMARY KEY NOT NULL,
+            bookmark_json TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS bookmarks_position_idx
+            ON bookmarks(position, created_at);
         CREATE TABLE IF NOT EXISTS moments (
             id TEXT PRIMARY KEY NOT NULL,
             created_at TEXT NOT NULL,
@@ -1343,6 +2962,22 @@ public actor LocalBlogStore {
         try ensureColumn("deleted_at", in: "articles", database: database)
         try ensureColumn("delete_expires_at", in: "articles", database: database)
         try ensureColumn("page_views", in: "articles", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
+        try ensureColumn("properties_json", in: "articles", database: database, definition: "TEXT NOT NULL DEFAULT '{}'")
+        try ensureColumn("source_relative_path", in: "articles", database: database)
+        try ensureColumn("source_content_hash", in: "articles", database: database)
+        try ensureColumn("source_imported_at", in: "articles", database: database)
+        try ensureColumn(
+            "target_identity",
+            in: "article_link_references",
+            database: database,
+            definition: "TEXT NOT NULL DEFAULT ''"
+        )
+        try ensureColumn(
+            "target_path",
+            in: "article_link_references",
+            database: database,
+            definition: "TEXT NOT NULL DEFAULT ''"
+        )
         try ensureColumn("deleted_at", in: "moments", database: database)
         try ensureColumn("delete_expires_at", in: "moments", database: database)
         try ensureColumn("tags_json", in: "moments", database: database)
@@ -1350,21 +2985,79 @@ public actor LocalBlogStore {
         try ensureColumn("page_views", in: "moments", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
         try database.execute("""
         CREATE INDEX IF NOT EXISTS articles_trash_expiry_idx ON articles(delete_expires_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS articles_source_path_idx
+            ON articles(source_relative_path) WHERE source_relative_path IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS article_link_references_identity_idx
+            ON article_link_references(target_identity, source_slug);
+        CREATE INDEX IF NOT EXISTS article_link_references_path_idx
+            ON article_link_references(target_path, source_slug);
         CREATE INDEX IF NOT EXISTS moments_trash_expiry_idx ON moments(delete_expires_at);
         """)
         try createSearchSchema(in: database)
+        try createArticleMentionSchema(in: database)
+    }
+
+    private func createArticleMentionSchema(in database: SQLiteDatabase) throws {
+        try database.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS article_mention_search USING fts5(
+            source_slug UNINDEXED,
+            body,
+            tokenize = 'trigram'
+        );
+
+        DROP TRIGGER IF EXISTS article_mention_search_insert;
+        DROP TRIGGER IF EXISTS article_mention_search_update;
+        DROP TRIGGER IF EXISTS article_mention_search_delete;
+
+        CREATE TRIGGER article_mention_search_insert
+        AFTER INSERT ON articles WHEN new.deleted_at IS NULL BEGIN
+            DELETE FROM article_mention_search WHERE source_slug = new.slug;
+            INSERT INTO article_mention_search(source_slug, body) VALUES(new.slug, new.body);
+        END;
+        CREATE TRIGGER article_mention_search_update
+        AFTER UPDATE OF slug, body, deleted_at ON articles
+        WHEN old.slug <> new.slug
+          OR old.body <> new.body
+          OR old.deleted_at IS NOT new.deleted_at BEGIN
+            DELETE FROM article_mention_search WHERE source_slug = old.slug;
+            INSERT INTO article_mention_search(source_slug, body)
+            SELECT new.slug, new.body WHERE new.deleted_at IS NULL;
+        END;
+        CREATE TRIGGER article_mention_search_delete
+        AFTER DELETE ON articles BEGIN
+            DELETE FROM article_mention_search WHERE source_slug = old.slug;
+        END;
+        """)
     }
 
     private func createSearchSchema(in database: SQLiteDatabase) throws {
+        var existingSearchColumns = Set<String>()
+        try database.query("PRAGMA table_info(content_search)") { row in
+            if let name = row.text(at: 1) { existingSearchColumns.insert(name) }
+        }
+        if !existingSearchColumns.isEmpty,
+           (!existingSearchColumns.contains("aliases") || !existingSearchColumns.contains("properties")) {
+            try database.execute("""
+            DROP TRIGGER IF EXISTS content_search_articles_insert;
+            DROP TRIGGER IF EXISTS content_search_articles_update;
+            DROP TRIGGER IF EXISTS content_search_articles_delete;
+            DROP TRIGGER IF EXISTS content_search_moments_insert;
+            DROP TRIGGER IF EXISTS content_search_moments_update;
+            DROP TRIGGER IF EXISTS content_search_moments_delete;
+            DROP TABLE content_search;
+            """)
+        }
         try database.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS content_search USING fts5(
             document_type UNINDEXED,
             document_id UNINDEXED,
             title,
+            aliases,
             body,
             excerpt,
             tags,
             category,
+            properties,
             status UNINDEXED,
             created_at UNINDEXED,
             updated_at UNINDEXED,
@@ -1383,25 +3076,63 @@ public actor LocalBlogStore {
             DELETE FROM content_search
             WHERE document_type = 'article' AND document_id = new.slug;
             INSERT INTO content_search(
-                document_type, document_id, title, body, excerpt, tags,
-                category, status, created_at, updated_at
+                document_type, document_id, title, aliases, body, excerpt, tags,
+                category, properties, status, created_at, updated_at
             ) VALUES (
-                'article', new.slug, new.title, new.body, new.excerpt,
-                new.tags_json, new.category, new.status,
+                'article', new.slug, new.title,
+                COALESCE(
+                    json_extract(new.properties_json, '$.aliases.value'),
+                    json_extract(new.properties_json, '$.alias.value'),
+                    json_extract(new.properties_json, '$.aliases'),
+                    json_extract(new.properties_json, '$.alias'),
+                    ''
+                ),
+                new.body, new.excerpt,
+                new.tags_json, new.category,
+                COALESCE((
+                    SELECT group_concat(
+                        indexed_property.key || ': ' || CASE indexed_property.type
+                            WHEN 'object' THEN COALESCE(json_extract(indexed_property.value, '$.value'), '')
+                            ELSE CAST(indexed_property.value AS TEXT)
+                        END,
+                        ' '
+                    )
+                    FROM json_each(new.properties_json) AS indexed_property
+                ), ''),
+                new.status,
                 COALESCE(new.published_at, new.updated_at), new.updated_at
             );
         END;
         CREATE TRIGGER content_search_articles_update
-        AFTER UPDATE OF slug, title, body, category, excerpt, tags_json, status,
+        AFTER UPDATE OF slug, title, body, category, excerpt, tags_json, status, properties_json,
                         updated_at, published_at, deleted_at ON articles BEGIN
             DELETE FROM content_search
             WHERE document_type = 'article' AND document_id = old.slug;
             INSERT INTO content_search(
-                document_type, document_id, title, body, excerpt, tags,
-                category, status, created_at, updated_at
+                document_type, document_id, title, aliases, body, excerpt, tags,
+                category, properties, status, created_at, updated_at
             )
-            SELECT 'article', new.slug, new.title, new.body, new.excerpt,
-                   new.tags_json, new.category, new.status,
+            SELECT 'article', new.slug, new.title,
+                   COALESCE(
+                       json_extract(new.properties_json, '$.aliases.value'),
+                       json_extract(new.properties_json, '$.alias.value'),
+                       json_extract(new.properties_json, '$.aliases'),
+                       json_extract(new.properties_json, '$.alias'),
+                       ''
+                   ),
+                   new.body, new.excerpt,
+                   new.tags_json, new.category,
+                   COALESCE((
+                       SELECT group_concat(
+                           indexed_property.key || ': ' || CASE indexed_property.type
+                               WHEN 'object' THEN COALESCE(json_extract(indexed_property.value, '$.value'), '')
+                               ELSE CAST(indexed_property.value AS TEXT)
+                           END,
+                           ' '
+                       )
+                       FROM json_each(new.properties_json) AS indexed_property
+                   ), ''),
+                   new.status,
                    COALESCE(new.published_at, new.updated_at), new.updated_at
             WHERE new.deleted_at IS NULL;
         END;
@@ -1416,13 +3147,13 @@ public actor LocalBlogStore {
             DELETE FROM content_search
             WHERE document_type = 'moment' AND document_id = new.id;
             INSERT INTO content_search(
-                document_type, document_id, title, body, excerpt, tags,
-                category, status, created_at, updated_at
+                document_type, document_id, title, aliases, body, excerpt, tags,
+                category, properties, status, created_at, updated_at
             ) VALUES (
                 'moment', new.id,
                 CASE WHEN trim(new.text) = '' THEN '图片微博'
                      ELSE substr(replace(replace(new.text, char(10), ' '), char(13), ' '), 1, 80) END,
-                new.text, '', COALESCE(new.tags_json, '[]'), '', '',
+                '', new.text, '', COALESCE(new.tags_json, '[]'), '', '{}', '',
                 new.created_at, new.updated_at
             );
         END;
@@ -1431,13 +3162,13 @@ public actor LocalBlogStore {
             DELETE FROM content_search
             WHERE document_type = 'moment' AND document_id = old.id;
             INSERT INTO content_search(
-                document_type, document_id, title, body, excerpt, tags,
-                category, status, created_at, updated_at
+                document_type, document_id, title, aliases, body, excerpt, tags,
+                category, properties, status, created_at, updated_at
             )
             SELECT 'moment', new.id,
                    CASE WHEN trim(new.text) = '' THEN '图片微博'
                         ELSE substr(replace(replace(new.text, char(10), ' '), char(13), ' '), 1, 80) END,
-                   new.text, '', COALESCE(new.tags_json, '[]'), '', '',
+                   '', new.text, '', COALESCE(new.tags_json, '[]'), '', '{}', '',
                    new.created_at, new.updated_at
             WHERE new.deleted_at IS NULL;
         END;
@@ -1454,33 +3185,52 @@ public actor LocalBlogStore {
         """) ?? 0
         let indexedCount = try database.integer("SELECT COUNT(*) FROM content_search") ?? 0
         let version = try database.text(
-            "SELECT value FROM metadata WHERE key = 'content_search_v1'"
+            "SELECT value FROM metadata WHERE key = 'content_search_v2'"
         )
-        guard version != "trigram-v1" || activeCount != indexedCount else { return }
+        guard version != "properties-v4" || activeCount != indexedCount else { return }
 
         try database.transaction {
             try database.execute("DELETE FROM content_search")
             try database.execute("""
             INSERT INTO content_search(
-                document_type, document_id, title, body, excerpt, tags,
-                category, status, created_at, updated_at
+                document_type, document_id, title, aliases, body, excerpt, tags,
+                category, properties, status, created_at, updated_at
             )
-            SELECT 'article', slug, title, body, excerpt, tags_json,
-                   category, status, COALESCE(published_at, updated_at), updated_at
+            SELECT 'article', slug, title,
+                   COALESCE(
+                       json_extract(properties_json, '$.aliases.value'),
+                       json_extract(properties_json, '$.alias.value'),
+                       json_extract(properties_json, '$.aliases'),
+                       json_extract(properties_json, '$.alias'),
+                       ''
+                   ),
+                   body, excerpt, tags_json,
+                   category,
+                   COALESCE((
+                       SELECT group_concat(
+                           indexed_property.key || ': ' || CASE indexed_property.type
+                               WHEN 'object' THEN COALESCE(json_extract(indexed_property.value, '$.value'), '')
+                               ELSE CAST(indexed_property.value AS TEXT)
+                           END,
+                           ' '
+                       )
+                       FROM json_each(articles.properties_json) AS indexed_property
+                   ), ''),
+                   status, COALESCE(published_at, updated_at), updated_at
             FROM articles WHERE deleted_at IS NULL;
 
             INSERT INTO content_search(
-                document_type, document_id, title, body, excerpt, tags,
-                category, status, created_at, updated_at
+                document_type, document_id, title, aliases, body, excerpt, tags,
+                category, properties, status, created_at, updated_at
             )
             SELECT 'moment', id,
                    CASE WHEN trim(text) = '' THEN '图片微博'
                         ELSE substr(replace(replace(text, char(10), ' '), char(13), ' '), 1, 80) END,
-                   text, '', COALESCE(tags_json, '[]'), '', '', created_at, updated_at
+                   '', text, '', COALESCE(tags_json, '[]'), '', '{}', '', created_at, updated_at
             FROM moments WHERE deleted_at IS NULL;
 
             INSERT OR REPLACE INTO metadata(key, value)
-            VALUES('content_search_v1', 'trigram-v1');
+            VALUES('content_search_v2', 'properties-v4');
             """)
         }
     }
@@ -1519,6 +3269,31 @@ public actor LocalBlogStore {
         }
     }
 
+    /// One-time handoff from the former SQLite-primary layout. Existing database
+    /// rows win exactly once; after this marker is written, Markdown wins.
+    private func migrateMarkdownSourcesIfNeeded() throws {
+        let database = try db()
+        guard try database.text(
+            "SELECT value FROM metadata WHERE key = 'markdown_source_v1'"
+        ) != "done" else { return }
+
+        var migrated: [NativeArticle] = []
+        for article in try allArticles() {
+            let record = try MarkdownArticleSource.write(
+                article,
+                relativePath: article.sourceRelativePath,
+                in: articlesURL
+            )
+            migrated.append(applyingSourceRecord(record, to: article))
+        }
+        try database.transaction {
+            for article in migrated { try insertArticle(article, into: database) }
+            try database.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES('markdown_source_v1', 'done')"
+            )
+        }
+    }
+
     private func migrateMomentTagsIfNeeded() throws {
         let database = try db()
         guard try database.text("SELECT value FROM metadata WHERE key = 'moment_tags_v1'") != "done" else {
@@ -1547,11 +3322,49 @@ public actor LocalBlogStore {
         }
     }
 
+    private func migrateArticleDerivedIndexesIfNeeded() throws {
+        let database = try db()
+        let version = try database.text(
+            "SELECT value FROM metadata WHERE key = 'article_derived_indexes_v1'"
+        )
+        guard version != "links-mentions-v2" else { return }
+
+        var documents: [(slug: String, body: String)] = []
+        try database.query(
+            "SELECT slug, body FROM articles WHERE deleted_at IS NULL ORDER BY slug"
+        ) { row in
+            guard let slug = row.text(at: 0), let body = row.text(at: 1) else {
+                throw NativeStoreError.fileSystem("SQLite：文章派生索引迁移记录不完整")
+            }
+            documents.append((slug, body))
+        }
+
+        try database.transaction {
+            try database.execute("DELETE FROM article_link_references")
+            try database.execute("DELETE FROM article_mention_search")
+            for document in documents {
+                try insertArticleLinkReferences(
+                    sourceSlug: document.slug,
+                    body: document.body,
+                    into: database
+                )
+                try database.execute(
+                    "INSERT INTO article_mention_search(source_slug, body) VALUES(?, ?)",
+                    values: [.text(document.slug), .text(document.body)]
+                )
+            }
+            try database.execute("""
+            INSERT OR REPLACE INTO metadata(key, value)
+            VALUES('article_derived_indexes_v1', 'links-mentions-v2')
+            """)
+        }
+    }
+
     private func exportJsonBackupIfNeeded() throws {
         if jsonBackupVerified { return }
         let database = try db()
         let exportMarkedDone = try database.text("SELECT value FROM metadata WHERE key = 'json_export_v2'") == "done"
-        if exportMarkedDone, try jsonBackupIsComplete() {
+        if exportMarkedDone, try jsonBackupFilesArePresent() {
             jsonBackupVerified = true
             return
         }
@@ -1565,55 +3378,59 @@ public actor LocalBlogStore {
         jsonBackupVerified = true
     }
 
-    private func jsonBackupIsComplete() throws -> Bool {
+    /// JSON is a compatibility export, not an input source after migration.
+    /// Check its shape without decoding every article body on each new store;
+    /// a missing file or a failed prior write clears the metadata marker and
+    /// takes the slower rebuild path below.
+    private func jsonBackupFilesArePresent() throws -> Bool {
         let fileManager = FileManager.default
-        let articles = try allArticles()
-        for article in articles {
-            let jsonURL = articlesURL.appendingPathComponent("\(article.slug).json")
-            guard let data = try? Data(contentsOf: jsonURL),
-                  let exported = try? JSONDecoder().decode(NativeArticle.self, from: data),
-                  normalize(exported) == article else {
+        guard let stampDate = try? jsonExportStampURL.resourceValues(
+            forKeys: [.contentModificationDateKey]
+        ).contentModificationDate else { return false }
+        func isCurrentExport(_ url: URL) -> Bool {
+            guard let modifiedAt = try? url.resourceValues(
+                forKeys: [.contentModificationDateKey]
+            ).contentModificationDate else { return false }
+            return modifiedAt <= stampDate
+        }
+
+        var articleSlugs: [String] = []
+        try db().query("SELECT slug FROM articles WHERE deleted_at IS NULL") { row in
+            if let slug = row.text(at: 0) { articleSlugs.append(slug) }
+        }
+        for slug in articleSlugs {
+            guard isCurrentExport(articlesURL.appendingPathComponent("\(slug).json")) else {
                 return false
             }
         }
 
-        let indexURL = articlesURL.appendingPathComponent("index.json")
-        guard fileManager.fileExists(atPath: indexURL.path),
-              let indexData = try? Data(contentsOf: indexURL),
-              let indexed = try? JSONDecoder().decode([NativeArticle].self, from: indexData),
-              indexed.count == articles.count,
-              Set(indexed.map(normalize)) == Set(articles) else {
-            return false
+        if !fileManager.fileExists(atPath: articleSidecarsMarkerURL.path) {
+            let indexURL = articlesURL.appendingPathComponent("index.json")
+            guard isCurrentExport(indexURL) else { return false }
         }
 
         let eventsURL = activityURL.appendingPathComponent("events.json")
-        guard let eventData = try? Data(contentsOf: eventsURL),
-              let exportedEvents = try? JSONDecoder().decode([NativeActivityEvent].self, from: eventData),
-              exportedEvents == (try allActivityEvents()) else {
-            return false
-        }
+        guard isCurrentExport(eventsURL), isCurrentExport(momentsIndexURL) else { return false }
 
-        if !fileManager.fileExists(atPath: momentSidecarsMarkerURL.path) {
-            let moments = try allMoments()
-            guard let momentsData = try? Data(contentsOf: momentsIndexURL),
-                  let indexedMoments = try? JSONDecoder().decode([NativeMoment].self, from: momentsData),
-                  indexedMoments.count == moments.count,
-                  Set(indexedMoments) == Set(moments) else {
-                return false
+        if fileManager.fileExists(atPath: momentSidecarsMarkerURL.path) {
+            var momentIDs: [String] = []
+            try db().query("SELECT id FROM moments WHERE deleted_at IS NULL") { row in
+                if let id = row.text(at: 0) { momentIDs.append(id) }
+            }
+            for id in momentIDs {
+                guard isCurrentExport(momentsURL.appendingPathComponent("\(id).json")) else {
+                    return false
+                }
             }
         }
 
-        guard let trashData = try? Data(contentsOf: trashIndexURL),
-              let exportedTrash = try? JSONDecoder().decode(NativeTrashBackup.self, from: trashData),
-              exportedTrash == (try trashBackup()) else {
-            return false
-        }
-        return true
+        return isCurrentExport(trashIndexURL)
     }
 
     private func loadLegacyArticles() throws -> [NativeArticle] {
         let indexURL = articlesURL.appendingPathComponent("index.json")
-        if FileManager.default.fileExists(atPath: indexURL.path) {
+        let usesSidecars = FileManager.default.fileExists(atPath: articleSidecarsMarkerURL.path)
+        if !usesSidecars, FileManager.default.fileExists(atPath: indexURL.path) {
             let indexed: [NativeArticle]
             do {
                 indexed = try JSONDecoder().decode([NativeArticle].self, from: Data(contentsOf: indexURL))
@@ -1645,7 +3462,8 @@ public actor LocalBlogStore {
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )
-        for file in files where file.pathExtension.lowercased() == "json" {
+        for file in files where file.pathExtension.lowercased() == "json"
+            && file.lastPathComponent != "index.json" {
             let article = try readArticle(at: file)
             if !article.slug.isEmpty {
                 let slug = try requireSafeSegment(article.slug, label: "文章 slug")
@@ -1809,22 +3627,125 @@ public actor LocalBlogStore {
         return articles
     }
 
-    private func articleGraph(from articles: [NativeArticle]) -> NativeArticleGraph {
-        let nodes = articles.map(summary)
-        var edges: [NativeArticleGraphEdge] = []
-
-        for article in articles {
-            var targetSlugs = Set<String>()
-            for reference in NativeArticleLink.references(in: article.body) {
-                guard let target = NativeArticleLink.resolve(reference, in: nodes),
-                      targetSlugs.insert(target.slug).inserted else {
-                    continue
-                }
-                edges.append(NativeArticleGraphEdge(sourceSlug: article.slug, targetSlug: target.slug))
-            }
+    private func allArticleSummaries() throws -> [NativeArticleSummary] {
+        var articles: [NativeArticleSummary] = []
+        try db().query(
+            "\(articleSummarySelect) WHERE deleted_at IS NULL ORDER BY updated_at DESC"
+        ) { row in
+            articles.append(try decodeArticleSummary(row))
         }
+        return articles
+    }
 
+    private func indexedArticleGraph(nodes: [NativeArticleSummary]) throws -> NativeArticleGraph {
+        let resolver = NativeArticleLinkIdentityIndex(nodes)
+        let nodesBySlug = Dictionary(uniqueKeysWithValues: nodes.map { ($0.slug, $0) })
+        var edges: [NativeArticleGraphEdge] = []
+        var targetsBySource: [String: Set<String>] = [:]
+        try db().query("""
+        SELECT links.source_slug, links.target_reference
+        FROM article_link_references AS links
+        JOIN articles AS source ON source.slug = links.source_slug
+        WHERE source.deleted_at IS NULL
+        ORDER BY source.updated_at DESC, links.position, links.target_reference
+        """) { row in
+            guard let sourceSlug = row.text(at: 0),
+                  nodesBySlug[sourceSlug] != nil,
+                  let reference = row.text(at: 1),
+                  let target = resolver.resolve(reference),
+                  targetsBySource[sourceSlug, default: []].insert(target.slug).inserted else {
+                return
+            }
+            edges.append(NativeArticleGraphEdge(sourceSlug: sourceSlug, targetSlug: target.slug))
+        }
         return NativeArticleGraph(nodes: nodes, edges: edges)
+    }
+
+    private func indexedOutgoingArticles(
+        from sourceSlug: String,
+        summariesBySlug: [String: NativeArticleSummary],
+        resolver: NativeArticleLinkIdentityIndex
+    ) throws -> [NativeArticleSummary] {
+        var articles: [NativeArticleSummary] = []
+        var seen = Set<String>()
+        try db().query("""
+        SELECT target_reference
+        FROM article_link_references
+        WHERE source_slug = ?
+        ORDER BY position, target_reference
+        """, values: [.text(sourceSlug)]) { row in
+            guard let reference = row.text(at: 0),
+                  let target = resolver.resolve(reference),
+                  seen.insert(target.slug).inserted,
+                  let summary = summariesBySlug[target.slug] else { return }
+            articles.append(summary)
+        }
+        return articles
+    }
+
+    private func indexedIncomingArticles(
+        to target: NativeArticleSummary,
+        summariesBySlug: [String: NativeArticleSummary],
+        resolver: NativeArticleLinkIdentityIndex
+    ) throws -> [NativeArticleSummary] {
+        let identities = Set([target.title, target.slug] + target.aliases)
+            .map(NativeArticleLinkIdentityIndex.folded)
+            .filter { !$0.isEmpty }
+            .sorted()
+        guard !identities.isEmpty else { return [] }
+        let placeholders = Array(repeating: "?", count: identities.count).joined(separator: ", ")
+        var values = identities.map(SQLiteValue.text)
+        values.append(.text(NativeArticleLinkIdentityIndex.normalizedPath(target.sourceRelativePath)))
+        values.append(.text(target.slug))
+
+        var articles: [NativeArticleSummary] = []
+        var seen = Set<String>()
+        try db().query("""
+        SELECT links.source_slug, links.target_reference
+        FROM article_link_references AS links
+        JOIN articles AS source ON source.slug = links.source_slug
+        WHERE source.deleted_at IS NULL
+          AND (links.target_identity IN (\(placeholders)) OR links.target_path = ?)
+          AND links.source_slug <> ?
+        ORDER BY source.updated_at DESC, links.position, links.target_reference
+        """, values: values) { row in
+            guard let sourceSlug = row.text(at: 0),
+                  let reference = row.text(at: 1),
+                  resolver.resolve(reference)?.slug == target.slug,
+                  seen.insert(sourceSlug).inserted,
+                  let summary = summariesBySlug[sourceSlug] else { return }
+            articles.append(summary)
+        }
+        return articles
+    }
+
+    private func mentionCandidates(
+        containing title: String,
+        excluding slug: String
+    ) throws -> [NativeArticle] {
+        let target = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard target.count >= 2 else { return [] }
+        let predicate: String
+        let value: SQLiteValue
+        if target.count >= 3 {
+            predicate = "article_mention_search MATCH ?"
+            value = .text("\"\(target.replacingOccurrences(of: "\"", with: "\"\""))\"")
+        } else {
+            predicate = "instr(lower(article_mention_search.body), lower(?)) > 0"
+            value = .text(target)
+        }
+        var candidates: [NativeArticle] = []
+        try db().query("""
+        \(qualifiedArticleSelect("candidate"))
+        JOIN article_mention_search ON article_mention_search.source_slug = candidate.slug
+        WHERE candidate.deleted_at IS NULL
+          AND candidate.slug <> ?
+          AND \(predicate)
+        ORDER BY candidate.updated_at DESC, candidate.slug
+        """, values: [.text(slug), value]) { row in
+            candidates.append(try decodeArticle(row))
+        }
+        return candidates
     }
 
     private func insertArticle(
@@ -1833,6 +3754,15 @@ public actor LocalBlogStore {
         deleteExpiresAt: String? = nil,
         into database: SQLiteDatabase
     ) throws {
+        var previousIndexedBody: String?
+        var previousWasActive = false
+        try database.query(
+            "SELECT body, deleted_at FROM articles WHERE slug = ?",
+            values: [.text(article.slug)]
+        ) { row in
+            previousIndexedBody = row.text(at: 0)
+            previousWasActive = row.text(at: 1) == nil
+        }
         let bannerJSON: SQLiteValue
         if let banner = article.banner {
             bannerJSON = .text(try jsonString(banner))
@@ -1840,10 +3770,30 @@ public actor LocalBlogStore {
             bannerJSON = .null
         }
         try database.execute("""
-        INSERT OR REPLACE INTO articles(
+        INSERT INTO articles(
             slug, title, body, category, excerpt, banner_json, media_json, status,
-            tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at,
+            properties_json, source_relative_path, source_content_hash, source_imported_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(slug) DO UPDATE SET
+            title = excluded.title,
+            body = excluded.body,
+            category = excluded.category,
+            excerpt = excluded.excerpt,
+            banner_json = excluded.banner_json,
+            media_json = excluded.media_json,
+            status = excluded.status,
+            tags_json = excluded.tags_json,
+            updated_at = excluded.updated_at,
+            published_at = excluded.published_at,
+            word_count = excluded.word_count,
+            page_views = excluded.page_views,
+            deleted_at = excluded.deleted_at,
+            delete_expires_at = excluded.delete_expires_at,
+            properties_json = excluded.properties_json,
+            source_relative_path = excluded.source_relative_path,
+            source_content_hash = excluded.source_content_hash,
+            source_imported_at = excluded.source_imported_at
         """, values: [
             .text(article.slug),
             .text(article.title),
@@ -1856,11 +3806,60 @@ public actor LocalBlogStore {
             .text(try jsonString(article.tags)),
             .text(article.updatedAt),
             article.publishedAt.map(SQLiteValue.text) ?? .null,
-            .integer(article.wordCount ?? wordCount(article.body)),
+            // Word count is derived from the body. Imported sidecars may contain
+            // an older cached value, so recompute it in the same transaction that
+            // updates the article and its other derived indexes.
+            .integer(wordCount(article.body)),
             .integer(article.pageViews),
             deletedAt.map(SQLiteValue.text) ?? .null,
             deleteExpiresAt.map(SQLiteValue.text) ?? .null,
+            .text(try jsonString(article.properties)),
+            .text(article.sourceRelativePath),
+            article.sourceContentHash.map(SQLiteValue.text) ?? .null,
+            article.sourceImportedAt.map(SQLiteValue.text) ?? .null,
         ])
+
+        let isActive = deletedAt == nil
+        if previousIndexedBody == nil
+            || previousIndexedBody != article.body
+            || previousWasActive != isActive {
+            try database.execute(
+                "DELETE FROM article_link_references WHERE source_slug = ?",
+                values: [.text(article.slug)]
+            )
+            if isActive {
+                try insertArticleLinkReferences(
+                    sourceSlug: article.slug,
+                    body: article.body,
+                    into: database
+                )
+            }
+        }
+    }
+
+    private func insertArticleLinkReferences(
+        sourceSlug: String,
+        body: String,
+        into database: SQLiteDatabase
+    ) throws {
+        var seen = Set<String>()
+        for (position, target) in NativeArticleLink.references(in: body).enumerated()
+            where seen.insert(target).inserted {
+            try database.execute(
+                """
+                INSERT INTO article_link_references(
+                    source_slug, target_reference, target_identity, target_path, position
+                ) VALUES(?, ?, ?, ?, ?)
+                """,
+                values: [
+                    .text(sourceSlug),
+                    .text(target),
+                    .text(NativeArticleLinkIdentityIndex.folded(target)),
+                    .text(NativeArticleLinkIdentityIndex.normalizedPath(target)),
+                    .integer(position),
+                ]
+            )
+        }
     }
 
     private func decodeArticle(_ row: SQLiteRow) throws -> NativeArticle {
@@ -1888,8 +3887,42 @@ public actor LocalBlogStore {
             title: title,
             updatedAt: updatedAt,
             publishedAt: row.text(at: 10),
-            wordCount: wordCount(body),
-            pageViews: row.integer(at: 12) ?? 0
+            wordCount: row.integer(at: 11) ?? wordCount(body),
+            pageViews: row.integer(at: 12) ?? 0,
+            properties: try decode(row.text(at: 15) ?? "{}"),
+            sourceRelativePath: row.text(at: 16) ?? "\(slug).md",
+            sourceContentHash: row.text(at: 17),
+            sourceImportedAt: row.text(at: 18)
+        )
+    }
+
+    private func decodeArticleSummary(_ row: SQLiteRow) throws -> NativeArticleSummary {
+        guard let slug = row.text(at: 0),
+              let title = row.text(at: 1),
+              let category = row.text(at: 2),
+              let excerpt = row.text(at: 3),
+              let statusValue = row.text(at: 5),
+              let status = NativeArticleStatus(rawValue: statusValue),
+              let tagsJSON = row.text(at: 6),
+              let updatedAt = row.text(at: 7) else {
+            throw NativeStoreError.fileSystem("SQLite：文章摘要记录不完整")
+        }
+        let properties: [String: NativeArticlePropertyValue] = try decode(row.text(at: 11) ?? "{}")
+        return NativeArticleSummary(
+            aliases: NativeArticleAlias.values(from: properties),
+            banner: try decodeOptional(row.text(at: 4)),
+            category: category,
+            excerpt: excerpt,
+            pageViews: row.integer(at: 10) ?? 0,
+            properties: properties,
+            publishedAt: row.text(at: 8),
+            slug: slug,
+            sourceRelativePath: row.text(at: 12) ?? "\(slug).md",
+            status: status,
+            tags: try decode(tagsJSON),
+            title: title,
+            updatedAt: updatedAt,
+            wordCount: row.integer(at: 9) ?? 0
         )
     }
 
@@ -2146,13 +4179,15 @@ public actor LocalBlogStore {
 
     private func rebuildArticleExports() throws {
         for article in try allArticles() {
-            try writeArticleSidecars(article)
+            try writeArticleJSONSidecars(article)
         }
         try rebuildIndex()
     }
 
     private func rebuildIndex() throws {
-        try writeJSON(try allArticles(), to: articlesURL.appendingPathComponent("index.json"))
+        if !FileManager.default.fileExists(atPath: articleSidecarsMarkerURL.path) {
+            try Data().write(to: articleSidecarsMarkerURL, options: .atomic)
+        }
     }
 
     private func rebuildMomentsIndex() throws {
@@ -2199,38 +4234,10 @@ public actor LocalBlogStore {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             try encoder.encode(value).write(to: url, options: .atomic)
-        } catch {
-            throw NativeStoreError.fileSystem("无法写入 \(url.lastPathComponent)：\(error.localizedDescription)")
-        }
-    }
-
-    private func writeMarkdown(_ article: NativeArticle, to url: URL) throws {
-        let encoder = JSONEncoder()
-        func quoted(_ value: String) -> String {
-            (try? String(data: encoder.encode(value), encoding: .utf8)) ?? "\"\""
-        }
-        var lines = [
-            "---",
-            "title: \(quoted(article.title))",
-            "category: \(quoted(article.category))",
-            "tags: \(quoted(article.tags.joined(separator: ",")))",
-            "slug: \(article.slug)",
-            "status: \(article.status.rawValue)",
-            "updatedAt: \(article.updatedAt)",
-        ]
-        if let publishedAt = article.publishedAt { lines.append("publishedAt: \(publishedAt)") }
-        if let banner = article.banner {
-            lines.append("banner: \(quoted(banner.url))")
-            lines.append("bannerAlt: \(quoted(banner.alt))")
-        }
-        lines.append(contentsOf: ["---", "", article.body, ""])
-        if !article.media.isEmpty {
-            lines.append("## Media")
-            lines.append(contentsOf: article.media.map { "- [\($0.name)](\($0.url))" })
-            lines.append("")
-        }
-        do {
-            try lines.joined(separator: "\n").data(using: .utf8)?.write(to: url, options: .atomic)
+            // This stamp lets the next process detect missing or externally
+            // modified compatibility exports using metadata only, without
+            // decoding every article body to compare it with SQLite.
+            try Data().write(to: jsonExportStampURL, options: .atomic)
         } catch {
             throw NativeStoreError.fileSystem("无法写入 \(url.lastPathComponent)：\(error.localizedDescription)")
         }
@@ -2251,7 +4258,11 @@ public actor LocalBlogStore {
             updatedAt: article.updatedAt,
             publishedAt: article.publishedAt,
             wordCount: article.wordCount ?? wordCount(body),
-            pageViews: article.pageViews
+            pageViews: article.pageViews,
+            properties: article.properties,
+            sourceRelativePath: article.sourceRelativePath,
+            sourceContentHash: article.sourceContentHash,
+            sourceImportedAt: article.sourceImportedAt
         )
     }
 
@@ -2349,12 +4360,15 @@ public actor LocalBlogStore {
 
     private func summary(for article: NativeArticle) -> NativeArticleSummary {
         NativeArticleSummary(
+            aliases: NativeArticleAlias.values(from: article.properties),
             banner: article.banner,
             category: article.category,
             excerpt: article.excerpt,
             pageViews: article.pageViews,
+            properties: article.properties,
             publishedAt: article.publishedAt,
             slug: article.slug,
+            sourceRelativePath: article.sourceRelativePath,
             status: article.status,
             tags: article.tags,
             title: article.title,
@@ -2433,7 +4447,29 @@ public actor LocalBlogStore {
     }
 
     private var articleSelect: String {
-        "SELECT slug, title, body, category, excerpt, banner_json, media_json, status, tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at FROM articles"
+        "SELECT slug, title, body, category, excerpt, banner_json, media_json, status, tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at, properties_json, source_relative_path, source_content_hash, source_imported_at FROM articles"
+    }
+
+    private func qualifiedArticleSelect(_ alias: String) -> String {
+        let columns = [
+            "slug", "title", "body", "category", "excerpt", "banner_json", "media_json", "status",
+            "tags_json", "updated_at", "published_at", "word_count", "page_views", "deleted_at",
+            "delete_expires_at", "properties_json", "source_relative_path", "source_content_hash",
+            "source_imported_at",
+        ].map { "\(alias).\($0)" }.joined(separator: ", ")
+        return "SELECT \(columns) FROM articles AS \(alias)"
+    }
+
+    private var articleSummarySelect: String {
+        "SELECT slug, title, category, excerpt, banner_json, status, tags_json, updated_at, published_at, word_count, page_views, properties_json, source_relative_path FROM articles"
+    }
+
+    private func qualifiedArticleSummarySelect(_ alias: String) -> String {
+        let columns = [
+            "slug", "title", "category", "excerpt", "banner_json", "status", "tags_json", "updated_at",
+            "published_at", "word_count", "page_views", "properties_json", "source_relative_path",
+        ].map { "\(alias).\($0)" }.joined(separator: ", ")
+        return "SELECT \(columns) FROM articles AS \(alias)"
     }
 
     private var momentSelect: String {
@@ -2442,6 +4478,37 @@ public actor LocalBlogStore {
 
     private var revisionSelect: String {
         "SELECT id, draft_key, article_slug, reason, snapshot_json, created_at, updated_at FROM article_revisions"
+    }
+
+    private var commentSelect: String {
+        "SELECT id, article_slug, parent_id, author_name, text, quoted_text, anchor_id, created_at, updated_at FROM article_comments"
+    }
+
+    private func decodeArticleComment(_ row: SQLiteRow) throws -> NativeArticleComment {
+        guard let id = row.text(at: 0),
+              let articleSlug = row.text(at: 1),
+              let authorName = row.text(at: 3),
+              let text = row.text(at: 4),
+              let createdAt = row.text(at: 7),
+              let updatedAt = row.text(at: 8) else {
+            throw NativeStoreError.fileSystem("SQLite：文章评论记录不完整")
+        }
+        let selection: NativeArticleCommentSelection?
+        if let quote = row.text(at: 5), let anchorID = row.text(at: 6) {
+            selection = NativeArticleCommentSelection(quote: quote, anchorID: anchorID)
+        } else {
+            selection = nil
+        }
+        return NativeArticleComment(
+            id: id,
+            articleSlug: articleSlug,
+            parentID: row.text(at: 2),
+            authorName: authorName,
+            text: text,
+            selection: selection,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
     }
 }
 

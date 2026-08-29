@@ -184,24 +184,81 @@ final class SQLiteDatabase {
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 final class ExclusiveDirectoryLock {
-    private let handle: FileHandle
+    private final class Lease {
+        let handle: FileHandle
+
+        init(handle: FileHandle) {
+            self.handle = handle
+        }
+
+        func close() {
+            flock(handle.fileDescriptor, LOCK_UN)
+            try? handle.close()
+        }
+    }
+
+    private struct RegisteredLease {
+        let lease: Lease
+        var referenceCount: Int
+    }
+
+    private static let registryLock = NSLock()
+    private static var processLeases: [String: RegisteredLease] = [:]
+
+    private let lockPath: String
+    private let lease: Lease
 
     init(directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent(".leon-book.lock")
+        let lockPath = url.standardizedFileURL.path
+
+        Self.registryLock.lock()
+        if var registered = Self.processLeases[lockPath] {
+            registered.referenceCount += 1
+            Self.processLeases[lockPath] = registered
+            Self.registryLock.unlock()
+            self.lockPath = lockPath
+            lease = registered.lease
+            return
+        }
+
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: Data())
         }
-        let handle = try FileHandle(forWritingTo: url)
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forWritingTo: url)
+        } catch {
+            Self.registryLock.unlock()
+            throw error
+        }
         if flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) != 0 {
             try? handle.close()
+            Self.registryLock.unlock()
             throw NativeStoreError.fileSystem("leon-book 已在其他窗口中打开同一资料库。")
         }
-        self.handle = handle
+        let lease = Lease(handle: handle)
+        Self.processLeases[lockPath] = RegisteredLease(lease: lease, referenceCount: 1)
+        Self.registryLock.unlock()
+        self.lockPath = lockPath
+        self.lease = lease
     }
 
     deinit {
-        flock(handle.fileDescriptor, LOCK_UN)
-        try? handle.close()
+        Self.registryLock.lock()
+        guard var registered = Self.processLeases[lockPath], registered.lease === lease else {
+            Self.registryLock.unlock()
+            return
+        }
+        registered.referenceCount -= 1
+        if registered.referenceCount == 0 {
+            Self.processLeases.removeValue(forKey: lockPath)
+            Self.registryLock.unlock()
+            lease.close()
+        } else {
+            Self.processLeases[lockPath] = registered
+            Self.registryLock.unlock()
+        }
     }
 }
