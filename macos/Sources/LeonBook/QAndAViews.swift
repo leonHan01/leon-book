@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-struct ZhihuView: View {
+struct QAndAView: View {
     @ObservedObject var model: NativeAppModel
     @State private var isPresentingQuestionComposer = false
     @State private var detailQuestionID: String?
@@ -720,19 +720,16 @@ private struct QuestionAnswerImage: View {
                 didFinishLoading = true
                 return
             }
-            let result = await Task.detached(priority: .utility) {
-                QuestionAnswerImageResult(image: NSImage(contentsOf: url))
-            }.value
+            let result = await NativeImagePipeline.shared.image(
+                from: url,
+                mode: .thumbnail(maxPixelSize: 720)
+            )
             guard !Task.isCancelled else { return }
             image = result.image
             didFinishLoading = true
         }
         .accessibilityLabel(media.name.isEmpty ? "回答图片" : media.name)
     }
-}
-
-private struct QuestionAnswerImageResult: @unchecked Sendable {
-    let image: NSImage?
 }
 
 private struct QuestionTagButtonStyle: ButtonStyle {

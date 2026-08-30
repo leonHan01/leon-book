@@ -9,6 +9,11 @@ public enum NativeWritingMetrics {
 
 public enum NativeTimestamp {
     private static let formatterLock = NSLock()
+    private static let parsedDateCache: NSCache<NSString, NSDate> = {
+        let cache = NSCache<NSString, NSDate>()
+        cache.countLimit = 20_000
+        return cache
+    }()
     private static let standardFormatter = ISO8601DateFormatter()
     private static let fractionalFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -17,10 +22,26 @@ public enum NativeTimestamp {
     }()
 
     public static func date(from timestamp: String) -> Date? {
+        if let cached = parsedDateCache.object(forKey: timestamp as NSString) {
+            return cached as Date
+        }
         formatterLock.lock()
         defer { formatterLock.unlock() }
-        return standardFormatter.date(from: timestamp)
-            ?? fractionalFormatter.date(from: timestamp)
+        if let cached = parsedDateCache.object(forKey: timestamp as NSString) {
+            return cached as Date
+        }
+        let parsed: Date?
+        if timestamp.utf8.contains(UInt8(ascii: ".")) {
+            parsed = fractionalFormatter.date(from: timestamp)
+                ?? standardFormatter.date(from: timestamp)
+        } else {
+            parsed = standardFormatter.date(from: timestamp)
+                ?? fractionalFormatter.date(from: timestamp)
+        }
+        if let parsed {
+            parsedDateCache.setObject(parsed as NSDate, forKey: timestamp as NSString)
+        }
+        return parsed
     }
 
     public static func string(from date: Date) -> String {
@@ -990,6 +1011,25 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
     public var sourceFolderPath: String {
         sourceRelativePath.split(separator: "/").dropLast().joined(separator: "/")
     }
+
+    var summary: NativeArticleSummary {
+        NativeArticleSummary(
+            aliases: NativeArticleAlias.values(from: properties),
+            banner: banner,
+            category: category,
+            excerpt: excerpt,
+            pageViews: pageViews,
+            properties: properties,
+            publishedAt: publishedAt,
+            slug: slug,
+            sourceRelativePath: sourceRelativePath,
+            status: status,
+            tags: tags,
+            title: title,
+            updatedAt: updatedAt,
+            wordCount: wordCount ?? NativeWritingMetrics.characterCount(of: body)
+        )
+    }
 }
 
 public struct NativeSaveArticle: Encodable {
@@ -1607,7 +1647,7 @@ enum NativeSection: Hashable {
     case articles
     case graph
     case moments
-    case zhihu
+    case qAndA
     case reader
     case editor
     case trash

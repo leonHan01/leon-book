@@ -30,7 +30,9 @@ SWIFT_ARGUMENTS=(
     --disable-sandbox
 )
 
-swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" --configuration release
+swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" \
+    --configuration release \
+    --product "${EXECUTABLE_NAME}"
 BIN_PATH="$(swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" --configuration release --show-bin-path)"
 
 rm -rf "${STAGING_APP}" "${APP_BUNDLE}"

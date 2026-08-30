@@ -293,6 +293,11 @@ extension NativeAppModel {
             name: "graph.requested"
         )
         section = .graph
+        knowledgeGraphTask?.cancel()
+        knowledgeGraphTask = Task { [weak self] in
+            do { try await self?.reloadKnowledgeGraph() }
+            catch { self?.errorMessage = error.localizedDescription }
+        }
     }
 
     func reloadKnowledgeGraph() async throws {

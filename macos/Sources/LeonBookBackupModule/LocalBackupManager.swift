@@ -78,6 +78,32 @@ public struct NativeBackupStorageEstimate: Sendable {
 /// Unchanged files are cloned from the preceding snapshot (or hard-linked when
 /// cloning is unavailable), so frequent snapshots do not duplicate media data.
 public enum LocalBackupManager {
+    public static func overview(
+        source: URL,
+        destination: URL
+    ) throws -> (snapshots: [NativeBackupSnapshot], estimate: NativeBackupStorageEstimate) {
+        try validateDestination(source: source, destination: destination)
+        let destinationURL = destination.standardizedFileURL
+        try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        let snapshots = try listSnapshots(in: destinationURL)
+        let sourceFiles = try files(
+            in: source.standardizedFileURL.resolvingSymlinksInPath(),
+            excludingManifest: false
+        )
+        let precedingSnapshot = snapshots.first
+        let precedingManifest = precedingSnapshot.flatMap { try? readManifest(at: $0.url) }
+        let records = Dictionary(uniqueKeysWithValues: (precedingManifest?.files ?? []).map {
+            ($0.relativePath, $0)
+        })
+        let estimate = storageEstimate(
+            sourceFiles: sourceFiles,
+            precedingSnapshot: precedingSnapshot,
+            precedingRecords: records,
+            destination: destinationURL
+        )
+        return (snapshots, estimate)
+    }
+
     private static let lockFileName = ".leon-book.lock"
     private static let manifestFileName = "backup-manifest.json"
     private static let currentFormatVersion = 2

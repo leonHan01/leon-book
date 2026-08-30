@@ -61,8 +61,7 @@ public enum NativeBaseValue: Equatable, Hashable {
     }
 
     fileprivate static func parseDate(_ source: String) -> Date? {
-        if let timestamp = NativeTimestamp.date(from: source) { return timestamp }
-        return dateFormatter.date(from: source)
+        NativeBaseDateParserCache.shared.date(from: source)
     }
 
     private static let dateFormatter: DateFormatter = {
@@ -72,6 +71,49 @@ public enum NativeBaseValue: Equatable, Hashable {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
+}
+
+private final class NativeBaseDateBox: NSObject {
+    let date: Date?
+
+    init(date: Date?) {
+        self.date = date
+    }
+}
+
+private final class NativeBaseDateParserCache: @unchecked Sendable {
+    static let shared = NativeBaseDateParserCache()
+
+    private let cache = NSCache<NSString, NativeBaseDateBox>()
+    private let lock = NSLock()
+    private let dayFormatter: DateFormatter
+
+    private init() {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd"
+        dayFormatter = formatter
+        cache.countLimit = 2_048
+    }
+
+    func date(from source: String) -> Date? {
+        let isDayValue = source.utf8.count == 10
+        let timeZone = isDayValue ? TimeZone.current : nil
+        let key = timeZone.map { "\($0.identifier)\u{0}\(source)" } ?? source
+        if let cached = cache.object(forKey: key as NSString) { return cached.date }
+        let parsed: Date?
+        if isDayValue {
+            lock.lock()
+            dayFormatter.timeZone = timeZone
+            parsed = dayFormatter.date(from: source)
+            lock.unlock()
+        } else {
+            parsed = NativeTimestamp.date(from: source)
+        }
+        cache.setObject(NativeBaseDateBox(date: parsed), forKey: key as NSString)
+        return parsed
+    }
 }
 
 /// Pure formula and summary module shared by tables, embeds and tests.
@@ -108,29 +150,85 @@ public enum NativeSmartCollectionFormulaEngine {
         collection: NativeSmartCollection,
         now: Date = Date()
     ) -> NativeBaseValue {
-        let values = articles.map { value(for: column, article: $0, collection: collection, now: now) }
         switch operation {
-        case .filled: return .number(Double(values.filter { !$0.isEmpty }.count))
-        case .empty: return .number(Double(values.filter(\.isEmpty).count))
+        case .filled, .empty:
+            var count = 0
+            for article in articles {
+                let isEmpty = value(for: column, article: article, collection: collection, now: now).isEmpty
+                if (operation == .empty) == isEmpty { count += 1 }
+            }
+            return .number(Double(count))
         case .unique:
-            return .number(Double(Set(values.filter { !$0.isEmpty }.map(\.displayText)).count))
+            var values = Set<String>()
+            for article in articles {
+                let value = value(for: column, article: article, collection: collection, now: now)
+                if !value.isEmpty { values.insert(value.displayText) }
+            }
+            return .number(Double(values.count))
         case .sum:
-            return .number(values.compactMap(\.numberValue).reduce(0, +))
+            var total = 0.0
+            for article in articles {
+                total += value(for: column, article: article, collection: collection, now: now).numberValue ?? 0
+            }
+            return .number(total)
         case .average:
-            let numbers = values.compactMap(\.numberValue)
-            return numbers.isEmpty ? .empty : .number(numbers.reduce(0, +) / Double(numbers.count))
-        case .minimum:
-            return values.compactMap(\.numberValue).min().map(NativeBaseValue.number) ?? .empty
-        case .maximum:
-            return values.compactMap(\.numberValue).max().map(NativeBaseValue.number) ?? .empty
-        case .earliest:
-            return values.compactMap(\.dateValue).min().map(NativeBaseValue.date) ?? .empty
-        case .latest:
-            return values.compactMap(\.dateValue).max().map(NativeBaseValue.date) ?? .empty
-        case .checked:
-            return .number(Double(values.filter { $0.booleanValue }.count))
-        case .unchecked:
-            return .number(Double(values.filter { !$0.booleanValue }.count))
+            var total = 0.0
+            var count = 0
+            for article in articles {
+                guard let number = value(
+                    for: column,
+                    article: article,
+                    collection: collection,
+                    now: now
+                ).numberValue else { continue }
+                total += number
+                count += 1
+            }
+            return count == 0 ? .empty : .number(total / Double(count))
+        case .minimum, .maximum:
+            var result: Double?
+            for article in articles {
+                guard let number = value(
+                    for: column,
+                    article: article,
+                    collection: collection,
+                    now: now
+                ).numberValue else { continue }
+                if let current = result {
+                    result = operation == .minimum ? min(current, number) : max(current, number)
+                } else {
+                    result = number
+                }
+            }
+            return result.map(NativeBaseValue.number) ?? .empty
+        case .earliest, .latest:
+            var result: Date?
+            for article in articles {
+                guard let date = value(
+                    for: column,
+                    article: article,
+                    collection: collection,
+                    now: now
+                ).dateValue else { continue }
+                if let current = result {
+                    result = operation == .earliest ? min(current, date) : max(current, date)
+                } else {
+                    result = date
+                }
+            }
+            return result.map(NativeBaseValue.date) ?? .empty
+        case .checked, .unchecked:
+            var count = 0
+            for article in articles {
+                let isChecked = value(
+                    for: column,
+                    article: article,
+                    collection: collection,
+                    now: now
+                ).booleanValue
+                if (operation == .checked) == isChecked { count += 1 }
+            }
+            return .number(Double(count))
         }
     }
 
@@ -143,9 +241,10 @@ public enum NativeSmartCollectionFormulaEngine {
     ) -> NativeBaseValue {
         let normalized = key.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
         guard !visited.contains(normalized),
-              let formula = collection.formulas.first(where: {
+              let formula = collection.formulas.first(where: { $0.key == key })
+                ?? collection.formulas.first(where: {
                   $0.key.caseInsensitiveCompare(key) == .orderedSame
-              }) else { return .empty }
+                }) else { return .empty }
         var nextVisited = visited
         nextVisited.insert(normalized)
         var parser = FormulaParser(
@@ -161,9 +260,10 @@ public enum NativeSmartCollectionFormulaEngine {
                         visited: nextVisited
                     )
                 }
-                if let nested = collection.formulas.first(where: {
-                    $0.key.caseInsensitiveCompare(identifier) == .orderedSame
-                }) {
+                if let nested = collection.formulas.first(where: { $0.key == identifier })
+                    ?? collection.formulas.first(where: {
+                        $0.key.caseInsensitiveCompare(identifier) == .orderedSame
+                    }) {
                     return evaluateFormula(
                         nested.key,
                         article: article,
@@ -204,9 +304,10 @@ public enum NativeSmartCollectionFormulaEngine {
     }
 
     private static func propertyValue(_ key: String, article: NativeArticleSummary) -> NativeBaseValue {
-        guard let value = article.properties.first(where: {
+        let value = article.properties[key] ?? article.properties.first(where: {
             $0.key.caseInsensitiveCompare(key) == .orderedSame
-        })?.value else { return .empty }
+        })?.value
+        guard let value else { return .empty }
         switch value.kind {
         case .text: return .string(value.value)
         case .list, .tags: return .list(value.listValues)
@@ -218,8 +319,73 @@ public enum NativeSmartCollectionFormulaEngine {
     }
 }
 
-private struct FormulaParser {
-    private enum Token: Equatable {
+private final class NativeFormulaTokenBox: NSObject {
+    let tokens: [FormulaParser.Token]
+
+    init(tokens: [FormulaParser.Token]) {
+        self.tokens = tokens
+    }
+}
+
+private final class NativeFormulaTokenCache: @unchecked Sendable {
+    static let shared = NativeFormulaTokenCache()
+
+    private let cache = NSCache<NSString, NativeFormulaTokenBox>()
+
+    private init() {
+        cache.countLimit = 256
+    }
+
+    func tokens(for source: String) -> [FormulaParser.Token] {
+        if let cached = cache.object(forKey: source as NSString) { return cached.tokens }
+        let tokens = FormulaParser.tokenize(source) + [.end]
+        cache.setObject(NativeFormulaTokenBox(tokens: tokens), forKey: source as NSString)
+        return tokens
+    }
+}
+
+private final class NativeFormulaDateFormatterBox: NSObject {
+    private let formatter: DateFormatter
+    private let lock = NSLock()
+
+    init(format: String, timeZone: TimeZone) {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = format
+        self.formatter = formatter
+    }
+
+    func string(from date: Date) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return formatter.string(from: date)
+    }
+}
+
+private final class NativeFormulaDateFormatterCache: @unchecked Sendable {
+    static let shared = NativeFormulaDateFormatterCache()
+
+    private let cache = NSCache<NSString, NativeFormulaDateFormatterBox>()
+
+    private init() {
+        cache.countLimit = 64
+    }
+
+    func string(from date: Date, format: String) -> String {
+        let timeZone = TimeZone.current
+        let key = "\(timeZone.identifier)\u{0}\(format)"
+        if let cached = cache.object(forKey: key as NSString) {
+            return cached.string(from: date)
+        }
+        let formatter = NativeFormulaDateFormatterBox(format: format, timeZone: timeZone)
+        cache.setObject(formatter, forKey: key as NSString)
+        return formatter.string(from: date)
+    }
+}
+
+fileprivate struct FormulaParser {
+    fileprivate enum Token: Equatable {
         case number(Double)
         case string(String)
         case identifier(String)
@@ -239,7 +405,7 @@ private struct FormulaParser {
         resolve: @escaping (String) -> NativeBaseValue,
         property: @escaping (String) -> NativeBaseValue
     ) {
-        tokens = Self.tokenize(source) + [.end]
+        tokens = NativeFormulaTokenCache.shared.tokens(for: source)
         self.now = now
         self.resolve = resolve
         self.property = property
@@ -351,10 +517,8 @@ private struct FormulaParser {
         case "upper": return .string(arguments.first?.displayText.uppercased() ?? "")
         case "formatdate":
             guard let date = arguments.first?.dateValue else { return .empty }
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = arguments.dropFirst().first?.displayText ?? "yyyy-MM-dd"
-            return .string(formatter.string(from: date))
+            let format = arguments.dropFirst().first?.displayText ?? "yyyy-MM-dd"
+            return .string(NativeFormulaDateFormatterCache.shared.string(from: date, format: format))
         case "min": return arguments.compactMap(\.numberValue).min().map(NativeBaseValue.number) ?? .empty
         case "max": return arguments.compactMap(\.numberValue).max().map(NativeBaseValue.number) ?? .empty
         default: return .empty
@@ -414,7 +578,7 @@ private struct FormulaParser {
         return true
     }
 
-    private static func tokenize(_ source: String) -> [Token] {
+    fileprivate static func tokenize(_ source: String) -> [Token] {
         let characters = Array(source)
         var result: [Token] = []
         var index = 0

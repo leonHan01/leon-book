@@ -9,6 +9,7 @@ extension NativeAppModel {
     }
 
     func reloadQuestionList(selecting questionID: String? = nil) async throws {
+        let generation = workspaceGeneration
         let currentQuestionID = selectedQuestion?.id
         let preferredQuestionID = questionID ?? currentQuestionID
         let loadedQuestions = try await store.listQuestions(
@@ -26,6 +27,8 @@ extension NativeAppModel {
         } else {
             loadedAnswers = []
         }
+
+        guard generation == workspaceGeneration else { return }
 
         questions = loadedQuestions
         questionTagFacets = loadedFacets

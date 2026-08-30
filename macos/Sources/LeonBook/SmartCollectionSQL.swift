@@ -84,26 +84,19 @@ enum NativeSmartCollectionSQLCompiler {
         case .tag:
             return candidateRule(
                 rule,
-                from: "json_each(\(alias).tags_json) AS candidate",
-                candidate: "CAST(candidate.value AS TEXT)"
+                from: "article_tags AS candidate",
+                candidate: "candidate.normalized_tag",
+                prefixPredicate: "candidate.article_slug = \(alias).slug",
+                candidateIsNormalized: true
             )
         case .property:
-            let source = """
-            json_each(\(alias).properties_json) AS property,
-            json_each(
-                CASE
-                    WHEN json_extract(property.value, '$.kind') IN ('list', 'tags')
-                    THEN json_extract(property.value, '$.value')
-                    ELSE json_array(COALESCE(json_extract(property.value, '$.value'), ''))
-                END
-            ) AS candidate
-            """
             return candidateRule(
                 rule,
-                from: source,
-                candidate: "CAST(candidate.value AS TEXT)",
-                prefixPredicate: "lower(trim(CAST(property.key AS TEXT))) = lower(?)",
-                prefixValues: [.text(rule.propertyKey.trimmingCharacters(in: .whitespacesAndNewlines))]
+                from: "article_properties AS candidate",
+                candidate: "candidate.normalized_value",
+                prefixPredicate: "candidate.article_slug = \(alias).slug AND candidate.normalized_key = ?",
+                prefixValues: [.text(normalizedIdentity(rule.propertyKey))],
+                candidateIsNormalized: true
             )
         case .updatedAt:
             return dateRule(rule, expression: "\(alias).updated_at")
@@ -114,7 +107,7 @@ enum NativeSmartCollectionSQLCompiler {
         case .pageViews:
             return numberRule(rule, expression: "\(alias).page_views")
         case .sourcePath:
-            return textRule(rule, expressions: ["\(alias).source_path"])
+            return textRule(rule, expressions: ["\(alias).source_relative_path"])
         }
     }
 
@@ -159,10 +152,13 @@ enum NativeSmartCollectionSQLCompiler {
         from source: String,
         candidate: String,
         prefixPredicate: String? = nil,
-        prefixValues: [SQLiteValue] = []
+        prefixValues: [SQLiteValue] = [],
+        candidateIsNormalized: Bool = false
     ) -> CompiledRule {
-        let expected = rule.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalizedCandidate = "lower(trim(COALESCE(\(candidate), '')))"
+        let expected = normalizedIdentity(rule.value)
+        let normalizedCandidate = candidateIsNormalized
+            ? candidate
+            : "lower(trim(COALESCE(\(candidate), '')))"
         let prefix = prefixPredicate.map { "\($0) AND " } ?? ""
         let exists: (String) -> String = { predicate in
             "EXISTS (SELECT 1 FROM \(source) WHERE \(prefix)\(predicate))"
@@ -214,7 +210,7 @@ enum NativeSmartCollectionSQLCompiler {
                 return CompiledRule(sql: "0", values: [])
             }
             return CompiledRule(
-                sql: "julianday(\(expression)) \(dateOperation(rule.comparison)) julianday(?)",
+                sql: "\(expression) \(dateOperation(rule.comparison)) ?",
                 values: [.text(timestamp)]
             )
         case .contains, .equals, .notEquals, .lessThan, .greaterThan, .startsWith:
@@ -250,6 +246,12 @@ enum NativeSmartCollectionSQLCompiler {
         case .atMost: return "<="
         default: return "="
         }
+    }
+
+    private static func normalizedIdentity(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
     }
 
     private static func sortExpression(

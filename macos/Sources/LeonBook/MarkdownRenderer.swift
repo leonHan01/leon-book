@@ -39,7 +39,7 @@ struct NativeParsedMarkdownDocument {
 /// Renders CommonMark/GFM. Local `/media` URLs are resolved by `MarkdownArticleBody`.
 struct MarkdownDocumentView: View {
     let blocks: [MarkdownBlock]
-    let articleLinks: [NativeArticleSummary]
+    let articleLinks: NativeArticleLinkCollection
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
     let onToggleTask: ((Int, Bool) -> Void)?
     let headingIDs: [String]
@@ -48,7 +48,7 @@ struct MarkdownDocumentView: View {
 
     init(
         markdown: String,
-        articleLinks: [NativeArticleSummary],
+        articleLinks: NativeArticleLinkCollection,
         onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void,
         onToggleTask: ((Int, Bool) -> Void)? = nil,
         headingIDs: [String] = [],
@@ -64,7 +64,7 @@ struct MarkdownDocumentView: View {
 
     init(
         blocks: [MarkdownBlock],
-        articleLinks: [NativeArticleSummary],
+        articleLinks: NativeArticleLinkCollection,
         onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void,
         onToggleTask: ((Int, Bool) -> Void)? = nil,
         headingIDs: [String] = [],
@@ -323,7 +323,7 @@ enum MarkdownTableAlignment {
 
 private struct MarkdownBlockView: View {
     let block: MarkdownBlock
-    let articleLinks: [NativeArticleSummary]
+    let articleLinks: NativeArticleLinkCollection
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
     let onToggleTask: ((Int, Bool) -> Void)?
     @Environment(\.nativeReadingTypography) private var typography
@@ -448,14 +448,14 @@ private struct MarkdownBlockView: View {
 
 private struct MarkdownCalloutView: View {
     let callout: MarkdownCallout
-    let articleLinks: [NativeArticleSummary]
+    let articleLinks: NativeArticleLinkCollection
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
     let onToggleTask: ((Int, Bool) -> Void)?
     @State private var isExpanded: Bool
 
     init(
         callout: MarkdownCallout,
-        articleLinks: [NativeArticleSummary],
+        articleLinks: NativeArticleLinkCollection,
         onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void,
         onToggleTask: ((Int, Bool) -> Void)?
     ) {
@@ -531,7 +531,7 @@ private struct MarkdownCalloutView: View {
 
 private struct MarkdownListView: View {
     let items: [MarkdownListItem]
-    let articleLinks: [NativeArticleSummary]
+    let articleLinks: NativeArticleLinkCollection
     let onToggleTask: ((Int, Bool) -> Void)?
 
     var body: some View {
@@ -570,7 +570,7 @@ private struct MarkdownTableView: View {
     let headers: [String]
     let alignments: [MarkdownTableAlignment]
     let rows: [[String]]
-    let articleLinks: [NativeArticleSummary]
+    let articleLinks: NativeArticleLinkCollection
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
@@ -981,7 +981,7 @@ private enum MarkdownParser {
     }
 }
 
-private func inlineMarkdownText(_ source: String, articleLinks: [NativeArticleSummary]) -> Text {
+private func inlineMarkdownText(_ source: String, articleLinks: NativeArticleLinkCollection) -> Text {
     let highlighted = source.components(separatedBy: "==")
     let highlightDelimiterCount = highlighted.count - 1
     if highlightDelimiterCount >= 2, highlightDelimiterCount.isMultiple(of: 2) {
@@ -998,7 +998,7 @@ private func inlineMarkdownText(_ source: String, articleLinks: [NativeArticleSu
 
 private func strikethroughMarkdownText(
     _ source: String,
-    articleLinks: [NativeArticleSummary],
+    articleLinks: NativeArticleLinkCollection,
     highlighted: Bool
 ) -> Text {
     let fragments = source.components(separatedBy: "~~")
@@ -1026,7 +1026,7 @@ private func strikethroughMarkdownText(
 
 private func markdownInlineFragment(
     _ source: String,
-    articleLinks: [NativeArticleSummary],
+    articleLinks: NativeArticleLinkCollection,
     highlighted: Bool
 ) -> Text {
     let normalizedSource = MarkdownTypography.normalizedFootnotes(
@@ -1069,7 +1069,7 @@ private enum MarkdownTypography {
 }
 
 private enum MarkdownArticleLinkRenderer {
-    static func markdown(from source: String, articleLinks: [NativeArticleSummary]) -> String {
+    static func markdown(from source: String, articleLinks: NativeArticleLinkCollection) -> String {
         let expression = try! NSRegularExpression(pattern: #"(?<!!)\[\[([^\[\]\r\n]+)\]\]"#)
         let searchRange = NSRange(source.startIndex..., in: source)
         let matches = expression.matches(in: source, range: searchRange)
@@ -1081,10 +1081,7 @@ private enum MarkdownArticleLinkRenderer {
             guard let matchRange = Range(match.range, in: source) else { continue }
             rendered += source[cursor..<matchRange.lowerBound]
             if let referenceRange = Range(match.range(at: 1), in: source),
-               let destination = NativeArticleLink.destination(
-                for: String(source[referenceRange]),
-                in: articleLinks
-               ),
+               let destination = articleLinks.destination(for: String(source[referenceRange])),
                let url = internalURL(destination) {
                 rendered += "[\(escapedLabel(destination.label))](\(url))"
             } else {

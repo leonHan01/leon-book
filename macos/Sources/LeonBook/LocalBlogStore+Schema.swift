@@ -29,6 +29,31 @@ extension LocalBlogStore {
             source_imported_at TEXT
         );
         CREATE INDEX IF NOT EXISTS articles_updated_at_idx ON articles(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS articles_active_status_updated_idx
+            ON articles(status, updated_at DESC) WHERE deleted_at IS NULL;
+        CREATE INDEX IF NOT EXISTS articles_active_category_updated_idx
+            ON articles(category, updated_at DESC) WHERE deleted_at IS NULL;
+        CREATE TABLE IF NOT EXISTS article_tags (
+            article_slug TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            normalized_tag TEXT NOT NULL,
+            PRIMARY KEY(article_slug, normalized_tag),
+            FOREIGN KEY(article_slug) REFERENCES articles(slug) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS article_tags_search_idx
+            ON article_tags(normalized_tag, article_slug);
+        CREATE TABLE IF NOT EXISTS article_properties (
+            article_slug TEXT NOT NULL,
+            property_key TEXT NOT NULL,
+            normalized_key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            normalized_value TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            PRIMARY KEY(article_slug, normalized_key, normalized_value),
+            FOREIGN KEY(article_slug) REFERENCES articles(slug) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS article_properties_search_idx
+            ON article_properties(normalized_key, normalized_value, article_slug);
         CREATE TABLE IF NOT EXISTS article_revisions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             draft_key TEXT NOT NULL,
@@ -100,6 +125,15 @@ extension LocalBlogStore {
         CREATE INDEX IF NOT EXISTS moments_created_at_idx ON moments(created_at DESC);
         CREATE INDEX IF NOT EXISTS moments_feed_active_idx ON moments(created_at DESC, id DESC)
             WHERE deleted_at IS NULL;
+        CREATE TABLE IF NOT EXISTS moment_tags (
+            moment_id TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            normalized_tag TEXT NOT NULL,
+            PRIMARY KEY(moment_id, normalized_tag),
+            FOREIGN KEY(moment_id) REFERENCES moments(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS moment_tags_search_idx
+            ON moment_tags(normalized_tag, moment_id);
         CREATE TABLE IF NOT EXISTS questions (
             id TEXT PRIMARY KEY NOT NULL,
             title TEXT NOT NULL,
@@ -130,6 +164,14 @@ extension LocalBlogStore {
         );
         CREATE INDEX IF NOT EXISTS question_answers_question_idx
             ON question_answers(question_id, created_at, id);
+        CREATE TABLE IF NOT EXISTS media_references (
+            owner_type TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            normalized_url TEXT NOT NULL,
+            PRIMARY KEY(owner_type, owner_id, normalized_url)
+        );
+        CREATE INDEX IF NOT EXISTS media_references_url_idx
+            ON media_references(normalized_url, owner_type, owner_id);
         CREATE TABLE IF NOT EXISTS activity_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             type TEXT NOT NULL,
@@ -175,9 +217,105 @@ extension LocalBlogStore {
         CREATE INDEX IF NOT EXISTS article_link_references_path_idx
             ON article_link_references(target_path, source_slug);
         CREATE INDEX IF NOT EXISTS moments_trash_expiry_idx ON moments(delete_expires_at);
+
+        DROP TRIGGER IF EXISTS media_references_articles_delete;
+        DROP TRIGGER IF EXISTS media_references_moments_delete;
+        DROP TRIGGER IF EXISTS media_references_answers_delete;
+        CREATE TRIGGER media_references_articles_delete AFTER DELETE ON articles BEGIN
+            DELETE FROM media_references WHERE owner_type = 'article' AND owner_id = old.slug;
+        END;
+        CREATE TRIGGER media_references_moments_delete AFTER DELETE ON moments BEGIN
+            DELETE FROM media_references WHERE owner_type = 'moment' AND owner_id = old.id;
+        END;
+        CREATE TRIGGER media_references_answers_delete AFTER DELETE ON question_answers BEGIN
+            DELETE FROM media_references WHERE owner_type = 'answer' AND owner_id = old.id;
+        END;
         """)
         try createSearchSchema(in: database)
+        try createShortSearchSchema(in: database)
+        try createQuestionSearchSchema(in: database)
         try createArticleMentionSchema(in: database)
+    }
+
+    func createQuestionSearchSchema(in database: SQLiteDatabase) throws {
+        try database.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS question_search USING fts5(
+            question_id UNINDEXED,
+            title,
+            body,
+            tags,
+            tokenize = 'trigram'
+        );
+
+        DROP TRIGGER IF EXISTS question_search_insert;
+        DROP TRIGGER IF EXISTS question_search_update;
+        DROP TRIGGER IF EXISTS question_search_delete;
+
+        CREATE TRIGGER question_search_insert AFTER INSERT ON questions BEGIN
+            DELETE FROM question_search WHERE question_id = new.id;
+            INSERT INTO question_search(question_id, title, body, tags)
+            VALUES(new.id, new.title, new.body, new.tags_json);
+        END;
+        CREATE TRIGGER question_search_update
+        AFTER UPDATE OF id, title, body, tags_json ON questions BEGIN
+            DELETE FROM question_search WHERE question_id = old.id;
+            INSERT INTO question_search(question_id, title, body, tags)
+            VALUES(new.id, new.title, new.body, new.tags_json);
+        END;
+        CREATE TRIGGER question_search_delete AFTER DELETE ON questions BEGIN
+            DELETE FROM question_search WHERE question_id = old.id;
+        END;
+        """)
+
+        let questionCount = try database.integer("SELECT COUNT(*) FROM questions") ?? 0
+        let indexedCount = try database.integer("SELECT COUNT(*) FROM question_search") ?? 0
+        guard questionCount != indexedCount else { return }
+        try database.transaction {
+            try database.execute("DELETE FROM question_search")
+            try database.execute("""
+            INSERT INTO question_search(question_id, title, body, tags)
+            SELECT id, title, body, tags_json FROM questions
+            """)
+        }
+    }
+
+    func createShortSearchSchema(in database: SQLiteDatabase) throws {
+        try database.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS content_short_search USING fts5(
+            document_type UNINDEXED,
+            document_id UNINDEXED,
+            terms,
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+
+        DROP TRIGGER IF EXISTS content_short_search_articles_update;
+        DROP TRIGGER IF EXISTS content_short_search_articles_delete;
+        DROP TRIGGER IF EXISTS content_short_search_moments_update;
+        DROP TRIGGER IF EXISTS content_short_search_moments_delete;
+
+        CREATE TRIGGER content_short_search_articles_update
+        AFTER UPDATE OF slug, deleted_at ON articles
+        WHEN old.slug <> new.slug OR old.deleted_at IS NOT new.deleted_at BEGIN
+            DELETE FROM content_short_search
+            WHERE document_type = 'article' AND document_id = old.slug;
+        END;
+        CREATE TRIGGER content_short_search_articles_delete
+        AFTER DELETE ON articles BEGIN
+            DELETE FROM content_short_search
+            WHERE document_type = 'article' AND document_id = old.slug;
+        END;
+        CREATE TRIGGER content_short_search_moments_update
+        AFTER UPDATE OF id, deleted_at ON moments
+        WHEN old.id <> new.id OR old.deleted_at IS NOT new.deleted_at BEGIN
+            DELETE FROM content_short_search
+            WHERE document_type = 'moment' AND document_id = old.id;
+        END;
+        CREATE TRIGGER content_short_search_moments_delete
+        AFTER DELETE ON moments BEGIN
+            DELETE FROM content_short_search
+            WHERE document_type = 'moment' AND document_id = old.id;
+        END;
+        """)
     }
 
     func createArticleMentionSchema(in database: SQLiteDatabase) throws {

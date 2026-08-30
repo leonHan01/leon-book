@@ -17,6 +17,7 @@ let moduleSourcePath = { (module: String, name: String) in
 }
 let appSourcePath = { (name: String) in macosRoot.appendingPathComponent("Sources/LeonBookApp/\(name)").path }
 let resourcePath = { (name: String) in macosRoot.appendingPathComponent("Resources/\(name)").path }
+let scriptPath = { (name: String) in macosRoot.appendingPathComponent("scripts/\(name)").path }
 
 if let packageManifest = try? String(
     contentsOf: macosRoot.appendingPathComponent("Package.swift"),
@@ -66,10 +67,27 @@ expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Article
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Backup.swift")), "backup app-model module should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Import.swift")), "import app-model module should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Search.swift")), "search app-model module should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("NativeVideoPlayback.swift")), "video playback lifecycle should live in a dedicated module")
 expect(FileManager.default.fileExists(atPath: appSourcePath("LeonBookAutomationIntents.swift")), "App Intents should exist")
 expect(!FileManager.default.fileExists(atPath: sourcePath("LocalServerController.swift")), "HTTP server controller should be removed")
 expect(!FileManager.default.fileExists(atPath: sourcePath("BlogWebView.swift")), "WKWebView wrapper should be removed")
 expect(!FileManager.default.fileExists(atPath: sourcePath("BrowserModel.swift")), "browser model should be removed")
+
+if let buildScript = try? String(contentsOfFile: scriptPath("build-app.sh"), encoding: .utf8) {
+    expect(buildScript.contains("--product \"${EXECUTABLE_NAME}\""), "release packaging should compile only the app product")
+} else {
+    failures.append("release build script should be readable")
+}
+expect(
+    FileManager.default.isExecutableFile(atPath: scriptPath("benchmark-performance.sh")),
+    "release performance benchmark script should be executable"
+)
+if let benchmarkScript = try? String(
+    contentsOfFile: scriptPath("benchmark-performance.sh"),
+    encoding: .utf8
+) {
+    expect(benchmarkScript.contains("LEON_BOOK_TEST_FILTER=Benchmark"), "performance script should run every budgeted benchmark")
+}
 
 if let properties = try? String(contentsOfFile: sourcePath("ArticleProperties.swift"), encoding: .utf8) {
     for kind in ["case text", "case list", "case number", "case date", "case checkbox", "case tags"] {
@@ -111,6 +129,10 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("AVPlayerView()"), "article reader should use AVPlayerView for embedded playback")
     expect(articleViews.contains("controlsStyle = .inline"), "embedded video should expose inline playback controls")
     expect(articleViews.contains("showsFullScreenToggleButton = true"), "embedded video should expose a fullscreen control")
+    expect(articleViews.contains("LazyVStack(alignment: .leading, spacing: 24)"), "article media should be created lazily while scrolling")
+    expect(articleViews.contains("NativeInlineVideoPlayerModel"), "embedded video should use an explicit playback lifecycle model")
+    expect(articleViews.contains("allowsVideoFrameAnalysis = false"), "embedded video should disable expensive automatic frame analysis")
+    expect(articleViews.contains("updatesNowPlayingInfoCenter = false"), "inline players should not compete for the system Now Playing center")
     expect(articleViews.contains("Button(\"添加视频\")"), "article editor should allow selecting video media")
     expect(articleViews.contains("document: document,"), "article reader should render the parsed article Markdown document")
     expect(articleViews.contains("NativeMarkdownArticleDocumentCache.shared.document"), "article reader should reuse one parsed Markdown document")
@@ -184,6 +206,23 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(!articleViews.contains("ScrollView {\n                VStack(alignment: .leading, spacing: 18)"), "article body input must not be nested inside the editor scroll view because macOS drops its keyboard input")
 } else {
     failures.append("native article views should be readable")
+}
+
+if let playback = try? String(contentsOfFile: sourcePath("NativeVideoPlayback.swift"), encoding: .utf8) {
+    expect(playback.contains("asset.load(.isPlayable)"), "video playback should validate assets before presenting controls")
+    expect(playback.contains("NativeVideoPlaybackCoordinator.shared.activate"), "only one inline video should remain active")
+    expect(playback.contains("addPeriodicTimeObserver"), "video playback should persist meaningful resume positions")
+    expect(playback.contains("UserDefaults"), "video resume positions should survive relaunches")
+    expect(playback.contains("replaceCurrentItem(with: nil)"), "offscreen videos should release their AVPlayerItem")
+} else {
+    failures.append("video playback lifecycle module should be readable")
+}
+
+if let store = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8) {
+    expect(store.contains("func uploadMedia(fileURL: URL, kind: String, slug: String? = nil) async throws"), "media uploads should yield the store actor while copying")
+    expect(store.contains("Task.detached(priority: .utility)"), "large media copies should run outside the store actor")
+} else {
+    failures.append("native local store should be readable for media checks")
 }
 
 if let markdownRenderer = try? String(contentsOfFile: sourcePath("MarkdownRenderer.swift"), encoding: .utf8) {
@@ -333,11 +372,16 @@ if let graphProjection = try? String(contentsOfFile: sourcePath("ArticleGraphPro
 
 if let articleReader = try? String(contentsOfFile: sourcePath("ArticleViews.swift"), encoding: .utf8),
    let articleEditor = try? String(contentsOfFile: sourcePath("ArticleEditorViews.swift"), encoding: .utf8),
-   let appModelCore = try? String(contentsOfFile: sourcePath("NativeAppModel.swift"), encoding: .utf8),
+   let appModelCoreFile = try? String(contentsOfFile: sourcePath("NativeAppModel.swift"), encoding: .utf8),
    let appModelSupport = try? String(contentsOfFile: sourcePath("NativeAppModelSupport.swift"), encoding: .utf8) {
+    let appModelWorkspace = (try? String(
+        contentsOfFile: sourcePath("NativeAppModel+Workspace.swift"),
+        encoding: .utf8
+    )) ?? ""
+    let appModelCore = appModelCoreFile + appModelWorkspace
     expect(articleReader.split(separator: "\n").count < 2_200, "article reader module should stay below the former monolithic size")
     expect(articleEditor.split(separator: "\n").count < 1_700, "article editor should be isolated from reader implementation")
-    expect(appModelCore.split(separator: "\n").count < 2_000, "NativeAppModel core should delegate article, backup, import, and search modules")
+    expect(appModelCoreFile.split(separator: "\n").count < 2_000, "NativeAppModel core should delegate article, backup, import, search, and workspace modules")
     expect(appModelCore.contains("let editorSession = NativeEditorSessionState()"), "high-frequency editor state should live outside the global app publisher")
     expect(!appModelCore.contains("@Published var editor ="), "editor typing should not invalidate every NativeAppModel observer")
     expect(appModelCore.contains("if result.didChange { try await reloadAfterMarkdownSourceChanges(result) }"), "external Markdown events should use the targeted article refresh path")
@@ -392,6 +436,7 @@ if let infoPlist = try? String(contentsOfFile: resourcePath("Info.plist"), encod
 if var localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8) {
     localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+SearchGraph.swift"), encoding: .utf8)) ?? ""
     localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Schema.swift"), encoding: .utf8)) ?? ""
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Indexes.swift"), encoding: .utf8)) ?? ""
     let coreLineCount = ((try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8)) ?? "")
         .split(separator: "\n").count
     expect(coreLineCount < 4_500, "LocalBlogStore core should remain below the former monolithic size")
@@ -426,7 +471,7 @@ if var localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift
     expect(localStore.contains("title, aliases, body"), "article aliases should be indexed in full-text search")
     expect(localStore.contains("category, properties, status"), "typed article properties should be indexed in full-text search")
     expect(localStore.contains("public func renameArticleProperty("), "LocalBlogStore should rename a property across the workspace")
-    expect(localStore.contains("json_each(property_article.properties_json)"), "property search should filter exact keys and values")
+    expect(localStore.contains("article_properties AS property_filter"), "property search should filter exact indexed keys and values")
     expect(localStore.contains("func saveMoment"), "LocalBlogStore should save moments")
     expect(localStore.contains("func updateMoment"), "LocalBlogStore should update moments")
     expect(localStore.contains("func deleteMoment"), "LocalBlogStore should delete moments")
@@ -454,8 +499,9 @@ if var localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift
 
 if let collectionSQL = try? String(contentsOfFile: sourcePath("SmartCollectionSQL.swift"), encoding: .utf8) {
     expect(collectionSQL.contains("struct NativeSmartCollectionSQLQuery"), "smart collection SQL should expose one compiled query boundary")
-    expect(collectionSQL.contains("json_each"), "smart collection SQL should query tags and typed properties without decoding all articles")
-    expect(collectionSQL.contains("julianday"), "smart collection date filters should compare normalized instants")
+    expect(collectionSQL.contains("article_tags AS candidate"), "smart collection SQL should query indexed tags without decoding all articles")
+    expect(collectionSQL.contains("article_properties AS candidate"), "smart collection SQL should query indexed typed properties")
+    expect(collectionSQL.contains("dateOperation(rule.comparison)) ?"), "smart collection date filters should compare normalized ISO instants with indexes")
 } else {
     failures.append("smart collection SQL compiler should be readable")
 }
@@ -466,8 +512,26 @@ if let smartCollections = try? String(contentsOfFile: sourcePath("SmartCollectio
     expect(smartCollections.contains("case .cards: cardLayout"), "smart collections should expose cards layout")
     expect(smartCollections.contains("最多三层排序"), "smart collection editor should explain multi-sort")
     expect(smartCollections.contains("属性筛选"), "smart collection editor should expose article properties")
+    expect(smartCollections.contains("private struct SmartCollectionTableGroup"), "large smart-collection tables should isolate each lazy row group")
+    expect(smartCollections.contains("LazyVStack(alignment: .leading, spacing: 0)"), "smart-collection table rows should be created lazily")
 } else {
     failures.append("smart collection views should be readable")
+}
+
+if let formulaEngine = try? String(
+    contentsOfFile: sourcePath("SmartCollectionFormulaEngine.swift"),
+    encoding: .utf8
+) {
+    expect(formulaEngine.contains("NativeFormulaTokenCache"), "smart-collection formulas should reuse parsed tokens")
+    expect(formulaEngine.contains("NativeFormulaDateFormatterCache"), "date formulas should reuse bounded formatters")
+    expect(formulaEngine.contains("NativeBaseDateParserCache"), "formula dates should reuse parsed values")
+    expect(!formulaEngine.contains("let values = articles.map"), "smart-collection summaries should aggregate without a full value array")
+} else {
+    failures.append("smart collection formula engine should be readable")
+}
+
+if let nativeModels = try? String(contentsOfFile: sourcePath("NativeModels.swift"), encoding: .utf8) {
+    expect(nativeModels.contains("parsedDateCache"), "shared native timestamps should cache successful parses")
 }
 
 if let backupManager = try? String(
@@ -504,7 +568,14 @@ if let settingsView = try? String(contentsOfFile: sourcePath("NativeSettingsView
 }
 
 if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift"), encoding: .utf8) {
-    for module in ["NativeAppModel+Article.swift", "NativeAppModel+Backup.swift", "NativeAppModel+Import.swift", "NativeAppModel+Search.swift"] {
+    for module in [
+        "NativeAppModel+Article.swift",
+        "NativeAppModel+Backup.swift",
+        "NativeAppModel+Import.swift",
+        "NativeAppModel+Search.swift",
+        "NativeAppModel+Workspace.swift",
+        "NativeAppModelSupport.swift",
+    ] {
         appModel += (try? String(contentsOfFile: sourcePath(module), encoding: .utf8)) ?? ""
     }
     expect(appModel.contains("3_000_000_000"), "article autosave should use a three-second debounce")
@@ -532,6 +603,39 @@ if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
     expect(appModel.contains("func toggleMomentTagFilter(_ tag: String)"), "Moment tags should be toggled independently")
     expect(appModel.contains("selectedArticleTags: Set<String>"), "Article tag filters should support selecting multiple tags")
     expect(appModel.contains("availableArticleTagFilters"), "Article tags should include their post counts")
+    expect(appModel.contains("NativeArticleLibraryProjection"), "Article list derivations should be indexed outside SwiftUI renders")
+    expect(appModel.contains("guard usesResolvedSearch || filtersByTag || filtersByFolder"), "Unfiltered and unresolved-search article lists should use the zero-scan fast path")
+    expect(appModel.contains("Task.detached(priority: .userInitiated)"), "Article projection building should stay off the main actor")
+    expect(appModel.contains("NativeProjectionRebuildCoordinator"), "Projection rebuilds should share one generation coordinator")
+    expect(appModel.contains("projectionRebuilds.isCurrent(token)"), "Stale projection tasks should not overwrite newer data")
+    expect(appModel.contains("applyPageViewOverrides"), "Projection rebuilds should preserve concurrent page-view updates")
+    expect(appModel.contains("localSearchTask.cancel()"), "Background article summary searches should be cancellable")
+    expect(appModel.contains("NativeMomentTimelineProjection"), "Moment timeline groups should be cached between renders")
+    expect(
+        appModel.contains("if debounce {\n                let startedAt = ProcessInfo.processInfo.systemUptime\n                let localSearchTask"),
+        "non-debounced article search should skip the local summary scan"
+    )
+    expect(
+        !appModel.contains("var article: NativeArticleSummary"),
+        "article projection records should reference the canonical summary by index"
+    )
+    expect(
+        !appModel.contains("articlesBySlug: [String: NativeArticleSummary]"),
+        "article projection slug indexes should store integer positions instead of summary copies"
+    )
+    expect(
+        appModel.contains("NSSystemTimeZoneDidChange"),
+        "calendar-dependent projections should respond to system time-zone changes"
+    )
+    if let pageCommit = appModel.range(of: "moments = page.moments"),
+       let facetCommit = appModel.range(of: "await replaceMomentFacetRecords(facets)") {
+        expect(
+            pageCommit.lowerBound < facetCommit.lowerBound,
+            "moment pages should be published before the full facet projection is rebuilt"
+        )
+    } else {
+        failures.append("moment feed refresh ordering should be inspectable")
+    }
     expect(appModel.contains("func toggleArticleTagFilter(_ tag: String)"), "Article tags should be toggled independently")
     expect(appModel.contains("func openArticleLink(_ slug: String)"), "NativeAppModel should open a linked article")
     expect(appModel.contains("func openArticleLink(_ destination: NativeArticleLinkDestination)"), "NativeAppModel should preserve full wiki-link destinations")
@@ -562,8 +666,80 @@ if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
     expect(appModel.contains("700_000_000"), "Markdown filesystem events should be coalesced before syncing")
     expect(appModel.contains("15 * 60 * 1_000_000_000"), "Markdown sync should retain a low-frequency full verification")
     expect(!appModel.contains("Task.sleep(nanoseconds: 2_000_000_000)"), "Markdown sync should not scan the whole library every two seconds")
+    expect(
+        !appModel.contains("discardUnreferencedMedia(cleanupCandidates)\n            try await reload()"),
+        "saving one article should not trigger a full Markdown and workspace reload"
+    )
+    expect(
+        appModel.contains("loadArticleAncillaryState"),
+        "article comments and relations should load after the reader is presented"
+    )
+    expect(
+        appModel.contains("scheduleBackupOverviewRefresh"),
+        "backup overview work should not block the startup loading state"
+    )
+    expect(
+        appModel.contains("try await reloadArticleLibraryState()")
+            && appModel.contains("NativeMarkdownSourceChangeSet(requiresFullScan: true)"),
+        "startup should publish the SQLite article projection before the full Markdown verification"
+    )
 } else {
     failures.append("native app model should be readable")
+}
+
+if let searchStore = try? String(
+    contentsOfFile: sourcePath("LocalBlogStore+SearchGraph.swift"),
+    encoding: .utf8
+) {
+    expect(
+        searchStore.contains("content_short_search MATCH"),
+        "one- and two-character searches should use the short-term FTS index"
+    )
+    expect(
+        searchStore.contains("article_properties AS property_filter"),
+        "search property filters should use the normalized property index"
+    )
+} else {
+    failures.append("search store should be readable")
+}
+
+if let schema = try? String(
+    contentsOfFile: sourcePath("LocalBlogStore+Schema.swift"),
+    encoding: .utf8
+) {
+    expect(schema.contains("CREATE TABLE IF NOT EXISTS article_tags"), "article tags should have a normalized index")
+    expect(schema.contains("CREATE TABLE IF NOT EXISTS article_properties"), "article properties should have a normalized index")
+    expect(schema.contains("CREATE VIRTUAL TABLE IF NOT EXISTS content_short_search"), "short search should have a dedicated FTS index")
+    expect(schema.contains("CREATE TABLE IF NOT EXISTS media_references"), "media cleanup should use an incremental reference index")
+} else {
+    failures.append("local store schema should be readable")
+}
+
+if let sqlite = try? String(contentsOfFile: sourcePath("SQLiteDatabase.swift"), encoding: .utf8) {
+    expect(sqlite.contains("statementCache"), "SQLite hot queries should reuse prepared statements")
+    expect(sqlite.contains("SQLITE_OPEN_NOMUTEX"), "actor-owned SQLite connections should avoid redundant mutexes")
+} else {
+    failures.append("SQLite adapter should be readable")
+}
+
+if let smartCollectionSQL = try? String(
+    contentsOfFile: sourcePath("SmartCollectionSQL.swift"),
+    encoding: .utf8
+) {
+    expect(
+        smartCollectionSQL.contains("article_tags AS candidate"),
+        "smart collection tag rules should use the normalized tag index"
+    )
+    expect(
+        smartCollectionSQL.contains("article_properties AS candidate"),
+        "smart collection property rules should use the normalized property index"
+    )
+    expect(
+        !smartCollectionSQL.contains("julianday(\\(expression))"),
+        "smart collection ISO timestamp comparisons should remain indexable"
+    )
+} else {
+    failures.append("smart collection SQL compiler should be readable")
 }
 
 if let sourceMonitor = try? String(

@@ -473,6 +473,17 @@ public indirect enum NativeSmartCollectionFilter: Codable, Hashable {
         }
     }
 
+    var usesPageViews: Bool {
+        switch self {
+        case let .rule(rule):
+            return rule.field == .pageViews
+        case .expression:
+            return false
+        case let .and(children), let .or(children), let .not(children):
+            return children.contains(where: \.usesPageViews)
+        }
+    }
+
     var legacyProjection: (mode: NativeSmartCollectionMatchMode, rules: [NativeSmartCollectionRule])? {
         switch self {
         case let .rule(rule): return (.all, [rule])
@@ -633,6 +644,11 @@ public struct NativeSmartCollection: Codable, Hashable, Identifiable {
     var hasAdvancedFilter: Bool {
         guard let filter else { return false }
         return filter.legacyProjection == nil
+    }
+
+    var dependsOnPageViews: Bool {
+        effectiveFilter?.usesPageViews == true
+            || sorts.contains(where: { $0.field == .pageViews })
     }
 
     public func materialized(viewID: String?) -> Self {

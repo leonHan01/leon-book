@@ -32,21 +32,45 @@ extension LocalBlogStore {
         }
 
         for term in shortTerms {
-            predicates.append("""
-            (instr(lower(title), lower(?)) > 0
-             OR instr(lower(aliases), lower(?)) > 0
-             OR instr(lower(body), lower(?)) > 0
-             OR instr(lower(excerpt), lower(?)) > 0
-             OR instr(lower(tags), lower(?)) > 0
-             OR instr(lower(category), lower(?)) > 0
-             OR instr(lower(properties), lower(?)) > 0)
-            """)
-            values.append(contentsOf: Array(repeating: .text(term), count: 7))
+            if let token = shortSearchToken(for: term) {
+                predicates.append("""
+                EXISTS (
+                    SELECT 1 FROM content_short_search AS short_index
+                    WHERE short_index.document_type = content_search.document_type
+                      AND short_index.document_id = content_search.document_id
+                      AND content_short_search MATCH ?
+                )
+                """)
+                values.append(.text("\"\(token.replacingOccurrences(of: "\"", with: "\"\""))\""))
+            } else {
+                predicates.append("""
+                (instr(lower(title), lower(?)) > 0
+                 OR instr(lower(aliases), lower(?)) > 0
+                 OR instr(lower(body), lower(?)) > 0
+                 OR instr(lower(excerpt), lower(?)) > 0
+                 OR instr(lower(tags), lower(?)) > 0
+                 OR instr(lower(category), lower(?)) > 0
+                 OR instr(lower(properties), lower(?)) > 0)
+                """)
+                values.append(contentsOf: Array(repeating: .text(term), count: 7))
+            }
         }
 
         for tag in query.tags {
-            predicates.append("instr(lower(tags), lower(?)) > 0")
-            values.append(.text("\"\(tag)\""))
+            predicates.append("""
+            ((document_type = 'article' AND EXISTS (
+                SELECT 1 FROM article_tags AS tag_filter
+                WHERE tag_filter.article_slug = document_id
+                  AND tag_filter.normalized_tag = ?
+            )) OR (document_type = 'moment' AND EXISTS (
+                SELECT 1 FROM moment_tags AS tag_filter
+                WHERE tag_filter.moment_id = document_id
+                  AND tag_filter.normalized_tag = ?
+            )))
+            """)
+            let normalizedTag = normalizedSearchIdentity(tag)
+            values.append(.text(normalizedTag))
+            values.append(.text(normalizedTag))
         }
 
         if !effectiveTypes.isEmpty {
@@ -71,52 +95,14 @@ extension LocalBlogStore {
             predicates.append("""
             (document_type = 'article' AND EXISTS (
                 SELECT 1
-                FROM articles AS property_article,
-                     json_each(property_article.properties_json) AS property_value
-                WHERE property_article.slug = document_id
-                  AND property_article.deleted_at IS NULL
-                  AND lower(property_value.key) = lower(?)
-                  AND (
-                      (property_value.type = 'object'
-                       AND json_extract(property_value.value, '$.kind') IN ('list', 'tags')
-                       AND EXISTS (
-                           SELECT 1
-                           FROM json_each(json_extract(property_value.value, '$.value')) AS list_item
-                           WHERE lower(CAST(list_item.value AS TEXT)) = lower(?)
-                       ))
-                      OR
-                      (property_value.type = 'object'
-                       AND json_extract(property_value.value, '$.kind') NOT IN ('list', 'tags')
-                       AND lower(COALESCE(json_extract(property_value.value, '$.value'), '')) = lower(?))
-                      OR
-                      (property_value.type != 'object'
-                       AND json_valid(CAST(property_value.value AS TEXT))
-                       AND json_type(CASE
-                           WHEN json_valid(CAST(property_value.value AS TEXT))
-                           THEN CAST(property_value.value AS TEXT)
-                           ELSE 'null'
-                       END) = 'array'
-                       AND EXISTS (
-                           SELECT 1
-                           FROM json_each(CAST(property_value.value AS TEXT)) AS legacy_list_item
-                           WHERE lower(CAST(legacy_list_item.value AS TEXT)) = lower(?)
-                       ))
-                      OR
-                      (property_value.type != 'object'
-                       AND NOT (
-                           json_valid(CAST(property_value.value AS TEXT))
-                           AND json_type(CASE
-                               WHEN json_valid(CAST(property_value.value AS TEXT))
-                               THEN CAST(property_value.value AS TEXT)
-                               ELSE 'null'
-                           END) = 'array'
-                       )
-                       AND lower(CAST(property_value.value AS TEXT)) = lower(?))
-                  )
+                FROM article_properties AS property_filter
+                WHERE property_filter.article_slug = document_id
+                  AND property_filter.normalized_key = ?
+                  AND property_filter.normalized_value = ?
             ))
             """)
-            values.append(.text(property.key))
-            values.append(contentsOf: Array(repeating: .text(property.value), count: 4))
+            values.append(.text(normalizedSearchIdentity(property.key)))
+            values.append(.text(normalizedSearchIdentity(property.value)))
         }
 
         let whereClause = predicates.isEmpty ? "" : "WHERE \(predicates.joined(separator: " AND "))"
@@ -130,7 +116,7 @@ extension LocalBlogStore {
             """
             SELECT document_type, document_id, title,
                    snippet(content_search, -1, '⟦', '⟧', ' … ', 28),
-                   body, excerpt, tags, category, status, created_at, updated_at
+                   substr(body, 1, 320), excerpt, tags, category, status, created_at, updated_at
             FROM content_search
             \(whereClause)
             ORDER BY \(ordering)
@@ -174,8 +160,10 @@ extension LocalBlogStore {
     /// against current titles, slugs, paths, and aliases without loading bodies.
     public func articleRelations(for slug: String) throws -> NativeArticleRelations {
         try prepare()
+        try Task.checkCancellation()
         let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
         let summaries = try allArticleSummaries()
+        try Task.checkCancellation()
         guard let article = summaries.first(where: { $0.slug == safeSlug }) else {
             throw NativeStoreError.notFound
         }
@@ -197,6 +185,7 @@ extension LocalBlogStore {
             containing: article.title,
             excluding: article.slug
         ).compactMap { candidate -> NativeArticleMention? in
+            guard !Task.isCancelled else { return nil }
             guard let mention = unlinkedMention(of: article.title, in: candidate.body),
                   let summary = summariesBySlug[candidate.slug] else { return nil }
             return NativeArticleMention(article: summary, count: mention.count, snippet: mention.snippet)
@@ -205,6 +194,7 @@ extension LocalBlogStore {
             if $0.count != $1.count { return $0.count > $1.count }
             return $0.article.updatedAt > $1.article.updatedAt
         }
+        try Task.checkCancellation()
 
         return NativeArticleRelations(
             outgoing: outgoing,

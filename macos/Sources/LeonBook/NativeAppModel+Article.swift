@@ -2,6 +2,50 @@ import AppKit
 import Foundation
 
 extension NativeAppModel {
+    func schedulePostSaveArticleRefresh(_ saved: NativeArticle, recoveryID: String) {
+        articlePostSaveTask?.cancel()
+        let activeStore = store
+        let workspace = workspaceGeneration
+        articlePostSaveTask = Task { [weak self] in
+            guard let self else { return }
+
+            var summaries = self.articles
+            let summary = saved.summary
+            if let index = summaries.firstIndex(where: { $0.slug == summary.slug }) {
+                summaries[index] = summary
+            } else {
+                summaries.append(summary)
+            }
+            summaries.sort {
+                if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+                return $0.slug < $1.slug
+            }
+            await self.replaceArticleSummaries(summaries)
+            guard !Task.isCancelled, workspace == self.workspaceGeneration else { return }
+
+            if !self.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                self.updateArticleListSearch(self.searchText, debounce: false)
+            }
+            do {
+                if self.selectedSmartCollection != nil {
+                    try await self.refreshSelectedSmartCollection()
+                }
+                let revisions = try await activeStore.listArticleRevisions(
+                    articleSlug: saved.slug,
+                    draftKey: recoveryID
+                )
+                guard !Task.isCancelled,
+                      workspace == self.workspaceGeneration,
+                      self.selectedSlug == saved.slug else { return }
+                self.articleRevisions = revisions
+                try await self.refreshActivity()
+            } catch {
+                guard !Task.isCancelled, workspace == self.workspaceGeneration else { return }
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func toggleArticleTask(article: NativeArticle, lineIndex: Int, completed: Bool) {
         Task {
             do {
@@ -13,7 +57,7 @@ extension NativeAppModel {
                 )
                 guard selectedArticle?.slug == updated.slug else { return }
                 selectedArticle = updated
-                articles = try await store.listArticles()
+                await replaceArticleSummaries(try await store.listArticles())
                 try await reloadKnowledgeGraph()
                 selectedArticleRelations = try await store.articleRelations(for: updated.slug)
                 scheduleBackup()
@@ -169,7 +213,7 @@ extension NativeAppModel {
                     expectedDestinationUpdatedAt: destinationArticle.updatedAt,
                     position: position
                 )
-                articles = try await store.listArticles()
+                await replaceArticleSummaries(try await store.listArticles())
                 try await reloadKnowledgeGraph()
                 articleTabs.removeAll(where: { $0.slug == source.slug })
                 recentArticleSlugs.removeAll(where: { $0 == source.slug })
@@ -185,7 +229,7 @@ extension NativeAppModel {
     }
 
     private func refreshAfterArticleRefactor(primarySlug: String) async throws {
-        articles = try await store.listArticles()
+        await replaceArticleSummaries(try await store.listArticles())
         try await reloadKnowledgeGraph()
         selectedArticleRelations = try await store.articleRelations(for: primarySlug)
         try await refreshSelectedSmartCollection()
@@ -219,7 +263,7 @@ extension NativeAppModel {
                 )
                 let changedCount = try await store.renameArticleProperty(from: oldKey, to: newKey)
                 editor.properties = editorProperties
-                articles = try await store.listArticles()
+                await replaceArticleSummaries(try await store.listArticles())
                 try await reloadKnowledgeGraph()
                 try await refreshSelectedSmartCollection()
                 if let slug = selectedArticle?.slug {
@@ -262,13 +306,10 @@ extension NativeAppModel {
         } else {
             selected = try await store.getArticle(slug: summary.slug)
         }
-        async let relationsRequest = store.articleRelations(for: summary.slug)
-        async let commentsRequest = store.listArticleComments(articleSlug: summary.slug)
-        let (relations, comments) = try await (relationsRequest, commentsRequest)
         guard navigationGeneration == articleNavigationGeneration,
               workspace == workspaceGeneration else { return false }
-        if recordsPageView, let index = articles.firstIndex(where: { $0.slug == summary.slug }) {
-            articles[index].pageViews = selected.pageViews
+        if recordsPageView {
+            updateArticleSummaryPageViews(slug: summary.slug, pageViews: selected.pageViews)
         }
         if selectedSlug != summary.slug {
             articleRevisions = []
@@ -276,14 +317,67 @@ extension NativeAppModel {
         updateArticleTabs(for: summary.slug, disposition: disposition)
         selectedSlug = summary.slug
         selectedArticle = selected
-        selectedArticleRelations = relations
-        articleComments = comments
+        selectedArticleRelations = .empty
+        articleComments = []
         pendingArticleCommentSelection = nil
         recordRecentArticle(summary.slug)
         section = .reader
         persistArticleNavigationState()
         errorMessage = nil
+        let refreshesPageViewCollection = recordsPageView
+            && selectedSmartCollection?.dependsOnPageViews == true
+        loadArticleAncillaryState(
+            slug: summary.slug,
+            navigationGeneration: navigationGeneration,
+            workspaceGeneration: workspace,
+            refreshesPageViewCollection: false
+        )
+        // The reader is already visible at this point. Keep the selected Base
+        // semantically current before returning, without putting comments and
+        // backlinks back on the navigation critical path.
+        if refreshesPageViewCollection {
+            try await refreshSelectedSmartCollection()
+        }
         return true
+    }
+
+    func loadArticleAncillaryState(
+        slug: String,
+        navigationGeneration: Int,
+        workspaceGeneration: Int,
+        refreshesPageViewCollection: Bool
+    ) {
+        articleAncillaryLoadTask?.cancel()
+        let activeStore = store
+        articleAncillaryLoadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let comments = try await activeStore.listArticleComments(articleSlug: slug)
+                guard !Task.isCancelled,
+                      navigationGeneration == self.articleNavigationGeneration,
+                      workspaceGeneration == self.workspaceGeneration,
+                      self.selectedSlug == slug else { return }
+                self.articleComments = comments
+
+                let relations = try await activeStore.articleRelations(for: slug)
+                guard !Task.isCancelled,
+                      navigationGeneration == self.articleNavigationGeneration,
+                      workspaceGeneration == self.workspaceGeneration,
+                      self.selectedSlug == slug else { return }
+                self.selectedArticleRelations = relations
+
+                if refreshesPageViewCollection {
+                    try await self.refreshSelectedSmartCollection()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled,
+                      navigationGeneration == self.articleNavigationGeneration,
+                      workspaceGeneration == self.workspaceGeneration else { return }
+                self.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     func selectSlug(_ slug: String?) {
@@ -306,7 +400,7 @@ extension NativeAppModel {
     func showAllArticles() {
         selectedSmartCollectionID = nil
         selectedSmartCollectionViewID = nil
-        smartCollectionArticles = []
+        clearSmartCollectionArticleSummaries()
         selectedArticleFolderPath = nil
         clearArticleFilters()
         section = .articles
@@ -315,7 +409,7 @@ extension NativeAppModel {
     func showArticleFolder(_ path: String) {
         selectedSmartCollectionID = nil
         selectedSmartCollectionViewID = nil
-        smartCollectionArticles = []
+        clearSmartCollectionArticleSummaries()
         selectedArticleFolderPath = path
         clearArticleFilters()
         section = .articles
@@ -355,7 +449,7 @@ extension NativeAppModel {
     func showSmartCollection(_ collection: NativeSmartCollection) {
         selectedSmartCollectionID = collection.id
         selectedSmartCollectionViewID = collection.views.first?.id
-        smartCollectionArticles = []
+        clearSmartCollectionArticleSummaries()
         selectedArticleFolderPath = nil
         clearArticleFilters()
         section = .articles
@@ -392,7 +486,7 @@ extension NativeAppModel {
               definition.views.contains(where: { $0.id == viewID }),
               selectedSmartCollectionViewID != viewID else { return }
         selectedSmartCollectionViewID = viewID
-        smartCollectionArticles = []
+        clearSmartCollectionArticleSummaries()
         Task {
             do { try await refreshSelectedSmartCollection() }
             catch { errorMessage = error.localizedDescription }
@@ -416,7 +510,7 @@ extension NativeAppModel {
                     key: key,
                     value: value
                 )
-                articles = try await store.listArticles()
+                await replaceArticleSummaries(try await store.listArticles())
                 try await refreshSelectedSmartCollection()
                 if selectedArticle?.slug == updated.slug { selectedArticle = updated }
                 try await reloadKnowledgeGraph()
@@ -435,7 +529,7 @@ extension NativeAppModel {
             if selectedSmartCollectionID == collection.id {
                 selectedSmartCollectionID = nil
                 selectedSmartCollectionViewID = nil
-                smartCollectionArticles = []
+                clearSmartCollectionArticleSummaries()
             }
             smartCollections = try await store.listSmartCollections()
             scheduleBackup()
@@ -446,11 +540,13 @@ extension NativeAppModel {
     }
 
     func refreshSelectedSmartCollection() async throws {
-        guard let selectedSmartCollection else {
-            smartCollectionArticles = []
+        guard let collection = selectedSmartCollection else {
+            clearSmartCollectionArticleSummaries()
             return
         }
-        smartCollectionArticles = try await store.listArticles(in: selectedSmartCollection)
+        let summaries = try await store.listArticles(in: collection)
+        guard collection == selectedSmartCollection else { return }
+        await replaceSmartCollectionArticleSummaries(summaries)
     }
 
     func isBookmarked(_ target: NativeBookmarkTarget) -> Bool {
@@ -564,7 +660,7 @@ extension NativeAppModel {
             return
         }
         let resolvedSlug = destination.resolvedSlug
-            ?? NativeArticleLink.resolve(destination.target, in: articles)?.slug
+            ?? resolveArticleLink(destination.target)?.slug
         guard let resolvedSlug else {
             createArticle(from: destination)
             return

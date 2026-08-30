@@ -4,6 +4,29 @@ import LeonBookBackupModule
 import LeonBookModuleKit
 
 extension NativeAppModel {
+    func scheduleCompatibilityExportVerification(for sourceStore: LocalBlogStore) {
+        compatibilityExportTask?.cancel()
+        compatibilityExportTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            do {
+                try await sourceStore.verifyCompatibilityExports()
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.errorMessage = "兼容导出校验失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func scheduleBackupOverviewRefresh() {
+        backupOverviewTask?.cancel()
+        backupOverviewTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled, let self else { return }
+            await self.refreshBackupOverview()
+        }
+    }
+
     func chooseBackupDirectory() {
         guard authorizeFirstPartyModule(
             BackupFirstPartyModule.id,
@@ -81,6 +104,9 @@ extension NativeAppModel {
     }
 
     func scheduleBackup() {
+        // Compatibility exports are intentionally coalesced with ordinary
+        // mutations even when automatic snapshots are not configured.
+        scheduleCompatibilityExportVerification(for: store)
         guard authorizeFirstPartyModule(
                 BackupFirstPartyModule.id,
                 permission: .backupWrite,
@@ -234,16 +260,14 @@ extension NativeAppModel {
         let destinationURL = URL(fileURLWithPath: backupDirectoryPath, isDirectory: true)
         do {
             let overview = try await Task.detached(priority: .utility) {
-                let snapshots = try LocalBackupManager.listSnapshots(in: destinationURL)
-                let estimate = try? LocalBackupManager.estimateStorage(
+                try LocalBackupManager.overview(
                     source: sourceURL,
                     destination: destinationURL
                 )
-                return (snapshots, estimate)
             }.value
-            backupSnapshots = overview.0
-            backupStorageEstimate = overview.1
-            lastBackupPath = overview.0.first?.url.path ?? ""
+            backupSnapshots = overview.snapshots
+            backupStorageEstimate = overview.estimate
+            lastBackupPath = overview.snapshots.first?.url.path ?? ""
         } catch {
             backupValidationStatus = "无法读取快照：\(error.localizedDescription)"
         }

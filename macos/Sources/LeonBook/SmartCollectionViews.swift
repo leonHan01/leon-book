@@ -16,34 +16,35 @@ struct SmartArticleLibraryView: View {
             ?? .list
     }
 
-    private var groups: [SmartArticleDisplayGroup] {
-        SmartArticleDisplayGroup.groups(
-            articles: model.filteredArticles,
+    var body: some View {
+        let filteredArticles = model.filteredArticles
+        let tagFilters = model.availableArticleTagFilters
+        let currentLayout = layout
+        let groups = SmartArticleDisplayGroup.groups(
+            articles: filteredArticles,
             by: model.selectedSmartCollection?.groupBy ?? .none
         )
-    }
 
-    var body: some View {
         VStack(spacing: 0) {
-            header
-            if !model.availableArticleTagFilters.isEmpty {
-                SmartArticleTagFilterBar(model: model, filters: model.availableArticleTagFilters)
+            header(articleCount: filteredArticles.count, currentLayout: currentLayout)
+            if !tagFilters.isEmpty {
+                SmartArticleTagFilterBar(model: model, filters: tagFilters)
                     .padding(.horizontal, 22)
                     .padding(.bottom, 14)
             }
             Divider()
 
-            if model.filteredArticles.isEmpty {
+            if filteredArticles.isEmpty {
                 EmptyState(
                     title: "没有匹配的文章",
                     message: emptyMessage,
                     actionTitle: "新文章"
                 ) { model.newArticle() }
             } else {
-                switch layout {
-                case .list: listLayout
-                case .table: tableLayout
-                case .cards: cardLayout
+                switch currentLayout {
+                case .list: listLayout(groups: groups)
+                case .table: tableLayout(groups: groups)
+                case .cards: cardLayout(groups: groups)
                 }
             }
         }
@@ -62,11 +63,14 @@ struct SmartArticleLibraryView: View {
         return "调整智能集合的筛选条件，或创建符合条件的文章。"
     }
 
-    private var header: some View {
+    private func header(
+        articleCount: Int,
+        currentLayout: NativeSmartCollectionLayout
+    ) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.articleListTitle).font(.title2.weight(.semibold))
-                Text("\(model.filteredArticles.count) 篇 · 虚拟集合，不移动原文章")
+                Text("\(articleCount) 篇 · 虚拟集合，不移动原文章")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -87,7 +91,7 @@ struct SmartArticleLibraryView: View {
             }
 
             Picker("视图", selection: Binding(
-                get: { layout },
+                get: { currentLayout },
                 set: { nextLayout in
                     if model.selectedSmartCollection == nil {
                         allArticlesLayoutRaw = nextLayout.rawValue
@@ -133,7 +137,7 @@ struct SmartArticleLibraryView: View {
         .padding(22)
     }
 
-    private var listLayout: some View {
+    private func listLayout(groups: [SmartArticleDisplayGroup]) -> some View {
         List {
             ForEach(groups) { group in
                 Section {
@@ -150,7 +154,7 @@ struct SmartArticleLibraryView: View {
         .listStyle(.plain)
     }
 
-    private var tableLayout: some View {
+    private func tableLayout(groups: [SmartArticleDisplayGroup]) -> some View {
         SmartCollectionTableView(
             model: model,
             collection: model.selectedSmartCollection ?? NativeSmartCollection(name: "全部文章"),
@@ -158,7 +162,7 @@ struct SmartArticleLibraryView: View {
         )
     }
 
-    private var cardLayout: some View {
+    private func cardLayout(groups: [SmartArticleDisplayGroup]) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
                 ForEach(groups) { group in
@@ -349,73 +353,105 @@ private struct SmartCollectionTableView: View {
         ScrollView([.horizontal, .vertical]) {
             LazyVStack(alignment: .leading, spacing: 16) {
                 ForEach(groups) { group in
-                    VStack(alignment: .leading, spacing: 8) {
-                        if groups.count > 1 { SmartArticleGroupHeader(group: group) }
-                        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 0) {
-                            GridRow {
-                                ForEach(columns) { column in
-                                    Text(column.displayTitle)
-                                        .frame(width: column.width, alignment: .leading)
-                                        .gridColumnAlignment(.leading)
-                                }
-                                Text("").frame(width: 24)
-                            }
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 8)
-
-                            Divider().gridCellColumns(columns.count + 1)
-
-                            ForEach(group.articles) { article in
-                                GridRow {
-                                    ForEach(columns) { column in
-                                        SmartCollectionCell(
-                                            model: model,
-                                            collection: collection,
-                                            column: column,
-                                            article: article
-                                        )
-                                        .frame(width: column.width, alignment: .leading)
-                                    }
-                                    SmartArticleBookmarkButton(model: model, article: article)
-                                        .frame(width: 24)
-                                }
-                                .font(.callout)
-                                .padding(.vertical, 7)
-                                Divider().gridCellColumns(columns.count + 1)
-                            }
-
-                            if columns.contains(where: { $0.summary != nil }) {
-                                GridRow {
-                                    ForEach(columns) { column in
-                                        if let summary = column.summary {
-                                            let value = NativeSmartCollectionFormulaEngine.summary(
-                                                summary,
-                                                column: column,
-                                                articles: group.articles,
-                                                collection: collection
-                                            )
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(summary.label).font(.caption2).foregroundStyle(.secondary)
-                                                Text(value.displayText.isEmpty ? "—" : value.displayText)
-                                                    .font(.caption.weight(.semibold))
-                                            }
-                                            .frame(width: column.width, alignment: .leading)
-                                        } else {
-                                            Color.clear.frame(width: column.width, height: 1)
-                                        }
-                                    }
-                                    Color.clear.frame(width: 24, height: 1)
-                                }
-                                .padding(.vertical, 8)
-                            }
-                        }
-                        .padding(.horizontal, 14)
-                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-                    }
+                    SmartCollectionTableGroup(
+                        model: model,
+                        collection: collection,
+                        columns: columns,
+                        group: group,
+                        showsHeader: groups.count > 1
+                    )
                 }
             }
             .padding(20)
+        }
+    }
+}
+
+private struct SmartCollectionTableGroup: View {
+    @ObservedObject var model: NativeAppModel
+    let collection: NativeSmartCollection
+    let columns: [NativeSmartCollectionColumn]
+    let group: SmartArticleDisplayGroup
+    let showsHeader: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showsHeader { SmartArticleGroupHeader(group: group) }
+            LazyVStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 12) {
+                    ForEach(columns) { column in
+                        Text(column.displayTitle)
+                            .frame(width: column.width, alignment: .leading)
+                    }
+                    Text("").frame(width: 24)
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 8)
+
+                Divider()
+
+                ForEach(group.articles) { article in
+                    HStack(spacing: 12) {
+                        ForEach(columns) { column in
+                            SmartCollectionCell(
+                                model: model,
+                                collection: collection,
+                                column: column,
+                                article: article
+                            )
+                            .frame(width: column.width, alignment: .leading)
+                        }
+                        SmartArticleBookmarkButton(model: model, article: article)
+                            .frame(width: 24)
+                    }
+                    .font(.callout)
+                    .padding(.vertical, 7)
+                    Divider()
+                }
+
+                if columns.contains(where: { $0.summary != nil }) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(columns) { column in
+                            SmartCollectionSummaryCell(
+                                collection: collection,
+                                column: column,
+                                articles: group.articles
+                            )
+                        }
+                        Color.clear.frame(width: 24, height: 1)
+                    }
+                    .padding(.vertical, 8)
+                }
+            }
+            .padding(.horizontal, 14)
+            .fixedSize(horizontal: true, vertical: false)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+}
+
+private struct SmartCollectionSummaryCell: View {
+    let collection: NativeSmartCollection
+    let column: NativeSmartCollectionColumn
+    let articles: [NativeArticleSummary]
+
+    var body: some View {
+        if let summary = column.summary {
+            let value = NativeSmartCollectionFormulaEngine.summary(
+                summary,
+                column: column,
+                articles: articles,
+                collection: collection
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(summary.label).font(.caption2).foregroundStyle(.secondary)
+                Text(value.displayText.isEmpty ? "—" : value.displayText)
+                    .font(.caption.weight(.semibold))
+            }
+            .frame(width: column.width, alignment: .leading)
+        } else {
+            Color.clear.frame(width: column.width, height: 1)
         }
     }
 }
@@ -432,9 +468,11 @@ private struct SmartCollectionCell: View {
                 model: model,
                 article: article,
                 key: column.key,
-                kind: article.properties.first(where: {
-                    $0.key.caseInsensitiveCompare(column.key) == .orderedSame
-                })?.value.kind ?? column.propertyKind
+                kind: article.properties[column.key]?.kind
+                    ?? article.properties.first(where: {
+                        $0.key.caseInsensitiveCompare(column.key) == .orderedSame
+                    })?.value.kind
+                    ?? column.propertyKind
             )
         } else if column.source == .system,
                   NativeSmartCollectionSystemField(rawValue: column.key) == .title {

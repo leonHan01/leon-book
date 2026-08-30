@@ -50,3 +50,30 @@ struct NativeArticleLinkIdentityIndex {
         return folded(withoutExtension)
     }
 }
+
+/// Carries article summaries and their O(1) identity resolver together so a
+/// Markdown document builds the index once instead of once per inline link.
+struct NativeArticleLinkCollection: @unchecked Sendable {
+    let articles: [NativeArticleSummary]
+    private let identityIndex: NativeArticleLinkIdentityIndex
+
+    init(_ articles: [NativeArticleSummary] = []) {
+        self.articles = articles
+        identityIndex = NativeArticleLinkIdentityIndex(articles)
+    }
+
+    func resolve(_ reference: String) -> NativeArticleSummary? {
+        identityIndex.resolve(reference)
+    }
+
+    func destination(for rawReference: String) -> NativeArticleLinkDestination? {
+        let reference = NativeArticleLink.Reference(rawValue: rawReference)
+        guard !reference.target.isEmpty || reference.heading != nil else { return nil }
+        return NativeArticleLinkDestination(
+            target: reference.target,
+            resolvedSlug: resolve(rawReference)?.slug,
+            heading: reference.heading,
+            label: reference.label
+        )
+    }
+}

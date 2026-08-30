@@ -40,9 +40,11 @@ public final class NativeAppModel: ObservableObject {
         }
     }
     @Published var articles: [NativeArticleSummary] = []
-    @Published private(set) var activity: [NativeActivityDay] = []
-    @Published var moments: [NativeMoment] = []
-    @Published private(set) var totalMomentCount = 0
+    @Published var activity: [NativeActivityDay] = []
+    @Published var moments: [NativeMoment] = [] {
+        didSet { rebuildMomentTimelineProjection() }
+    }
+    @Published var totalMomentCount = 0
     @Published var filteredMomentCount = 0
     @Published var questions: [NativeQuestion] = []
     @Published var totalQuestionCount = 0
@@ -52,7 +54,7 @@ public final class NativeAppModel: ObservableObject {
     @Published var isLoadingQuestionAnswers = false
     @Published var questionAnswerDraft = NativeQuestionAnswerDraft()
     @Published var editingQuestionAnswerID: String?
-    @Published private(set) var trashItems: [NativeTrashItem] = []
+    @Published var trashItems: [NativeTrashItem] = []
     @Published var selectedArticle: NativeArticle?
     @Published var selectedArticleRelations = NativeArticleRelations.empty
     @Published var articleComments: [NativeArticleComment] = []
@@ -84,8 +86,8 @@ public final class NativeAppModel: ObservableObject {
         set { editorSession.isAutosaving = newValue }
     }
     @Published var momentDraft = NativeMomentDraft()
-    @Published private(set) var editingMomentID: String?
-    @Published private(set) var selectedArticleTags: Set<String> = []
+    @Published var editingMomentID: String?
+    @Published var selectedArticleTags: Set<String> = []
     @Published var selectedArticleFolderPath: String?
     @Published var selectedMomentTags: Set<String> = []
     @Published var momentDateFilter: NativeMomentDateFilter = .all
@@ -102,10 +104,10 @@ public final class NativeAppModel: ObservableObject {
     @Published private(set) var isUploadingMedia = false
     @Published var storageReady = false
     @Published private(set) var needsWorkDirectorySelection = false
-    @Published private(set) var users: [NativeUser] = []
-    @Published private(set) var currentUser = NativeUser.leon
+    @Published var users: [NativeUser] = []
+    @Published var currentUser = NativeUser.leon
     @Published private(set) var isSwitchingWorkspace = false
-    @Published private(set) var dataDirectoryPath = LocalBlogStore.defaultRootURL.path
+    @Published var dataDirectoryPath = LocalBlogStore.defaultRootURL.path
     @Published private(set) var dataRootDirectoryPath = LocalBlogStore.defaultRootURL.path
     @Published var selectedMarkdownWorkspaceMode = NativeMarkdownWorkspaceMode.copyImport
     @Published var activeMarkdownWorkspaceMode = NativeMarkdownWorkspaceMode.copyImport
@@ -146,17 +148,30 @@ public final class NativeAppModel: ObservableObject {
     @Published var articleScrollRevision = UUID()
 
     var userWorkspaces: UserWorkspaceStore
-    private(set) var store: LocalBlogStore
+    var store: LocalBlogStore
     var trashCleanupTask: Task<Void, Never>?
     private var uploadCount = 0
     var workspaceGeneration = 0
-    private var pendingEditorMediaCleanup: [NativeMedia] = []
-    private var editorOriginalArticle: NativeArticle?
+    var pendingEditorMediaCleanup: [NativeMedia] = []
+    var editorOriginalArticle: NativeArticle?
     var backupTask: Task<Void, Never>?
     var editorAutosaveTask: Task<Void, Never>?
+    var articleAncillaryLoadTask: Task<Void, Never>?
+    var articlePostSaveTask: Task<Void, Never>?
+    var backupOverviewTask: Task<Void, Never>?
+    var compatibilityExportTask: Task<Void, Never>?
+    var workspaceAncillaryLoadTask: Task<Void, Never>?
+    private var articleLibraryProjection = NativeArticleLibraryProjection()
+    private var smartCollectionArticleProjection = NativeArticleLibraryProjection()
+    private var projectionRebuilds = NativeProjectionRebuildCoordinator()
+    var projectionRebuildWillBuild: (@MainActor (NativeProjectionKind) async -> Void)?
+    private var articlePageViewOverrides: [String: Int] = [:]
+    private var momentFacetProjection = NativeMomentFacetProjection()
     private var momentFacetRecords: [NativeMomentFacetRecord] = []
+    private var momentTimelineProjection = NativeMomentTimelineProjection()
+    private var momentTimelineReferenceDay = Calendar.current.startOfDay(for: Date())
     var nextMomentCursor: NativeMomentCursor?
-    private var momentFeedGeneration = 0
+    var momentFeedGeneration = 0
     private var momentSearchTask: Task<Void, Never>?
     var questionSearchTask: Task<Void, Never>?
     var editingQuestionAnswerUpdatedAt: String?
@@ -165,17 +180,22 @@ public final class NativeAppModel: ObservableObject {
     var articleListSearchTask: Task<Void, Never>?
     var knowledgeGraphTask: Task<Void, Never>?
     var obsidianScanTask: Task<Void, Never>?
-    private var markdownSourceEventMonitor: MarkdownSourceEventMonitor?
-    private var markdownSourceSyncTask: Task<Void, Never>?
-    private var markdownSourceVerificationTask: Task<Void, Never>?
-    private var pendingMarkdownSourceChanges = NativeMarkdownSourceChangeSet()
+    var markdownSourceEventMonitor: MarkdownSourceEventMonitor?
+    var markdownSourceSyncTask: Task<Void, Never>?
+    var markdownSourceVerificationTask: Task<Void, Never>?
+    var pendingMarkdownSourceChanges = NativeMarkdownSourceChangeSet()
     var articleListSearchGeneration = 0
     var articleNavigationGeneration = 0
     private var automationObserver: NSObjectProtocol?
+    private var calendarObservers: [NSObjectProtocol] = []
     var automationRetryTask: Task<Void, Never>?
     private let momentPageSize = 40
 
-    public init(navigationScopeID: String? = nil) {
+    public convenience init(navigationScopeID: String? = nil) {
+        self.init(navigationScopeID: navigationScopeID, startsAutomatically: true)
+    }
+
+    init(navigationScopeID: String?, startsAutomatically: Bool) {
         self.navigationScopeID = navigationScopeID
         let rootURL = LocalBlogStore.defaultRootURL
         userWorkspaces = UserWorkspaceStore(rootURL: rootURL)
@@ -187,13 +207,34 @@ public final class NativeAppModel: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.consumeAutomationInbox() }
         }
-        Task { await start() }
+        calendarObservers = [
+            Notification.Name.NSSystemTimeZoneDidChange,
+            NSLocale.currentLocaleDidChangeNotification,
+        ].map { name in
+            NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    await self?.refreshCalendarDependentProjections()
+                }
+            }
+        }
+        if startsAutomatically {
+            Task { await start() }
+        }
     }
 
     deinit {
         trashCleanupTask?.cancel()
         backupTask?.cancel()
         editorAutosaveTask?.cancel()
+        articleAncillaryLoadTask?.cancel()
+        articlePostSaveTask?.cancel()
+        backupOverviewTask?.cancel()
+        compatibilityExportTask?.cancel()
+        workspaceAncillaryLoadTask?.cancel()
         momentSearchTask?.cancel()
         questionSearchTask?.cancel()
         globalSearchTask?.cancel()
@@ -207,77 +248,161 @@ public final class NativeAppModel: ObservableObject {
         if let automationObserver {
             NotificationCenter.default.removeObserver(automationObserver)
         }
+        for observer in calendarObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
-    private func tagIdentifier(_ tag: String) -> String {
-        tag.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    private func rebuildProjection<Input: Sendable, Projection: Sendable>(
+        _ kind: NativeProjectionKind,
+        input: Input,
+        using builder: @escaping @Sendable (Input) -> Projection
+    ) async -> Projection? {
+        let token = projectionRebuilds.begin(kind)
+        if let projectionRebuildWillBuild {
+            await projectionRebuildWillBuild(kind)
+        }
+        let projection = await Task.detached(priority: .userInitiated) {
+            builder(input)
+        }.value
+        guard projectionRebuilds.isCurrent(token) else { return nil }
+        return projection
     }
 
-    var publishedArticles: [NativeArticleSummary] {
-        articles.filter { $0.status == .published }
+    private func clearArticleSummaries() {
+        projectionRebuilds.invalidate(.articleLibrary)
+        articleLibraryProjection = NativeArticleLibraryProjection()
+        articlePageViewOverrides.removeAll(keepingCapacity: false)
+        articles = []
     }
 
-    var draftArticles: [NativeArticleSummary] {
-        articles.filter { $0.status == .draft }
+    private func applyPageViewOverrides(
+        to projection: inout NativeArticleLibraryProjection,
+        prunesResolvedOverrides: Bool
+    ) {
+        var resolvedSlugs: [String] = []
+        resolvedSlugs.reserveCapacity(articlePageViewOverrides.count)
+
+        for (slug, pageViews) in articlePageViewOverrides {
+            guard let projectedPageViews = projection.pageViews(for: slug) else {
+                if prunesResolvedOverrides { resolvedSlugs.append(slug) }
+                continue
+            }
+            if projectedPageViews >= pageViews {
+                if prunesResolvedOverrides { resolvedSlugs.append(slug) }
+            } else {
+                projection.updatePageViews(for: slug, to: pageViews)
+            }
+        }
+
+        for slug in resolvedSlugs {
+            articlePageViewOverrides.removeValue(forKey: slug)
+        }
+    }
+
+    func replaceArticleSummaries(_ summaries: [NativeArticleSummary]) async {
+        guard !summaries.isEmpty else {
+            clearArticleSummaries()
+            return
+        }
+
+        let batch = NativeProjectionBatch(summaries)
+        guard var projection = await rebuildProjection(
+            .articleLibrary,
+            input: batch,
+            using: { NativeArticleLibraryProjection(articles: $0.elements) }
+        ) else { return }
+        applyPageViewOverrides(to: &projection, prunesResolvedOverrides: true)
+        articleLibraryProjection = projection
+        articles = projection.articles
+    }
+
+    func updateArticleSummaryPageViews(slug: String, pageViews: Int) {
+        articlePageViewOverrides[slug] = max(articlePageViewOverrides[slug] ?? 0, pageViews)
+        if articleLibraryProjection.updatePageViews(for: slug, to: pageViews) {
+            articles = articleLibraryProjection.articles
+        }
+        if smartCollectionArticleProjection.updatePageViews(for: slug, to: pageViews) {
+            smartCollectionArticles = smartCollectionArticleProjection.articles
+        }
+    }
+
+    func resolveArticleLink(_ reference: String) -> NativeArticleSummary? {
+        articleLibraryProjection.resolveArticleLink(reference)
+    }
+
+    func clearSmartCollectionArticleSummaries() {
+        projectionRebuilds.invalidate(.smartCollection)
+        smartCollectionArticleProjection = NativeArticleLibraryProjection()
+        smartCollectionArticles = []
+    }
+
+    func replaceSmartCollectionArticleSummaries(_ summaries: [NativeArticleSummary]) async {
+        guard !summaries.isEmpty else {
+            clearSmartCollectionArticleSummaries()
+            return
+        }
+
+        let batch = NativeProjectionBatch(summaries)
+        guard var projection = await rebuildProjection(
+            .smartCollection,
+            input: batch,
+            using: { NativeArticleLibraryProjection(articles: $0.elements) }
+        ) else { return }
+        applyPageViewOverrides(to: &projection, prunesResolvedOverrides: false)
+        smartCollectionArticleProjection = projection
+        smartCollectionArticles = projection.articles
+    }
+
+    func clearMomentFacetRecords() {
+        projectionRebuilds.invalidate(.momentFacets)
+        momentFacetRecords = []
+        momentFacetProjection = NativeMomentFacetProjection()
+    }
+
+    func replaceMomentFacetRecords(
+        _ records: [NativeMomentFacetRecord],
+        calendar: Calendar = .current
+    ) async {
+        guard !records.isEmpty else {
+            clearMomentFacetRecords()
+            return
+        }
+
+        let batch = NativeProjectionBatch(records)
+        guard let projection = await rebuildProjection(
+            .momentFacets,
+            input: batch,
+            using: { NativeMomentFacetProjection(records: $0.elements, calendar: calendar) }
+        ) else { return }
+        momentFacetRecords = records
+        momentFacetProjection = projection
+    }
+
+    var publishedArticleCount: Int {
+        articleLibraryProjection.publishedArticleCount
+    }
+
+    var draftArticleCount: Int {
+        articleLibraryProjection.draftArticleCount
     }
 
     var filteredArticles: [NativeArticleSummary] {
-        let query = searchText
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        let resolvedQuery = articleSearchResolvedText
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        return articleListBase.filter { article in
-            let searchableSummary = [article.title, article.category, article.excerpt, article.tags.joined(separator: " ")]
-                .joined(separator: " ")
-                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            let matchesSearch = query.isEmpty || (resolvedQuery == query
-                ? articleSearchMatchSlugs.contains(article.slug)
-                : searchableSummary.contains(query))
-            let matchesTags = selectedArticleTags.isEmpty || article.tags.contains { tag in
-                selectedArticleTags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
-            }
-            let matchesFolder = selectedArticleFolderPath.map { folder in
-                article.sourceFolderPath == folder || article.sourceFolderPath.hasPrefix(folder + "/")
-            } ?? true
-            return matchesSearch && matchesTags && matchesFolder
-        }
+        articleListProjection.filteredArticles(
+            searchText: searchText,
+            resolvedSearchText: articleSearchResolvedText,
+            searchMatchSlugs: articleSearchMatchSlugs,
+            selectedTags: selectedArticleTags,
+            selectedFolderPath: selectedArticleFolderPath
+        )
     }
 
     var availableArticleFolderFilters: [NativeArticleFolderFilter] {
-        var counts: [String: Int] = [:]
-        for article in articles where !article.sourceFolderPath.isEmpty {
-            let components = article.sourceFolderPath.split(separator: "/").map(String.init)
-            for length in 1...components.count {
-                counts[components.prefix(length).joined(separator: "/"), default: 0] += 1
-            }
-        }
-        return counts.map { NativeArticleFolderFilter(path: $0.key, count: $0.value) }
-            .sorted { $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending }
+        articleLibraryProjection.folderFilters
     }
 
     var availableArticleTagFilters: [NativeArticleTagFilter] {
-        var filters: [String: NativeArticleTagFilter] = [:]
-
-        for article in articleListBase {
-            var countedTags = Set<String>()
-            for tag in article.tags {
-                let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-                let identifier = tagIdentifier(normalized)
-                guard !normalized.isEmpty, countedTags.insert(identifier).inserted else { continue }
-
-                if let existing = filters[identifier] {
-                    filters[identifier] = NativeArticleTagFilter(tag: existing.tag, count: existing.count + 1)
-                } else {
-                    filters[identifier] = NativeArticleTagFilter(tag: normalized, count: 1)
-                }
-            }
-        }
-
-        return filters.values.sorted {
-            if $0.count != $1.count { return $0.count > $1.count }
-            return $0.tag.localizedCaseInsensitiveCompare($1.tag) == .orderedAscending
-        }
+        articleListProjection.tagFilters
     }
 
     var availableArticleTags: [String] {
@@ -302,8 +427,14 @@ public final class NativeAppModel: ObservableObject {
         return selectedSmartCollection?.name ?? selectedArticleFolderPath ?? "全部文章"
     }
 
-    private var articleListBase: [NativeArticleSummary] {
-        selectedSmartCollection == nil ? articles : smartCollectionArticles
+    private var articleListProjection: NativeArticleLibraryProjection {
+        selectedSmartCollection == nil
+            ? articleLibraryProjection
+            : smartCollectionArticleProjection
+    }
+
+    func articleSearchProjectionSnapshot() -> NativeArticleLibraryProjection {
+        articleListProjection
     }
 
     var activeArticleTab: NativeArticleTab? {
@@ -350,8 +481,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     var recentArticles: [NativeArticleSummary] {
-        let summaries = Dictionary(uniqueKeysWithValues: articles.map { ($0.slug, $0) })
-        return recentArticleSlugs.compactMap { summaries[$0] }
+        articleLibraryProjection.articles(for: recentArticleSlugs)
     }
 
     var currentArticleHistorySnapshot: NativeArticleRevisionSnapshot {
@@ -372,27 +502,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     var availableMomentTagFilters: [NativeMomentTagFilter] {
-        var filters: [String: NativeMomentTagFilter] = [:]
-
-        for record in momentFacetRecords {
-            var countedTags = Set<String>()
-            for tag in record.tags {
-                let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-                let identifier = tagIdentifier(normalized)
-                guard !normalized.isEmpty, countedTags.insert(identifier).inserted else { continue }
-
-                if let existing = filters[identifier] {
-                    filters[identifier] = NativeMomentTagFilter(tag: existing.tag, count: existing.count + 1)
-                } else {
-                    filters[identifier] = NativeMomentTagFilter(tag: normalized, count: 1)
-                }
-            }
-        }
-
-        return filters.values.sorted {
-            if $0.count != $1.count { return $0.count > $1.count }
-            return $0.tag.localizedCaseInsensitiveCompare($1.tag) == .orderedAscending
-        }
+        momentFacetProjection.tagFilters
     }
 
     var availableMomentTags: [String] {
@@ -411,49 +521,46 @@ public final class NativeAppModel: ObservableObject {
     }
 
     var availableMomentMonths: [NativeMomentMonth] {
-        var months = Set<NativeMomentMonth>()
-        for record in momentFacetRecords {
-            guard let date = NativeTimestamp.date(from: record.createdAt) else { continue }
-            let components = Calendar.current.dateComponents([.year, .month], from: date)
-            guard let year = components.year, let month = components.month else { continue }
-            months.insert(NativeMomentMonth(year: year, month: month))
-        }
-        return months.sorted {
-            $0.year == $1.year ? $0.month > $1.month : $0.year > $1.year
-        }
+        momentFacetProjection.months
     }
 
     var availableMomentYears: [Int] {
-        Set(availableMomentMonths.map(\.year)).sorted(by: >)
+        momentFacetProjection.years
     }
 
     var momentTimeline: [NativeMomentTimelineGroup] {
         let calendar = Calendar.current
-        var groups: [NativeMomentTimelineGroup] = []
-
-        for moment in filteredMoments {
-            guard let date = NativeTimestamp.date(from: moment.createdAt) else {
-                groups.append(NativeMomentTimelineGroup(
-                    id: "unknown-\(moment.id)",
-                    label: moment.createdAt.isEmpty ? "未知日期" : moment.createdAt,
-                    moments: [moment]
-                ))
-                continue
-            }
-
-            let day = calendar.startOfDay(for: date)
-            let id = NativeTimestamp.string(from: day)
-            if let lastIndex = groups.indices.last, groups[lastIndex].id == id {
-                groups[lastIndex].moments.append(moment)
-            } else {
-                groups.append(NativeMomentTimelineGroup(
-                    id: id,
-                    label: timelineDateLabel(for: day, calendar: calendar),
-                    moments: [moment]
-                ))
-            }
+        let referenceDay = calendar.startOfDay(for: Date())
+        if referenceDay != momentTimelineReferenceDay {
+            momentTimelineProjection = NativeMomentTimelineProjection(
+                moments: filteredMoments,
+                now: referenceDay,
+                calendar: calendar
+            )
+            momentTimelineReferenceDay = referenceDay
         }
-        return groups
+        return momentTimelineProjection.groups
+    }
+
+    private func rebuildMomentTimelineProjection(
+        calendar: Calendar = .current,
+        now: Date = Date()
+    ) {
+        momentTimelineProjection = NativeMomentTimelineProjection(
+            moments: moments,
+            now: now,
+            calendar: calendar
+        )
+        momentTimelineReferenceDay = calendar.startOfDay(for: now)
+    }
+
+    func refreshCalendarDependentProjections(
+        calendar: Calendar = .current,
+        now: Date = Date()
+    ) async {
+        rebuildMomentTimelineProjection(calendar: calendar, now: now)
+        await replaceMomentFacetRecords(momentFacetRecords, calendar: calendar)
+        objectWillChange.send()
     }
 
     func start() async {
@@ -469,8 +576,8 @@ public final class NativeAppModel: ObservableObject {
             try await connect(to: rootURL)
             consumeAutomationInbox()
             startTrashCleanupLoop()
-            await refreshBackupOverview()
             scheduleBackup()
+            scheduleBackupOverviewRefresh()
         } catch {
             storageReady = false
             errorMessage = error.localizedDescription
@@ -490,8 +597,8 @@ public final class NativeAppModel: ObservableObject {
                 try await connect(to: rootURL)
                 consumeAutomationInbox()
                 startTrashCleanupLoop()
-                await refreshBackupOverview()
                 scheduleBackup()
+                scheduleBackupOverviewRefresh()
                 errorMessage = nil
             } catch {
                 storageReady = false
@@ -590,276 +697,6 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
-    public func reload() async throws {
-        let syncResult = try await store.refreshMarkdownSources()
-        try await reloadIndexedState()
-        if !syncResult.warnings.isEmpty {
-            errorMessage = syncResult.warnings.joined(separator: "\n")
-        }
-    }
-
-    private func reloadIndexedState() async throws {
-        articles = try await store.listArticles()
-        smartCollections = try await store.listSmartCollections()
-        bookmarks = try await store.listBookmarks()
-        if let selectedSmartCollectionID,
-           !smartCollections.contains(where: { $0.id == selectedSmartCollectionID }) {
-            self.selectedSmartCollectionID = nil
-            selectedSmartCollectionViewID = nil
-        } else if let definition = selectedSmartCollectionDefinition,
-                  !definition.views.contains(where: { $0.id == selectedSmartCollectionViewID }) {
-            selectedSmartCollectionViewID = definition.views.first?.id
-        }
-        try await refreshSelectedSmartCollection()
-        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            updateArticleListSearch(searchText, debounce: false)
-        }
-        try await reloadKnowledgeGraph()
-        try await reloadMomentFeed(refreshesFacets: true)
-        try await reloadQuestionList()
-        trashItems = try await store.listTrash()
-        try await refreshActivity()
-        if !isEditorDirty,
-           let selectedSlug,
-           let selected = articles.first(where: { $0.slug == selectedSlug }) {
-            try await displayArticle(
-                selected,
-                disposition: .refreshActiveTab,
-                recordsPageView: false
-            )
-        }
-    }
-
-    private func reloadAfterMarkdownSourceChanges(_ result: NativeMarkdownSyncResult) async throws {
-        let plan = NativeMarkdownRefreshPlan(
-            result: result,
-            selectedArticleSlug: selectedSlug
-        )
-        guard plan.reloadsArticleList else { return }
-
-        articles = try await store.listArticles()
-        if plan.reloadsSelectedSmartCollection {
-            try await refreshSelectedSmartCollection()
-        }
-        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            updateArticleListSearch(searchText, debounce: false)
-        }
-        if plan.reloadsKnowledgeGraph {
-            try await reloadKnowledgeGraph()
-        }
-        if plan.reloadsTrash {
-            trashItems = try await store.listTrash()
-        }
-
-        guard plan.reloadsSelectedArticle, !isEditorDirty, let selectedSlug else { return }
-        guard let selected = articles.first(where: { $0.slug == selectedSlug }) else {
-            articleTabs.removeAll(where: { $0.slug == selectedSlug })
-            recentArticleSlugs.removeAll(where: { $0 == selectedSlug })
-            self.selectedSlug = nil
-            selectedArticle = nil
-            selectedArticleRelations = .empty
-            articleComments = []
-            pendingArticleCommentSelection = nil
-            activeArticleTabID = articleTabs.first?.id
-            if section == .reader { section = .articles }
-            persistArticleNavigationState()
-            return
-        }
-
-        let previousSection = section
-        try await displayArticle(
-            selected,
-            disposition: .refreshActiveTab,
-            recordsPageView: false
-        )
-        if previousSection != .reader {
-            section = previousSection
-        }
-    }
-
-    var isMarkdownSourceReadOnly: Bool { activeMarkdownWorkspaceMode.isReadOnly }
-
-    func startMarkdownSourceMonitor() {
-        stopMarkdownSourceMonitor()
-        let generation = workspaceGeneration
-        let articlesURL = URL(fileURLWithPath: markdownSourceDirectoryPath, isDirectory: true)
-        let monitor = MarkdownSourceEventMonitor(rootURL: articlesURL)
-        markdownSourceEventMonitor = monitor
-        do {
-            try monitor.start { [weak self] changes in
-                Task { @MainActor [weak self] in
-                    self?.enqueueMarkdownSourceChanges(changes, generation: generation)
-                }
-            }
-        } catch {
-            markdownSourceEventMonitor = nil
-            errorMessage = "Markdown 事件监听启动失败，将使用低频校验：\(error.localizedDescription)"
-        }
-        markdownSourceVerificationTask = Task { [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled, let self,
-                      generation == self.workspaceGeneration else { return }
-                self.enqueueMarkdownSourceChanges(
-                    NativeMarkdownSourceChangeSet(requiresFullScan: true),
-                    generation: generation
-                )
-            }
-        }
-    }
-
-    func stopMarkdownSourceMonitor() {
-        markdownSourceEventMonitor?.stop()
-        markdownSourceEventMonitor = nil
-        markdownSourceSyncTask?.cancel()
-        markdownSourceSyncTask = nil
-        markdownSourceVerificationTask?.cancel()
-        markdownSourceVerificationTask = nil
-        pendingMarkdownSourceChanges = NativeMarkdownSourceChangeSet()
-    }
-
-    private func enqueueMarkdownSourceChanges(
-        _ changes: NativeMarkdownSourceChangeSet,
-        generation: Int
-    ) {
-        guard generation == workspaceGeneration else { return }
-        pendingMarkdownSourceChanges.merge(changes)
-        guard markdownSourceSyncTask == nil else { return }
-        markdownSourceSyncTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: 700_000_000)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled, let self else { return }
-            await self.processPendingMarkdownSourceChanges(generation: generation)
-        }
-    }
-
-    private func processPendingMarkdownSourceChanges(generation: Int) async {
-        defer {
-            markdownSourceSyncTask = nil
-            if generation == workspaceGeneration, !pendingMarkdownSourceChanges.isEmpty {
-                enqueueMarkdownSourceChanges(
-                    NativeMarkdownSourceChangeSet(),
-                    generation: generation
-                )
-            }
-        }
-        guard generation == workspaceGeneration else { return }
-        let changes = pendingMarkdownSourceChanges
-        pendingMarkdownSourceChanges = NativeMarkdownSourceChangeSet()
-        guard !changes.isEmpty else { return }
-        do {
-            let result: NativeMarkdownSyncResult
-            if changes.requiresFullScan {
-                result = try await store.refreshMarkdownSources()
-            } else {
-                result = try await store.refreshMarkdownSources(
-                    changedRelativePaths: changes.relativePaths,
-                    changedDirectoryPrefixes: changes.directoryPrefixes
-                )
-            }
-            guard generation == workspaceGeneration else { return }
-            if result.didChange { try await reloadAfterMarkdownSourceChanges(result) }
-            if !result.warnings.isEmpty {
-                errorMessage = result.warnings.joined(separator: "\n")
-            }
-        } catch {
-            guard generation == workspaceGeneration else { return }
-            errorMessage = "Markdown 自动同步失败：\(error.localizedDescription)"
-        }
-    }
-
-    private func loadWorkspace(_ workspace: NativeWorkspaceState) async throws {
-        let nextStore = LocalBlogStore(rootURL: workspace.workspaceURL)
-        try await nextStore.prepare()
-        let sourceState = try await nextStore.markdownWorkspaceSourceState()
-        let sourceURL = try await nextStore.markdownSourceDirectoryURL()
-        stopMarkdownSourceMonitor()
-        articleListSearchTask?.cancel()
-        globalSearchTask?.cancel()
-        questionSearchTask?.cancel()
-        workspaceGeneration += 1
-        store = nextStore
-        users = workspace.users
-        currentUser = workspace.activeUser
-        dataDirectoryPath = workspace.workspaceURL.path
-        activeMarkdownWorkspaceMode = sourceState.mode
-        selectedMarkdownWorkspaceMode = sourceState.mode
-        markdownSourceDirectoryPath = sourceURL.path
-        articles = []
-        moments = []
-        totalMomentCount = 0
-        filteredMomentCount = 0
-        questions = []
-        totalQuestionCount = 0
-        questionTagFacets = []
-        selectedQuestion = nil
-        questionAnswers = []
-        isLoadingQuestionAnswers = false
-        questionAnswerDraft = NativeQuestionAnswerDraft()
-        editingQuestionAnswerID = nil
-        editingQuestionAnswerUpdatedAt = nil
-        momentFacetRecords = []
-        nextMomentCursor = nil
-        hasMoreMoments = false
-        trashItems = []
-        activity = []
-        selectedArticle = nil
-        selectedArticleRelations = .empty
-        articleComments = []
-        pendingArticleCommentSelection = nil
-        articleTabs = []
-        activeArticleTabID = nil
-        recentArticleSlugs = []
-        articleGraph = .empty
-        articleRevisions = []
-        articleSourceConflict = nil
-        selectedSlug = nil
-        editor = NativeEditorDraft()
-        editorAutosaveStatus = "尚未自动保存"
-        pendingEditorMediaCleanup = []
-        editorOriginalArticle = nil
-        momentDraft = NativeMomentDraft()
-        editingMomentID = nil
-        searchText = ""
-        momentSearchText = ""
-        questionSearchText = ""
-        selectedQuestionTag = nil
-        globalSearchText = ""
-        globalSearchResults = []
-        searchPresentation = nil
-        articleSearchMatchSlugs = []
-        articleSearchResolvedText = ""
-        smartCollections = []
-        selectedSmartCollectionID = nil
-        selectedSmartCollectionViewID = nil
-        smartCollectionArticles = []
-        bookmarks = []
-        pendingArticleScrollAnchor = nil
-        isSearchingArticles = false
-        isSearchingGlobally = false
-        obsidianImportPreview = nil
-        obsidianImportStatus = "尚未选择 Vault"
-        isScanningObsidianVault = false
-        isImportingObsidianVault = false
-        selectedArticleTags = []
-        selectedArticleFolderPath = nil
-        selectedMomentTags = []
-        momentDateFilter = .all
-        showsOnlyFavoriteMoments = false
-        section = .dashboard
-        try await reload()
-        await restoreArticleNavigationState()
-        try await restoreLatestUnsavedArticleDraftIfNeeded()
-        startMarkdownSourceMonitor()
-    }
-
     private var currentMomentFilter: NativeMomentFilter {
         NativeMomentFilter(
             searchText: momentSearchText,
@@ -876,19 +713,21 @@ public final class NativeAppModel: ObservableObject {
         defer { isLoadingMoreMoments = false }
 
         let filter = currentMomentFilter
-        let facets = refreshesFacets ? try await store.listMomentFacetRecords() : nil
         let filteredTotal = try await store.countMoments(matching: filter)
         let page = try await store.listMomentPage(matching: filter, limit: momentPageSize)
         guard generation == momentFeedGeneration else { return }
 
-        if let facets {
-            momentFacetRecords = facets
-            totalMomentCount = facets.count
-        }
         filteredMomentCount = filteredTotal
         moments = page.moments
         nextMomentCursor = page.nextCursor
         hasMoreMoments = page.nextCursor != nil
+
+        if refreshesFacets {
+            let facets = try await store.listMomentFacetRecords()
+            guard generation == momentFeedGeneration else { return }
+            totalMomentCount = facets.count
+            await replaceMomentFacetRecords(facets)
+        }
     }
 
     func loadMoreMoments() {
@@ -1160,15 +999,17 @@ public final class NativeAppModel: ObservableObject {
             editorAutosaveTask?.cancel()
             editorAutosaveStatus = "已正式保存"
             discardUnreferencedMedia(cleanupCandidates)
-            try await reload()
-            articleRevisions = try await store.listArticleRevisions(
-                articleSlug: saved.slug,
-                draftKey: recoveryID
-            )
             scheduleBackup()
             section = .reader
             persistArticleNavigationState()
             errorMessage = nil
+            schedulePostSaveArticleRefresh(saved, recoveryID: recoveryID)
+            loadArticleAncillaryState(
+                slug: saved.slug,
+                navigationGeneration: articleNavigationGeneration,
+                workspaceGeneration: workspaceGeneration,
+                refreshesPageViewCollection: false
+            )
             if status == .published {
                 recordFirstPartyModuleEvent(
                     moduleID: PublishingFirstPartyModule.id,
@@ -1459,7 +1300,7 @@ public final class NativeAppModel: ObservableObject {
         guard !normalized.isEmpty else { return }
         selectedSmartCollectionID = nil
         selectedSmartCollectionViewID = nil
-        smartCollectionArticles = []
+        clearSmartCollectionArticleSummaries()
         selectedArticleTags = [normalized]
         section = .articles
     }
@@ -1688,6 +1529,33 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
+    func videoTimestampLabel(for media: NativeMedia) -> String? {
+        guard media.isVideo,
+              let seconds = NativeVideoPlaybackCoordinator.shared.resumePosition(
+                for: media.url,
+                duration: 0
+              ) else { return nil }
+        return NativeInlineVideoPlayerModel.timeLabel(seconds)
+    }
+
+    func insertVideoTimestamp(_ media: NativeMedia) {
+        guard let timestamp = videoTimestampLabel(for: media) else {
+            errorMessage = "请先播放视频，再插入时间点。"
+            return
+        }
+        let insertion = "视频《\(media.name)》@ \(timestamp)"
+        let source = editor.body as NSString
+        let location = min(max(0, editorBodySelection.location), source.length)
+        let length = min(max(0, editorBodySelection.length), source.length - location)
+        let selection = NSRange(location: location, length: length)
+        editor.body = source.replacingCharacters(in: selection, with: insertion)
+        editorBodySelection = NSRange(
+            location: location + (insertion as NSString).length,
+            length: 0
+        )
+        scheduleEditorAutosave()
+    }
+
     func beginUpload() -> Int {
         uploadCount += 1
         isUploadingMedia = true
@@ -1784,7 +1652,7 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
-    private func restoreLatestUnsavedArticleDraftIfNeeded() async throws {
+    func restoreLatestUnsavedArticleDraftIfNeeded() async throws {
         guard let revision = try await store.latestUnsavedArticleAutosave() else { return }
         editorOriginalArticle = nil
         pendingEditorMediaCleanup = []
@@ -1836,7 +1704,7 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
-    private var isEditorDirty: Bool {
+    var isEditorDirty: Bool {
         if editor.isNew {
             return !editor.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !editor.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1867,8 +1735,8 @@ public final class NativeAppModel: ObservableObject {
     }
 
     private func articleTagsEqual(_ lhs: [String], _ rhs: [String]) -> Bool {
-        NativeArticleTag.normalized(lhs).map(tagIdentifier)
-            == NativeArticleTag.normalized(rhs).map(tagIdentifier)
+        NativeArticleTag.normalized(lhs).map(NativeTagIdentity.facet)
+            == NativeArticleTag.normalized(rhs).map(NativeTagIdentity.facet)
     }
 
     private func confirmDiscardUnsavedWork(includingMomentDraft: Bool = false) -> Bool {
@@ -1935,12 +1803,6 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
-    private func timelineDateLabel(for date: Date, calendar: Calendar) -> String {
-        if calendar.isDateInToday(date) { return "今天" }
-        if calendar.isDateInYesterday(date) { return "昨天" }
-        return date.formatted(date: .long, time: .omitted)
-    }
-
     private func editableMomentDraft(from moment: NativeMoment) -> NativeMomentDraft {
         let content = moment.displayContent
         let tagsText = moment.tags.map { "#\($0)" }.joined(separator: " ")
@@ -1998,7 +1860,7 @@ public final class NativeAppModel: ObservableObject {
         editor.body = editor.body.replacingOccurrences(of: placeholder, with: replacement)
     }
 
-    private func activityWindowStart(now: Date = Date()) -> Date {
+    func activityWindowStart(now: Date = Date()) -> Date {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         return calendar.date(byAdding: .day, value: -364, to: today) ?? today

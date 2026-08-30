@@ -42,6 +42,39 @@ private func XCTFail(_ message: String) {
 }
 
 final class NativeModelsTests {
+    @MainActor
+    func testVideoPlaybackFormatsAndPersistsResumePositions() {
+        XCTAssertEqual(NativeInlineVideoPlayerModel.timeLabel(7), "00:07")
+        XCTAssertEqual(NativeInlineVideoPlayerModel.timeLabel(3_661), "1:01:01")
+
+        let suiteName = "NativeVideoPlaybackTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("expected isolated UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let mediaID = "/media/note/demo.mp4"
+        let coordinator = NativeVideoPlaybackCoordinator(defaults: defaults)
+        coordinator.record(
+            mediaID: mediaID,
+            seconds: 42.5,
+            duration: 180,
+            forcePersistence: true
+        )
+        XCTAssertEqual(coordinator.resumePosition(for: mediaID, duration: 180) ?? 0, 42.5)
+
+        let restored = NativeVideoPlaybackCoordinator(defaults: defaults)
+        XCTAssertEqual(restored.resumePosition(for: mediaID, duration: 180) ?? 0, 42.5)
+        restored.record(
+            mediaID: mediaID,
+            seconds: 178,
+            duration: 180,
+            forcePersistence: true
+        )
+        XCTAssertNil(restored.resumePosition(for: mediaID, duration: 180))
+    }
+
     func testWritingMetricsAndTimestampRoundTrip() {
         XCTAssertEqual(NativeWritingMetrics.characterCount(of: "  hello\n\n"), 5)
         XCTAssertEqual(NativeWritingMetrics.characterCount(of: " 你好 "), 2)
@@ -583,6 +616,7 @@ final class NativeModelsTests {
                 "price": .number(12.5),
                 "months": .number(4),
                 "due date": .date("2026-08-20"),
+                "finished": .checkbox(true),
             ],
             publishedAt: nil,
             slug: "first",
@@ -596,7 +630,11 @@ final class NativeModelsTests {
             banner: nil,
             category: "Books",
             excerpt: "",
-            properties: ["price": .number(7.5), "months": .number(2)],
+            properties: [
+                "price": .number(7.5),
+                "months": .number(2),
+                "finished": .checkbox(false),
+            ],
             publishedAt: nil,
             slug: "second",
             status: .draft,
@@ -616,6 +654,7 @@ final class NativeModelsTests {
                 NativeSmartCollectionFormula(key: "cost", name: "总价", expression: "price * months"),
                 NativeSmartCollectionFormula(key: "overdue", name: "逾期", expression: "today() - prop(\"due date\")"),
                 NativeSmartCollectionFormula(key: "state", name: "状态", expression: "if(formula.overdue > 0, \"late\", \"ok\")"),
+                NativeSmartCollectionFormula(key: "case_cost", name: "大小写", expression: "PRICE * MONTHS"),
             ]
         )
         XCTAssertEqual(
@@ -631,6 +670,10 @@ final class NativeModelsTests {
             .string("late")
         )
         XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.formulaValue("case_cost", article: first, collection: collection, now: now),
+            .number(50)
+        )
+        XCTAssertEqual(
             NativeSmartCollectionFormulaEngine.summary(
                 .sum,
                 column: collection.columns[0],
@@ -639,6 +682,89 @@ final class NativeModelsTests {
                 now: now
             ),
             .number(65)
+        )
+
+        let priceColumn = NativeSmartCollectionColumn(source: .property, key: "price", title: "价格")
+        let finishedColumn = NativeSmartCollectionColumn(source: .property, key: "finished", title: "完成")
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.summary(
+                .filled,
+                column: priceColumn,
+                articles: [first, second],
+                collection: collection,
+                now: now
+            ),
+            .number(2)
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.summary(
+                .empty,
+                column: priceColumn,
+                articles: [first, second],
+                collection: collection,
+                now: now
+            ),
+            .number(0)
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.summary(
+                .unique,
+                column: priceColumn,
+                articles: [first, second],
+                collection: collection,
+                now: now
+            ),
+            .number(2)
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.summary(
+                .average,
+                column: priceColumn,
+                articles: [first, second],
+                collection: collection,
+                now: now
+            ),
+            .number(10)
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.summary(
+                .minimum,
+                column: priceColumn,
+                articles: [first, second],
+                collection: collection,
+                now: now
+            ),
+            .number(7.5)
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.summary(
+                .maximum,
+                column: priceColumn,
+                articles: [first, second],
+                collection: collection,
+                now: now
+            ),
+            .number(12.5)
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.summary(
+                .checked,
+                column: finishedColumn,
+                articles: [first, second],
+                collection: collection,
+                now: now
+            ),
+            .number(1)
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.summary(
+                .unchecked,
+                column: finishedColumn,
+                articles: [first, second],
+                collection: collection,
+                now: now
+            ),
+            .number(1)
         )
     }
 
@@ -870,6 +996,739 @@ final class PerformanceRegressionTests {
         XCTAssertEqual(concurrencyProbe.counts.invocations, urls.count)
         XCTAssertTrue(concurrencyProbe.counts.peakActive <= 2)
     }
+
+    func testLibraryAndMomentProjectionsCacheDerivedStateWithoutChangingFilters() {
+        var rebuilds = NativeProjectionRebuildCoordinator()
+        let staleArticleToken = rebuilds.begin(.articleLibrary)
+        let momentToken = rebuilds.begin(.momentFacets)
+        let currentArticleToken = rebuilds.begin(.articleLibrary)
+        XCTAssertFalse(rebuilds.isCurrent(staleArticleToken))
+        XCTAssertTrue(rebuilds.isCurrent(momentToken))
+        XCTAssertTrue(rebuilds.isCurrent(currentArticleToken))
+
+        let articles = [
+            performanceArticle(
+                index: 0,
+                status: .published,
+                tags: ["Swift", "Performance"],
+                sourceRelativePath: "work/swift/first.md"
+            ),
+            performanceArticle(
+                index: 1,
+                status: .draft,
+                tags: ["performance"],
+                sourceRelativePath: "work/drafts/second.md"
+            ),
+            performanceArticle(
+                index: 2,
+                status: .published,
+                tags: ["Café"],
+                sourceRelativePath: "personal/third.md"
+            ),
+        ]
+        var projection = NativeArticleLibraryProjection(articles: articles)
+
+        XCTAssertEqual(projection.publishedArticleCount, 2)
+        XCTAssertEqual(projection.draftArticleCount, 1)
+        XCTAssertEqual(
+            projection.folderFilters.first(where: { $0.path == "work" })?.count,
+            2
+        )
+        XCTAssertEqual(
+            projection.tagFilters.first(where: { $0.tag == "Performance" })?.count,
+            2
+        )
+        XCTAssertEqual(
+            projection.filteredArticles(
+                searchText: "",
+                resolvedSearchText: "",
+                searchMatchSlugs: [],
+                selectedTags: [],
+                selectedFolderPath: nil
+            ),
+            articles
+        )
+        let localSearchMatches = projection.localSearchMatchSlugs(searchText: "ARTICLE 1")
+        XCTAssertEqual(localSearchMatches, ["article-1"])
+        XCTAssertEqual(
+            projection.filteredArticles(
+                searchText: "ARTICLE 1",
+                resolvedSearchText: "",
+                searchMatchSlugs: [],
+                selectedTags: [],
+                selectedFolderPath: nil
+            ),
+            articles
+        )
+        XCTAssertEqual(
+            projection.filteredArticles(
+                searchText: "ARTICLE 1",
+                resolvedSearchText: "ARTICLE 1",
+                searchMatchSlugs: localSearchMatches,
+                selectedTags: [],
+                selectedFolderPath: nil
+            ).map(\.slug),
+            ["article-1"]
+        )
+        XCTAssertEqual(
+            projection.filteredArticles(
+                searchText: "body term",
+                resolvedSearchText: "body term",
+                searchMatchSlugs: ["article-2"],
+                selectedTags: [],
+                selectedFolderPath: nil
+            ).map(\.slug),
+            ["article-2"]
+        )
+        XCTAssertEqual(
+            projection.filteredArticles(
+                searchText: "",
+                resolvedSearchText: "",
+                searchMatchSlugs: [],
+                selectedTags: ["swift", "missing"],
+                selectedFolderPath: "work"
+            ).map(\.slug),
+            ["article-0"]
+        )
+        XCTAssertEqual(
+            projection.articles(for: ["article-2", "missing", "article-0"]).map(\.slug),
+            ["article-2", "article-0"]
+        )
+
+        projection.updatePageViews(for: "article-0", to: 42)
+        XCTAssertEqual(projection.articles.first?.pageViews, 42)
+        XCTAssertEqual(projection.publishedArticleCount, 2)
+        XCTAssertEqual(projection.draftArticleCount, 1)
+        XCTAssertEqual(projection.articles(for: ["article-0"]).first?.pageViews, 42)
+
+        let facets = NativeMomentFacetProjection(records: [
+            NativeMomentFacetRecord(createdAt: "2026-08-29T10:00:00.000Z", tags: ["Swift"]),
+            NativeMomentFacetRecord(createdAt: "2026-08-01T10:00:00.000Z", tags: ["swift", "Life"]),
+            NativeMomentFacetRecord(createdAt: "2025-12-01T10:00:00.000Z", tags: ["Life"]),
+        ])
+        XCTAssertEqual(facets.months, [
+            NativeMomentMonth(year: 2026, month: 8),
+            NativeMomentMonth(year: 2025, month: 12),
+        ])
+        XCTAssertEqual(facets.years, [2026, 2025])
+        XCTAssertEqual(facets.tagFilters.first(where: { $0.tag == "Swift" })?.count, 2)
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let timeline = NativeMomentTimelineProjection(
+            moments: [
+                performanceMoment(id: "first", createdAt: "2026-08-29T10:00:00.000Z"),
+                performanceMoment(id: "second", createdAt: "2026-08-29T08:00:00.000Z"),
+                performanceMoment(id: "third", createdAt: "2026-08-28T08:00:00.000Z"),
+            ],
+            now: NativeTimestamp.date(from: "2026-08-29T12:00:00.000Z")!,
+            calendar: calendar
+        )
+        XCTAssertEqual(timeline.groups.map(\.id), ["2026-08-29", "2026-08-28"])
+        XCTAssertEqual(timeline.groups.map(\.label), ["今天", "昨天"])
+        XCTAssertEqual(timeline.groups.first?.moments.map(\.id), ["first", "second"])
+    }
+
+    @MainActor
+    func testArticleProjectionRebuildPreservesConcurrentPageViewUpdate() async {
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        let initial = performanceArticle(
+            index: 0,
+            status: .published,
+            tags: ["Swift"],
+            sourceRelativePath: "work/article-0.md"
+        )
+        await model.replaceArticleSummaries([initial])
+        model.recentArticleSlugs = [initial.slug]
+
+        let replacement = (0..<2).map { index in
+            performanceArticle(
+                index: index,
+                status: .published,
+                tags: ["Swift", "Topic-\(index % 24)"],
+                sourceRelativePath: "work/article-\(index).md"
+            )
+        }
+        let gate = AsyncTestGate()
+        model.projectionRebuildWillBuild = { kind in
+            if kind == .articleLibrary {
+                await gate.suspend()
+            }
+        }
+        let rebuild = Task { @MainActor in
+            await model.replaceArticleSummaries(replacement)
+        }
+        await gate.waitUntilSuspended()
+        model.updateArticleSummaryPageViews(slug: initial.slug, pageViews: 42)
+        await gate.release()
+        await rebuild.value
+        model.projectionRebuildWillBuild = nil
+
+        XCTAssertEqual(model.articles.first?.pageViews, 42)
+        XCTAssertEqual(model.publishedArticleCount, 2)
+        XCTAssertEqual(model.recentArticles.first?.pageViews, 42)
+    }
+
+    @MainActor
+    func testPageViewIncrementReevaluatesSelectedSmartCollection() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let previousWorkDirectory = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"]
+        setenv("LEON_BOOK_WORKDIR", root.path, 1)
+        defer {
+            if let previousWorkDirectory {
+                setenv("LEON_BOOK_WORKDIR", previousWorkDirectory, 1)
+            } else {
+                unsetenv("LEON_BOOK_WORKDIR")
+            }
+        }
+
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        let saved = try await model.store.saveArticle(article(
+            slug: "page-view-threshold",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "threshold",
+            title: "Threshold"
+        ))
+        let collection = try await model.store.saveSmartCollection(NativeSmartCollection(
+            name: "Unread",
+            rules: [NativeSmartCollectionRule(
+                field: .pageViews,
+                comparison: .lessThan,
+                value: "1"
+            )],
+            sorts: [NativeArticleSortDescriptor(field: .pageViews, ascending: true)]
+        ))
+        await model.replaceArticleSummaries(try await model.store.listArticles())
+        model.smartCollections = [collection]
+        model.selectedSmartCollectionID = collection.id
+        try await model.refreshSelectedSmartCollection()
+        XCTAssertEqual(model.smartCollectionArticles.map(\.slug), [saved.slug])
+
+        let displayed = try await model.displayArticle(
+            model.smartCollectionArticles[0],
+            disposition: .currentTab,
+            recordsPageView: true
+        )
+
+        XCTAssertTrue(displayed)
+        XCTAssertEqual(model.smartCollectionArticles, [])
+    }
+
+    @MainActor
+    func testCalendarChangeRebuildsCachedMomentFacets() async {
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        let records = [NativeMomentFacetRecord(
+            createdAt: "2026-09-01T00:30:00.000Z",
+            tags: ["boundary"]
+        )]
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        await model.replaceMomentFacetRecords(records, calendar: utc)
+        XCTAssertEqual(model.availableMomentMonths, [NativeMomentMonth(year: 2026, month: 9)])
+
+        var previousMonth = Calendar(identifier: .gregorian)
+        previousMonth.timeZone = TimeZone(secondsFromGMT: -3_600)!
+        await model.refreshCalendarDependentProjections(calendar: previousMonth)
+
+        XCTAssertEqual(model.availableMomentMonths, [NativeMomentMonth(year: 2026, month: 8)])
+    }
+
+    func testLargeArticleLibraryProjectionBenchmark() {
+        let articleCount = 10_000
+        let iterations = 20
+        let articles = (0..<articleCount).map { index in
+            performanceArticle(
+                index: index,
+                status: index.isMultiple(of: 4) ? .draft : .published,
+                tags: ["Swift", "性能", "Topic-\(index % 24)"],
+                sourceRelativePath: "area-\(index % 20)/section-\(index % 100)/article-\(index).md"
+            )
+        }
+
+        let buildStart = ProcessInfo.processInfo.systemUptime
+        let previousProjection = NativeArticleLibraryProjection(articles: articles)
+        let buildElapsed = ProcessInfo.processInfo.systemUptime - buildStart
+        let residentBeforeRebuild = currentResidentMemoryBytes()
+        let projection = NativeArticleLibraryProjection(articles: articles)
+        let residentAfterRebuild = currentResidentMemoryBytes()
+        withExtendedLifetime(previousProjection) {}
+        let rebuildPeakResidentGrowth = residentAfterRebuild >= residentBeforeRebuild
+            ? residentAfterRebuild - residentBeforeRebuild
+            : 0
+        let runtimeEmptyQuery = ProcessInfo.processInfo.environment["LEON_BOOK_BENCHMARK_QUERY"] ?? ""
+
+        let noFilterPair = bestPairedElapsed(first: {
+            var total = 0
+            for _ in 0..<iterations {
+                total += legacyFilteredArticles(
+                    articles,
+                    searchText: runtimeEmptyQuery,
+                    resolvedSearchText: "",
+                    searchMatchSlugs: [],
+                    selectedTags: [],
+                    selectedFolderPath: nil
+                ).count
+            }
+            return total
+        }, second: {
+            var total = 0
+            for _ in 0..<iterations {
+                total += projection.filteredArticles(
+                    searchText: runtimeEmptyQuery,
+                    resolvedSearchText: "",
+                    searchMatchSlugs: [],
+                    selectedTags: [],
+                    selectedFolderPath: nil
+                ).count
+            }
+            return total
+        })
+        let legacyNoFilter = noFilterPair.first
+        let projectedNoFilter = noFilterPair.second
+
+        let pendingSearchPair = bestPairedElapsed(first: {
+            var total = 0
+            for _ in 0..<iterations {
+                total += legacyFilteredArticles(
+                    articles,
+                    searchText: "needle",
+                    resolvedSearchText: "",
+                    searchMatchSlugs: [],
+                    selectedTags: [],
+                    selectedFolderPath: nil
+                ).count
+            }
+            return total
+        }, second: {
+            var total = 0
+            for _ in 0..<iterations {
+                total += projection.filteredArticles(
+                    searchText: "needle",
+                    resolvedSearchText: "",
+                    searchMatchSlugs: [],
+                    selectedTags: [],
+                    selectedFolderPath: nil
+                ).count
+            }
+            return total
+        })
+        let legacyPendingSearch = pendingSearchPair.first
+        let projectedPendingSearch = pendingSearchPair.second
+        let localSearchPair = bestPairedElapsed(first: {
+            legacyFilteredArticles(
+                articles,
+                searchText: "needle",
+                resolvedSearchText: "",
+                searchMatchSlugs: [],
+                selectedTags: [],
+                selectedFolderPath: nil
+            ).count
+        }, second: {
+            projection.localSearchMatchSlugs(searchText: "needle").count
+        })
+        let legacyPendingSingleSearch = localSearchPair.first
+        let backgroundLocalSearch = localSearchPair.second
+
+        let matchSlugs = Set(stride(from: 0, to: articleCount, by: 10).map { "article-\($0)" })
+        let resolvedSearchPair = bestPairedElapsed(first: {
+            var total = 0
+            for _ in 0..<iterations {
+                total += legacyFilteredArticles(
+                    articles,
+                    searchText: "needle",
+                    resolvedSearchText: "needle",
+                    searchMatchSlugs: matchSlugs,
+                    selectedTags: [],
+                    selectedFolderPath: nil
+                ).count
+            }
+            return total
+        }, second: {
+            var total = 0
+            for _ in 0..<iterations {
+                total += projection.filteredArticles(
+                    searchText: "needle",
+                    resolvedSearchText: "needle",
+                    searchMatchSlugs: matchSlugs,
+                    selectedTags: [],
+                    selectedFolderPath: nil
+                ).count
+            }
+            return total
+        })
+        let legacyResolvedSearch = resolvedSearchPair.first
+        let projectedResolvedSearch = resolvedSearchPair.second
+
+        XCTAssertEqual(legacyNoFilter.result, projectedNoFilter.result)
+        XCTAssertEqual(legacyPendingSearch.result, projectedPendingSearch.result)
+        XCTAssertEqual(legacyPendingSingleSearch.result, backgroundLocalSearch.result)
+        XCTAssertEqual(legacyResolvedSearch.result, projectedResolvedSearch.result)
+        XCTAssertTrue(buildElapsed < 0.5, "10k article projection build took \(buildElapsed) seconds")
+        XCTAssertTrue(
+            rebuildPeakResidentGrowth < 128 * 1_024 * 1_024,
+            "10k article projection rebuild grew peak RSS by more than 128 MiB"
+        )
+        XCTAssertTrue(
+            projectedNoFilter.elapsed / Double(iterations) < 0.001,
+            "no-filter projection exceeded the 1 ms absolute budget"
+        )
+        XCTAssertTrue(
+            projectedPendingSearch.elapsed / Double(iterations) < 0.008,
+            "pending-search projection exceeded the 8 ms absolute budget"
+        )
+        XCTAssertTrue(
+            backgroundLocalSearch.elapsed < 0.05,
+            "background local search exceeded the 50 ms absolute budget"
+        )
+        XCTAssertTrue(
+            projectedResolvedSearch.elapsed / Double(iterations) < 0.008,
+            "resolved-search projection exceeded the 8 ms absolute budget"
+        )
+        XCTAssertTrue(
+            projectedNoFilter.elapsed < legacyNoFilter.elapsed * 0.1,
+            "no-filter projection should remove at least 90% of the legacy render cost"
+        )
+        XCTAssertTrue(
+            projectedResolvedSearch.elapsed < legacyResolvedSearch.elapsed * 0.5,
+            "resolved search projection should remove at least 50% of the legacy render cost"
+        )
+        XCTAssertTrue(
+            backgroundLocalSearch.elapsed < legacyPendingSingleSearch.elapsed * 0.75,
+            "background local search should remove at least 25% of the legacy pending-search cost"
+        )
+
+        print(String(
+            format: "PERF articles=%d build_ms=%.3f rebuild_peak_rss_mb=%.3f legacy_no_filter_ms=%.3f projected_no_filter_ms=%.3f legacy_pending_ms=%.3f projected_pending_ms=%.3f background_local_search_ms=%.3f legacy_resolved_ms=%.3f projected_resolved_ms=%.3f",
+            articleCount,
+            buildElapsed * 1_000,
+            Double(rebuildPeakResidentGrowth) / 1_024 / 1_024,
+            legacyNoFilter.elapsed * 1_000 / Double(iterations),
+            projectedNoFilter.elapsed * 1_000 / Double(iterations),
+            legacyPendingSearch.elapsed * 1_000 / Double(iterations),
+            projectedPendingSearch.elapsed * 1_000 / Double(iterations),
+            backgroundLocalSearch.elapsed * 1_000,
+            legacyResolvedSearch.elapsed * 1_000 / Double(iterations),
+            projectedResolvedSearch.elapsed * 1_000 / Double(iterations)
+        ))
+    }
+
+    func testLargeSmartCollectionFormulaSummaryBenchmark() {
+        let articleCount = 10_000
+        let now = NativeTimestamp.date(from: "2026-08-30T12:00:00Z")!
+        let articles = (0..<articleCount).map { index in
+            NativeArticleSummary(
+                banner: nil,
+                category: "Benchmark",
+                excerpt: "",
+                pageViews: index,
+                properties: [
+                    "price": .number(Double((index % 100) + 1)),
+                    "months": .number(Double((index % 12) + 1)),
+                    "tax": .number(1.25),
+                    "divisor": .number(2),
+                    "due": .date("2026-08-30"),
+                    "unused-a": .text("a"),
+                    "unused-b": .text("b"),
+                    "unused-c": .text("c"),
+                    "unused-d": .text("d"),
+                ],
+                publishedAt: nil,
+                slug: "formula-\(index)",
+                status: .published,
+                tags: [],
+                title: "Formula \(index)",
+                updatedAt: "2026-08-30T00:00:00Z",
+                wordCount: 10
+            )
+        }
+        let column = NativeSmartCollectionColumn(
+            source: .formula,
+            key: "weighted",
+            title: "加权价格",
+            summary: .sum
+        )
+        let collection = NativeSmartCollection(
+            name: "公式基准",
+            columns: [column],
+            formulas: [
+                NativeSmartCollectionFormula(
+                    key: "weighted",
+                    name: "加权价格",
+                    expression: "round((price * months + tax) / divisor, 2)"
+                ),
+                NativeSmartCollectionFormula(
+                    key: "date_label",
+                    name: "日期标签",
+                    expression: "formatDate(due, \"yyyy/MM/dd\")"
+                ),
+            ]
+        )
+
+        var best = TimeInterval.greatestFiniteMagnitude
+        var result = NativeBaseValue.empty
+        for _ in 0..<4 {
+            let start = ProcessInfo.processInfo.systemUptime
+            result = NativeSmartCollectionFormulaEngine.summary(
+                .sum,
+                column: column,
+                articles: articles,
+                collection: collection,
+                now: now
+            )
+            best = min(best, ProcessInfo.processInfo.systemUptime - start)
+        }
+
+        XCTAssertTrue(result.numberValue != nil, "formula benchmark should produce a numeric sum")
+        XCTAssertTrue(
+            best < 0.08,
+            "10k formula summary exceeded the 80 ms render budget: \(best * 1_000) ms"
+        )
+        let dateColumn = NativeSmartCollectionColumn(
+            source: .formula,
+            key: "date_label",
+            title: "日期标签",
+            summary: .filled
+        )
+        var dateBest = TimeInterval.greatestFiniteMagnitude
+        var dateResult = NativeBaseValue.empty
+        for _ in 0..<4 {
+            let start = ProcessInfo.processInfo.systemUptime
+            dateResult = NativeSmartCollectionFormulaEngine.summary(
+                .filled,
+                column: dateColumn,
+                articles: articles,
+                collection: collection,
+                now: now
+            )
+            dateBest = min(dateBest, ProcessInfo.processInfo.systemUptime - start)
+        }
+        XCTAssertEqual(dateResult, .number(Double(articleCount)))
+        XCTAssertTrue(
+            dateBest < 0.12,
+            "10k date formula summary exceeded the 120 ms render budget: \(dateBest * 1_000) ms"
+        )
+        print(String(
+            format: "PERF formula_articles=%d summary_ms=%.3f date_summary_ms=%.3f",
+            articleCount,
+            best * 1_000,
+            dateBest * 1_000
+        ))
+    }
+
+    func testMomentTimestampReuseBenchmark() {
+        let momentCount = 10_000
+        let timestamps = (0..<momentCount).map { index -> String in
+            let hour = (index / 3_600) % 24
+            let minute = (index / 60) % 60
+            let second = index % 60
+            return String(format: "2026-08-30T%02d:%02d:%02d.000Z", hour, minute, second)
+        }
+        let records = timestamps.map { NativeMomentFacetRecord(createdAt: $0, tags: ["性能"]) }
+        let moments = timestamps.enumerated().map { index, timestamp in
+            performanceMoment(id: "timestamp-\(index)", createdAt: timestamp)
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = NativeTimestamp.date(from: "2026-08-30T12:00:00Z")!
+
+        let facetStart = ProcessInfo.processInfo.systemUptime
+        let facets = NativeMomentFacetProjection(records: records, calendar: calendar)
+        let facetElapsed = ProcessInfo.processInfo.systemUptime - facetStart
+        let timelineStart = ProcessInfo.processInfo.systemUptime
+        let timeline = NativeMomentTimelineProjection(moments: moments, now: now, calendar: calendar)
+        let timelineElapsed = ProcessInfo.processInfo.systemUptime - timelineStart
+
+        XCTAssertEqual(facets.months, [NativeMomentMonth(year: 2026, month: 8)])
+        XCTAssertFalse(timeline.groups.isEmpty)
+        XCTAssertTrue(
+            timelineElapsed < 0.12,
+            "reusing 10k parsed timestamps exceeded the 120 ms budget: \(timelineElapsed * 1_000) ms"
+        )
+        print(String(
+            format: "PERF moment_timestamps=%d facet_ms=%.3f reused_timeline_ms=%.3f",
+            momentCount,
+            facetElapsed * 1_000,
+            timelineElapsed * 1_000
+        ))
+    }
+
+    func testPairedPerformanceSamplingAlternatesOrder() {
+        var order: [String] = []
+        _ = bestPairedElapsed(samples: 4, first: {
+            order.append("legacy")
+            return 1
+        }, second: {
+            order.append("projected")
+            return 1
+        })
+        XCTAssertEqual(order, [
+            "legacy", "projected",
+            "projected", "legacy",
+            "legacy", "projected",
+            "projected", "legacy",
+        ])
+    }
+
+    private func performanceArticle(
+        index: Int,
+        status: NativeArticleStatus,
+        tags: [String],
+        sourceRelativePath: String
+    ) -> NativeArticleSummary {
+        NativeArticleSummary(
+            banner: nil,
+            category: "Knowledge",
+            excerpt: "Article \(index) summary with enough text to model a real library row and needle terms",
+            publishedAt: status == .published ? "2026-08-29T10:00:00.000Z" : nil,
+            slug: "article-\(index)",
+            sourceRelativePath: sourceRelativePath,
+            status: status,
+            tags: tags,
+            title: "Article \(index)",
+            updatedAt: "2026-08-29T10:00:00.000Z",
+            wordCount: 120
+        )
+    }
+
+    private func currentResidentMemoryBytes() -> UInt64 {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(MACH_TASK_BASIC_INFO),
+                    rebound,
+                    &count
+                )
+            }
+        }
+        XCTAssertEqual(result, KERN_SUCCESS, "failed to read benchmark resident memory")
+        return result == KERN_SUCCESS ? UInt64(info.resident_size) : 0
+    }
+
+    private func performanceMoment(id: String, createdAt: String) -> NativeMoment {
+        NativeMoment(
+            createdAt: createdAt,
+            id: id,
+            images: [],
+            text: id,
+            textRuns: [],
+            updatedAt: createdAt
+        )
+    }
+
+    private func legacyFilteredArticles(
+        _ articles: [NativeArticleSummary],
+        searchText: String,
+        resolvedSearchText: String,
+        searchMatchSlugs: Set<String>,
+        selectedTags: Set<String>,
+        selectedFolderPath: String?
+    ) -> [NativeArticleSummary] {
+        let query = searchText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        let resolvedQuery = resolvedSearchText
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        return articles.filter { article in
+            let searchableSummary = [
+                article.title,
+                article.category,
+                article.excerpt,
+                article.tags.joined(separator: " "),
+            ]
+            .joined(separator: " ")
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            let matchesSearch = query.isEmpty || (resolvedQuery == query
+                ? searchMatchSlugs.contains(article.slug)
+                : searchableSummary.contains(query))
+            let matchesTags = selectedTags.isEmpty || article.tags.contains { tag in
+                selectedTags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+            }
+            let matchesFolder = selectedFolderPath.map { folder in
+                article.sourceFolderPath == folder || article.sourceFolderPath.hasPrefix(folder + "/")
+            } ?? true
+            return matchesSearch && matchesTags && matchesFolder
+        }
+    }
+
+    private func bestPairedElapsed(
+        samples: Int = 4,
+        first: () -> Int,
+        second: () -> Int
+    ) -> (
+        first: (elapsed: TimeInterval, result: Int),
+        second: (elapsed: TimeInterval, result: Int)
+    ) {
+        var firstBest = TimeInterval.greatestFiniteMagnitude
+        var secondBest = TimeInterval.greatestFiniteMagnitude
+        var firstResult: Int?
+        var secondResult: Int?
+
+        func measure(
+            _ operation: () -> Int,
+            best: inout TimeInterval,
+            expectedResult: inout Int?
+        ) {
+            let start = ProcessInfo.processInfo.systemUptime
+            let result = operation()
+            best = min(best, ProcessInfo.processInfo.systemUptime - start)
+            if let expectedResult {
+                XCTAssertEqual(result, expectedResult, "benchmark samples must return stable results")
+            } else {
+                expectedResult = result
+            }
+        }
+
+        for sample in 0..<samples {
+            if sample.isMultiple(of: 2) {
+                measure(first, best: &firstBest, expectedResult: &firstResult)
+                measure(second, best: &secondBest, expectedResult: &secondResult)
+            } else {
+                measure(second, best: &secondBest, expectedResult: &secondResult)
+                measure(first, best: &firstBest, expectedResult: &firstResult)
+            }
+        }
+        return (
+            first: (firstBest, firstResult ?? 0),
+            second: (secondBest, secondResult ?? 0)
+        )
+    }
+}
+
+private actor AsyncTestGate {
+    private var isSuspended = false
+    private var isReleased = false
+    private var suspendedContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        isSuspended = true
+        suspendedContinuation?.resume()
+        suspendedContinuation = nil
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilSuspended() async {
+        guard !isSuspended else { return }
+        await withCheckedContinuation { continuation in
+            suspendedContinuation = continuation
+        }
+    }
+
+    func release() {
+        isReleased = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
 }
 
 final class LocalBlogStoreTests {
@@ -963,6 +1822,10 @@ final class LocalBlogStoreTests {
         )
         XCTAssertEqual(
             try await store.listQuestions(searchText: "性能").map(\.id),
+            [second.id]
+        )
+        XCTAssertEqual(
+            try await store.listQuestions(searchText: "性").map(\.id),
             [second.id]
         )
 
@@ -1680,6 +2543,44 @@ final class LocalBlogStoreTests {
         )
         XCTAssertNil(await store.mediaURL(for: "/media/notes/../secret.png"))
         XCTAssertNil(await store.mediaURL(for: "/other/notes/photo.png"))
+    }
+
+    func testShortSearchAndMediaReferenceIndexStayIncremental() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceFile = root.appendingPathComponent("source.png")
+        try Data([0x89, 0x50, 0x4e, 0x47]).write(to: sourceFile)
+        let store = LocalBlogStore(rootURL: root)
+        let uploaded = try await store.uploadMedia(fileURL: sourceFile, kind: "image", slug: "indexed-note")
+        let media = NativeMedia(
+            kind: uploaded.kind,
+            name: uploaded.name,
+            size: uploaded.size,
+            url: uploaded.url
+        )
+        let saved = try await store.saveArticle(article(
+            slug: "indexed-note",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "性能 ![图](\(uploaded.url))"
+        ))
+
+        XCTAssertEqual(
+            try await store.search("性", restrictingTo: [.article]).map(\.documentID),
+            [saved.slug]
+        )
+        try await store.discardUnreferencedMedia([media])
+        let storedURL = await store.mediaURL(for: uploaded.url)
+        XCTAssertTrue(storedURL.map { FileManager.default.fileExists(atPath: $0.path) } == true)
+
+        _ = try await store.saveArticle(article(
+            slug: saved.slug,
+            status: .published,
+            expectedUpdatedAt: saved.updatedAt,
+            body: "引用已移除"
+        ))
+        try await store.discardUnreferencedMedia([media])
+        XCTAssertTrue(storedURL.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
     }
 
     func testSmartCollectionsAndBookmarksPersistInSQLite() async throws {
@@ -2452,7 +3353,8 @@ private func makeTemporaryDirectory() throws -> URL {
 @main
 struct LeonBookUnitTests {
     static func main() async {
-        let tests: [(String, () async throws -> Void)] = [
+        var tests: [(String, () async throws -> Void)] = [
+            ("NativeModelsTests.testVideoPlaybackFormatsAndPersistsResumePositions", { NativeModelsTests().testVideoPlaybackFormatsAndPersistsResumePositions() }),
             ("NativeModelsTests.testWritingMetricsAndTimestampRoundTrip", { NativeModelsTests().testWritingMetricsAndTimestampRoundTrip() }),
             ("NativeModelsTests.testAutomationURLsParseActionsAndEncodedParameters", { try NativeModelsTests().testAutomationURLsParseActionsAndEncodedParameters() }),
             ("NativeModelsTests.testCommandRegistryFuzzyMatchingRankingAndAvailability", { NativeModelsTests().testCommandRegistryFuzzyMatchingRankingAndAvailability() }),
@@ -2479,6 +3381,11 @@ struct LeonBookUnitTests {
             ("PerformanceRegressionTests.testMarkdownLiveStylingLimitsOrdinaryEditsToNearbyParagraphs", { PerformanceRegressionTests().testMarkdownLiveStylingLimitsOrdinaryEditsToNearbyParagraphs() }),
             ("PerformanceRegressionTests.testArticleMarkdownAnalysisIsCachedAndSharedAcrossConsumers", { PerformanceRegressionTests().testArticleMarkdownAnalysisIsCachedAndSharedAcrossConsumers() }),
             ("PerformanceRegressionTests.testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency", { try await PerformanceRegressionTests().testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency() }),
+            ("PerformanceRegressionTests.testLibraryAndMomentProjectionsCacheDerivedStateWithoutChangingFilters", { PerformanceRegressionTests().testLibraryAndMomentProjectionsCacheDerivedStateWithoutChangingFilters() }),
+            ("PerformanceRegressionTests.testArticleProjectionRebuildPreservesConcurrentPageViewUpdate", { await PerformanceRegressionTests().testArticleProjectionRebuildPreservesConcurrentPageViewUpdate() }),
+            ("PerformanceRegressionTests.testPageViewIncrementReevaluatesSelectedSmartCollection", { try await PerformanceRegressionTests().testPageViewIncrementReevaluatesSelectedSmartCollection() }),
+            ("PerformanceRegressionTests.testCalendarChangeRebuildsCachedMomentFacets", { await PerformanceRegressionTests().testCalendarChangeRebuildsCachedMomentFacets() }),
+            ("PerformanceRegressionTests.testPairedPerformanceSamplingAlternatesOrder", { PerformanceRegressionTests().testPairedPerformanceSamplingAlternatesOrder() }),
             ("LocalBlogStoreTests.testMomentLifecycleNormalizesInputFiltersAndRecordsActivity", { try await LocalBlogStoreTests().testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() }),
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),
             ("LocalBlogStoreTests.testQuestionAnswersAndTagSearchPersistInSQLite", { try await LocalBlogStoreTests().testQuestionAnswersAndTagSearchPersistInSQLite() }),
@@ -2496,6 +3403,7 @@ struct LeonBookUnitTests {
             ("LocalBlogStoreTests.testObsidianVaultImportPreservesPropertiesLinksAndAttachments", { try await LocalBlogStoreTests().testObsidianVaultImportPreservesPropertiesLinksAndAttachments() }),
             ("LocalBlogStoreTests.testArticleCommentsPersistQuotesRepliesAndCascadeDeletion", { try await LocalBlogStoreTests().testArticleCommentsPersistQuotesRepliesAndCascadeDeletion() }),
             ("LocalBlogStoreTests.testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments", { try await LocalBlogStoreTests().testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments() }),
+            ("LocalBlogStoreTests.testShortSearchAndMediaReferenceIndexStayIncremental", { try await LocalBlogStoreTests().testShortSearchAndMediaReferenceIndexStayIncremental() }),
             ("LocalBlogStoreTests.testSmartCollectionsAndBookmarksPersistInSQLite", { try await LocalBlogStoreTests().testSmartCollectionsAndBookmarksPersistInSQLite() }),
             ("LocalBlogStoreTests.testSmartCollectionSQLMatchesTheInMemoryEvaluator", { try await LocalBlogStoreTests().testSmartCollectionSQLMatchesTheInMemoryEvaluator() }),
             ("LocalBlogStoreTests.testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields", { try await LocalBlogStoreTests().testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields() }),
@@ -2514,7 +3422,27 @@ struct LeonBookUnitTests {
             ("LocalBackupManagerTests.testCapacityGuardPreservesConfiguredFreeSpace", { try LocalBackupManagerTests().testCapacityGuardPreservesConfiguredFreeSpace() }),
         ]
 
-        for (name, test) in tests {
+        if ProcessInfo.processInfo.environment["LEON_BOOK_PERFORMANCE_BENCHMARKS"] == "1" {
+            tests.append((
+                "PerformanceRegressionTests.testLargeArticleLibraryProjectionBenchmark",
+                { PerformanceRegressionTests().testLargeArticleLibraryProjectionBenchmark() }
+            ))
+            tests.append((
+                "PerformanceRegressionTests.testLargeSmartCollectionFormulaSummaryBenchmark",
+                { PerformanceRegressionTests().testLargeSmartCollectionFormulaSummaryBenchmark() }
+            ))
+            tests.append((
+                "PerformanceRegressionTests.testMomentTimestampReuseBenchmark",
+                { PerformanceRegressionTests().testMomentTimestampReuseBenchmark() }
+            ))
+        }
+        let filter = ProcessInfo.processInfo.environment["LEON_BOOK_TEST_FILTER"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedTests = filter.map { filter in
+            tests.filter { $0.0.localizedCaseInsensitiveContains(filter) }
+        } ?? tests
+
+        for (name, test) in selectedTests {
             let failureCount = failures.count
             do {
                 try await test()
@@ -2527,7 +3455,7 @@ struct LeonBookUnitTests {
         }
 
         if failures.isEmpty {
-            print("LeonBook unit tests passed (\(tests.count) tests)")
+            print("LeonBook unit tests passed (\(selectedTests.count) tests)")
         } else {
             for failure in failures { fputs("FAIL: \(failure)\n", stderr) }
             exit(1)

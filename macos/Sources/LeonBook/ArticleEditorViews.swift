@@ -422,7 +422,7 @@ private final class PastingTextView: NSTextView {
 }
 
 private struct MarkdownPreview: View {
-    let markdown: String
+    let analysis: EditorDocumentAnalysis
     let store: LocalBlogStore
     let articleLinks: [NativeArticleSummary]
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
@@ -439,7 +439,7 @@ private struct MarkdownPreview: View {
             }
 
             ScrollView {
-                if markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if analysis.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     VStack(spacing: 10) {
                         Image(systemName: "text.document")
                             .font(.title2)
@@ -453,7 +453,7 @@ private struct MarkdownPreview: View {
                     .frame(maxWidth: .infinity, minHeight: 280)
                 } else {
                     MarkdownArticleBody(
-                        body: markdown,
+                        document: analysis.document,
                         store: store,
                         articleLinks: articleLinks,
                         onOpenArticle: onOpenArticle
@@ -599,6 +599,57 @@ private struct EditorWikiLink: Identifiable {
     let destination: NativeArticleLinkDestination
 }
 
+private struct EditorDocumentAnalysis: @unchecked Sendable {
+    let source: String
+    let document: NativeMarkdownArticleDocument
+    let wikiReferences: [NativeArticleLink.Reference]
+    let wordCount: Int
+
+    static let empty = EditorDocumentAnalysis(source: "")
+
+    init(source: String) {
+        self.source = source
+        document = NativeMarkdownArticleDocumentCache.shared.document(for: source)
+        wikiReferences = NativeArticleLink.parsedReferences(in: source)
+        wordCount = NativeWritingMetrics.characterCount(of: source)
+    }
+}
+
+@MainActor
+private final class EditorDocumentAnalysisModel: ObservableObject {
+    @Published private(set) var value = EditorDocumentAnalysis.empty
+    private var task: Task<Void, Never>?
+    private var generation = 0
+
+    func update(source: String, debounce: Bool = true) {
+        if source == value.source {
+            generation += 1
+            task?.cancel()
+            return
+        }
+        generation += 1
+        let requestedGeneration = generation
+        task?.cancel()
+        task = Task { [weak self] in
+            if debounce {
+                try? await Task.sleep(nanoseconds: 120_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            let analysis = await Task.detached(priority: .userInitiated) {
+                EditorDocumentAnalysis(source: source)
+            }.value
+            guard !Task.isCancelled,
+                  let self,
+                  requestedGeneration == self.generation else { return }
+            self.value = analysis
+        }
+    }
+
+    deinit {
+        task?.cancel()
+    }
+}
+
 struct ArticleEditorView: View {
     @ObservedObject var model: NativeAppModel
     @ObservedObject private var editorSession: NativeEditorSessionState
@@ -606,6 +657,7 @@ struct ArticleEditorView: View {
     @ObservedObject var readingPreferences: NativeReadingPreferences
     @StateObject private var articleLinkController = ArticleLinkAutocompleteController()
     @StateObject private var slashCommandController = EditorSlashCommandController()
+    @StateObject private var documentAnalysis = EditorDocumentAnalysisModel()
     @State private var isPresentingHistory = false
     @State private var propertyRows: [EditorPropertyRow] = []
     @State private var propertyRenameRequest: EditorPropertyRenameRequest?
@@ -695,7 +747,13 @@ struct ArticleEditorView: View {
         .onChange(of: model.editor) { _ in
             model.scheduleEditorAutosave()
         }
-        .onAppear(perform: synchronizePropertyRows)
+        .onAppear {
+            synchronizePropertyRows()
+            documentAnalysis.update(source: model.editor.body, debounce: false)
+        }
+        .onChange(of: model.editor.body) { body in
+            documentAnalysis.update(source: body)
+        }
         .onChange(of: model.editor.recoveryID) { _ in synchronizePropertyRows() }
         .onChange(of: model.editor.properties) { _ in synchronizePropertyRowsIfNeeded() }
         .onChange(of: propertyRows) { _ in commitPropertyRows() }
@@ -962,7 +1020,7 @@ struct ArticleEditorView: View {
                                 )
 
                             MarkdownPreview(
-                                markdown: model.editor.body,
+                                analysis: documentAnalysis.value,
                                 store: model.store,
                                 articleLinks: model.articles,
                                 onOpenArticle: model.openArticleLink
@@ -1262,9 +1320,12 @@ struct ArticleEditorView: View {
                 } else {
                     VStack(spacing: 8) {
                         ForEach(model.editor.media) { media in
-                            EditorAttachmentRow(media: media) {
-                                model.removeEditorMedia(media)
-                            }
+                            EditorAttachmentRow(
+                                media: media,
+                                savedTimestamp: model.videoTimestampLabel(for: media),
+                                onInsertTimestamp: { model.insertVideoTimestamp(media) },
+                                onRemove: { model.removeEditorMedia(media) }
+                            )
                         }
                     }
                 }
@@ -1281,6 +1342,15 @@ struct ArticleEditorView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                }
+
+                if model.isUploadingMedia {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("正在后台导入媒体，可继续编辑")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -1491,15 +1561,18 @@ struct ArticleEditorView: View {
     }
 
     private var editorOutline: [MarkdownOutlineItem] {
-        MarkdownOutline.items(in: model.editor.body)
+        documentAnalysis.value.document.outline
     }
 
     private var editorWikiLinks: [EditorWikiLink] {
-        NativeArticleLink.parsedReferences(in: model.editor.body).enumerated().compactMap { offset, reference in
-            guard let destination = NativeArticleLink.destination(
-                for: wikiReferenceValue(reference),
-                in: model.articles
-            ) else { return nil }
+        documentAnalysis.value.wikiReferences.enumerated().compactMap { offset, reference in
+            let value = wikiReferenceValue(reference)
+            let destination = NativeArticleLinkDestination(
+                target: reference.target,
+                resolvedSlug: model.resolveArticleLink(value)?.slug,
+                heading: reference.heading,
+                label: reference.label
+            )
             return EditorWikiLink(
                 id: "\(offset)-\(reference.target)-\(reference.heading ?? "")",
                 reference: reference,
@@ -1550,7 +1623,7 @@ struct ArticleEditorView: View {
     }
 
     private var wordCount: Int {
-        NativeWritingMetrics.characterCount(of: model.editor.body)
+        documentAnalysis.value.wordCount
     }
 
     private var readingMinutes: Int {
@@ -1756,34 +1829,6 @@ private struct EditorCard<Content: View>: View {
         .overlay {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(.quaternary)
-        }
-    }
-}
-
-private struct EditorAttachmentRow: View {
-    let media: NativeMedia
-    let onRemove: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: media.isVideo ? "video.fill" : media.isImage ? "photo.fill" : "doc.fill")
-                .font(.caption)
-                .foregroundStyle(.tint)
-                .frame(width: 24, height: 24)
-                .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-
-            Text(media.name)
-                .font(.caption)
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
-
-            Button(action: onRemove) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("移除附件")
         }
     }
 }

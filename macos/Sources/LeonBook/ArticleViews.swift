@@ -135,7 +135,7 @@ struct ArticleReaderView: View {
         usesCompactInspector: Bool
     ) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 24) {
                 HStack {
                     Label(
                         article.status.label,
@@ -1710,7 +1710,7 @@ struct MarkdownArticleBody: View {
     private let document: NativeMarkdownArticleDocument
     let store: LocalBlogStore
     let sourceRelativePath: String?
-    let articleLinks: [NativeArticleSummary]
+    let articleLinks: NativeArticleLinkCollection
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
     let onToggleTask: ((Int, Bool) -> Void)?
     let embeddedSlugs: Set<String>
@@ -1729,13 +1729,13 @@ struct MarkdownArticleBody: View {
         document = NativeMarkdownArticleDocumentCache.shared.document(for: body)
         self.store = store
         self.sourceRelativePath = sourceRelativePath
-        self.articleLinks = articleLinks
+        self.articleLinks = NativeArticleLinkCollection(articleLinks)
         self.onOpenArticle = onOpenArticle
         self.onToggleTask = onToggleTask
         self.embeddedSlugs = rootArticleSlug.map { embeddedSlugs.union([$0]) } ?? embeddedSlugs
     }
 
-    fileprivate init(
+    init(
         document: NativeMarkdownArticleDocument,
         store: LocalBlogStore,
         articleLinks: [NativeArticleSummary] = [],
@@ -1748,15 +1748,34 @@ struct MarkdownArticleBody: View {
         self.document = document
         self.store = store
         self.sourceRelativePath = sourceRelativePath
-        self.articleLinks = articleLinks
+        self.articleLinks = NativeArticleLinkCollection(articleLinks)
         self.onOpenArticle = onOpenArticle
         self.onToggleTask = onToggleTask
         self.embeddedSlugs = rootArticleSlug.map { embeddedSlugs.union([$0]) } ?? embeddedSlugs
     }
 
+    init(
+        body: String,
+        store: LocalBlogStore,
+        articleLinkCollection: NativeArticleLinkCollection,
+        sourceRelativePath: String? = nil,
+        embeddedSlugs: Set<String> = [],
+        onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void = { _ in },
+        onToggleTask: ((Int, Bool) -> Void)? = nil
+    ) {
+        document = NativeMarkdownArticleDocumentCache.shared.document(for: body)
+        self.store = store
+        self.sourceRelativePath = sourceRelativePath
+        articleLinks = articleLinkCollection
+        self.onOpenArticle = onOpenArticle
+        self.onToggleTask = onToggleTask
+        self.embeddedSlugs = embeddedSlugs
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: max(12, typography.paragraphSpacing)) {
-            ForEach(Array(document.blocks.enumerated()), id: \.offset) { _, block in
+        LazyVStack(alignment: .leading, spacing: max(12, typography.paragraphSpacing)) {
+            ForEach(document.blocks.indices, id: \.self) { index in
+                let block = document.blocks[index]
                 switch block {
                 case let .image(url, alt):
                     NativeImageView(
@@ -1801,14 +1820,14 @@ struct MarkdownArticleBody: View {
 private struct MarkdownArticleTransclusionView: View {
     let reference: String
     let store: LocalBlogStore
-    let articleLinks: [NativeArticleSummary]
+    let articleLinks: NativeArticleLinkCollection
     let embeddedSlugs: Set<String>
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
     @State private var article: NativeArticle?
     @State private var errorMessage: String?
 
     private var parsed: NativeArticleLink.Reference { .init(rawValue: reference) }
-    private var target: NativeArticleSummary? { NativeArticleLink.resolve(reference, in: articleLinks) }
+    private var target: NativeArticleSummary? { articleLinks.resolve(reference) }
 
     var body: some View {
         Group {
@@ -1817,7 +1836,7 @@ private struct MarkdownArticleTransclusionView: View {
             } else if let article {
                 VStack(alignment: .leading, spacing: 12) {
                     Button {
-                        if let destination = NativeArticleLink.destination(for: reference, in: articleLinks) {
+                        if let destination = articleLinks.destination(for: reference) {
                             onOpenArticle(destination)
                         }
                     } label: {
@@ -1833,7 +1852,7 @@ private struct MarkdownArticleTransclusionView: View {
                         AnyView(MarkdownArticleBody(
                             body: fragment,
                             store: store,
-                            articleLinks: articleLinks,
+                            articleLinkCollection: articleLinks,
                             sourceRelativePath: article.sourceRelativePath,
                             embeddedSlugs: embeddedSlugs.union([article.slug]),
                             onOpenArticle: onOpenArticle
@@ -2149,39 +2168,137 @@ private struct InlineVideoPlayer: View {
     let media: NativeMedia
     let store: LocalBlogStore
 
-    @State private var player: AVPlayer?
-    @State private var failedToLoad = false
+    @StateObject private var playback: NativeInlineVideoPlayerModel
+
+    init(media: NativeMedia, store: LocalBlogStore) {
+        self.media = media
+        self.store = store
+        _playback = StateObject(
+            wrappedValue: NativeInlineVideoPlayerModel(mediaID: media.url)
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let player {
-                NativeAVPlayerView(player: player)
-                    .frame(minHeight: 320)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .accessibilityLabel(media.name)
-            } else if failedToLoad {
-                Label("无法加载视频：\(media.name)", systemImage: "video.slash")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 320)
-            } else {
-                ProgressView("正在加载视频…")
-                    .frame(maxWidth: .infinity, minHeight: 320)
-                    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+            ZStack {
+                switch playback.phase {
+                case .resolving:
+                    videoPlaceholder {
+                        ProgressView("正在读取视频信息…")
+                    }
+                case .poster:
+                    posterButton
+                case .preparing:
+                    if let player = playback.player {
+                        NativeAVPlayerView(player: player)
+                        loadingOverlay
+                    } else {
+                        videoPlaceholder { ProgressView("正在验证视频…") }
+                    }
+                case .ready:
+                    if let player = playback.player {
+                        NativeAVPlayerView(player: player)
+                    } else {
+                        videoPlaceholder { ProgressView("正在准备播放器…") }
+                    }
+                case let .failed(message):
+                    failureView(message: message)
+                }
             }
+            .frame(minHeight: 320)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .accessibilityLabel(media.name)
 
-            Label(media.name, systemImage: "video")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Label(media.name, systemImage: "video")
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if playback.phase == .ready {
+                    Text(playback.progressLabel)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Button {
+                        playback.copyTimestamp(named: media.name)
+                    } label: {
+                        Label("复制时间点", systemImage: "text.badge.plus")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("复制当前播放时间，方便粘贴到笔记")
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
         }
         .task(id: media.url) {
-            guard let url = await store.mediaURL(for: media.url),
-                  FileManager.default.fileExists(atPath: url.path) else {
-                failedToLoad = true
-                return
-            }
-            player = AVPlayer(url: url)
+            await playback.resolve(using: store)
         }
-        .onDisappear { player?.pause() }
+        .onDisappear { playback.release() }
+    }
+
+    private var posterButton: some View {
+        Button {
+            Task { await playback.play() }
+        } label: {
+            ZStack {
+                if let poster = playback.poster {
+                    Image(nsImage: poster)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 420)
+                        .clipped()
+                } else {
+                    Color(nsColor: .windowBackgroundColor)
+                }
+                Color.black.opacity(playback.poster == nil ? 0.05 : 0.24)
+                VStack(spacing: 10) {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 56))
+                        .symbolRenderingMode(.hierarchical)
+                    Text(playback.resumeLabel ?? "点击播放")
+                        .font(.headline)
+                }
+                .foregroundStyle(playback.poster == nil ? Color.accentColor : .white)
+                .shadow(color: .black.opacity(playback.poster == nil ? 0 : 0.35), radius: 4, y: 2)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("点击后才加载播放器")
+    }
+
+    private var loadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.28)
+            ProgressView("正在准备播放…")
+                .controlSize(.large)
+                .foregroundStyle(.white)
+        }
+    }
+
+    private func videoPlaceholder<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+            content()
+        }
+        .frame(maxWidth: .infinity, minHeight: 320)
+    }
+
+    private func failureView(message: String) -> some View {
+        videoPlaceholder {
+            VStack(spacing: 12) {
+                Label("无法播放 \(media.name)", systemImage: "video.slash")
+                    .font(.headline)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("重试") {
+                    Task { await playback.retry() }
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(24)
+        }
     }
 }
 
@@ -2192,6 +2309,9 @@ private struct NativeAVPlayerView: NSViewRepresentable {
         let playerView = AVPlayerView()
         playerView.controlsStyle = .inline
         playerView.showsFullScreenToggleButton = true
+        playerView.allowsPictureInPicturePlayback = true
+        playerView.allowsVideoFrameAnalysis = false
+        playerView.updatesNowPlayingInfoCenter = false
         playerView.player = player
         return playerView
     }

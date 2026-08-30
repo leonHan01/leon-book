@@ -33,10 +33,15 @@ struct SQLiteRow {
 
 final class SQLiteDatabase {
     private var handle: OpaquePointer?
+    private var statementCache: [String: OpaquePointer] = [:]
+    private var statementLRU: [String] = []
+    private let maximumCachedStatementCount = 96
 
     init(url: URL) throws {
         var openedHandle: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        // Both owning stores are actors, so a connection is never used
+        // concurrently. Avoid SQLite's redundant per-connection mutex here.
+        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX
         let result = sqlite3_open_v2(url.path, &openedHandle, flags, nil)
         guard result == SQLITE_OK, let openedHandle else {
             let message = openedHandle.map { String(cString: sqlite3_errmsg($0)) } ?? "无法打开数据库"
@@ -62,6 +67,9 @@ final class SQLiteDatabase {
 
     func close() {
         guard let handle else { return }
+        for statement in statementCache.values { sqlite3_finalize(statement) }
+        statementCache.removeAll(keepingCapacity: false)
+        statementLRU.removeAll(keepingCapacity: false)
         _ = sqlite3_exec(handle, "PRAGMA wal_checkpoint(TRUNCATE)", nil, nil, nil)
         sqlite3_close_v2(handle)
         self.handle = nil
@@ -97,16 +105,16 @@ final class SQLiteDatabase {
             return
         }
 
-        let statement = try prepare(sql)
-        defer { sqlite3_finalize(statement) }
+        let statement = try takeStatement(sql)
+        defer { returnStatement(statement, for: sql) }
         try bind(values, to: statement)
         let result = sqlite3_step(statement)
         guard result == SQLITE_DONE else { throw databaseError() }
     }
 
     func query(_ sql: String, values: [SQLiteValue] = [], row: (SQLiteRow) throws -> Void) throws {
-        let statement = try prepare(sql)
-        defer { sqlite3_finalize(statement) }
+        let statement = try takeStatement(sql)
+        defer { returnStatement(statement, for: sql) }
         try bind(values, to: statement)
 
         while true {
@@ -155,6 +163,34 @@ final class SQLiteDatabase {
         let result = sqlite3_prepare_v2(handle, sql, -1, &statement, nil)
         guard result == SQLITE_OK, let statement else { throw databaseError() }
         return statement
+    }
+
+    private func takeStatement(_ sql: String) throws -> OpaquePointer {
+        if let statement = statementCache.removeValue(forKey: sql) {
+            statementLRU.removeAll { $0 == sql }
+            return statement
+        }
+        return try prepare(sql)
+    }
+
+    private func returnStatement(_ statement: OpaquePointer, for sql: String) {
+        guard handle != nil,
+              sqlite3_reset(statement) == SQLITE_OK,
+              sqlite3_clear_bindings(statement) == SQLITE_OK else {
+            sqlite3_finalize(statement)
+            return
+        }
+        if let replaced = statementCache.updateValue(statement, forKey: sql) {
+            sqlite3_finalize(replaced)
+            statementLRU.removeAll { $0 == sql }
+        }
+        statementLRU.append(sql)
+        while statementLRU.count > maximumCachedStatementCount {
+            let evictedSQL = statementLRU.removeFirst()
+            if let evicted = statementCache.removeValue(forKey: evictedSQL) {
+                sqlite3_finalize(evicted)
+            }
+        }
     }
 
     private func bind(_ values: [SQLiteValue], to statement: OpaquePointer) throws {

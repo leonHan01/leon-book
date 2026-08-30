@@ -157,6 +157,8 @@ private struct NativeSidebar: View {
     @State private var smartCollectionEditorRequest: SmartCollectionEditorRequest?
 
     var body: some View {
+        let articleFolderFilters = model.availableArticleFolderFilters
+
         List {
             Section("用户") {
                 Menu {
@@ -196,14 +198,14 @@ private struct NativeSidebar: View {
                     sidebarButton(.graph, title: "关系图", icon: "point.3.connected.trianglepath.dotted")
                 }
                 sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
-                sidebarButton(.zhihu, title: "问答", icon: "questionmark.bubble")
+                sidebarButton(.qAndA, title: "问答", icon: "questionmark.bubble")
                 sidebarButton(.editor, title: "写作", icon: "square.and.pencil")
                 sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
             }
 
-            if !model.availableArticleFolderFilters.isEmpty {
+            if !articleFolderFilters.isEmpty {
                 Section("文件夹") {
-                    ForEach(model.availableArticleFolderFilters) { folder in
+                    ForEach(articleFolderFilters) { folder in
                         Button {
                             model.showArticleFolder(folder.path)
                         } label: {
@@ -284,7 +286,7 @@ private struct NativeSidebar: View {
                     Image(systemName: model.storageReady ? "checkmark.circle.fill" : "circle.dotted")
                         .foregroundStyle(model.storageReady ? .green : .secondary)
                 }
-                Text("\(model.publishedArticles.count) 篇已发布 · \(model.draftArticles.count) 篇草稿 · \(model.totalMomentCount) 条微博 · \(model.totalQuestionCount) 个问题")
+                Text("\(model.publishedArticleCount) 篇已发布 · \(model.draftArticleCount) 篇草稿 · \(model.totalMomentCount) 条微博 · \(model.totalQuestionCount) 个问题")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -388,7 +390,7 @@ private struct NativeNavigationDetail: View {
                 model: model,
                 pageState: pageStateCache.moments
             )
-        case .zhihu: ZhihuView(model: model)
+        case .qAndA: QAndAView(model: model)
         case .reader: ArticleReaderView(
             model: model,
             workspaceLayout: workspaceLayout,
@@ -465,8 +467,8 @@ private struct DashboardView: View {
                 }
 
                 HStack(spacing: 14) {
-                    StatCard(title: "已发布", value: "\(model.publishedArticles.count)", color: .blue)
-                    StatCard(title: "草稿", value: "\(model.draftArticles.count)", color: .orange)
+                    StatCard(title: "已发布", value: "\(model.publishedArticleCount)", color: .blue)
+                    StatCard(title: "草稿", value: "\(model.draftArticleCount)", color: .orange)
                     StatCard(title: "全部文章", value: "\(model.articles.count)", color: .purple)
                     StatCard(title: "微博", value: "\(model.totalMomentCount)", color: .pink)
                 }

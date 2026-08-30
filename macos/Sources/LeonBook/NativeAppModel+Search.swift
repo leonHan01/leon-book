@@ -145,12 +145,34 @@ extension NativeAppModel {
         let generation = articleListSearchGeneration
         let workspace = workspaceGeneration
         let activeStore = store
+        let projection = articleSearchProjectionSnapshot()
         isSearchingArticles = true
         articleListSearchTask = Task { [weak self] in
             if debounce {
-                try? await Task.sleep(nanoseconds: 160_000_000)
+                let startedAt = ProcessInfo.processInfo.systemUptime
+                let localSearchTask = Task.detached(priority: .userInitiated) {
+                    projection.localSearchMatchSlugs(searchText: trimmed)
+                }
+                let localMatches = await withTaskCancellationHandler {
+                    await localSearchTask.value
+                } onCancel: {
+                    localSearchTask.cancel()
+                }
+                guard !Task.isCancelled, let self,
+                      generation == self.articleListSearchGeneration,
+                      workspace == self.workspaceGeneration else { return }
+                self.articleSearchMatchSlugs = localMatches
+                self.articleSearchResolvedText = trimmed
+
+                let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+                let remaining = max(0, 0.16 - elapsed)
+                if remaining > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
             }
-            guard !Task.isCancelled, let self else { return }
+            guard !Task.isCancelled, let self,
+                  generation == self.articleListSearchGeneration,
+                  workspace == self.workspaceGeneration else { return }
             do {
                 let results = try await activeStore.search(
                     trimmed,
