@@ -783,10 +783,11 @@ struct ArticleEditorView: View {
                 modeMenuButton(.livePreview, shortcut: "2")
                 modeMenuButton(.source, shortcut: "3")
                 modeMenuButton(.split, shortcut: "4")
+                modeMenuButton(.blocks, shortcut: "5")
             } label: {
                 Label(editorMode.title, systemImage: editorMode.systemImage)
             }
-            .help("切换编辑模式（⌘⌥1–4）")
+            .help("切换编辑模式（⌘⌥1–5）")
 
             Menu {
                 Button {
@@ -931,6 +932,15 @@ struct ArticleEditorView: View {
                 case .focus, .livePreview:
                     editorPane(appearance: .livePreview)
                         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                case .blocks:
+                    ArticleBlockEditor(
+                        source: $editorSession.draft.body,
+                        articleReference: model.editor.slug.isEmpty ? model.editor.title : model.editor.slug,
+                        isEditable: !model.isMarkdownSourceReadOnly,
+                        typography: readingPreferences.typography
+                    )
+                    .padding(ArticleEditorLayout.contentInset)
+                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 case .source:
                     editorPane(appearance: .source)
                         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

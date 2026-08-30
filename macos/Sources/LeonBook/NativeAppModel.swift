@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import LeonBookBackupModule
+import LeonBookExtensionKit
 import LeonBookModuleKit
 import LeonBookPublishingModule
 import SwiftUI
@@ -21,13 +22,17 @@ public final class NativeAppModel: ObservableObject {
 
     let navigationScopeID: String?
     public var commandRegistry: NativeCommandRegistry {
-        NativeCommandRegistry(definitions: NativeCommandRegistry.builtIn.definitions.filter {
-            firstPartyModuleRuntime.authorization(forCommand: $0.id.rawValue).isAllowed
-        })
+        NativeCommandRegistry(
+            definitions: NativeCommandRegistry.builtIn.definitions.filter {
+                firstPartyModuleRuntime.authorization(forCommand: $0.id.rawValue).isAllowed
+            } + declarativeExtensionCommandDefinitions
+        )
     }
     public let commandPreferences = NativeCommandPreferences.shared
     @Published var firstPartyModuleRuntime = NativeFirstPartyModules.loadRuntime()
     @Published var latestFirstPartyModuleEvent: FirstPartyModuleEvent?
+    @Published var declarativeExtensions = DeclarativeExtensionRuntime.empty
+    @Published var declarativeExtensionStatus = "尚未加载扩展"
     let firstPartyModuleEventBus = FirstPartyModuleEventBus()
     let navigation = NativeNavigationState()
     var section: NativeSection {

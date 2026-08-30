@@ -1,0 +1,68 @@
+{
+  "manifestVersion": 1,
+  "id": "example.reading-tools",
+  "name": "Reading Tools",
+  "version": "1.0.0",
+  "description": "演示五种安全声明式扩展点。",
+  "author": "LeonBook",
+  "commands": [
+    {
+      "id": "daily-note",
+      "title": "新建今日阅读笔记",
+      "description": "用日期、用户和扩展变量预填一篇草稿",
+      "keywords": "daily reading journal",
+      "icon": "book.pages",
+      "action": {
+        "type": "newNote",
+        "title": "{{date}} · {{notebook}}",
+        "body": "# 今日阅读\n\n记录人：{{user}}\n\n## 摘录\n\n## 想法\n",
+        "folder": "Reading/{{date}}"
+      }
+    },
+    {
+      "id": "insert-review",
+      "title": "插入书评模板",
+      "description": "在光标位置插入书评小节",
+      "keywords": "review template",
+      "icon": "text.badge.plus",
+      "action": {
+        "type": "insertText",
+        "text": "## 书评\n\n> {{selection}}\n\n评分：\n\n",
+        "cursorOffset": 22
+      }
+    }
+  ],
+  "templateVariables": {
+    "notebook": "阅读札记"
+  },
+  "importers": [
+    {
+      "id": "book-json",
+      "title": "导入图书 JSON",
+      "description": "从 title、author 和 notes 字段生成草稿",
+      "fileExtensions": ["json"],
+      "format": "json",
+      "titleTemplate": "{{json.title}}",
+      "bodyTemplate": "作者：{{json.author}}\n\n{{json.notes}}",
+      "folderTemplate": "Imported/Books",
+      "maximumBytes": 1048576
+    }
+  ],
+  "renderers": [
+    {
+      "language": "book-card",
+      "titleTemplate": "{{notebook}}",
+      "bodyTemplate": "{{content}}",
+      "style": "card",
+      "icon": "book.closed"
+    }
+  ],
+  "baseFunctions": [
+    {
+      "name": "double",
+      "parameters": ["value"],
+      "expression": "value * 2",
+      "description": "返回数值的两倍，可在 Base 公式中使用 double(wordcount)。"
+    }
+  ]
+}

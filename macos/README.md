@@ -24,7 +24,7 @@ Bookmarks are separate shortcuts in the sidebar. Articles, individual Markdown h
 
 The reader keeps an Article Inspector on the right, so the outline, backlinks, outgoing links, unlinked mentions, and one-hop local graph stay available without scrolling to the end of a long article. Hovering a related article or graph node previews its status, excerpt, tags, and update time; clicking opens it. Unlinked mentions ignore existing `[[wiki links]]`, inline and fenced code, and Markdown links; each source row can convert all safe occurrences to wiki links with conflict protection.
 
-Wiki links resolve case-insensitively by title, stable slug, or a unique `aliases` Property. Clicking a missing target opens a prefilled new-article draft, while `[[note#heading]]` and `[[#heading]]` retain the heading destination and scroll to the matching section. Imported aliases also enter full-text search and the article-link graph.
+Wiki links resolve case-insensitively by title, stable slug, or a unique `aliases` Property. Clicking a missing target opens a prefilled new-article draft. `[[note#heading]]` and `[[#heading]]` scroll to headings; `[[note#^block-id]]` and `[[#^block-id]]` scroll to stable paragraph, structured-block, or list-item anchors. Typing `#^` inside a wiki link searches the target note's block IDs and previews their text before insertion. Imported aliases also enter full-text search and the article-link graph.
 
 At narrow reader widths the inspector collapses automatically. Use the Article Inspector button in the article header to open the same navigation tools in a separate panel.
 
@@ -42,15 +42,16 @@ An anchored comment stores both its source quote and nearest Markdown heading. C
 
 ## Writing modes
 
-The writing workspace offers four modes; the selection is saved with the active task layout:
+The writing workspace offers five modes; the selection is saved with the active task layout:
 
 - **Focus** uses the full-width inline preview editor and hides article settings and formatting hints.
 - **Live Preview** styles headings, emphasis, code, quotes, lists, links, and wiki links directly inside the editable body while de-emphasizing Markdown markers.
+- **Blocks** presents Markdown as independently insertable, convertible, duplicable, removable, and draggable content blocks. It includes a `/` type menu, Enter-to-split, Shift+Enter line breaks, interactive tasks, and copyable `^block-id` links.
 - **Source** shows unrendered Markdown for precise syntax control.
 - **Split** keeps source editing on the left and the complete rendered result, including images and embeds, on the right.
 
-All four modes share the same body, autosave history, undo stack, image paste handling, and wiki-link suggestions, so changing layout does not discard editing state.
-Use `⌘⌥1` through `⌘⌥4` to switch through the four modes in order.
+All five modes share the same Markdown body, autosave, and version history, so changing layout does not discard editing state.
+Use `⌘⌥1` through `⌘⌥5` to switch through the five modes in order.
 
 The editor's right sidebar switches among Settings, Properties, Outline, and Links. Properties provides typed editors for text, lists, numbers, dates, checkboxes, and tags, preserves those types in SQLite/JSON, emits valid YAML, and can rename a key across every article without overwriting conflicting values. Outline follows body headings live, and Links combines live wiki links with saved backlinks and unlinked mentions. The selected pane and sidebar visibility are part of the saved layout.
 
@@ -73,6 +74,8 @@ Each article's wiki-link references and mention-search document update increment
 The global article graph supports title, slug, tag, and alias search; publication-status and orphan filters; a 50–500 node cap; and 50%–180% zoom. Before drawing, the projection module ranks matching nodes by degree, clips the result, and removes edges whose endpoints are no longer visible.
 
 Source is split along Article, Editor, Article Properties, Backup, Import, Search, Graph Projection, and Navigation Page State seams. Views keep the existing `NativeAppModel` interface, while implementation and verification stay local to the corresponding module.
+
+`LeonBookExtensionKit` adds a separate declarative-extension seam. Versioned `extension.json` packages can contribute commands, static template variables, bounded text/JSON importers, native fenced-block renderers, and pure Base formula functions. The host never loads a dylib or hands Swift/Objective-C objects, JavaScript, a shell, network access, or arbitrary file access to an extension. Packages are validated as a whole and can be enabled, disabled, or reloaded under **Settings → Declarative Extensions**. See [`Examples/DeclarativeExtension/extension.json`](Examples/DeclarativeExtension/extension.json).
 
 ## Importing an Obsidian Vault
 
@@ -155,6 +158,12 @@ or paste a standalone iframe snippet:
 ```
 
 Only `http` and `https` URLs are accepted. The embedded view is interactive and includes a button to open the same page in the external browser.
+
+## Rich Markdown embeds
+
+Obsidian-style `![[manual.pdf]]` embeds use PDFKit with continuous scrolling, while `![[recording.mp3]]` and other common AVFoundation audio formats receive inline playback controls. Both resolve through the same path-safe Vault/media lookup as images and expose an external-open fallback. Embedded files are excluded from the duplicate attachment list below an article.
+
+Display math supports `$$…$$` plus `math`, `latex`, and `tex` fences; paragraphs containing `$…$` receive inline formula rendering. Mermaid fences render diagrams with a strict content-security policy. Formula and Mermaid source never leaves the WebView, but the pinned KaTeX and Mermaid renderer scripts are currently fetched from jsDelivr and cached by WebKit; if they are unavailable, the original source remains visible instead of disappearing.
 
 ## Article HTML components
 

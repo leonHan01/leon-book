@@ -20,6 +20,10 @@ let package = Package(
             path: "Sources/LeonBookModuleKit"
         ),
         .target(
+            name: "LeonBookExtensionKit",
+            path: "Sources/LeonBookExtensionKit"
+        ),
+        .target(
             name: "LeonBookSearchModule",
             dependencies: ["LeonBookModuleKit"],
             path: "Sources/LeonBookSearchModule"
@@ -48,6 +52,7 @@ let package = Package(
             name: "LeonBook",
             dependencies: [
                 "CSQLite",
+                "LeonBookExtensionKit",
                 "LeonBookModuleKit",
                 "LeonBookSearchModule",
                 "LeonBookKnowledgeGraphModule",
@@ -80,6 +85,7 @@ let package = Package(
             name: "LeonBookTests",
             dependencies: [
                 "LeonBook",
+                "LeonBookExtensionKit",
             ],
             path: "Tests/LeonBookTests",
             resources: [

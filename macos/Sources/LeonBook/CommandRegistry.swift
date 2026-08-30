@@ -392,7 +392,7 @@ public final class NativeCommandPreferences: ObservableObject {
 
     private let defaults: UserDefaults
     private let defaultsKey: String
-    private let registry: NativeCommandRegistry
+    private var registry: NativeCommandRegistry
     private let maximumRecentCount = 20
     private let maximumPinnedCount = 16
 
@@ -488,12 +488,19 @@ public final class NativeCommandPreferences: ObservableObject {
         persist()
     }
 
+    /// Refreshes the live command catalog after modules or declarative
+    /// extensions change. Unknown saved IDs are retained so disabling and
+    /// re-enabling an extension does not discard its shortcuts.
+    public func updateRegistry(_ registry: NativeCommandRegistry) {
+        self.registry = registry
+        sanitize()
+        objectWillChange.send()
+    }
+
     private func sanitize() {
-        let validIDs = Set(registry.definitions.map { $0.id.rawValue })
-        state.customShortcuts = state.customShortcuts.filter { validIDs.contains($0.key) && $0.value.isValid }
-        state.disabledDefaultShortcuts = state.disabledDefaultShortcuts.intersection(validIDs)
-        state.pinnedCommandIDs = Array(state.pinnedCommandIDs.filter(validIDs.contains).uniqued().prefix(maximumPinnedCount))
-        state.recentCommandIDs = Array(state.recentCommandIDs.filter(validIDs.contains).uniqued().prefix(maximumRecentCount))
+        state.customShortcuts = state.customShortcuts.filter { $0.value.isValid }
+        state.pinnedCommandIDs = Array(state.pinnedCommandIDs.uniqued().prefix(maximumPinnedCount))
+        state.recentCommandIDs = Array(state.recentCommandIDs.uniqued().prefix(maximumRecentCount))
     }
 
     private func persist() {

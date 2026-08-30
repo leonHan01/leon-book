@@ -1,6 +1,7 @@
 import Darwin
 import AppKit
 import Foundation
+import LeonBookExtensionKit
 @testable import LeonBook
 
 private var failures: [String] = []
@@ -376,6 +377,154 @@ final class NativeModelsTests {
         XCTAssertEqual(NativeArticleEmbed.fragment(in: body, selector: "^decision"), "第一段")
         XCTAssertEqual(NativeArticleEmbed.fragment(in: body, selector: "^list-block"), "- 条目一\n- 条目二")
         XCTAssertNil(NativeArticleEmbed.fragment(in: body, selector: "^missing"))
+    }
+
+    func testRichMarkdownEmbedsAndBlockLinkAnchors() {
+        let body = """
+        普通段落 ^decision
+
+        - 第一项 ^first-item
+        - 第二项
+        ^whole-list
+
+        ```swift
+        let marker = "^not-a-block"
+        ```
+        """
+        XCTAssertEqual(
+            NativeArticleEmbed.blockReferences(in: body),
+            [
+                NativeArticleBlockReference(id: "decision", preview: "普通段落"),
+                NativeArticleBlockReference(id: "first-item", preview: "- 第一项"),
+                NativeArticleBlockReference(id: "whole-list", preview: "- 第一项 - 第二项"),
+            ]
+        )
+        XCTAssertEqual(
+            NativeArticleBlockReference.scrollAnchorID(for: "decision"),
+            "markdown-block-decision"
+        )
+        XCTAssertEqual(EditorBlockLinkQuery("笔记#^dec")?.target, "笔记")
+        XCTAssertEqual(EditorBlockLinkQuery("笔记#^dec")?.searchText, "dec")
+        XCTAssertEqual(
+            NativeArticleLink.destination(for: "笔记#^decision", in: [])?.heading,
+            "^decision"
+        )
+
+        let parsed = NativeParsedMarkdownDocument(source: body)
+        XCTAssertTrue(parsed.blockAnchorIDs.contains("markdown-block-decision"))
+        XCTAssertTrue(parsed.blockAnchorIDs.contains("markdown-block-whole-list"))
+        let hasAnchoredListItem = parsed.blocks.contains { block in
+            guard case let .list(items) = block else { return false }
+            return items.contains { $0.blockID == "first-item" && $0.text == "第一项" }
+        }
+        XCTAssertTrue(hasAnchoredListItem)
+
+        let rich = NativeMarkdownArticleDocument(markdown: """
+        ![[manual.pdf]]
+
+        ![[recording.m4a]]
+
+        ```mermaid
+        flowchart LR
+          A --> B
+        ```
+
+        $$
+        E = mc^2
+        $$
+
+        行内公式 $x^2 + y^2 = z^2$。
+        """)
+        var hasPDF = false
+        var hasAudio = false
+        var hasMermaid = false
+        var hasDisplayMath = false
+        var hasInlineMath = false
+        XCTAssertEqual(rich.embeddedAttachmentURLs, Set(["manual.pdf", "recording.m4a"]))
+        for block in rich.blocks {
+            switch block {
+            case let .pdf(reference, _): hasPDF = reference == "manual.pdf"
+            case let .audio(reference, _): hasAudio = reference == "recording.m4a"
+            case let .text(blocks, _, _, _):
+                for markdownBlock in blocks {
+                    switch markdownBlock {
+                    case .mermaid: hasMermaid = true
+                    case let .math(_, display): hasDisplayMath = display
+                    case let .paragraph(text):
+                        hasInlineMath = hasInlineMath
+                            || MarkdownMathSource.containsInlineExpression(in: text)
+                    default: break
+                    }
+                }
+            default: break
+            }
+        }
+        XCTAssertTrue(hasPDF)
+        XCTAssertTrue(hasAudio)
+        XCTAssertTrue(hasMermaid)
+        XCTAssertTrue(hasDisplayMath)
+        XCTAssertTrue(hasInlineMath)
+    }
+
+    func testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes() {
+        let source = """
+        # 计划
+
+        第一段
+
+        - 项目 A
+        - [ ] 项目 B
+
+        ```swift
+        let value = 1
+
+        print(value)
+        ```
+        """
+        let blocks = NativeBlockEditorDocument.parse(source)
+        XCTAssertEqual(blocks.map(\.kind), [
+            .heading1,
+            .paragraph,
+            .bulletedList,
+            .task,
+            .code,
+        ])
+        XCTAssertEqual(NativeBlockEditorDocument.render(blocks), source)
+
+        var movable = NativeBlockEditorDocument.parse("第一块\n\n第二块\n\n第三块")
+        let firstID = movable[0].id
+        let thirdID = movable[2].id
+        XCTAssertTrue(NativeBlockEditorDocument.move(
+            &movable,
+            blockID: firstID,
+            relativeTo: thirdID
+        ))
+        XCTAssertEqual(
+            NativeBlockEditorDocument.render(movable),
+            "第二块\n\n第三块\n\n第一块"
+        )
+
+        XCTAssertEqual(
+            NativeBlockEditorDocument.converting("决定 ^choice", to: .heading2),
+            "## 决定 ^choice"
+        )
+        let task = NativeBlockEditorDocument.converting("发布版本", to: .task)
+        XCTAssertEqual(task, "- [ ] 发布版本")
+        XCTAssertFalse(NativeBlockEditorDocument.isCompletedTask(task))
+        XCTAssertEqual(NativeBlockEditorDocument.togglingTask(task), "- [x] 发布版本")
+        XCTAssertTrue(NativeBlockEditorDocument.isCompletedTask("- [x] 发布版本"))
+
+        let split = NativeBlockEditorDocument.split(
+            task,
+            atUTF16Location: (task as NSString).length
+        )
+        XCTAssertEqual(split?.0, task)
+        XCTAssertEqual(split?.1, "- [ ] ")
+        XCTAssertNil(NativeBlockEditorDocument.split("```\nlet x = 1\n```", atUTF16Location: 4))
+
+        let addressable = NativeBlockEditorDocument.ensuringBlockID(in: "一段内容")
+        XCTAssertEqual(NativeBlockEditorDocument.blockID(in: addressable.markdown), addressable.id)
+        XCTAssertEqual(NativeBlockEditorDocument.removingBlockID(from: addressable.markdown), "一段内容")
     }
 
     func testArticleTabMaintainsIndependentBackAndForwardHistory() throws {
@@ -766,6 +915,163 @@ final class NativeModelsTests {
             ),
             .number(1)
         )
+    }
+
+    func testDeclarativeExtensionsExposeFiveSafeCapabilities() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("reading-tools", isDirectory: true)
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+        let manifest = DeclarativeExtensionManifest(
+            id: "demo.reading-tools",
+            name: "Reading Tools",
+            version: "1.0.0",
+            description: "Safe test extension",
+            commands: [
+                DeclarativeExtensionCommand(
+                    id: "daily-note",
+                    title: "Daily note",
+                    action: DeclarativeExtensionCommandAction(
+                        type: .newNote,
+                        title: "{{date}} · {{team}}",
+                        body: "Owner: {{user}}"
+                    )
+                ),
+            ],
+            templateVariables: ["team": "Research"],
+            importers: [
+                DeclarativeExtensionImporter(
+                    id: "book-json",
+                    title: "Book JSON",
+                    fileExtensions: ["json"],
+                    format: .json,
+                    titleTemplate: "{{json.title}}",
+                    bodyTemplate: "Author: {{json.author}}"
+                ),
+            ],
+            renderers: [
+                DeclarativeExtensionRenderer(
+                    language: "book-card",
+                    titleTemplate: "{{team}} card",
+                    bodyTemplate: "{{content}}",
+                    style: .card
+                ),
+            ],
+            baseFunctions: [
+                DeclarativeExtensionBaseFunction(
+                    name: "double",
+                    parameters: ["value"],
+                    expression: "value * 2"
+                ),
+            ]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(manifest).write(
+            to: packageURL.appendingPathComponent("extension.json"),
+            options: .atomic
+        )
+
+        var runtime = try DeclarativeExtensionLoader.load(from: root)
+        XCTAssertEqual(runtime.packages.map(\.id), ["demo.reading-tools"])
+        XCTAssertTrue(runtime.diagnostics.isEmpty)
+        XCTAssertEqual(runtime.commands.count, 1)
+        XCTAssertEqual(runtime.importers.count, 1)
+        XCTAssertEqual(runtime.renderers.count, 1)
+        XCTAssertEqual(runtime.baseFunctions.count, 1)
+
+        let fixedNow = Date(timeIntervalSince1970: 0)
+        let renderedCommand = runtime.renderTemplate(
+            runtime.commands[0].command.action.title ?? "",
+            context: ["user": "Leon"],
+            now: fixedNow
+        )
+        XCTAssertEqual(renderedCommand.value, "1970-01-01 · Research")
+        XCTAssertTrue(renderedCommand.unresolvedVariables.isEmpty)
+
+        let imported = try runtime.importDocument(
+            using: runtime.importers[0],
+            data: Data(#"{"title":"Dune","author":"Frank Herbert"}"#.utf8),
+            fileName: "dune.json",
+            now: fixedNow
+        )
+        XCTAssertEqual(imported.title, "Dune")
+        XCTAssertEqual(imported.body, "Author: Frank Herbert")
+        XCTAssertTrue(imported.unresolvedVariables.isEmpty)
+
+        let block = runtime.renderBlock(language: "book-card", content: "Dune", now: fixedNow)
+        XCTAssertEqual(block?.title, "Research card")
+        XCTAssertEqual(block?.body, "Dune")
+        XCTAssertEqual(block?.style, .card)
+
+        let article = NativeArticleSummary(
+            banner: nil,
+            category: "Books",
+            excerpt: "",
+            publishedAt: nil,
+            slug: "dune",
+            status: .draft,
+            tags: [],
+            title: "Dune",
+            updatedAt: "2026-08-30T00:00:00Z",
+            wordCount: 21
+        )
+        let collection = NativeSmartCollection(
+            name: "Reading",
+            formulas: [
+                NativeSmartCollectionFormula(
+                    key: "score",
+                    name: "Score",
+                    expression: "double(wordcount)"
+                ),
+            ]
+        )
+        XCTAssertEqual(
+            NativeSmartCollectionFormulaEngine.formulaValue(
+                "score",
+                article: article,
+                collection: collection,
+                baseFunctions: runtime.baseFunctions.map(\.function)
+            ),
+            .number(42)
+        )
+
+        XCTAssertTrue(runtime.setEnabled(false, extensionID: "demo.reading-tools"))
+        XCTAssertTrue(runtime.commands.isEmpty)
+        XCTAssertTrue(runtime.importers.isEmpty)
+        XCTAssertTrue(runtime.renderers.isEmpty)
+        XCTAssertTrue(runtime.baseFunctions.isEmpty)
+    }
+
+    func testDeclarativeExtensionRejectsExecutableTemplates() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("unsafe", isDirectory: true)
+        try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+        let manifest = DeclarativeExtensionManifest(
+            id: "demo.unsafe-extension",
+            name: "Unsafe",
+            version: "1.0.0",
+            commands: [
+                DeclarativeExtensionCommand(
+                    id: "insert-script",
+                    title: "Unsafe",
+                    action: DeclarativeExtensionCommandAction(
+                        type: .insertText,
+                        text: "```html-render\n<script>alert(1)</script>\n```"
+                    )
+                ),
+            ]
+        )
+        try JSONEncoder().encode(manifest).write(
+            to: packageURL.appendingPathComponent("extension.json"),
+            options: .atomic
+        )
+
+        let runtime = try DeclarativeExtensionLoader.load(from: root)
+        XCTAssertTrue(runtime.packages.isEmpty)
+        XCTAssertEqual(runtime.diagnostics.count, 1)
+        XCTAssertTrue(runtime.diagnostics[0].message.contains("被禁止的可执行内容"))
     }
 
     func testArticleGraphProjectionFiltersOrphansAndClipsByDegree() {
@@ -3758,6 +4064,8 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testArticleHashtagsNormalizeAndPreserveLegacyCommaTags", { NativeModelsTests().testArticleHashtagsNormalizeAndPreserveLegacyCommaTags() }),
             ("NativeModelsTests.testArticleLinksExtractAndResolveTitlesOrSlugs", { try NativeModelsTests().testArticleLinksExtractAndResolveTitlesOrSlugs() }),
             ("NativeModelsTests.testArticleEmbedsSelectWholeNotesHeadingsAndBlocks", { NativeModelsTests().testArticleEmbedsSelectWholeNotesHeadingsAndBlocks() }),
+            ("NativeModelsTests.testRichMarkdownEmbedsAndBlockLinkAnchors", { NativeModelsTests().testRichMarkdownEmbedsAndBlockLinkAnchors() }),
+            ("NativeModelsTests.testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes", { NativeModelsTests().testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes() }),
             ("NativeModelsTests.testArticleTabMaintainsIndependentBackAndForwardHistory", { try NativeModelsTests().testArticleTabMaintainsIndependentBackAndForwardHistory() }),
             ("NativeModelsTests.testArticleCommentSelectionAnchorsToNearestHeading", { NativeModelsTests().testArticleCommentSelectionAnchorsToNearestHeading() }),
             ("NativeModelsTests.testArticleLineDiffMarksAddedAndRemovedLines", { NativeModelsTests().testArticleLineDiffMarksAddedAndRemovedLines() }),
@@ -3768,6 +4076,8 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename", { try NativeModelsTests().testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename() }),
             ("NativeModelsTests.testSmartCollectionCombinesPropertiesDatesAndMultiSort", { NativeModelsTests().testSmartCollectionCombinesPropertiesDatesAndMultiSort() }),
             ("NativeModelsTests.testBaseFormulasCalculatePropertiesDatesAndSummaries", { NativeModelsTests().testBaseFormulasCalculatePropertiesDatesAndSummaries() }),
+            ("NativeModelsTests.testDeclarativeExtensionsExposeFiveSafeCapabilities", { try NativeModelsTests().testDeclarativeExtensionsExposeFiveSafeCapabilities() }),
+            ("NativeModelsTests.testDeclarativeExtensionRejectsExecutableTemplates", { try NativeModelsTests().testDeclarativeExtensionRejectsExecutableTemplates() }),
             ("NativeModelsTests.testArticleGraphProjectionFiltersOrphansAndClipsByDegree", { NativeModelsTests().testArticleGraphProjectionFiltersOrphansAndClipsByDegree() }),
             ("PerformanceRegressionTests.testEditorSessionOwnsHighFrequencyDraftState", { PerformanceRegressionTests().testEditorSessionOwnsHighFrequencyDraftState() }),
             ("PerformanceRegressionTests.testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries", { PerformanceRegressionTests().testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries() }),

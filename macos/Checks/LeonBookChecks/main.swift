@@ -24,6 +24,7 @@ if let packageManifest = try? String(
     encoding: .utf8
 ) {
     for target in [
+        "LeonBookExtensionKit",
         "LeonBookModuleKit",
         "LeonBookSearchModule",
         "LeonBookKnowledgeGraphModule",
@@ -42,6 +43,8 @@ expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore.swift")
 expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore+SearchGraph.swift")), "search and graph SQLite adapters should be split from the core store")
 expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore+Schema.swift")), "SQLite schema should be split from the core store")
 expect(FileManager.default.fileExists(atPath: sourcePath("FirstPartyModules.swift")), "first-party module runtime adapter should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("DeclarativeExtensions.swift")), "declarative extension host adapter should exist")
+expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookExtensionKit", "DeclarativeExtensions.swift")), "declarative extension interface should exist")
 expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookModuleKit", "FirstPartyModule.swift")), "shared first-party module interface should exist")
 expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookSearchModule", "SearchModule.swift")), "search feature target should exist")
 expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookKnowledgeGraphModule", "KnowledgeGraphModule.swift")), "knowledge graph feature target should exist")
@@ -106,6 +109,7 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     articleViews += (try? String(contentsOfFile: sourcePath("ArticleEditorViews.swift"), encoding: .utf8)) ?? ""
     articleViews += (try? String(contentsOfFile: sourcePath("ArticleLinkAutocomplete.swift"), encoding: .utf8)) ?? ""
     articleViews += (try? String(contentsOfFile: sourcePath("MarkdownRichEmbedViews.swift"), encoding: .utf8)) ?? ""
+    articleViews += (try? String(contentsOfFile: sourcePath("MarkdownRenderer.swift"), encoding: .utf8)) ?? ""
     articleViews += (try? String(contentsOfFile: sourcePath("NativeMarkdownLiveStyler.swift"), encoding: .utf8)) ?? ""
     expect(articleViews.contains("ArticleHistoryView"), "article reader and editor should expose version history")
     expect(articleViews.contains("ArticleRevisionDiffView"), "version history should compare revisions with current content")
@@ -161,6 +165,12 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("ArticleLinkSuggestionMenu"), "article editor should offer article-link suggestions")
     expect(articleViews.contains("activeLinkQuery"), "article editor should detect a [[ article-link query")
     expect(articleViews.contains("[[\\(suggestion.reference)]]"), "selecting an article or block suggestion should insert a wiki-style link")
+    expect(articleViews.contains("EditorBlockLinkQuery"), "wiki-link suggestions should recognize #^ block queries")
+    expect(articleViews.contains("NativeArticleBlockReference.scrollAnchorID"), "rendered block IDs should expose stable scroll anchors")
+    expect(articleViews.contains("NativePDFKitView"), "PDF embeds should use PDFKit")
+    expect(articleViews.contains("NativeAudioEmbedView"), "audio attachments should render inline playback controls")
+    expect(articleViews.contains("MarkdownMathView"), "Markdown math should use a dedicated renderer")
+    expect(articleViews.contains("MarkdownMermaidView"), "Mermaid fences should use a dedicated renderer")
     expect(articleViews.contains("NativeImageView(url: banner.url, alt: banner.alt, store: model.store)"), "article reader should render a banner image inline")
     expect(articleViews.contains("NativeImageView(url: media.url, alt: media.name, store: model.store)"), "article reader should render attached images inline")
     expect(articleViews.contains("NativeImagePipeline.shared.image"), "article images should use the shared cached decode pipeline")
@@ -188,7 +198,7 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("[属性名:值]"), "property editor should document structured search syntax")
     expect(articleViews.contains("private var editorOutlineSidebar"), "article editor should expose a live outline")
     expect(articleViews.contains("private var editorLinksSidebar"), "article editor should expose outgoing and incoming links")
-    expect(articleViews.contains("切换编辑模式（⌘⌥1–4）"), "article editing modes should expose keyboard shortcuts")
+    expect(articleViews.contains("切换编辑模式（⌘⌥1–5）"), "article editing modes should expose keyboard shortcuts")
     expect(articleViews.contains("private struct ArticleTabBar"), "article reader should expose a persistent tab strip")
     expect(articleViews.contains("model.navigateArticleBack"), "article tabs should expose back navigation")
     expect(articleViews.contains("model.navigateArticleForward"), "article tabs should expose forward navigation")
@@ -304,6 +314,22 @@ if let commandRegistry = try? String(contentsOfFile: sourcePath("CommandRegistry
     expect(commandRegistry.contains("editor.insert.callout"), "command registry should expose editor slash commands")
 } else {
     failures.append("native command registry should be readable")
+}
+
+if let extensionKit = try? String(
+    contentsOfFile: moduleSourcePath("LeonBookExtensionKit", "DeclarativeExtensions.swift"),
+    encoding: .utf8
+) {
+    expect(extensionKit.contains("public struct DeclarativeExtensionRuntime"), "extensions should expose one deep runtime interface")
+    expect(extensionKit.contains("case insertText"), "extensions should support bounded text-insertion commands")
+    expect(extensionKit.contains("case json"), "extensions should support declarative JSON importers")
+    expect(extensionKit.contains("case callout"), "extensions should support native renderer styles")
+    expect(extensionKit.contains("baseFunctions"), "extensions should expose pure Base functions")
+    expect(extensionKit.contains("<script"), "extension validation should reject script templates")
+    expect(!extensionKit.contains("dlopen("), "extension runtime must not load dynamic libraries")
+    expect(!extensionKit.contains("Process("), "extension runtime must not launch subprocesses")
+} else {
+    failures.append("declarative extension interface should be readable")
 }
 
 if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift"), encoding: .utf8) {

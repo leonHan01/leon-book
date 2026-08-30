@@ -32,6 +32,7 @@ public struct ContentView: View {
             )
         }
         .frame(minWidth: 1_080, minHeight: 680)
+        .environment(\.nativeDeclarativeExtensions, model.declarativeExtensions)
         .toolbar {
             ToolbarItemGroup {
                 Button { model.executeCommand(.globalSearch) } label: {

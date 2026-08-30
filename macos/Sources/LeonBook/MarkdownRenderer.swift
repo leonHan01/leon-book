@@ -361,6 +361,7 @@ private struct MarkdownBlockView: View {
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
     let onToggleTask: ((Int, Bool) -> Void)?
     @Environment(\.nativeReadingTypography) private var typography
+    @Environment(\.nativeDeclarativeExtensions) private var declarativeExtensions
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -413,24 +414,31 @@ private struct MarkdownBlockView: View {
             )
 
         case let .codeBlock(language, code):
-            VStack(alignment: .leading, spacing: 8) {
-                if let language, !language.isEmpty {
-                    Text(language)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+            if let rendered = declarativeExtensions.renderBlock(
+                language: language,
+                content: code
+            ) {
+                NativeDeclarativeRendererView(block: rendered)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let language, !language.isEmpty {
+                        Text(language)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(code.isEmpty ? " " : code)
+                            .font(typography.codeFont.swiftUIFont(size: max(11, typography.fontSize - 2)))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(code.isEmpty ? " " : code)
-                        .font(typography.codeFont.swiftUIFont(size: max(11, typography.fontSize - 2)))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(typography.theme.codeBackground(system: colorScheme), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.2))
                 }
-            }
-            .padding(14)
-            .background(typography.theme.codeBackground(system: colorScheme), in: RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.secondary.opacity(0.2))
             }
 
         case let .math(source, display):

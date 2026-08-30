@@ -338,8 +338,7 @@ private struct NativeScriptedMarkdownWebView: NSViewRepresentable {
                 return
             }
             let scheme = url.scheme?.lowercased()
-            decisionHandler(scheme == "about" || scheme == "https" ? .allow : .cancel)
+            decisionHandler(scheme == "about" ? .allow : .cancel)
         }
     }
 }
-

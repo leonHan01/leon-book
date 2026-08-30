@@ -255,6 +255,7 @@ extension NativeAppModel {
         users = workspace.users
         currentUser = workspace.activeUser
         dataDirectoryPath = workspace.workspaceURL.path
+        reloadDeclarativeExtensions()
         activeMarkdownWorkspaceMode = sourceState.mode
         selectedMarkdownWorkspaceMode = sourceState.mode
         markdownSourceDirectoryPath = sourceURL.path

@@ -240,6 +240,7 @@ extension NativeAppModel {
         commandPreferences.recordUse(command)
 
         if executeFirstPartyModuleCommand(invocation) { return }
+        if executeDeclarativeExtensionCommand(invocation) { return }
 
         if command == .commandPalette {
             presentCommandPalette()
@@ -328,7 +329,7 @@ extension NativeAppModel {
         }
     }
 
-    private func performEditorInsertion(
+    func performEditorInsertion(
         _ insertion: NativeCommandTextInsertion,
         invocation: NativeCommandInvocation
     ) {

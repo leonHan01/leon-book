@@ -1,4 +1,5 @@
 import Foundation
+import LeonBookExtensionKit
 
 public enum NativeBaseValue: Equatable, Hashable {
     case empty
@@ -122,7 +123,8 @@ public enum NativeSmartCollectionFormulaEngine {
         for column: NativeSmartCollectionColumn,
         article: NativeArticleSummary,
         collection: NativeSmartCollection,
-        now: Date = Date()
+        now: Date = Date(),
+        baseFunctions: [DeclarativeExtensionBaseFunction] = []
     ) -> NativeBaseValue {
         switch column.source {
         case .system:
@@ -130,7 +132,13 @@ public enum NativeSmartCollectionFormulaEngine {
         case .property:
             return propertyValue(column.key, article: article)
         case .formula:
-            return formulaValue(column.key, article: article, collection: collection, now: now)
+            return formulaValue(
+                column.key,
+                article: article,
+                collection: collection,
+                now: now,
+                baseFunctions: baseFunctions
+            )
         }
     }
 
@@ -138,9 +146,17 @@ public enum NativeSmartCollectionFormulaEngine {
         _ key: String,
         article: NativeArticleSummary,
         collection: NativeSmartCollection,
-        now: Date = Date()
+        now: Date = Date(),
+        baseFunctions: [DeclarativeExtensionBaseFunction] = []
     ) -> NativeBaseValue {
-        evaluateFormula(key, article: article, collection: collection, now: now, visited: [])
+        evaluateFormula(
+            key,
+            article: article,
+            collection: collection,
+            now: now,
+            visited: [],
+            baseFunctions: baseFunctions
+        )
     }
 
     public static func summary(
@@ -148,27 +164,46 @@ public enum NativeSmartCollectionFormulaEngine {
         column: NativeSmartCollectionColumn,
         articles: [NativeArticleSummary],
         collection: NativeSmartCollection,
-        now: Date = Date()
+        now: Date = Date(),
+        baseFunctions: [DeclarativeExtensionBaseFunction] = []
     ) -> NativeBaseValue {
         switch operation {
         case .filled, .empty:
             var count = 0
             for article in articles {
-                let isEmpty = value(for: column, article: article, collection: collection, now: now).isEmpty
+                let isEmpty = value(
+                    for: column,
+                    article: article,
+                    collection: collection,
+                    now: now,
+                    baseFunctions: baseFunctions
+                ).isEmpty
                 if (operation == .empty) == isEmpty { count += 1 }
             }
             return .number(Double(count))
         case .unique:
             var values = Set<String>()
             for article in articles {
-                let value = value(for: column, article: article, collection: collection, now: now)
+                let value = value(
+                    for: column,
+                    article: article,
+                    collection: collection,
+                    now: now,
+                    baseFunctions: baseFunctions
+                )
                 if !value.isEmpty { values.insert(value.displayText) }
             }
             return .number(Double(values.count))
         case .sum:
             var total = 0.0
             for article in articles {
-                total += value(for: column, article: article, collection: collection, now: now).numberValue ?? 0
+                total += value(
+                    for: column,
+                    article: article,
+                    collection: collection,
+                    now: now,
+                    baseFunctions: baseFunctions
+                ).numberValue ?? 0
             }
             return .number(total)
         case .average:
@@ -179,7 +214,8 @@ public enum NativeSmartCollectionFormulaEngine {
                     for: column,
                     article: article,
                     collection: collection,
-                    now: now
+                    now: now,
+                    baseFunctions: baseFunctions
                 ).numberValue else { continue }
                 total += number
                 count += 1
@@ -192,7 +228,8 @@ public enum NativeSmartCollectionFormulaEngine {
                     for: column,
                     article: article,
                     collection: collection,
-                    now: now
+                    now: now,
+                    baseFunctions: baseFunctions
                 ).numberValue else { continue }
                 if let current = result {
                     result = operation == .minimum ? min(current, number) : max(current, number)
@@ -208,7 +245,8 @@ public enum NativeSmartCollectionFormulaEngine {
                     for: column,
                     article: article,
                     collection: collection,
-                    now: now
+                    now: now,
+                    baseFunctions: baseFunctions
                 ).dateValue else { continue }
                 if let current = result {
                     result = operation == .earliest ? min(current, date) : max(current, date)
@@ -224,7 +262,8 @@ public enum NativeSmartCollectionFormulaEngine {
                     for: column,
                     article: article,
                     collection: collection,
-                    now: now
+                    now: now,
+                    baseFunctions: baseFunctions
                 ).booleanValue
                 if (operation == .checked) == isChecked { count += 1 }
             }
@@ -237,7 +276,8 @@ public enum NativeSmartCollectionFormulaEngine {
         article: NativeArticleSummary,
         collection: NativeSmartCollection,
         now: Date,
-        visited: Set<String>
+        visited: Set<String>,
+        baseFunctions: [DeclarativeExtensionBaseFunction]
     ) -> NativeBaseValue {
         let normalized = key.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
         guard !visited.contains(normalized),
@@ -257,7 +297,8 @@ public enum NativeSmartCollectionFormulaEngine {
                         article: article,
                         collection: collection,
                         now: now,
-                        visited: nextVisited
+                        visited: nextVisited,
+                        baseFunctions: baseFunctions
                     )
                 }
                 if let nested = collection.formulas.first(where: { $0.key == identifier })
@@ -269,7 +310,8 @@ public enum NativeSmartCollectionFormulaEngine {
                         article: article,
                         collection: collection,
                         now: now,
-                        visited: nextVisited
+                        visited: nextVisited,
+                        baseFunctions: baseFunctions
                     )
                 }
                 if identifier.lowercased().hasPrefix("file.") {
@@ -280,7 +322,8 @@ public enum NativeSmartCollectionFormulaEngine {
                 let property = propertyValue(propertyKey, article: article)
                 return property.isEmpty ? systemValue(propertyKey, article: article) : property
             },
-            property: { propertyValue($0, article: article) }
+            property: { propertyValue($0, article: article) },
+            baseFunctions: baseFunctions
         )
         return parser.parse()
     }
@@ -398,17 +441,23 @@ fileprivate struct FormulaParser {
     private let now: Date
     private let resolve: (String) -> NativeBaseValue
     private let property: (String) -> NativeBaseValue
+    private let baseFunctions: [DeclarativeExtensionBaseFunction]
+    private let activeBaseFunctions: Set<String>
 
     init(
         source: String,
         now: Date,
         resolve: @escaping (String) -> NativeBaseValue,
-        property: @escaping (String) -> NativeBaseValue
+        property: @escaping (String) -> NativeBaseValue,
+        baseFunctions: [DeclarativeExtensionBaseFunction] = [],
+        activeBaseFunctions: Set<String> = []
     ) {
         tokens = NativeFormulaTokenCache.shared.tokens(for: source)
         self.now = now
         self.resolve = resolve
         self.property = property
+        self.baseFunctions = baseFunctions
+        self.activeBaseFunctions = activeBaseFunctions
     }
 
     mutating func parse() -> NativeBaseValue { parseOr() }
@@ -521,7 +570,30 @@ fileprivate struct FormulaParser {
             return .string(NativeFormulaDateFormatterCache.shared.string(from: date, format: format))
         case "min": return arguments.compactMap(\.numberValue).min().map(NativeBaseValue.number) ?? .empty
         case "max": return arguments.compactMap(\.numberValue).max().map(NativeBaseValue.number) ?? .empty
-        default: return .empty
+        default:
+            let normalized = name.lowercased()
+            guard !activeBaseFunctions.contains(normalized),
+                  let definition = baseFunctions.first(where: {
+                    $0.name.caseInsensitiveCompare(name) == .orderedSame
+                  }),
+                  definition.parameters.count == arguments.count else { return .empty }
+            let values = Dictionary(uniqueKeysWithValues: zip(
+                definition.parameters.map { $0.lowercased() },
+                arguments
+            ))
+            let parentResolve = resolve
+            let parentProperty = property
+            var nested = FormulaParser(
+                source: definition.expression,
+                now: now,
+                resolve: { identifier in
+                    values[identifier.lowercased()] ?? parentResolve(identifier)
+                },
+                property: parentProperty,
+                baseFunctions: baseFunctions,
+                activeBaseFunctions: activeBaseFunctions.union([normalized])
+            )
+            return nested.parse()
         }
     }
 

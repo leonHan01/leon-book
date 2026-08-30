@@ -4,6 +4,7 @@ import SwiftUI
 enum ArticleEditorMode: String, CaseIterable, Identifiable, Codable {
     case focus
     case livePreview
+    case blocks
     case source
     case split
 
@@ -13,6 +14,7 @@ enum ArticleEditorMode: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .focus: return "专注写作"
         case .livePreview: return "实时预览"
+        case .blocks: return "块编辑"
         case .source: return "源码"
         case .split: return "左右分栏"
         }
@@ -22,6 +24,7 @@ enum ArticleEditorMode: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .focus: return "arrow.up.left.and.arrow.down.right"
         case .livePreview: return "textformat"
+        case .blocks: return "square.grid.3x1.folder.badge.plus"
         case .source: return "chevron.left.forwardslash.chevron.right"
         case .split: return "rectangle.split.2x1"
         }
@@ -31,6 +34,7 @@ enum ArticleEditorMode: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .focus: return "隐藏右侧面板，以行内格式专注正文"
         case .livePreview: return "在可编辑正文中即时显示 Markdown 格式"
+        case .blocks: return "像 Notion 一样逐块编辑、转换、复制和拖动正文"
         case .source: return "只显示未经渲染的 Markdown 源码"
         case .split: return "左侧编辑源码，右侧查看完整渲染效果"
         }

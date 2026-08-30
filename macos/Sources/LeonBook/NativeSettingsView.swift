@@ -159,6 +159,10 @@ public struct NativeSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("声明式扩展") {
+                NativeDeclarativeExtensionSettingsPanel(model: model)
+            }
+
             Section("Markdown 工作区 / Obsidian Vault") {
                 Picker("使用方式", selection: $model.selectedMarkdownWorkspaceMode) {
                     ForEach(NativeMarkdownWorkspaceMode.allCases) { mode in

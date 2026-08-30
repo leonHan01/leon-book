@@ -326,6 +326,7 @@ extension NativeAppModel {
         guard runtime.setEnabled(enabled, for: moduleID) else { return }
         firstPartyModuleRuntime = runtime
         NativeFirstPartyModules.save(runtime.state)
+        commandPreferences.updateRegistry(commandRegistry)
         if enabled {
             NativeFirstPartyModules.activate(moduleID, in: self)
         } else {

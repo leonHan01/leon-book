@@ -269,8 +269,8 @@ struct ArticleReaderView: View {
                     }
                 }
 
-                let embeddedImageURLs = document.imageURLs
-                let attachmentMedia = article.media.filter { !embeddedImageURLs.contains($0.url) }
+                let embeddedAttachmentURLs = document.embeddedAttachmentURLs
+                let attachmentMedia = article.media.filter { !embeddedAttachmentURLs.contains($0.url) }
                 if !attachmentMedia.isEmpty {
                     Divider()
                     Text("媒体").font(.headline)
@@ -1581,6 +1581,7 @@ final class NativeMarkdownArticleDocument {
     let blocks: [MarkdownArticleBlock]
     let outline: [MarkdownOutlineItem]
     let imageURLs: Set<String>
+    let embeddedAttachmentURLs: Set<String>
 
     private static let embeddedBlockExpression = try! NSRegularExpression(
         pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)|!\[\[([^\[\]\r\n]+)\]\]|(?s:```base[^\r\n]*\r?\n(.*?)\r?\n```)"#
@@ -1590,6 +1591,7 @@ final class NativeMarkdownArticleDocument {
         var parsedBlocks: [MarkdownArticleBlock] = []
         var parsedOutline: [MarkdownOutlineItem] = []
         var parsedImageURLs = Set<String>()
+        var parsedEmbeddedAttachmentURLs = Set<String>()
 
         func appendTextBlock(_ source: String, lineOffset: Int) {
             let parsed = NativeParsedMarkdownDocument(source: source, lineOffset: lineOffset)
@@ -1620,18 +1622,22 @@ final class NativeMarkdownArticleDocument {
                 parsedBlocks.append(.base(reference: reference))
             } else if extensionName == "pdf" {
                 parsedBlocks.append(.pdf(reference: target, title: title))
+                parsedEmbeddedAttachmentURLs.insert(target)
             } else if ["mp3", "m4a", "aac", "wav", "aif", "aiff", "caf", "flac"]
                 .contains(extensionName) {
                 parsedBlocks.append(.audio(reference: target, title: title))
+                parsedEmbeddedAttachmentURLs.insert(target)
             } else if ["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic", "tif", "tiff", "svg"]
                 .contains(extensionName) {
                 parsedBlocks.append(.image(url: target, alt: title))
                 parsedImageURLs.insert(target)
+                parsedEmbeddedAttachmentURLs.insert(target)
             } else if allowsTransclusion {
                 parsedBlocks.append(.transclusion(reference: reference))
             } else {
                 parsedBlocks.append(.image(url: target, alt: title))
                 parsedImageURLs.insert(target)
+                parsedEmbeddedAttachmentURLs.insert(target)
             }
         }
 
@@ -1695,6 +1701,7 @@ final class NativeMarkdownArticleDocument {
         blocks = parsedBlocks
         outline = parsedOutline
         imageURLs = parsedImageURLs
+        embeddedAttachmentURLs = parsedEmbeddedAttachmentURLs
     }
 }
 

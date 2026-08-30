@@ -233,6 +233,12 @@ enum ArticleKnowledgeComposer {
                   let fragment = block(in: body, identifier: id) else { continue }
             let preview = fragment
                 .replacingOccurrences(of: "\n", with: " ")
+                .replacingOccurrences(
+                    of: #"(?:^|\s)\^[A-Za-z0-9-]+(?=\s|$)"#,
+                    with: "",
+                    options: .regularExpression
+                )
+                .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             references.append(NativeArticleBlockReference(
                 id: id,

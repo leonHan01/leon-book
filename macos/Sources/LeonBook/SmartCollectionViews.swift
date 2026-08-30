@@ -192,6 +192,7 @@ struct SmartCollectionEmbedView: View {
     @State private var collection: NativeSmartCollection?
     @State private var articles: [NativeArticleSummary] = []
     @State private var errorMessage: String?
+    @Environment(\.nativeDeclarativeExtensions) private var declarativeExtensions
 
     private var columns: [NativeSmartCollectionColumn] {
         let visible = collection?.columns.filter { !$0.isHidden } ?? []
@@ -247,7 +248,8 @@ struct SmartCollectionEmbedView: View {
                             let value = NativeSmartCollectionFormulaEngine.value(
                                 for: column,
                                 article: article,
-                                collection: collection
+                                collection: collection,
+                                baseFunctions: declarativeExtensions.baseFunctions.map(\.function)
                             )
                             if column.source == .system,
                                NativeSmartCollectionSystemField(rawValue: column.key) == .title {
@@ -435,6 +437,7 @@ private struct SmartCollectionSummaryCell: View {
     let collection: NativeSmartCollection
     let column: NativeSmartCollectionColumn
     let articles: [NativeArticleSummary]
+    @Environment(\.nativeDeclarativeExtensions) private var declarativeExtensions
 
     var body: some View {
         if let summary = column.summary {
@@ -442,7 +445,8 @@ private struct SmartCollectionSummaryCell: View {
                 summary,
                 column: column,
                 articles: articles,
-                collection: collection
+                collection: collection,
+                baseFunctions: declarativeExtensions.baseFunctions.map(\.function)
             )
             VStack(alignment: .leading, spacing: 2) {
                 Text(summary.label).font(.caption2).foregroundStyle(.secondary)
@@ -461,6 +465,7 @@ private struct SmartCollectionCell: View {
     let collection: NativeSmartCollection
     let column: NativeSmartCollectionColumn
     let article: NativeArticleSummary
+    @Environment(\.nativeDeclarativeExtensions) private var declarativeExtensions
 
     var body: some View {
         if column.source == .property {
@@ -484,7 +489,8 @@ private struct SmartCollectionCell: View {
             let value = NativeSmartCollectionFormulaEngine.value(
                 for: column,
                 article: article,
-                collection: collection
+                collection: collection,
+                baseFunctions: declarativeExtensions.baseFunctions.map(\.function)
             )
             Text(value.displayText.isEmpty ? "—" : value.displayText)
                 .foregroundStyle(value.displayText.isEmpty ? .tertiary : .primary)
