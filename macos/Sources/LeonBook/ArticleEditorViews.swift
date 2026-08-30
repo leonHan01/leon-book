@@ -16,61 +16,6 @@ enum NativeBodyEditorAppearance {
 }
 
 @MainActor
-private final class ArticleLinkAutocompleteController: ObservableObject {
-    private weak var textView: NSTextView?
-    @Published private(set) var activeLinkQuery: String?
-
-    func attach(to textView: NSTextView) {
-        self.textView = textView
-    }
-
-    func completeSuggestion(_ article: NativeArticleSummary) {
-        guard let textView,
-              let context = linkContext(in: textView.string, selectedRange: textView.selectedRange()) else {
-            return
-        }
-
-        let replacement = "[[\(article.title)]]"
-        guard textView.shouldChangeText(in: context.range, replacementString: replacement) else { return }
-        textView.textStorage?.replaceCharacters(in: context.range, with: replacement)
-        let cursor = context.range.location + (replacement as NSString).length
-        textView.setSelectedRange(NSRange(location: cursor, length: 0))
-        textView.didChangeText()
-        activeLinkQuery = nil
-        textView.window?.makeFirstResponder(textView)
-    }
-
-    func dismissSuggestions() {
-        activeLinkQuery = nil
-    }
-
-    fileprivate func updateLinkQuery(from textView: NSTextView) {
-        activeLinkQuery = linkContext(in: textView.string, selectedRange: textView.selectedRange())?.query
-    }
-
-    private func linkContext(in text: String, selectedRange: NSRange) -> (range: NSRange, query: String)? {
-        guard selectedRange.length == 0 else { return nil }
-        let source = text as NSString
-        guard selectedRange.location <= source.length else { return nil }
-        let prefix = source.substring(to: selectedRange.location) as NSString
-        let opening = prefix.range(of: "[[", options: .backwards)
-        guard opening.location != NSNotFound else { return nil }
-
-        let queryRange = NSRange(
-            location: opening.location + opening.length,
-            length: selectedRange.location - opening.location - opening.length
-        )
-        let query = source.substring(with: queryRange)
-        guard !query.contains("["),
-              !query.contains("]"),
-              !query.contains(where: { $0.isNewline }) else {
-            return nil
-        }
-        return (NSRange(location: opening.location, length: selectedRange.location - opening.location), query)
-    }
-}
-
-@MainActor
 private final class EditorSlashCommandController: ObservableObject {
     private weak var textView: NSTextView?
     var onExecute: ((NativeCommandDefinition, NSRange) -> Void)?
@@ -663,6 +608,7 @@ struct ArticleEditorView: View {
     @State private var propertyRenameRequest: EditorPropertyRenameRequest?
     @State private var editorSidebarDragStart: Double?
     @State private var splitDragStart: Double?
+    @State private var blockLinkSuggestions: [EditorArticleLinkSuggestion] = []
 
     init(
         model: NativeAppModel,
@@ -753,6 +699,9 @@ struct ArticleEditorView: View {
         }
         .onChange(of: model.editor.body) { body in
             documentAnalysis.update(source: body)
+        }
+        .task(id: articleBlockSuggestionTaskID) {
+            await reloadBlockLinkSuggestions()
         }
         .onChange(of: model.editor.recoveryID) { _ in synchronizePropertyRows() }
         .onChange(of: model.editor.properties) { _ in synchronizePropertyRowsIfNeeded() }
@@ -1637,16 +1586,81 @@ struct ArticleEditorView: View {
         }
     }
 
-    private var articleLinkSuggestions: [NativeArticleSummary] {
+    private var articleLinkSuggestions: [EditorArticleLinkSuggestion] {
         guard let query = articleLinkController.activeLinkQuery else { return [] }
+        if EditorBlockLinkQuery(query) != nil { return blockLinkSuggestions }
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.articles.filter { article in
+        return model.articles.lazy.filter { article in
             normalized.isEmpty
                 || article.title.localizedCaseInsensitiveContains(normalized)
                 || article.slug.localizedCaseInsensitiveContains(normalized)
         }
         .prefix(8)
-        .map { $0 }
+        .map(EditorArticleLinkSuggestion.article)
+    }
+
+    private var articleBlockSuggestionTaskID: String {
+        let query = articleLinkController.activeLinkQuery ?? ""
+        let bodyHash = EditorBlockLinkQuery(query)?.target.isEmpty == true
+            ? model.editor.body.hashValue : 0
+        return "\(query)|\(bodyHash)|\(model.editor.recoveryID)"
+    }
+
+    @MainActor
+    private func reloadBlockLinkSuggestions() async {
+        guard let rawQuery = articleLinkController.activeLinkQuery,
+              let query = EditorBlockLinkQuery(rawQuery) else {
+            blockLinkSuggestions = []
+            return
+        }
+
+        let source: String
+        let targetTitle: String
+        if query.target.isEmpty
+            || (!model.editor.slug.isEmpty
+                && (query.target.caseInsensitiveCompare(model.editor.slug) == .orderedSame
+                    || query.target.caseInsensitiveCompare(model.editor.title) == .orderedSame)) {
+            source = model.editor.body
+            targetTitle = model.editor.title.isEmpty ? "当前笔记" : model.editor.title
+        } else if let summary = NativeArticleLink.resolve(query.target, in: model.articles),
+                  let article = try? await model.store.getArticle(slug: summary.slug) {
+            source = article.body
+            targetTitle = article.title
+        } else {
+            blockLinkSuggestions = []
+            return
+        }
+
+        guard articleLinkController.activeLinkQuery == rawQuery else { return }
+        let normalizedSearch = query.searchText.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+        )
+        blockLinkSuggestions = NativeArticleEmbed.blockReferences(in: source).lazy
+            .filter { block in
+                normalizedSearch.isEmpty
+                    || block.id.folding(
+                        options: [.caseInsensitive, .diacriticInsensitive],
+                        locale: .current
+                    ).contains(normalizedSearch)
+                    || block.preview.folding(
+                        options: [.caseInsensitive, .diacriticInsensitive],
+                        locale: .current
+                    ).contains(normalizedSearch)
+            }
+            .prefix(8)
+            .map { block in
+                let reference = query.target.isEmpty
+                    ? "#^\(block.id)"
+                    : "\(query.target)#^\(block.id)"
+                return EditorArticleLinkSuggestion(
+                    id: "block:\(query.target):\(block.id)",
+                    title: "^\(block.id)",
+                    detail: "\(targetTitle) · \(block.preview)",
+                    systemImage: "scope",
+                    reference: reference
+                )
+            }
     }
 
     private var slashCommandSuggestions: [NativeCommandDefinition] {
@@ -1740,8 +1754,8 @@ private struct EditorSlashCommandMenu: View {
 
 private struct ArticleLinkSuggestionMenu: View {
     let query: String
-    let articles: [NativeArticleSummary]
-    let onSelect: (NativeArticleSummary) -> Void
+    let articles: [EditorArticleLinkSuggestion]
+    let onSelect: (EditorArticleLinkSuggestion) -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -1770,14 +1784,15 @@ private struct ArticleLinkSuggestionMenu: View {
                     onSelect(article)
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "doc.text.fill")
+                        Image(systemName: article.systemImage)
                             .foregroundStyle(.tint)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(article.title)
                                 .font(.callout.weight(.medium))
-                            Text("\(article.category) · \(article.slug)")
+                            Text(article.detail)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(2)
                         }
                         Spacer()
                         Text("插入")

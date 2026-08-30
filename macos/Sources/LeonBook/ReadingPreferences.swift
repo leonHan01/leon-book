@@ -200,6 +200,15 @@ final class NativeReadingPreferences: ObservableObject {
         profile = NativeReadingProfile()
     }
 
+    func applyPortableProfile(_ imported: NativeReadingProfile, for userID: String) {
+        currentUserID = userID
+        isApplying = true
+        profile = imported.normalized
+        isApplying = false
+        archive.profilesByUser[userID] = profile
+        persistArchive()
+    }
+
     private func profileDidChange() {
         guard !isApplying else { return }
         let normalized = profile.normalized

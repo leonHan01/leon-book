@@ -2,6 +2,60 @@ import Combine
 import Foundation
 
 @MainActor
+final class NativeArticleSelectionCache {
+    private final class Entry {
+        let article: NativeArticle
+
+        init(article: NativeArticle) {
+            self.article = article
+        }
+    }
+
+    private let cache = NSCache<NSString, Entry>()
+
+    init(countLimit: Int = 24, totalCostLimit: Int = 32 * 1_024 * 1_024) {
+        cache.countLimit = countLimit
+        cache.totalCostLimit = totalCostLimit
+    }
+
+    func article(
+        matching summary: NativeArticleSummary,
+        workspaceGeneration: Int
+    ) -> NativeArticle? {
+        let key = cacheKey(slug: summary.slug, workspaceGeneration: workspaceGeneration)
+        guard let article = cache.object(forKey: key)?.article else { return nil }
+        guard article.updatedAt == summary.updatedAt,
+              article.pageViews == summary.pageViews else {
+            cache.removeObject(forKey: key)
+            return nil
+        }
+        return article
+    }
+
+    func insert(_ article: NativeArticle, workspaceGeneration: Int) {
+        let key = cacheKey(slug: article.slug, workspaceGeneration: workspaceGeneration)
+        if let cached = cache.object(forKey: key)?.article,
+           cached.updatedAt == article.updatedAt,
+           cached.pageViews == article.pageViews {
+            return
+        }
+        cache.setObject(
+            Entry(article: article),
+            forKey: key,
+            cost: article.body.utf8.count
+        )
+    }
+
+    func removeAll() {
+        cache.removeAllObjects()
+    }
+
+    private func cacheKey(slug: String, workspaceGeneration: Int) -> NSString {
+        "\(workspaceGeneration):\(slug)" as NSString
+    }
+}
+
+@MainActor
 final class NativeEditorSessionState: ObservableObject {
     @Published var draft: NativeEditorDraft
     @Published var bodySelection: NSRange
@@ -307,6 +361,10 @@ struct NativeArticleLibraryProjection: @unchecked Sendable {
         }
     }
 
+    func article(for slug: String) -> NativeArticleSummary? {
+        articleIndexBySlug[slug].map { articles[$0] }
+    }
+
     func pageViews(for slug: String) -> Int? {
         articleIndexBySlug[slug].map { articles[$0].pageViews }
     }
@@ -422,7 +480,7 @@ struct NativeArticleSourceConflict: Identifiable {
     var id: String { external.slug }
 }
 
-struct NativeArticleNavigationSnapshot: Codable {
+struct NativeArticleNavigationSnapshot: Codable, Sendable {
     let tabs: [NativeArticleTab]
     let activeTabID: UUID?
     let recentSlugs: [String]

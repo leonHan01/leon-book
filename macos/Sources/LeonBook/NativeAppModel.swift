@@ -33,13 +33,15 @@ public final class NativeAppModel: ObservableObject {
     var section: NativeSection {
         get { navigation.section }
         set {
-            if newValue != .reader, navigation.section != newValue {
+            guard navigation.section != newValue else { return }
+            if newValue != .reader {
                 articleNavigationGeneration += 1
             }
             navigation.section = newValue
         }
     }
     @Published var articles: [NativeArticleSummary] = []
+    @Published var workspaceResources: [NativeWorkspaceResourceNode] = []
     @Published var activity: [NativeActivityDay] = []
     @Published var moments: [NativeMoment] = [] {
         didSet { rebuildMomentTimelineProjection() }
@@ -55,7 +57,16 @@ public final class NativeAppModel: ObservableObject {
     @Published var questionAnswerDraft = NativeQuestionAnswerDraft()
     @Published var editingQuestionAnswerID: String?
     @Published var trashItems: [NativeTrashItem] = []
-    @Published var selectedArticle: NativeArticle?
+    @Published var selectedArticle: NativeArticle? {
+        didSet {
+            if let selectedArticle {
+                articleSelectionCache.insert(
+                    selectedArticle,
+                    workspaceGeneration: workspaceGeneration
+                )
+            }
+        }
+    }
     @Published var selectedArticleRelations = NativeArticleRelations.empty
     @Published var articleComments: [NativeArticleComment] = []
     @Published var pendingArticleCommentSelection: NativeArticleCommentSelection?
@@ -89,6 +100,7 @@ public final class NativeAppModel: ObservableObject {
     @Published var editingMomentID: String?
     @Published var selectedArticleTags: Set<String> = []
     @Published var selectedArticleFolderPath: String?
+    var pendingNewArticleFolderPath: String?
     @Published var selectedMomentTags: Set<String> = []
     @Published var momentDateFilter: NativeMomentDateFilter = .all
     @Published var showsOnlyFavoriteMoments = false
@@ -113,6 +125,12 @@ public final class NativeAppModel: ObservableObject {
     @Published var activeMarkdownWorkspaceMode = NativeMarkdownWorkspaceMode.copyImport
     @Published var markdownSourceDirectoryPath = LocalBlogStore.defaultRootURL
         .appendingPathComponent("articles", isDirectory: true).path
+    @Published var isPortableSidecarEnabled = false
+    @Published var isPortableSidecarWritable = true
+    @Published var isSynchronizingPortableSidecar = false
+    @Published var portableSidecarStatus = "未启用"
+    @Published var portableSidecarDirectoryPath = ""
+    @Published var portableSidecarRevision = UUID()
     @Published var backupDirectoryPath = LocalBlogStore.savedBackupDirectoryURL?.path ?? ""
     @Published var lastBackupPath = ""
     @Published var backupStatus = "尚未生成备份"
@@ -158,9 +176,12 @@ public final class NativeAppModel: ObservableObject {
     var editorAutosaveTask: Task<Void, Never>?
     var articleAncillaryLoadTask: Task<Void, Never>?
     var articlePostSaveTask: Task<Void, Never>?
+    var articleNavigationPersistenceTask: Task<Void, Never>?
+    var articleNavigationPersistenceDefaultsKey: String?
     var backupOverviewTask: Task<Void, Never>?
     var compatibilityExportTask: Task<Void, Never>?
     var workspaceAncillaryLoadTask: Task<Void, Never>?
+    let articleSelectionCache = NativeArticleSelectionCache()
     private var articleLibraryProjection = NativeArticleLibraryProjection()
     private var smartCollectionArticleProjection = NativeArticleLibraryProjection()
     private var projectionRebuilds = NativeProjectionRebuildCoordinator()
@@ -273,6 +294,7 @@ public final class NativeAppModel: ObservableObject {
         projectionRebuilds.invalidate(.articleLibrary)
         articleLibraryProjection = NativeArticleLibraryProjection()
         articlePageViewOverrides.removeAll(keepingCapacity: false)
+        articleSelectionCache.removeAll()
         articles = []
     }
 
@@ -482,6 +504,14 @@ public final class NativeAppModel: ObservableObject {
 
     var recentArticles: [NativeArticleSummary] {
         articleLibraryProjection.articles(for: recentArticleSlugs)
+    }
+
+    func articleSummary(for slug: String) -> NativeArticleSummary? {
+        articleLibraryProjection.article(for: slug)
+    }
+
+    func articleTabTitle(for tab: NativeArticleTab) -> String {
+        articleSummary(for: tab.slug)?.title ?? tab.slug
     }
 
     var currentArticleHistorySnapshot: NativeArticleRevisionSnapshot {
@@ -794,6 +824,7 @@ public final class NativeAppModel: ObservableObject {
         articleComments = []
         pendingArticleCommentSelection = nil
         editor = NativeEditorDraft()
+        pendingNewArticleFolderPath = nil
         editorBodySelection = NSRange(location: 0, length: 0)
         articleRevisions = []
         editorAutosaveStatus = "尚未自动保存"
@@ -801,6 +832,18 @@ public final class NativeAppModel: ObservableObject {
         editorOriginalArticle = nil
         section = .editor
         errorMessage = nil
+    }
+
+    func newArticle(inFolder folderPath: String) {
+        let previousRecoveryID = editor.recoveryID
+        newArticle()
+        guard editor.recoveryID != previousRecoveryID else { return }
+        let normalized = folderPath.replacingOccurrences(of: "\\", with: "/")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        pendingNewArticleFolderPath = normalized.isEmpty ? nil : normalized
+        editorAutosaveStatus = normalized.isEmpty
+            ? "将在资料库根目录保存"
+            : "将在“\(normalized)”文件夹保存"
     }
 
     func editSelected() {
@@ -828,6 +871,7 @@ public final class NativeAppModel: ObservableObject {
             status: article.status,
             updatedAt: article.updatedAt
         )
+        pendingNewArticleFolderPath = nil
         editorBodySelection = NSRange(location: 0, length: 0)
         pendingEditorMediaCleanup = []
         editorOriginalArticle = article
@@ -976,7 +1020,10 @@ public final class NativeAppModel: ObservableObject {
             tags: tags,
             title: title,
             expectedUpdatedAt: editor.updatedAt,
-            properties: editor.properties
+            properties: editor.properties,
+            sourceRelativePath: editor.isNew ? pendingNewArticleFolderPath.map {
+                "\($0)/\(slug).md"
+            } : nil
         )
 
         do {
@@ -996,6 +1043,7 @@ public final class NativeAppModel: ObservableObject {
             articleComments = []
             pendingArticleCommentSelection = nil
             editorOriginalArticle = saved
+            pendingNewArticleFolderPath = nil
             editorAutosaveTask?.cancel()
             editorAutosaveStatus = "已正式保存"
             discardUnreferencedMedia(cleanupCandidates)
@@ -1617,6 +1665,7 @@ public final class NativeAppModel: ObservableObject {
                 articleSlug: slug,
                 draftKey: recoveryID
             )
+            scheduleCompatibilityExportVerification(for: store)
             errorMessage = nil
         } catch {
             guard generation == workspaceGeneration else { return }

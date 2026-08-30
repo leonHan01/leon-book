@@ -19,10 +19,13 @@ enum MarkdownOutline {
 
 struct NativeParsedMarkdownDocument {
     let blocks: [MarkdownBlock]
+    let blockAnchorIDs: [String?]
     let outline: [MarkdownOutlineItem]
 
     init(source: String, lineOffset: Int = 0) {
-        blocks = MarkdownParser.parse(source, lineOffset: lineOffset)
+        let parsed = MarkdownParser.parse(source, lineOffset: lineOffset)
+        blocks = parsed.blocks
+        blockAnchorIDs = parsed.blockAnchorIDs
         var headings: [MarkdownOutlineItem] = []
         for block in blocks {
             guard case let .heading(level, title) = block else { continue }
@@ -43,6 +46,7 @@ struct MarkdownDocumentView: View {
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
     let onToggleTask: ((Int, Bool) -> Void)?
     let headingIDs: [String]
+    let blockAnchorIDs: [String?]
     let lineOffset: Int
     @Environment(\.nativeReadingTypography) private var typography
 
@@ -52,13 +56,16 @@ struct MarkdownDocumentView: View {
         onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void,
         onToggleTask: ((Int, Bool) -> Void)? = nil,
         headingIDs: [String] = [],
+        blockAnchorIDs: [String?]? = nil,
         lineOffset: Int = 0
     ) {
-        blocks = MarkdownParser.parse(markdown, lineOffset: lineOffset)
+        let parsed = MarkdownParser.parse(markdown, lineOffset: lineOffset)
+        blocks = parsed.blocks
         self.articleLinks = articleLinks
         self.onOpenArticle = onOpenArticle
         self.onToggleTask = onToggleTask
         self.headingIDs = headingIDs
+        self.blockAnchorIDs = blockAnchorIDs ?? parsed.blockAnchorIDs
         self.lineOffset = lineOffset
     }
 
@@ -68,6 +75,7 @@ struct MarkdownDocumentView: View {
         onOpenArticle: @escaping (NativeArticleLinkDestination) -> Void,
         onToggleTask: ((Int, Bool) -> Void)? = nil,
         headingIDs: [String] = [],
+        blockAnchorIDs: [String?] = [],
         lineOffset: Int = 0
     ) {
         self.blocks = blocks
@@ -75,28 +83,38 @@ struct MarkdownDocumentView: View {
         self.onOpenArticle = onOpenArticle
         self.onToggleTask = onToggleTask
         self.headingIDs = headingIDs
+        self.blockAnchorIDs = blockAnchorIDs
         self.lineOffset = lineOffset
     }
 
-    private var anchoredBlocks: [(block: MarkdownBlock, headingID: String?)] {
+    private var anchoredBlocks: [(block: MarkdownBlock, headingID: String?, blockAnchorID: String?)] {
         var nextHeadingIndex = 0
-        return blocks.map { block in
-            guard case .heading = block else { return (block, nil) }
+        return blocks.enumerated().map { index, block in
+            let blockAnchorID = index < blockAnchorIDs.count ? blockAnchorIDs[index] : nil
+            guard case .heading = block else { return (block, nil, blockAnchorID) }
             defer { nextHeadingIndex += 1 }
             let headingID = nextHeadingIndex < headingIDs.count ? headingIDs[nextHeadingIndex] : nil
-            return (block, headingID)
+            return (block, headingID, blockAnchorID)
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: typography.paragraphSpacing) {
             ForEach(Array(anchoredBlocks.enumerated()), id: \.offset) { _, anchoredBlock in
-                if let headingID = anchoredBlock.headingID {
-                    markdownBlockView(anchoredBlock.block)
-                        .id(headingID)
-                } else {
-                    markdownBlockView(anchoredBlock.block)
+                VStack(alignment: .leading, spacing: 0) {
+                    if let blockAnchorID = anchoredBlock.blockAnchorID {
+                        Color.clear
+                            .frame(width: 1, height: 0)
+                            .id(blockAnchorID)
+                    }
+                    if let headingID = anchoredBlock.headingID {
+                        markdownBlockView(anchoredBlock.block)
+                            .id(headingID)
+                    } else {
+                        markdownBlockView(anchoredBlock.block)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -250,6 +268,19 @@ enum MarkdownWebEmbedParser {
     }
 }
 
+enum MarkdownMathSource {
+    private static let inlineExpression = try! NSRegularExpression(
+        pattern: #"(?<!\\)\$(?!\$)(?:\\.|[^$\r\n])+(?<!\\)\$"#
+    )
+
+    static func containsInlineExpression(in source: String) -> Bool {
+        inlineExpression.firstMatch(
+            in: source,
+            range: NSRange(source.startIndex..., in: source)
+        ) != nil
+    }
+}
+
 enum MarkdownBlock {
     case heading(level: Int, text: String)
     case paragraph(String)
@@ -257,6 +288,8 @@ enum MarkdownBlock {
     case blockQuote(String)
     case callout(MarkdownCallout)
     case codeBlock(language: String?, code: String)
+    case math(source: String, display: Bool)
+    case mermaid(String)
     case htmlComponent(MarkdownHTMLComponent)
     case webEmbed(MarkdownWebEmbed)
     case thematicBreak
@@ -270,6 +303,7 @@ struct MarkdownListItem {
     let text: String
     let taskState: Bool?
     let sourceLine: Int
+    let blockID: String?
 }
 
 struct MarkdownCallout {
@@ -337,10 +371,14 @@ private struct MarkdownBlockView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case let .paragraph(text):
-            inlineMarkdownText(text, articleLinks: articleLinks)
-                .font(typography.bodyFont.swiftUIFont(size: typography.fontSize))
-                .lineSpacing(typography.lineSpacing)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if MarkdownMathSource.containsInlineExpression(in: text) {
+                MarkdownMathView(source: text, display: false)
+            } else {
+                inlineMarkdownText(text, articleLinks: articleLinks)
+                    .font(typography.bodyFont.swiftUIFont(size: typography.fontSize))
+                    .lineSpacing(typography.lineSpacing)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
         case let .list(items):
             MarkdownListView(
@@ -394,6 +432,12 @@ private struct MarkdownBlockView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.secondary.opacity(0.2))
             }
+
+        case let .math(source, display):
+            MarkdownMathView(source: source, display: display)
+
+        case let .mermaid(source):
+            MarkdownMermaidView(source: source)
 
         case let .htmlComponent(component):
             MarkdownHTMLComponentView(component: component)
@@ -560,6 +604,8 @@ private struct MarkdownListView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.leading, CGFloat(item.depth) * 22)
+                .id(item.blockID.map(NativeArticleBlockReference.scrollAnchorID(for:))
+                    ?? "markdown-list-item-\(item.sourceLine)")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -627,12 +673,23 @@ private struct MarkdownTableView: View {
     }
 }
 
+private struct MarkdownParseResult {
+    var blocks: [MarkdownBlock]
+    var blockAnchorIDs: [String?]
+}
+
 private enum MarkdownParser {
-    static func parse(_ source: String, lineOffset: Int = 0) -> [MarkdownBlock] {
+    static func parse(_ source: String, lineOffset: Int = 0) -> MarkdownParseResult {
         let extracted = extractFootnotes(from: source.components(separatedBy: .newlines))
         let lines = extracted.lines
         var blocks: [MarkdownBlock] = []
+        var blockAnchorIDs: [String?] = []
         var index = 0
+
+        func append(_ block: MarkdownBlock, blockID: String? = nil) {
+            blocks.append(block)
+            blockAnchorIDs.append(blockID.map(NativeArticleBlockReference.scrollAnchorID(for:)))
+        }
 
         while index < lines.count {
             if lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
@@ -640,8 +697,23 @@ private enum MarkdownParser {
                 continue
             }
 
+            if let blockID = standaloneBlockID(in: lines[index]) {
+                if !blockAnchorIDs.isEmpty {
+                    blockAnchorIDs[blockAnchorIDs.count - 1] =
+                        NativeArticleBlockReference.scrollAnchorID(for: blockID)
+                }
+                index += 1
+                continue
+            }
+
+            if let result = consumeMathBlock(lines, from: index) {
+                append(.math(source: result.source, display: true))
+                index = result.nextIndex
+                continue
+            }
+
             if let result = MarkdownWebEmbedParser.block(in: lines, from: index) {
-                blocks.append(.webEmbed(result.embed))
+                append(.webEmbed(result.embed))
                 index = result.nextIndex
                 continue
             }
@@ -652,12 +724,16 @@ private enum MarkdownParser {
                     result.code,
                     infoString: fence.language
                 ) {
-                    blocks.append(.htmlComponent(component))
-                } else if fence.language?.lowercased() == "embed",
+                    append(.htmlComponent(component))
+                } else if normalizedFenceLanguage(fence.language) == "embed",
                    let embed = MarkdownWebEmbedParser.fromFence(result.code) {
-                    blocks.append(.webEmbed(embed))
+                    append(.webEmbed(embed))
+                } else if normalizedFenceLanguage(fence.language) == "mermaid" {
+                    append(.mermaid(result.code))
+                } else if ["math", "latex", "tex"].contains(normalizedFenceLanguage(fence.language)) {
+                    append(.math(source: result.code, display: true))
                 } else {
-                    blocks.append(.codeBlock(language: fence.language, code: result.code))
+                    append(.codeBlock(language: fence.language, code: result.code))
                 }
                 index = result.nextIndex
                 continue
@@ -665,13 +741,14 @@ private enum MarkdownParser {
 
             if isIndentedCodeLine(lines[index]) {
                 let result = consumeIndentedCode(lines, from: index)
-                blocks.append(.codeBlock(language: nil, code: result.code))
+                append(.codeBlock(language: nil, code: result.code))
                 index = result.nextIndex
                 continue
             }
 
             if let heading = atxHeading(in: lines[index]) {
-                blocks.append(.heading(level: heading.level, text: heading.text))
+                let anchored = trailingBlockID(in: heading.text)
+                append(.heading(level: heading.level, text: anchored.text), blockID: anchored.id)
                 index += 1
                 continue
             }
@@ -679,13 +756,16 @@ private enum MarkdownParser {
             if index + 1 < lines.count,
                !lines[index].trimmingCharacters(in: .whitespaces).isEmpty,
                let level = setextHeadingLevel(in: lines[index + 1]) {
-                blocks.append(.heading(level: level, text: lines[index].trimmingCharacters(in: .whitespaces)))
+                let anchored = trailingBlockID(
+                    in: lines[index].trimmingCharacters(in: .whitespaces)
+                )
+                append(.heading(level: level, text: anchored.text), blockID: anchored.id)
                 index += 2
                 continue
             }
 
             if isThematicBreak(lines[index]) {
-                blocks.append(.thematicBreak)
+                append(.thematicBreak)
                 index += 1
                 continue
             }
@@ -693,9 +773,9 @@ private enum MarkdownParser {
             if isBlockQuote(lines[index]) {
                 let result = consumeBlockQuote(lines, from: index)
                 if let callout = MarkdownCallout.parse(result.source) {
-                    blocks.append(.callout(callout))
+                    append(.callout(callout))
                 } else {
-                    blocks.append(.blockQuote(result.source))
+                    append(.blockQuote(result.source))
                 }
                 index = result.nextIndex
                 continue
@@ -703,27 +783,28 @@ private enum MarkdownParser {
 
             if listItem(in: lines[index], sourceLine: lineOffset + index) != nil {
                 let result = consumeList(lines, from: index, lineOffset: lineOffset)
-                blocks.append(.list(result.items))
+                append(.list(result.items))
                 index = result.nextIndex
                 continue
             }
 
             if let table = table(at: index, in: lines) {
-                blocks.append(table.block)
+                append(table.block)
                 index = table.nextIndex
                 continue
             }
 
             let result = consumeParagraph(lines, from: index)
             if !result.text.isEmpty {
-                blocks.append(.paragraph(result.text))
+                let anchored = trailingBlockID(in: result.text)
+                append(.paragraph(anchored.text), blockID: anchored.id)
             }
             index = result.nextIndex
         }
 
-        if !extracted.notes.isEmpty { blocks.append(.footnotes(extracted.notes)) }
+        if !extracted.notes.isEmpty { append(.footnotes(extracted.notes)) }
 
-        return blocks
+        return MarkdownParseResult(blocks: blocks, blockAnchorIDs: blockAnchorIDs)
     }
 
     private static func extractFootnotes(
@@ -743,6 +824,67 @@ private enum MarkdownParser {
             lines[index] = ""
         }
         return (lines, notes)
+    }
+
+    private static func normalizedFenceLanguage(_ language: String?) -> String {
+        language?
+            .split(whereSeparator: { $0.isWhitespace })
+            .first
+            .map { String($0).lowercased() } ?? ""
+    }
+
+    private static func standaloneBlockID(in line: String) -> String? {
+        let expression = try! NSRegularExpression(pattern: #"^\s*\^([A-Za-z0-9-]+)\s*$"#)
+        guard let match = expression.firstMatch(
+            in: line,
+            range: NSRange(line.startIndex..., in: line)
+        ), let idRange = Range(match.range(at: 1), in: line) else { return nil }
+        return String(line[idRange])
+    }
+
+    private static func trailingBlockID(in source: String) -> (text: String, id: String?) {
+        let expression = try! NSRegularExpression(
+            pattern: #"(?:^|\s)\^([A-Za-z0-9-]+)\s*$"#
+        )
+        guard let match = expression.firstMatch(
+            in: source,
+            range: NSRange(source.startIndex..., in: source)
+        ), let idRange = Range(match.range(at: 1), in: source) else {
+            return (source, nil)
+        }
+        let cleaned = (source as NSString)
+            .replacingCharacters(in: match.range, with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (cleaned, String(source[idRange]))
+    }
+
+    private static func consumeMathBlock(
+        _ lines: [String],
+        from start: Int
+    ) -> (source: String, nextIndex: Int)? {
+        let opening = lines[start].trimmingCharacters(in: .whitespaces)
+        guard opening.hasPrefix("$$") else { return nil }
+        var first = String(opening.dropFirst(2))
+        if first.hasSuffix("$$") {
+            first.removeLast(2)
+            return (first.trimmingCharacters(in: .whitespaces), start + 1)
+        }
+
+        var source: [String] = []
+        if !first.isEmpty { source.append(first) }
+        var index = start + 1
+        while index < lines.count {
+            let candidate = lines[index]
+            let trimmed = candidate.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasSuffix("$$") {
+                let closing = String(trimmed.dropLast(2))
+                if !closing.isEmpty { source.append(closing) }
+                return (source.joined(separator: "\n"), index + 1)
+            }
+            source.append(candidate)
+            index += 1
+        }
+        return (source.joined(separator: "\n"), index)
     }
 
     private static func atxHeading(in line: String) -> (level: Int, text: String)? {
@@ -872,12 +1014,14 @@ private enum MarkdownParser {
             text.removeFirst(3)
             if text.first == " " { text.removeFirst() }
         }
+        let anchored = trailingBlockID(in: text)
         return MarkdownListItem(
             depth: indentation / 2,
             marker: marker,
-            text: text,
+            text: anchored.text,
             taskState: taskState,
-            sourceLine: sourceLine
+            sourceLine: sourceLine,
+            blockID: anchored.id
         )
     }
 
@@ -913,7 +1057,8 @@ private enum MarkdownParser {
                 marker: last.marker,
                 text: "\(last.text)\n\(continuation)",
                 taskState: last.taskState,
-                sourceLine: last.sourceLine
+                sourceLine: last.sourceLine,
+                blockID: last.blockID
             ))
             index += 1
         }
@@ -970,7 +1115,9 @@ private enum MarkdownParser {
     }
 
     private static func beginsBlock(at index: Int, in lines: [String]) -> Bool {
-        fencedCodeOpening(in: lines[index]) != nil ||
+        consumeMathBlock(lines, from: index) != nil ||
+            standaloneBlockID(in: lines[index]) != nil ||
+            fencedCodeOpening(in: lines[index]) != nil ||
             isIndentedCodeLine(lines[index]) ||
             atxHeading(in: lines[index]) != nil ||
             isThematicBreak(lines[index]) ||

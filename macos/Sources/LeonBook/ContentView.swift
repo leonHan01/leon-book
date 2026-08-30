@@ -82,12 +82,69 @@ public struct ContentView: View {
         .task {
             workspaceLayout.prepare(for: model.currentUser.id)
             readingPreferences.prepare(for: model.currentUser.id)
+            loadPortableUIState(for: model.currentUser.id)
         }
         .onChange(of: model.currentUser.id) { userID in
             workspaceLayout.prepare(for: userID)
             readingPreferences.prepare(for: userID)
+            loadPortableUIState(for: userID)
+        }
+        .onChange(of: model.portableSidecarRevision) { _ in
+            loadPortableUIState(for: model.currentUser.id)
+        }
+        .onChange(of: workspaceLayout.profiles) { _ in
+            persistPortableUIState(for: model.currentUser.id)
+        }
+        .onChange(of: workspaceLayout.activeLayoutID) { _ in
+            persistPortableUIState(for: model.currentUser.id)
+        }
+        .onChange(of: readingPreferences.profile) { _ in
+            persistPortableUIState(for: model.currentUser.id)
         }
         .onOpenURL(perform: model.handleAutomationURL)
+    }
+
+    private func loadPortableUIState(for userID: String) {
+        guard model.isPortableSidecarEnabled else { return }
+        let activeStore = model.store
+        Task {
+            do {
+                if let state = try await activeStore.readPortableUIState() {
+                    guard model.currentUser.id == userID else { return }
+                    workspaceLayout.applyPortableState(state.workspaceLayouts, for: userID)
+                    readingPreferences.applyPortableProfile(state.readingProfile, for: userID)
+                } else if model.isPortableSidecarWritable {
+                    let state = portableUIState(for: userID)
+                    try await activeStore.writePortableUIState(state)
+                }
+            } catch {
+                guard model.currentUser.id == userID else { return }
+                model.errorMessage = ".leonbook 布局同步失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func persistPortableUIState(for userID: String) {
+        guard model.isPortableSidecarEnabled,
+              model.isPortableSidecarWritable,
+              model.currentUser.id == userID else { return }
+        let state = portableUIState(for: userID)
+        let activeStore = model.store
+        Task {
+            do {
+                try await activeStore.writePortableUIState(state)
+            } catch {
+                guard model.currentUser.id == userID else { return }
+                model.errorMessage = ".leonbook 布局写入失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func portableUIState(for userID: String) -> NativePortableUIState {
+        NativePortableUIState(
+            workspaceLayouts: workspaceLayout.portableState(for: userID),
+            readingProfile: readingPreferences.profile
+        )
     }
 }
 
@@ -155,11 +212,12 @@ private struct NativeSidebar: View {
     @ObservedObject var navigation: NativeNavigationState
     @Binding var isPresentingNewUser: Bool
     @State private var smartCollectionEditorRequest: SmartCollectionEditorRequest?
+    @State private var expandedWorkspaceFolderIDs = Set<String>()
+    @State private var selectedWorkspaceResourceIDs = Set<String>()
 
     var body: some View {
-        let articleFolderFilters = model.availableArticleFolderFilters
-
-        List {
+        ScrollViewReader { proxy in
+            List {
             Section("用户") {
                 Menu {
                     ForEach(model.users) { user in
@@ -203,29 +261,11 @@ private struct NativeSidebar: View {
                 sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
             }
 
-            if !articleFolderFilters.isEmpty {
-                Section("文件夹") {
-                    ForEach(articleFolderFilters) { folder in
-                        Button {
-                            model.showArticleFolder(folder.path)
-                        } label: {
-                            HStack(spacing: 7) {
-                                Image(systemName: "folder")
-                                Text(folder.name).lineLimit(1)
-                                Spacer()
-                                Text("\(folder.count)").foregroundStyle(.secondary)
-                            }
-                            .padding(.leading, CGFloat(folder.depth) * 14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(SidebarNavigationButtonStyle(
-                            isSelected: navigation.section == .articles
-                                && model.selectedArticleFolderPath == folder.path
-                        ))
-                    }
-                }
-            }
+                NativeWorkspaceResourceSection(
+                    model: model,
+                    expandedFolderIDs: $expandedWorkspaceFolderIDs,
+                    selectedResourceIDs: $selectedWorkspaceResourceIDs
+                )
 
             Section("智能集合") {
                 ForEach(model.smartCollections) { collection in
@@ -294,11 +334,33 @@ private struct NativeSidebar: View {
             Section {
                 sidebarButton(.settings, title: "设置", icon: "gearshape")
             }
+            }
+            .listStyle(.sidebar)
+            .frame(minWidth: 210)
+            .onChange(of: model.selectedSlug) { slug in
+                revealSelectedArticle(slug, proxy: proxy)
+            }
+            .onChange(of: model.workspaceResources) { _ in
+                let liveIDs = Set(model.workspaceResourceItems.map(\.id))
+                selectedWorkspaceResourceIDs.formIntersection(liveIDs)
+                revealSelectedArticle(model.selectedSlug, proxy: proxy)
+            }
+            .sheet(item: $smartCollectionEditorRequest) { request in
+                SmartCollectionEditorSheet(model: model, collection: request.collection)
+            }
         }
-        .listStyle(.sidebar)
-        .frame(minWidth: 210)
-        .sheet(item: $smartCollectionEditorRequest) { request in
-            SmartCollectionEditorSheet(model: model, collection: request.collection)
+    }
+
+    private func revealSelectedArticle(_ slug: String?, proxy: ScrollViewProxy) {
+        guard let slug, let resourceID = model.workspaceResourceID(articleSlug: slug) else { return }
+        expandedWorkspaceFolderIDs.formUnion(
+            model.workspaceResourceAncestorIDs(resourceID: resourceID)
+        )
+        selectedWorkspaceResourceIDs = [resourceID]
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(resourceID, anchor: .center)
+            }
         }
     }
 
@@ -338,7 +400,7 @@ private struct NativeSidebar: View {
     }
 }
 
-private struct SidebarNavigationButtonStyle: ButtonStyle {
+struct SidebarNavigationButtonStyle: ButtonStyle {
     let isSelected: Bool
 
     func makeBody(configuration: Configuration) -> some View {

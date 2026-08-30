@@ -25,6 +25,7 @@
 - 主导航只挂载当前页面，以轻量状态缓存代替预热并常驻完整视图树
 - 搜索、知识图谱、发布、备份和采集是独立 SwiftPM 第一方模块，可在“设置 → 第一方模块”中分别启停；命令、事件和权限统一通过 ModuleKit
 - 可将普通 Markdown 文件夹或 Obsidian Vault 作为工作区，选择“复制导入 / 只读挂载 / 直接编辑”，并持续监听挂载目录
+- 可选将评论、版本历史、收藏、任务布局和阅读偏好写入 Vault 内版本化的 `.leonbook/` sidecar，配合 iCloud Drive、Dropbox、Syncthing 等整目录文件同步在设备间合并
 - 在文章正文中直接内嵌远程 HTTP(S) 网页
 - 本地保存草稿，支持多用户独立工作空间
 - 管理图片和视频素材
@@ -74,7 +75,7 @@ macos/dist/leon-book.app
 └── workspaces/
     └── <user-id>/      # 每位用户独立的工作空间
         ├── leon-book.sqlite # 文章、动态和活动记录数据库
-        ├── articles/   # 文章 JSON、Markdown 和索引
+        ├── articles/   # 文章 JSON、Markdown 和索引；可含可选 .leonbook/ sidecar
         ├── drafts/     # 草稿恢复副本
         ├── media/      # 图片和视频原文件
         ├── moments/    # 动态数据和时间线索引
@@ -102,13 +103,30 @@ LEON_BOOK_WORKDIR=/Volumes/T7Shield/myblog ./scripts/leonblog open
 
 备份路径不能放在数据目录内部，否则应用会拒绝保存设置以避免递归复制。备份文件保持本地明文格式；如内容敏感，请把备份目录放在启用 FileVault 的 APFS 磁盘、加密移动硬盘或受控权限的目录中。应用不会自动上传备份到云端。
 
-文章 Markdown（含 YAML Properties）和 `media/` 下的普通媒体文件是资料库的权威数据源；SQLite 保存可由这些文件重新扫描得到的文章索引，并继续承载评论、版本、收藏等非文章结构化数据。首次启动时，已有 JSON 数据会自动迁移；之后通过 macOS FSEvents 合并处理 Markdown 的新增、修改、移动和删除，只读取变更路径，并每 15 分钟执行一次低频完整校验。
+文章 Markdown（含 YAML Properties）和 `media/` 下的普通媒体文件是资料库的权威数据源；SQLite 保存可由这些文件重新扫描得到的文章索引，并承载本机正在使用的评论、版本、收藏等结构化数据。启用可移植 sidecar 后，这些不可重建状态会同时写入 Markdown 根目录的 `.leonbook/`，新设备导入后仍以 SQLite 提供本地查询。首次启动时，已有 JSON 数据会自动迁移；之后通过 macOS FSEvents 合并处理 Markdown 与 sidecar 的新增、修改、移动和删除，并每 15 分钟执行一次低频完整校验。
 
 在“设置 → Markdown 工作区 / Obsidian Vault”中有三种方式：
 
 - **复制导入**：只读取所选目录，把确认后的文章和附件复制到当前用户工作空间；之后与原目录互不影响，已有相同 slug 的文章会被跳过。
 - **只读挂载**：直接把普通目录或 Vault 作为 Markdown 权威数据源并持续监听；LeonBook 可以阅读、搜索和建立关系索引，但统一阻止保存、移动、删除、重构及批量属性写入。
-- **直接编辑**：与只读挂载使用相同的目录监听和索引机制，但允许 LeonBook 通过原子写入直接更新原 Markdown。SQLite、评论、版本、收藏、布局与应用媒体仍留在 LeonBook 用户工作空间。
+- **直接编辑**：与只读挂载使用相同的目录监听和索引机制，但允许 LeonBook 通过原子写入直接更新原 Markdown。SQLite 与应用媒体仍留在 LeonBook 用户工作空间；可选择把评论、版本、收藏和布局额外写入挂载目录的 `.leonbook/`。
+
+### 可移植 `.leonbook/` sidecar
+
+在“设置 → Markdown 工作区 / Obsidian Vault”中按当前 Markdown 根目录单独启用。LeonBook 会维护以下普通 JSON 文件：
+
+```text
+.leonbook/
+├── manifest.json   # 格式版本和文件清单
+├── comments.json   # 评论、回复及删除墓碑
+├── history.json    # 使用跨设备同步 ID 的版本历史
+├── bookmarks.json  # 收藏及删除墓碑
+└── layouts.json    # 任务布局和阅读偏好
+```
+
+sidecar 是 SQLite 之外的可移植事实记录：导入时按稳定 ID 合并，删除通过墓碑传播，历史记录按同步 ID 去重；SQLite 继续作为每台设备上的快速本地索引。LeonBook 监听这些文件，因此文件同步工具完成下载后会自动导入；本机变更会原子写回。只读挂载可以导入已有 sidecar，但不会创建或修改它。停用功能不会删除目录。
+
+此阶段不绑定任何云厂商，也不上传账号数据：iCloud Drive、Dropbox、Syncthing 等只负责同步整个 Markdown 目录。sidecar 是明文 JSON，不具备 Obsidian Sync 一类的端到端加密、远端版本历史或冲突副本管理能力；敏感资料应使用加密磁盘或可信的加密同步层。应用管理的 `media/` 仍需随 LeonBook 工作区单独同步或备份。
 
 智能集合以标准 Obsidian `.base` YAML 保存，可直接导入不含 LeonBook 私有字段的 Base；支持递归 `and/or/not`、全局与 view 级筛选、公式、汇总和多个命名视图。LeonBook 写回已识别配置时会保留未知的顶层、Property 和 view 字段；SQLite 中的集合记录只是 `.base` 的可重建缓存。
 

@@ -144,7 +144,7 @@ struct ArticleReaderView: View {
                     )
                     .foregroundStyle(article.status == .published ? .green : .orange)
                     Spacer()
-                    if let summary = model.articles.first(where: { $0.slug == article.slug }) {
+                    if let summary = model.articleSummary(for: article.slug) {
                         Button {
                             model.toggleArticleBookmark(summary)
                         } label: {
@@ -349,11 +349,11 @@ private struct ArticleTabBar: View {
             Divider().frame(height: 22)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                LazyHStack(spacing: 6) {
                     ForEach(model.articleTabs) { tab in
                         ArticleTabItem(
                             tab: tab,
-                            title: model.articles.first(where: { $0.slug == tab.slug })?.title ?? tab.slug,
+                            title: model.articleTabTitle(for: tab),
                             isActive: tab.id == model.activeArticleTabID,
                             onActivate: { model.activateArticleTab(tab.id) },
                             onTogglePin: { model.toggleArticleTabPin(tab.id) },
@@ -1565,9 +1565,16 @@ private struct ArticleRevisionCodeColumn: View {
 
 enum MarkdownArticleBlock {
     case image(url: String, alt: String)
+    case pdf(reference: String, title: String)
+    case audio(reference: String, title: String)
     case base(reference: String)
     case transclusion(reference: String)
-    case text(blocks: [MarkdownBlock], headingIDs: [String], lineOffset: Int)
+    case text(
+        blocks: [MarkdownBlock],
+        headingIDs: [String],
+        blockAnchorIDs: [String?],
+        lineOffset: Int
+    )
 }
 
 final class NativeMarkdownArticleDocument {
@@ -1598,8 +1605,34 @@ final class NativeMarkdownArticleDocument {
             parsedBlocks.append(.text(
                 blocks: parsed.blocks,
                 headingIDs: headingIDs,
+                blockAnchorIDs: parsed.blockAnchorIDs,
                 lineOffset: lineOffset
             ))
+        }
+
+        func appendEmbeddedFile(reference: String, alt: String, allowsTransclusion: Bool) {
+            let target = NativeArticleLink.Reference(rawValue: reference).target
+            let extensionName = URL(fileURLWithPath: target).pathExtension.lowercased()
+            let title = alt.isEmpty
+                ? URL(fileURLWithPath: target).deletingPathExtension().lastPathComponent
+                : alt
+            if extensionName == "base" {
+                parsedBlocks.append(.base(reference: reference))
+            } else if extensionName == "pdf" {
+                parsedBlocks.append(.pdf(reference: target, title: title))
+            } else if ["mp3", "m4a", "aac", "wav", "aif", "aiff", "caf", "flac"]
+                .contains(extensionName) {
+                parsedBlocks.append(.audio(reference: target, title: title))
+            } else if ["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic", "tif", "tiff", "svg"]
+                .contains(extensionName) {
+                parsedBlocks.append(.image(url: target, alt: title))
+                parsedImageURLs.insert(target)
+            } else if allowsTransclusion {
+                parsedBlocks.append(.transclusion(reference: reference))
+            } else {
+                parsedBlocks.append(.image(url: target, alt: title))
+                parsedImageURLs.insert(target)
+            }
         }
 
         let searchRange = NSRange(markdown.startIndex..., in: markdown)
@@ -1635,25 +1668,15 @@ final class NativeMarkdownArticleDocument {
                     ))
                 } else if let referenceRange = Range(match.range(at: 3), in: markdown) {
                     let reference = String(markdown[referenceRange])
-                    let target = NativeArticleLink.Reference(rawValue: reference).target
-                    let extensionName = URL(fileURLWithPath: target).pathExtension.lowercased()
-                    if extensionName == "base" {
-                        parsedBlocks.append(.base(reference: reference))
-                    } else if ["png", "jpg", "jpeg", "gif", "bmp", "webp", "heic", "tif", "tiff", "svg"]
-                        .contains(extensionName) {
-                        parsedBlocks.append(.image(
-                            url: target,
-                            alt: URL(fileURLWithPath: target).deletingPathExtension().lastPathComponent
-                        ))
-                        parsedImageURLs.insert(target)
-                    } else {
-                        parsedBlocks.append(.transclusion(reference: reference))
-                    }
+                    appendEmbeddedFile(reference: reference, alt: "", allowsTransclusion: true)
                 } else if let altRange = Range(match.range(at: 1), in: markdown),
                           let urlRange = Range(match.range(at: 2), in: markdown) {
                     let url = String(markdown[urlRange])
-                    parsedBlocks.append(.image(url: url, alt: String(markdown[altRange])))
-                    parsedImageURLs.insert(url)
+                    appendEmbeddedFile(
+                        reference: url,
+                        alt: String(markdown[altRange]),
+                        allowsTransclusion: false
+                    )
                 }
 
                 cursorLineOffset += rawText.filter { $0 == "\n" }.count
@@ -1784,6 +1807,20 @@ struct MarkdownArticleBody: View {
                         store: store,
                         sourceRelativePath: sourceRelativePath
                     )
+                case let .pdf(reference, title):
+                    NativePDFEmbedView(
+                        reference: reference,
+                        title: title,
+                        store: store,
+                        sourceRelativePath: sourceRelativePath
+                    )
+                case let .audio(reference, title):
+                    NativeAudioEmbedView(
+                        reference: reference,
+                        title: title,
+                        store: store,
+                        sourceRelativePath: sourceRelativePath
+                    )
                 case let .base(reference):
                     SmartCollectionEmbedView(
                         reference: reference,
@@ -1798,13 +1835,14 @@ struct MarkdownArticleBody: View {
                         embeddedSlugs: embeddedSlugs,
                         onOpenArticle: onOpenArticle
                     )
-                case let .text(blocks, headingIDs, lineOffset):
+                case let .text(blocks, headingIDs, blockAnchorIDs, lineOffset):
                     MarkdownDocumentView(
                         blocks: blocks,
                         articleLinks: articleLinks,
                         onOpenArticle: onOpenArticle,
                         onToggleTask: onToggleTask,
                         headingIDs: headingIDs,
+                        blockAnchorIDs: blockAnchorIDs,
                         lineOffset: lineOffset
                     )
                 }

@@ -56,6 +56,7 @@ extension LocalBlogStore {
             ON article_properties(normalized_key, normalized_value, article_slug);
         CREATE TABLE IF NOT EXISTS article_revisions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_id TEXT,
             draft_key TEXT NOT NULL,
             article_slug TEXT,
             reason TEXT NOT NULL,
@@ -110,6 +111,12 @@ extension LocalBlogStore {
         );
         CREATE INDEX IF NOT EXISTS bookmarks_position_idx
             ON bookmarks(position, created_at);
+        CREATE TABLE IF NOT EXISTS portable_sidecar_tombstones (
+            kind TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            deleted_at TEXT NOT NULL,
+            PRIMARY KEY(kind, record_id)
+        );
         CREATE TABLE IF NOT EXISTS moments (
             id TEXT PRIMARY KEY NOT NULL,
             created_at TEXT NOT NULL,
@@ -186,6 +193,7 @@ extension LocalBlogStore {
         try ensureColumn("source_relative_path", in: "articles", database: database)
         try ensureColumn("source_content_hash", in: "articles", database: database)
         try ensureColumn("source_imported_at", in: "articles", database: database)
+        try ensureColumn("sync_id", in: "article_revisions", database: database)
         try ensureColumn(
             "target_identity",
             in: "article_link_references",
@@ -212,6 +220,8 @@ extension LocalBlogStore {
         CREATE INDEX IF NOT EXISTS articles_trash_expiry_idx ON articles(delete_expires_at);
         CREATE UNIQUE INDEX IF NOT EXISTS articles_source_path_idx
             ON articles(source_relative_path) WHERE source_relative_path IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS article_revisions_sync_idx
+            ON article_revisions(sync_id) WHERE sync_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS article_link_references_identity_idx
             ON article_link_references(target_identity, source_slug);
         CREATE INDEX IF NOT EXISTS article_link_references_path_idx
@@ -231,6 +241,16 @@ extension LocalBlogStore {
             DELETE FROM media_references WHERE owner_type = 'answer' AND owner_id = old.id;
         END;
         """)
+        var revisionsMissingSyncID: [Int] = []
+        try database.query("SELECT id FROM article_revisions WHERE sync_id IS NULL") { row in
+            if let id = row.integer(at: 0) { revisionsMissingSyncID.append(id) }
+        }
+        for id in revisionsMissingSyncID {
+            try database.execute(
+                "UPDATE article_revisions SET sync_id = ? WHERE id = ?",
+                values: [.text(UUID().uuidString.lowercased()), .integer(id)]
+            )
+        }
         try createSearchSchema(in: database)
         try createShortSearchSchema(in: database)
         try createQuestionSearchSchema(in: database)

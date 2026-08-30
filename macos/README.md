@@ -38,7 +38,7 @@ Pinning protects a tab from being replaced: opening another article automaticall
 
 The right side of the reader opens on the Comments pane. Drag across body text, or double-click a word, to quote the selection and focus the comment composer automatically. Clear the quote to leave a general article comment. Comments support replies and deletion; deleting a parent also deletes its replies.
 
-An anchored comment stores both its source quote and nearest Markdown heading. Clicking the quote returns to that section, and the anchor is recalculated from the quote after article edits. Comments live in the current user's SQLite workspace and are included in local backups.
+An anchored comment stores both its source quote and nearest Markdown heading. Clicking the quote returns to that section, and the anchor is recalculated from the quote after article edits. Comments live in the current user's SQLite workspace and are included in local backups; the optional `.leonbook/` sidecar also makes them portable with the Markdown directory.
 
 ## Writing modes
 
@@ -57,6 +57,12 @@ The editor's right sidebar switches among Settings, Properties, Outline, and Lin
 ## Task layouts and multiple windows
 
 Writing, Reading, and Reviewing are three overwriteable task-layout presets. The layout menu saves the destination, editor mode, editor sidebar pane and visibility, plus the reader inspector pane and visibility; each preset can also be reset to its built-in default. Presets are stored per user, while every macOS window owns independent tabs, current article, and back/forward history. Menu commands target only the focused window.
+
+## Portable `.leonbook/` sidecar
+
+Settings can opt the current Markdown root into a versioned `.leonbook/` directory containing `comments.json`, `history.json`, `bookmarks.json`, `layouts.json`, and `manifest.json`. Comments and bookmarks use stable IDs plus deletion tombstones, revisions use device-independent sync IDs, and task layouts include reading preferences. SQLite remains the local query index; sidecar changes delivered by iCloud Drive, Dropbox, Syncthing, or another whole-folder file sync tool are merged automatically. Read-only mounts import but never write sidecars, and disabling the option does not delete existing files.
+
+The sidecar is plain JSON. This phase does not provide an account service, end-to-end encryption, remote version retention, or cloud conflict-copy resolution. App-managed media remains in the LeonBook workspace and must be synchronized or backed up separately.
 
 ## Page performance and module seams
 
@@ -113,6 +119,12 @@ swift run --package-path macos LeonBook
 ```
 
 `LeonBook` is the internal SwiftPM target name; the user-facing app name is `leon-book`.
+
+## File explorer
+
+The sidebar reads the authoritative Markdown directory as a real file tree. Folders can be expanded or collapsed, articles and attachments appear together, and the currently open article is revealed automatically. Use Command- or Shift-click for multi-selection, drag selected source items onto a folder to move them, or use the context menu to create, rename, move, reveal, and trash resources. App-managed article media is shown beside its owning article folder with a link badge; it follows the article and stays under the workspace `media/` directory.
+
+Read-only Markdown mounts expose the same tree but disable all filesystem mutations.
 
 ## Checks
 

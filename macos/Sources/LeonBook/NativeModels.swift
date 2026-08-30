@@ -328,7 +328,7 @@ public struct NativeMarkdownSyncResult: Equatable {
     }
 }
 
-public struct NativeArticleTab: Codable, Hashable, Identifiable {
+public struct NativeArticleTab: Codable, Hashable, Identifiable, Sendable {
     public let id: UUID
     public private(set) var slug: String
     public var isPinned: Bool
@@ -1044,6 +1044,7 @@ public struct NativeSaveArticle: Encodable {
     public let tags: [String]
     public let title: String
     public let expectedUpdatedAt: String?
+    public let sourceRelativePath: String?
 
     public init(
         banner: NativeBanner?,
@@ -1056,7 +1057,8 @@ public struct NativeSaveArticle: Encodable {
         tags: [String],
         title: String,
         expectedUpdatedAt: String?,
-        properties: [String: NativeArticlePropertyValue] = [:]
+        properties: [String: NativeArticlePropertyValue] = [:],
+        sourceRelativePath: String? = nil
     ) {
         self.banner = banner
         self.body = body
@@ -1069,6 +1071,7 @@ public struct NativeSaveArticle: Encodable {
         self.tags = tags
         self.title = title
         self.expectedUpdatedAt = expectedUpdatedAt
+        self.sourceRelativePath = sourceRelativePath
     }
 }
 
@@ -1152,6 +1155,7 @@ public struct NativeArticleRevisionSnapshot: Codable, Hashable {
 
 public struct NativeArticleRevision: Hashable, Identifiable {
     public let id: Int
+    public let syncID: String
     public let draftKey: String
     public let articleSlug: String?
     public let reason: NativeArticleRevisionReason
@@ -1161,6 +1165,7 @@ public struct NativeArticleRevision: Hashable, Identifiable {
 
     public init(
         id: Int,
+        syncID: String = UUID().uuidString.lowercased(),
         draftKey: String,
         articleSlug: String?,
         reason: NativeArticleRevisionReason,
@@ -1169,6 +1174,7 @@ public struct NativeArticleRevision: Hashable, Identifiable {
         updatedAt: String
     ) {
         self.id = id
+        self.syncID = syncID
         self.draftKey = draftKey
         self.articleSlug = articleSlug
         self.reason = reason

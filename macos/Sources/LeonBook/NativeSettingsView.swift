@@ -190,6 +190,41 @@ public struct NativeSettingsView: View {
                     }
                 }
 
+                Divider()
+
+                Toggle(
+                    "使用 .leonbook 同步评论、历史、收藏和布局",
+                    isOn: Binding(
+                        get: { model.isPortableSidecarEnabled },
+                        set: { model.setPortableSidecarEnabled($0) }
+                    )
+                )
+                .disabled(model.isSynchronizingPortableSidecar || !model.storageReady)
+
+                if model.isPortableSidecarEnabled {
+                    LabeledContent("Sidecar") {
+                        Text(model.portableSidecarDirectoryPath)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                    LabeledContent("Sidecar 状态") {
+                        HStack(spacing: 8) {
+                            if model.isSynchronizingPortableSidecar {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(model.portableSidecarStatus)
+                        }
+                    }
+                    Button(model.isPortableSidecarWritable ? "立即合并并写入" : "重新导入只读 Sidecar") {
+                        model.synchronizePortableSidecarNow()
+                    }
+                    .disabled(model.isSynchronizingPortableSidecar)
+                }
+
+                Text("启用后，LeonBook 会在当前 Markdown 根目录创建版本化的隐藏目录 `.leonbook/`。iCloud Drive、Dropbox、Syncthing 等只需同步整个目录；SQLite 仍是本机索引。删除通过墓碑传播，历史记录使用跨设备同步 ID。Sidecar 当前是普通 JSON，不提供端到端加密；只读挂载仅导入、不写回。停用不会删除已有 sidecar。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 if let preview = model.obsidianImportPreview {
                     LabeledContent("Vault") {
                         Text(preview.vaultURL.path)
@@ -272,7 +307,7 @@ public struct NativeSettingsView: View {
                     .disabled(model.isScanningObsidianVault || model.isImportingObsidianVault || !model.storageReady)
                 }
 
-                Text("挂载模式会持续监听普通文件夹或 Obsidian Vault 中的 Markdown；SQLite、评论、版本、布局和应用媒体仍保存在 LeonBook 工作区。只读挂载不会改写原目录；直接编辑会原子写回。工作区备份只包含 LeonBook 内部数据，不复制外部挂载目录。")
+                Text("挂载模式会持续监听普通文件夹或 Obsidian Vault。SQLite 和应用媒体仍保存在 LeonBook 工作区；启用 sidecar 后，评论、版本、收藏和布局会额外写入 Markdown 根目录。只读挂载不会改写原目录；直接编辑会原子写回。工作区备份不复制外部挂载目录。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

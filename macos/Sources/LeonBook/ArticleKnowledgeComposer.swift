@@ -52,6 +52,22 @@ struct MarkdownArticleExtraction: Equatable {
     let extractedBody: String
 }
 
+public struct NativeArticleBlockReference: Equatable, Hashable, Identifiable {
+    public let id: String
+    public let preview: String
+
+    public init(id: String, preview: String) {
+        self.id = id
+        self.preview = preview
+    }
+
+    public var scrollAnchorID: String { Self.scrollAnchorID(for: id) }
+
+    public static func scrollAnchorID(for id: String) -> String {
+        "markdown-block-\(id)"
+    }
+}
+
 enum ArticleKnowledgeComposer {
     static func extract(
         from body: String,
@@ -192,6 +208,40 @@ enum ArticleKnowledgeComposer {
         return headingSection(in: body, title: selector)
     }
 
+    static func blockReferences(in body: String) -> [NativeArticleBlockReference] {
+        let lines = body.components(separatedBy: .newlines)
+        let expression = blockMarkerExpression(identifier: nil)
+        var activeFence: (marker: Character, length: Int)?
+        var references: [NativeArticleBlockReference] = []
+        var seen = Set<String>()
+
+        for line in lines {
+            if let fence = activeFence {
+                if closesFence(line, fence: fence) { activeFence = nil }
+                continue
+            }
+            if let fence = opensFence(line) {
+                activeFence = fence
+                continue
+            }
+            guard let match = expression.firstMatch(
+                in: line,
+                range: NSRange(line.startIndex..., in: line)
+            ), let idRange = Range(match.range(at: 1), in: line) else { continue }
+            let id = String(line[idRange])
+            guard seen.insert(id).inserted,
+                  let fragment = block(in: body, identifier: id) else { continue }
+            let preview = fragment
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            references.append(NativeArticleBlockReference(
+                id: id,
+                preview: String(preview.prefix(160))
+            ))
+        }
+        return references
+    }
+
     static func toggleTask(in body: String, lineIndex: Int, completed: Bool) throws -> String {
         var lines = body.components(separatedBy: .newlines)
         guard lines.indices.contains(lineIndex) else { throw NativeStoreError.notFound }
@@ -238,14 +288,28 @@ enum ArticleKnowledgeComposer {
     private static func block(in body: String, identifier: String) -> String? {
         guard !identifier.isEmpty else { return nil }
         let lines = body.components(separatedBy: .newlines)
-        let escaped = NSRegularExpression.escapedPattern(for: identifier)
-        let expression = try! NSRegularExpression(pattern: #"(?:^|\s)\^"# + escaped + #"\s*$"#)
-        guard let markerIndex = lines.indices.first(where: { index in
-            expression.firstMatch(
-                in: lines[index],
-                range: NSRange(lines[index].startIndex..., in: lines[index])
-            ) != nil
-        }) else { return nil }
+        let expression = blockMarkerExpression(identifier: identifier)
+        var markerIndex: Int?
+        var activeFence: (marker: Character, length: Int)?
+        for index in lines.indices {
+            let line = lines[index]
+            if let fence = activeFence {
+                if closesFence(line, fence: fence) { activeFence = nil }
+                continue
+            }
+            if let fence = opensFence(line) {
+                activeFence = fence
+                continue
+            }
+            if expression.firstMatch(
+                in: line,
+                range: NSRange(line.startIndex..., in: line)
+            ) != nil {
+                markerIndex = index
+                break
+            }
+        }
+        guard let markerIndex else { return nil }
 
         let markerLine = lines[markerIndex]
         let cleaned = expression.stringByReplacingMatches(
@@ -261,6 +325,12 @@ enum ArticleKnowledgeComposer {
         }
         guard start < markerIndex else { return nil }
         return normalizedBody(lines[start..<markerIndex].joined(separator: "\n"))
+    }
+
+    private static func blockMarkerExpression(identifier: String?) -> NSRegularExpression {
+        let capture = identifier.map(NSRegularExpression.escapedPattern(for:))
+            ?? "([A-Za-z0-9-]+)"
+        return try! NSRegularExpression(pattern: #"(?:^|\s)\^"# + capture + #"\s*$"#)
     }
 
     private static func level2HeadingTitle(_ line: String) -> String? {
@@ -314,5 +384,9 @@ enum ArticleKnowledgeComposer {
 public enum NativeArticleEmbed {
     public static func fragment(in body: String, selector: String? = nil) -> String? {
         ArticleKnowledgeComposer.fragment(in: body, selector: selector)
+    }
+
+    public static func blockReferences(in body: String) -> [NativeArticleBlockReference] {
+        ArticleKnowledgeComposer.blockReferences(in: body)
     }
 }

@@ -5,13 +5,18 @@ struct NativeMarkdownSourceChangeSet: Sendable {
     var relativePaths = Set<String>()
     var directoryPrefixes = Set<String>()
     var requiresFullScan = false
+    var reloadsResources = false
+    var reloadsPortableSidecar = false
 
     var isEmpty: Bool {
         !requiresFullScan && relativePaths.isEmpty && directoryPrefixes.isEmpty
+            && !reloadsResources && !reloadsPortableSidecar
     }
 
     mutating func merge(_ other: NativeMarkdownSourceChangeSet) {
         requiresFullScan = requiresFullScan || other.requiresFullScan
+        reloadsResources = reloadsResources || other.reloadsResources
+        reloadsPortableSidecar = reloadsPortableSidecar || other.reloadsPortableSidecar
         relativePaths.formUnion(other.relativePaths)
         directoryPrefixes.formUnion(other.directoryPrefixes)
     }
@@ -102,20 +107,30 @@ final class MarkdownSourceEventMonitor: @unchecked Sendable {
         for (path, eventFlags) in zip(paths, flags) {
             if eventFlags & rescanFlags != 0 {
                 changes.requiresFullScan = true
+                changes.reloadsResources = true
                 break
             }
             guard path.hasPrefix(rootPrefix) else { continue }
             let relativePath = String(path.dropFirst(rootPrefix.count))
                 .precomposedStringWithCanonicalMapping
-            guard !relativePath.isEmpty,
-                  !relativePath.split(separator: "/").contains(where: { $0.hasPrefix(".") }) else {
+            guard !relativePath.isEmpty else { continue }
+            if relativePath == NativePortableSidecarRepository.directoryName
+                || relativePath.hasPrefix(NativePortableSidecarRepository.directoryName + "/") {
+                changes.reloadsPortableSidecar = true
+                continue
+            }
+            guard !relativePath.split(separator: "/").contains(where: { $0.hasPrefix(".") }) else {
                 continue
             }
             if eventFlags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsDir) != 0 {
                 changes.directoryPrefixes.insert(relativePath)
+                changes.reloadsResources = true
             } else if URL(fileURLWithPath: relativePath).pathExtension
                 .caseInsensitiveCompare("md") == .orderedSame {
                 changes.relativePaths.insert(relativePath)
+                changes.reloadsResources = true
+            } else {
+                changes.reloadsResources = true
             }
         }
         if !changes.isEmpty { handler?(changes) }

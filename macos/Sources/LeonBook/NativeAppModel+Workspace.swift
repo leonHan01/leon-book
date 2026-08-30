@@ -14,7 +14,7 @@ extension NativeAppModel {
         try await reloadWorkspaceAncillaryState(generation: workspaceGeneration)
         if !isEditorDirty,
            let selectedSlug,
-           let selected = articles.first(where: { $0.slug == selectedSlug }) {
+           let selected = articleSummary(for: selectedSlug) {
             try await displayArticle(
                 selected,
                 disposition: .refreshActiveTab,
@@ -25,6 +25,7 @@ extension NativeAppModel {
 
     private func reloadArticleLibraryState() async throws {
         await replaceArticleSummaries(try await store.listArticles())
+        workspaceResources = try await store.listWorkspaceResources()
         smartCollections = try await store.listSmartCollections()
         bookmarks = try await store.listBookmarks()
         if let selectedSmartCollectionID,
@@ -88,6 +89,7 @@ extension NativeAppModel {
             return $0.slug < $1.slug
         }
         await replaceArticleSummaries(summaries)
+        workspaceResources = try await store.listWorkspaceResources()
         if plan.reloadsSelectedSmartCollection {
             try await refreshSelectedSmartCollection()
         }
@@ -102,7 +104,7 @@ extension NativeAppModel {
         }
 
         guard plan.reloadsSelectedArticle, !isEditorDirty, let selectedSlug else { return }
-        guard let selected = articles.first(where: { $0.slug == selectedSlug }) else {
+        guard let selected = articleSummary(for: selectedSlug) else {
             articleTabs.removeAll(where: { $0.slug == selectedSlug })
             recentArticleSlugs.removeAll(where: { $0 == selectedSlug })
             self.selectedSlug = nil
@@ -216,6 +218,12 @@ extension NativeAppModel {
             }
             guard generation == workspaceGeneration else { return }
             if result.didChange { try await reloadAfterMarkdownSourceChanges(result) }
+            if !result.didChange, changes.reloadsResources {
+                workspaceResources = try await store.listWorkspaceResources()
+            }
+            if changes.reloadsPortableSidecar || changes.requiresFullScan {
+                try await importPortableSidecarAfterExternalChange()
+            }
             if !result.warnings.isEmpty {
                 errorMessage = result.warnings.joined(separator: "\n")
             }
@@ -230,6 +238,7 @@ extension NativeAppModel {
         try await nextStore.prepareForInteractiveUse()
         let sourceState = try await nextStore.markdownWorkspaceSourceState()
         let sourceURL = try await nextStore.markdownSourceDirectoryURL()
+        let portableStatus = try await nextStore.portableSidecarStatus()
         stopMarkdownSourceMonitor()
         articleAncillaryLoadTask?.cancel()
         articlePostSaveTask?.cancel()
@@ -249,7 +258,10 @@ extension NativeAppModel {
         activeMarkdownWorkspaceMode = sourceState.mode
         selectedMarkdownWorkspaceMode = sourceState.mode
         markdownSourceDirectoryPath = sourceURL.path
+        applyPortableSidecarStatus(portableStatus)
+        portableSidecarRevision = UUID()
         await replaceArticleSummaries([])
+        workspaceResources = []
         moments = []
         totalMomentCount = 0
         filteredMomentCount = 0
@@ -279,6 +291,7 @@ extension NativeAppModel {
         articleSourceConflict = nil
         selectedSlug = nil
         editor = NativeEditorDraft()
+        pendingNewArticleFolderPath = nil
         editorAutosaveStatus = "尚未自动保存"
         pendingEditorMediaCleanup = []
         editorOriginalArticle = nil

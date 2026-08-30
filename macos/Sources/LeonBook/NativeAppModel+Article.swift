@@ -27,6 +27,7 @@ extension NativeAppModel {
                 self.updateArticleListSearch(self.searchText, debounce: false)
             }
             do {
+                self.workspaceResources = try await activeStore.listWorkspaceResources()
                 if self.selectedSmartCollection != nil {
                     try await self.refreshSelectedSmartCollection()
                 }
@@ -217,7 +218,7 @@ extension NativeAppModel {
                 try await reloadKnowledgeGraph()
                 articleTabs.removeAll(where: { $0.slug == source.slug })
                 recentArticleSlugs.removeAll(where: { $0 == source.slug })
-                if let summary = articles.first(where: { $0.slug == result.primaryArticle.slug }) {
+                if let summary = articleSummary(for: result.primaryArticle.slug) {
                     _ = try await displayArticle(summary, disposition: .currentTab, recordsPageView: false)
                 }
                 scheduleBackup()
@@ -295,7 +296,8 @@ extension NativeAppModel {
     func displayArticle(
         _ summary: NativeArticleSummary,
         disposition: NativeArticleOpenDisposition,
-        recordsPageView: Bool
+        recordsPageView: Bool,
+        persistsNavigation: Bool = true
     ) async throws -> Bool {
         articleNavigationGeneration += 1
         let navigationGeneration = articleNavigationGeneration
@@ -303,6 +305,11 @@ extension NativeAppModel {
         let selected: NativeArticle
         if recordsPageView {
             selected = try await store.incrementArticlePageViews(slug: summary.slug)
+        } else if let cached = articleSelectionCache.article(
+            matching: summary,
+            workspaceGeneration: workspace
+        ) {
+            selected = cached
         } else {
             selected = try await store.getArticle(slug: summary.slug)
         }
@@ -322,7 +329,9 @@ extension NativeAppModel {
         pendingArticleCommentSelection = nil
         recordRecentArticle(summary.slug)
         section = .reader
-        persistArticleNavigationState()
+        if persistsNavigation {
+            persistArticleNavigationState()
+        }
         errorMessage = nil
         let refreshesPageViewCollection = recordsPageView
             && selectedSmartCollection?.dependsOnPageViews == true
@@ -381,7 +390,7 @@ extension NativeAppModel {
     }
 
     func selectSlug(_ slug: String?) {
-        guard let slug, let summary = articles.first(where: { $0.slug == slug }) else { return }
+        guard let slug, let summary = articleSummary(for: slug) else { return }
         let opensNewTab = NSEvent.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .contains(.command)
@@ -417,29 +426,22 @@ extension NativeAppModel {
 
     func promptToMoveArticleSource(_ summary: NativeArticleSummary) {
         guard !isSaving, !isBackingUp, !isRestoringBackup else { return }
-        let alert = NSAlert()
-        alert.messageText = "移动或重命名 Markdown"
-        alert.informativeText = "输入 articles 目录内的相对路径。slug 不会改变，评论、版本和双链会继续关联原文章。"
-        alert.addButton(withTitle: "移动")
-        alert.addButton(withTitle: "取消")
-        let field = NSTextField(string: summary.sourceRelativePath)
-        field.placeholderString = "文件夹/文章.md"
-        field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
-        alert.accessoryView = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let destination = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !destination.isEmpty else { return }
-
+        if let resource = workspaceResourceItems.first(where: {
+            $0.kind == .article && $0.articleSlug == summary.slug
+        }) {
+            promptToMoveWorkspaceResources([resource])
+            return
+        }
         Task {
             do {
-                let moved = try await store.moveArticleSource(
-                    slug: summary.slug,
-                    to: destination,
-                    expectedUpdatedAt: summary.updatedAt
-                )
-                if selectedArticle?.slug == moved.slug { selectedArticle = moved }
-                try await reload()
-                errorMessage = nil
+                workspaceResources = try await store.listWorkspaceResources()
+                guard let resource = workspaceResourceItems.first(where: {
+                    $0.kind == .article && $0.articleSlug == summary.slug
+                }) else {
+                    errorMessage = "无法在文件资源树中定位这篇文章。请刷新后重试。"
+                    return
+                }
+                promptToMoveWorkspaceResources([resource])
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -612,7 +614,7 @@ extension NativeAppModel {
         case let .article(slug):
             selectSlug(slug)
         case let .heading(slug, heading, anchorID):
-            guard let summary = articles.first(where: { $0.slug == slug }) else {
+            guard let summary = articleSummary(for: slug) else {
                 errorMessage = "收藏的文章已不存在。"
                 return
             }
@@ -665,7 +667,7 @@ extension NativeAppModel {
             createArticle(from: destination)
             return
         }
-        guard let summary = articles.first(where: { $0.slug == resolvedSlug }) else {
+        guard let summary = articleSummary(for: resolvedSlug) else {
             errorMessage = "关联的文章已不存在。"
             return
         }
@@ -691,7 +693,7 @@ extension NativeAppModel {
     }
 
     func openArticleLink(_ slug: String, disposition: NativeArticleOpenDisposition) {
-        guard let summary = articles.first(where: { $0.slug == slug }) else {
+        guard let summary = articleSummary(for: slug) else {
             errorMessage = "关联的文章已不存在。"
             return
         }
@@ -709,6 +711,19 @@ extension NativeAppModel {
 
     private func scrollToLinkedHeading(_ rawHeading: String) {
         guard let article = selectedArticle else { return }
+        let normalized = rawHeading.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.hasPrefix("^") {
+            let requestedID = String(normalized.dropFirst())
+            guard let block = NativeArticleEmbed.blockReferences(in: article.body).first(where: {
+                $0.id.caseInsensitiveCompare(requestedID) == .orderedSame
+            }) else {
+                errorMessage = "已打开文章，但没有找到块“^\(requestedID)”。"
+                return
+            }
+            pendingArticleScrollAnchor = block.scrollAnchorID
+            articleScrollRevision = UUID()
+            return
+        }
         let requested = rawHeading.split(separator: "#", omittingEmptySubsequences: true)
             .last.map(String.init) ?? rawHeading
         guard let heading = MarkdownOutline.items(in: article.body).first(where: {
@@ -759,22 +774,29 @@ extension NativeAppModel {
     }
 
     func activateArticleTab(_ id: UUID) {
-        guard id != activeArticleTabID,
-              let tab = articleTabs.first(where: { $0.id == id }),
-              let summary = articles.first(where: { $0.slug == tab.slug }) else { return }
         Task {
             do {
-                guard try await displayArticle(
-                    summary,
-                    disposition: .refreshActiveTab,
-                    recordsPageView: false
-                ) else { return }
-                activeArticleTabID = id
-                persistArticleNavigationState()
+                _ = try await activateArticleTabAndWait(id)
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    @discardableResult
+    func activateArticleTabAndWait(_ id: UUID) async throws -> Bool {
+        guard id != activeArticleTabID,
+              let tab = articleTabs.first(where: { $0.id == id }),
+              let summary = articleSummary(for: tab.slug),
+              try await displayArticle(
+                  summary,
+                  disposition: .refreshActiveTab,
+                  recordsPageView: false,
+                  persistsNavigation: false
+              ) else { return false }
+        activeArticleTabID = id
+        persistArticleNavigationState()
+        return true
     }
 
     public func navigateArticleBack() {
@@ -790,14 +812,15 @@ extension NativeAppModel {
               let index = articleTabs.firstIndex(where: { $0.id == activeArticleTabID }) else { return }
         var updatedTab = articleTabs[index]
         guard let targetSlug = forward ? updatedTab.goForward() : updatedTab.goBack(),
-              let summary = articles.first(where: { $0.slug == targetSlug }) else { return }
+              let summary = articleSummary(for: targetSlug) else { return }
 
         Task {
             do {
                 guard try await displayArticle(
                     summary,
                     disposition: .refreshActiveTab,
-                    recordsPageView: false
+                    recordsPageView: false,
+                    persistsNavigation: false
                 ) else { return }
                 guard self.activeArticleTabID == activeArticleTabID,
                       selectedSlug == targetSlug,
@@ -910,7 +933,7 @@ extension NativeAppModel {
         persistArticleNavigationState()
 
         guard let activeArticleTab,
-              let summary = articles.first(where: { $0.slug == activeArticleTab.slug }) else { return }
+              let summary = articleSummary(for: activeArticleTab.slug) else { return }
         Task {
             do {
                 _ = try await displayArticle(
@@ -943,8 +966,23 @@ extension NativeAppModel {
             activeTabID: activeArticleTabID,
             recentSlugs: recentArticleSlugs
         )
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        UserDefaults.standard.set(data, forKey: articleNavigationDefaultsKey)
+        let defaultsKey = articleNavigationDefaultsKey
+        if articleNavigationPersistenceDefaultsKey == defaultsKey {
+            articleNavigationPersistenceTask?.cancel()
+        }
+        articleNavigationPersistenceDefaultsKey = defaultsKey
+        articleNavigationPersistenceTask = Task {
+            do {
+                try await Task.sleep(nanoseconds: 150_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await Task.detached(priority: .utility) {
+                guard let data = try? JSONEncoder().encode(snapshot) else { return }
+                UserDefaults.standard.set(data, forKey: defaultsKey)
+            }.value
+        }
     }
 
     func restoreArticleNavigationState() async {
@@ -974,7 +1012,7 @@ extension NativeAppModel {
         } ?? articleTabs.first?.id
 
         guard let activeArticleTab,
-              let summary = articles.first(where: { $0.slug == activeArticleTab.slug }) else {
+              let summary = articleSummary(for: activeArticleTab.slug) else {
             persistArticleNavigationState()
             return
         }

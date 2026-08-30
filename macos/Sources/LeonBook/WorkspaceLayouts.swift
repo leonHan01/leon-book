@@ -350,6 +350,39 @@ final class NativeWorkspaceLayoutState: ObservableObject {
         if let profile = activeProfile { apply(profile) }
     }
 
+    func portableState(for userID: String) -> NativePortableLayoutState {
+        if currentUserID != userID { prepare(for: userID) }
+        return NativePortableLayoutState(
+            profiles: profiles,
+            activeProfileID: activeLayoutID
+        )
+    }
+
+    func applyPortableState(_ state: NativePortableLayoutState, for userID: String) {
+        var imported: [NativeWorkspaceLayoutProfile] = []
+        var seenIDs = Set<String>()
+        for profile in state.profiles.prefix(50) {
+            let id = profile.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, id.count <= 120, seenIDs.insert(id).inserted else { continue }
+            imported.append(profile.normalized)
+        }
+        for kind in NativeWorkspaceLayoutKind.allCases
+            where !imported.contains(where: { $0.id == kind.profileID }) {
+            imported.append(.defaultProfile(for: kind))
+        }
+        guard !imported.isEmpty else { return }
+        let activeID = imported.contains(where: { $0.id == state.activeProfileID })
+            ? state.activeProfileID
+            : NativeWorkspaceLayoutKind.writing.profileID
+        archive.profilesByUser[userID] = imported
+        archive.activeProfileIDByUser[userID] = activeID
+        persistArchive()
+        currentUserID = userID
+        profiles = imported
+        activeLayoutID = activeID
+        if let profile = activeProfile { apply(profile) }
+    }
+
     @discardableResult
     func activate(_ id: String, for userID: String) -> NativeWorkspaceLayoutProfile? {
         if currentUserID != userID { prepare(for: userID) }

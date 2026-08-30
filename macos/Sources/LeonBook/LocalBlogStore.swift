@@ -81,6 +81,7 @@ public actor LocalBlogStore {
     private var jsonBackupVerified = false
     private var defersCompatibilityExportVerification = false
     private var activityExportDirty = false
+    var portableSidecarLastError: String?
     private var directoryLock: ExclusiveDirectoryLock?
     var markdownWorkspaceSource: NativeMarkdownWorkspaceSource
 
@@ -100,7 +101,7 @@ public actor LocalBlogStore {
     }
     private var articleSidecarsMarkerURL: URL { managedArticlesURL.appendingPathComponent(".sidecars-v1") }
     private var draftsURL: URL { rootURL.appendingPathComponent("drafts", isDirectory: true) }
-    private var mediaURL: URL { rootURL.appendingPathComponent("media", isDirectory: true) }
+    var mediaURL: URL { rootURL.appendingPathComponent("media", isDirectory: true) }
     private var momentsURL: URL { rootURL.appendingPathComponent("moments", isDirectory: true) }
     private var basesURL: URL { rootURL.appendingPathComponent("bases", isDirectory: true) }
     private var basesMarkerURL: URL { basesURL.appendingPathComponent(".files-v1") }
@@ -165,6 +166,7 @@ public actor LocalBlogStore {
         try db().execute("PRAGMA wal_checkpoint(TRUNCATE)")
         if activityExportDirty { try writeActivityEvents() }
         try exportJsonBackupIfNeeded()
+        try exportPortableSidecarIfEnabled()
     }
 
     /// Prepares only the database state required for the first interactive
@@ -178,6 +180,7 @@ public actor LocalBlogStore {
         try prepare()
         if activityExportDirty { try writeActivityEvents() }
         try exportJsonBackupIfNeeded()
+        try exportPortableSidecarIfEnabled()
     }
 
     /// Runs low-frequency retention work without putting it on every storage API.
@@ -233,6 +236,7 @@ public actor LocalBlogStore {
             try migrateArticleDerivedIndexesIfNeeded()
             try migrateSearchAccelerationIndexesIfNeeded()
             try migrateMediaReferencesIfNeeded()
+            importPortableSidecarDuringPreparation()
             if !defersCompatibilityExportVerification {
                 try exportJsonBackupIfNeeded()
             }
@@ -288,7 +292,7 @@ public actor LocalBlogStore {
         }
     }
 
-    private func requireWritableArticleSource() throws {
+    func requireWritableArticleSource() throws {
         guard !markdownWorkspaceSource.mode.isReadOnly else {
             throw NativeStoreError.readOnlyArticleSource
         }
@@ -1092,12 +1096,18 @@ public actor LocalBlogStore {
                 .text(saved.createdAt),
             ]
         )
+        try db().execute(
+            "DELETE FROM portable_sidecar_tombstones WHERE kind = 'bookmark' AND record_id = ?",
+            values: [.text(saved.id)]
+        )
         return saved
     }
 
     public func deleteBookmark(id: String) throws {
         try prepare()
-        try db().execute("DELETE FROM bookmarks WHERE id = ?", values: [.text(id)])
+        let safeID = try requireSafeSegment(id, label: "收藏标识")
+        try db().execute("DELETE FROM bookmarks WHERE id = ?", values: [.text(safeID)])
+        try recordPortableSidecarTombstone(kind: "bookmark", id: safeID)
     }
 
     public func listMoments() throws -> [NativeMoment] {
@@ -2028,6 +2038,7 @@ public actor LocalBlogStore {
             )
             return NativeArticleRevision(
                 id: latest.id,
+                syncID: latest.syncID,
                 draftKey: latest.draftKey,
                 articleSlug: safeArticleSlug ?? latest.articleSlug,
                 reason: .autosave,
@@ -2213,10 +2224,28 @@ public actor LocalBlogStore {
             values: [.text(safeID), .text(safeSlug)]
         ) ?? 0
         guard existingCount == 1 else { throw NativeStoreError.notFound }
+        var removedIDs: [String] = []
+        try db().query(
+            """
+            WITH RECURSIVE removed(id) AS (
+                SELECT id FROM article_comments WHERE id = ? AND article_slug = ?
+                UNION ALL
+                SELECT child.id FROM article_comments AS child
+                JOIN removed AS parent ON child.parent_id = parent.id
+            )
+            SELECT id FROM removed
+            """,
+            values: [.text(safeID), .text(safeSlug)]
+        ) { row in
+            if let id = row.text(at: 0) { removedIDs.append(id) }
+        }
         try db().execute(
             "DELETE FROM article_comments WHERE id = ? AND article_slug = ?",
             values: [.text(safeID), .text(safeSlug)]
         )
+        for removedID in removedIDs {
+            try recordPortableSidecarTombstone(kind: "comment", id: removedID)
+        }
     }
 
     public func allocateSlug(from title: String) throws -> String {
@@ -2422,6 +2451,20 @@ public actor LocalBlogStore {
             publishedAt = previous?.publishedAt
         }
 
+        let sourceRelativePath: String
+        if let previous {
+            sourceRelativePath = previous.sourceRelativePath
+        } else if let requestedPath = article.sourceRelativePath {
+            sourceRelativePath = try MarkdownArticleSource.validatedRelativePath(requestedPath)
+        } else {
+            sourceRelativePath = MarkdownArticleSource.defaultRelativePath(for: slug)
+        }
+        if previous == nil,
+           FileManager.default.fileExists(
+               atPath: articlesURL.appendingPathComponent(sourceRelativePath).path
+            ) {
+            throw NativeStoreError.fileSystem("目标 Markdown 文件已存在")
+        }
         let relocated = try relocateInboxMedia(
             slug: slug,
             body: normalizeBody(article.body),
@@ -2443,7 +2486,7 @@ public actor LocalBlogStore {
             wordCount: wordCount(relocated.body),
             pageViews: previous?.pageViews ?? 0,
             properties: properties,
-            sourceRelativePath: previous?.sourceRelativePath ?? MarkdownArticleSource.defaultRelativePath(for: slug),
+            sourceRelativePath: sourceRelativePath,
             sourceContentHash: previous?.sourceContentHash,
             sourceImportedAt: previous?.sourceImportedAt
         )
@@ -2779,21 +2822,23 @@ public actor LocalBlogStore {
         )
     }
 
-    private func insertArticleRevision(
+    func insertArticleRevision(
         draftKey: String,
         articleSlug: String?,
         reason: NativeArticleRevisionReason,
         snapshot: NativeArticleRevisionSnapshot,
         createdAt: String,
-        updatedAt: String
+        updatedAt: String,
+        syncID: String = UUID().uuidString.lowercased()
     ) throws -> NativeArticleRevision {
         try db().execute(
             """
             INSERT INTO article_revisions(
-                draft_key, article_slug, reason, snapshot_json, created_at, updated_at
-            ) VALUES(?, ?, ?, ?, ?, ?)
+                sync_id, draft_key, article_slug, reason, snapshot_json, created_at, updated_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?)
             """,
             values: [
+                .text(syncID),
                 .text(draftKey),
                 articleSlug.map(SQLiteValue.text) ?? .null,
                 .text(reason.rawValue),
@@ -2807,6 +2852,7 @@ public actor LocalBlogStore {
         }
         return NativeArticleRevision(
             id: id,
+            syncID: syncID,
             draftKey: draftKey,
             articleSlug: articleSlug,
             reason: reason,
@@ -2830,21 +2876,23 @@ public actor LocalBlogStore {
         return revision
     }
 
-    private func decodeArticleRevision(_ row: SQLiteRow) throws -> NativeArticleRevision {
+    func decodeArticleRevision(_ row: SQLiteRow) throws -> NativeArticleRevision {
         guard let id = row.integer(at: 0),
-              let draftKey = row.text(at: 1),
-              let reasonValue = row.text(at: 3),
+              let syncID = row.text(at: 1),
+              let draftKey = row.text(at: 2),
+              let reasonValue = row.text(at: 4),
               let reason = NativeArticleRevisionReason(rawValue: reasonValue),
-              let snapshotJSON = row.text(at: 4),
-              let createdAt = row.text(at: 5),
-              let updatedAt = row.text(at: 6) else {
+              let snapshotJSON = row.text(at: 5),
+              let createdAt = row.text(at: 6),
+              let updatedAt = row.text(at: 7) else {
             throw NativeStoreError.fileSystem("SQLite：文章版本记录不完整")
         }
         let snapshot: NativeArticleRevisionSnapshot = try decode(snapshotJSON)
         return NativeArticleRevision(
             id: id,
+            syncID: syncID,
             draftKey: draftKey,
-            articleSlug: row.text(at: 2),
+            articleSlug: row.text(at: 3),
             reason: reason,
             snapshot: snapshot,
             createdAt: createdAt,
@@ -4394,15 +4442,15 @@ public actor LocalBlogStore {
         "SELECT id, question_id, body, images_json, created_at, updated_at FROM question_answers"
     }
 
-    private var revisionSelect: String {
-        "SELECT id, draft_key, article_slug, reason, snapshot_json, created_at, updated_at FROM article_revisions"
+    var revisionSelect: String {
+        "SELECT id, sync_id, draft_key, article_slug, reason, snapshot_json, created_at, updated_at FROM article_revisions"
     }
 
-    private var commentSelect: String {
+    var commentSelect: String {
         "SELECT id, article_slug, parent_id, author_name, text, quoted_text, anchor_id, created_at, updated_at FROM article_comments"
     }
 
-    private func decodeArticleComment(_ row: SQLiteRow) throws -> NativeArticleComment {
+    func decodeArticleComment(_ row: SQLiteRow) throws -> NativeArticleComment {
         guard let id = row.text(at: 0),
               let articleSlug = row.text(at: 1),
               let authorName = row.text(at: 3),

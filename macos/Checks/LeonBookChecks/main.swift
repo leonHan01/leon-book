@@ -60,6 +60,8 @@ expect(FileManager.default.fileExists(atPath: sourcePath("ArticleLinkIdentityInd
 expect(FileManager.default.fileExists(atPath: sourcePath("AutomationRouting.swift")), "automation URL routing should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("WorkspaceLayouts.swift")), "saved workspace layouts should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticleEditorViews.swift")), "article editor views should be a separate module")
+expect(FileManager.default.fileExists(atPath: sourcePath("ArticleLinkAutocomplete.swift")), "article link autocomplete should be a separate module")
+expect(FileManager.default.fileExists(atPath: sourcePath("MarkdownRichEmbedViews.swift")), "rich Markdown embeds should be a separate module")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticleProperties.swift")), "typed article properties should be a separate module")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticleGraphProjection.swift")), "article graph projection module should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NavigationPageState.swift")), "lightweight navigation page state cache should exist")
@@ -102,6 +104,8 @@ if let properties = try? String(contentsOfFile: sourcePath("ArticleProperties.sw
 
 if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift"), encoding: .utf8) {
     articleViews += (try? String(contentsOfFile: sourcePath("ArticleEditorViews.swift"), encoding: .utf8)) ?? ""
+    articleViews += (try? String(contentsOfFile: sourcePath("ArticleLinkAutocomplete.swift"), encoding: .utf8)) ?? ""
+    articleViews += (try? String(contentsOfFile: sourcePath("MarkdownRichEmbedViews.swift"), encoding: .utf8)) ?? ""
     articleViews += (try? String(contentsOfFile: sourcePath("NativeMarkdownLiveStyler.swift"), encoding: .utf8)) ?? ""
     expect(articleViews.contains("ArticleHistoryView"), "article reader and editor should expose version history")
     expect(articleViews.contains("ArticleRevisionDiffView"), "version history should compare revisions with current content")
@@ -156,7 +160,7 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("article.pageViews"), "article reader should display its persisted page views")
     expect(articleViews.contains("ArticleLinkSuggestionMenu"), "article editor should offer article-link suggestions")
     expect(articleViews.contains("activeLinkQuery"), "article editor should detect a [[ article-link query")
-    expect(articleViews.contains("[[\\(article.title)]]"), "selecting an article suggestion should insert a wiki-style link")
+    expect(articleViews.contains("[[\\(suggestion.reference)]]"), "selecting an article or block suggestion should insert a wiki-style link")
     expect(articleViews.contains("NativeImageView(url: banner.url, alt: banner.alt, store: model.store)"), "article reader should render a banner image inline")
     expect(articleViews.contains("NativeImageView(url: media.url, alt: media.name, store: model.store)"), "article reader should render attached images inline")
     expect(articleViews.contains("NativeImagePipeline.shared.image"), "article images should use the shared cached decode pipeline")

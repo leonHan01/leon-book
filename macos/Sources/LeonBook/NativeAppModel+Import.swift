@@ -159,6 +159,8 @@ extension NativeAppModel {
                         : "已直接挂载并监听 \(markdownSourceDirectoryPath)"
                     errorMessage = sync.warnings.isEmpty ? nil : sync.warnings.joined(separator: "\n")
                 }
+                try await refreshPortableSidecarStatus()
+                portableSidecarRevision = UUID()
                 startMarkdownSourceMonitor()
                 obsidianImportPreview = nil
                 scheduleBackup()

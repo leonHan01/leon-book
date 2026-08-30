@@ -842,6 +842,67 @@ private final class NativeImageDecodeProbe: @unchecked Sendable {
 
 final class PerformanceRegressionTests {
     @MainActor
+    func testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries() {
+        let cache = NativeArticleSelectionCache(countLimit: 4, totalCostLimit: 1_024 * 1_024)
+        let first = smartCollectionArticle(
+            slug: "cached-article",
+            title: "Cached",
+            status: .published,
+            category: "Performance",
+            updatedAt: "2026-08-30T10:00:00.000Z",
+            pageViews: 3,
+            properties: [:]
+        )
+        cache.insert(first, workspaceGeneration: 7)
+
+        XCTAssertEqual(cache.article(matching: first.summary, workspaceGeneration: 7), first)
+        XCTAssertNil(cache.article(matching: first.summary, workspaceGeneration: 8))
+
+        let updated = smartCollectionArticle(
+            slug: first.slug,
+            title: first.title,
+            status: first.status,
+            category: first.category,
+            updatedAt: "2026-08-30T10:01:00.000Z",
+            pageViews: 4,
+            properties: [:]
+        )
+        XCTAssertNil(cache.article(matching: updated.summary, workspaceGeneration: 7))
+        cache.insert(updated, workspaceGeneration: 7)
+        XCTAssertEqual(cache.article(matching: updated.summary, workspaceGeneration: 7), updated)
+    }
+
+    @MainActor
+    func testArticleNavigationPersistenceCoalescesToLatestSnapshot() async throws {
+        let scope = "persistence-\(UUID().uuidString)"
+        let model = NativeAppModel(navigationScopeID: scope, startsAutomatically: false)
+        let defaultsKey = "leon-book.article-navigation.\(model.currentUser.id).window.\(scope)"
+        defer { UserDefaults.standard.removeObject(forKey: defaultsKey) }
+
+        let first = NativeArticleTab(slug: "first")
+        let second = NativeArticleTab(slug: "second")
+        model.articleTabs = [first, second]
+        model.activeArticleTabID = first.id
+        model.persistArticleNavigationState()
+        model.activeArticleTabID = second.id
+        model.recentArticleSlugs = ["second", "first"]
+        model.persistArticleNavigationState()
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let snapshot = try? JSONDecoder().decode(
+                  NativeArticleNavigationSnapshot.self,
+                  from: data
+              ) else {
+            XCTFail("expected the coalesced article navigation snapshot")
+            return
+        }
+        XCTAssertEqual(snapshot.activeTabID, second.id)
+        XCTAssertEqual(snapshot.tabs, [first, second])
+        XCTAssertEqual(snapshot.recentSlugs, ["second", "first"])
+    }
+
+    @MainActor
     func testEditorSessionOwnsHighFrequencyDraftState() {
         let session = NativeEditorSessionState()
 
@@ -1552,6 +1613,98 @@ final class PerformanceRegressionTests {
             facetElapsed * 1_000,
             timelineElapsed * 1_000
         ))
+    }
+
+    @MainActor
+    func testArticleTabUserInteractionBenchmark() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let articleCount = 16
+        let renderPasses = 20
+        let largeBody = String(repeating: "## Heading\nA paragraph for tab switching.\n\n", count: 2_048)
+        let navigationScope = "performance-\(UUID().uuidString)"
+        let model = NativeAppModel(
+            navigationScopeID: navigationScope,
+            startsAutomatically: false
+        )
+        let defaultsKey = "leon-book.article-navigation.\(model.currentUser.id).window.\(navigationScope)"
+        defer { UserDefaults.standard.removeObject(forKey: defaultsKey) }
+        model.store = LocalBlogStore(rootURL: root)
+
+        var savedArticles: [NativeArticle] = []
+        savedArticles.reserveCapacity(articleCount)
+        for index in 0..<articleCount {
+            savedArticles.append(try await model.store.saveArticle(article(
+                slug: "tab-\(index)",
+                status: .published,
+                expectedUpdatedAt: nil,
+                body: largeBody,
+                title: "Tab \(index)"
+            )))
+        }
+        let savedSummaries = savedArticles.map(\.summary)
+        let library = (0..<(10_000 - articleCount)).map { index in
+            performanceArticle(
+                index: index,
+                status: .published,
+                tags: ["Performance"],
+                sourceRelativePath: "articles/article-\(index).md"
+            )
+        } + savedSummaries
+        await model.replaceArticleSummaries(library)
+        model.articleTabs = savedArticles.map { NativeArticleTab(slug: $0.slug) }
+        model.activeArticleTabID = model.articleTabs[0].id
+        _ = try await model.displayArticle(
+            savedSummaries[0],
+            disposition: .refreshActiveTab,
+            recordsPageView: false
+        )
+
+        for tab in model.articleTabs.dropFirst() {
+            XCTAssertTrue(try await model.activateArticleTabAndWait(tab.id))
+        }
+        XCTAssertTrue(try await model.activateArticleTabAndWait(model.articleTabs[0].id))
+
+        let switchStart = ProcessInfo.processInfo.systemUptime
+        var switchCount = 0
+        for _ in 0..<4 {
+            for tab in model.articleTabs {
+                guard tab.id != model.activeArticleTabID else { continue }
+                XCTAssertTrue(try await model.activateArticleTabAndWait(tab.id))
+                switchCount += 1
+            }
+        }
+        let switchElapsed = ProcessInfo.processInfo.systemUptime - switchStart
+
+        model.articleTabs = (0..<48).map { offset in
+            NativeArticleTab(slug: "article-\(library.count - articleCount - 1 - offset)")
+        }
+        let titleStart = ProcessInfo.processInfo.systemUptime
+        var titleLength = 0
+        for _ in 0..<renderPasses {
+            for tab in model.articleTabs {
+                titleLength += model.articleTabTitle(for: tab).count
+            }
+        }
+        let titleElapsed = ProcessInfo.processInfo.systemUptime - titleStart
+
+        XCTAssertTrue(titleLength > 0)
+        XCTAssertTrue(
+            switchElapsed / Double(switchCount) < 0.00025,
+            "warm tab switch exceeded the 0.25 ms interaction budget: \(switchElapsed * 1_000 / Double(switchCount)) ms"
+        )
+        XCTAssertTrue(
+            titleElapsed < 0.005,
+            "20 tab-bar render passes exceeded the 5 ms budget: \(titleElapsed * 1_000) ms"
+        )
+        print(String(
+            format: "PERF tab_switches=%d warm_switch_ms=%.3f tab_title_render_ms=%.3f",
+            switchCount,
+            switchElapsed * 1_000 / Double(switchCount),
+            titleElapsed * 1_000
+        ))
+        try await Task.sleep(nanoseconds: 200_000_000)
     }
 
     func testPairedPerformanceSamplingAlternatesOrder() {
@@ -3145,6 +3298,246 @@ final class LocalBlogStoreTests {
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("articles/managed-note.md").path))
         XCTAssertEqual(try String(contentsOf: vault.appendingPathComponent("mounted.md"), encoding: .utf8), mountedSource)
     }
+
+    func testWorkspaceResourceTreeMixesArticlesAttachmentsAndMovesFolders() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+
+        try await store.createWorkspaceFolder(relativePath: "projects")
+        try await store.createWorkspaceFolder(relativePath: "projects/empty")
+        let sourceAttachment = root.appendingPathComponent("source-cover.png")
+        try Data([0x89, 0x50, 0x4e, 0x47]).write(to: sourceAttachment)
+        let uploaded = try await store.uploadMedia(
+            fileURL: sourceAttachment,
+            kind: "image",
+            slug: "resource-note"
+        )
+        let saved = try await store.saveArticle(NativeSaveArticle(
+            banner: nil,
+            body: "Resource body\n\n![cover](\(uploaded.url))",
+            category: "Notes",
+            excerpt: "",
+            media: [NativeMedia(
+                kind: uploaded.kind,
+                name: "cover.png",
+                size: uploaded.size,
+                url: uploaded.url
+            )],
+            slug: "resource-note",
+            status: .published,
+            tags: [],
+            title: "Resource note",
+            expectedUpdatedAt: nil,
+            sourceRelativePath: "projects/resource-note.md"
+        ))
+        let markdownRoot = try await store.markdownSourceDirectoryURL()
+        try Data("attachment".utf8).write(
+            to: markdownRoot.appendingPathComponent("projects/specification.pdf")
+        )
+
+        let initial = try await store.listWorkspaceResources()
+        let initialItems = NativeWorkspaceResourceTree.flattened(initial)
+        XCTAssertNotNil(initialItems.first(where: {
+            $0.kind == .folder && $0.relativePath == "projects/empty"
+        }))
+        XCTAssertEqual(initialItems.first(where: {
+            $0.kind == .article && $0.articleSlug == saved.slug
+        })?.sourceRelativePath, "projects/resource-note.md")
+        XCTAssertNotNil(initialItems.first(where: {
+            $0.kind == .attachment
+                && $0.storage == .markdownSource
+                && $0.name == "specification.pdf"
+        }))
+        XCTAssertNotNil(initialItems.first(where: {
+            $0.kind == .attachment
+                && $0.storage == .managedMedia
+                && $0.name == "cover.png"
+                && $0.relativePath == "projects/cover.png"
+        }))
+
+        let sync = try await store.moveWorkspaceSourceItems([
+            NativeWorkspaceResourceMove(
+                sourceRelativePath: "projects",
+                destinationRelativePath: "archive/projects"
+            ),
+        ])
+        XCTAssertTrue(sync.didChange)
+        XCTAssertEqual(
+            try await store.getArticle(slug: saved.slug).sourceRelativePath,
+            "archive/projects/resource-note.md"
+        )
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: markdownRoot.appendingPathComponent("archive/projects/specification.pdf").path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: markdownRoot.appendingPathComponent("projects").path
+        ))
+
+        let movedItems = NativeWorkspaceResourceTree.flattened(
+            try await store.listWorkspaceResources()
+        )
+        XCTAssertNotNil(movedItems.first(where: {
+            $0.kind == .attachment
+                && $0.storage == .managedMedia
+                && $0.relativePath == "archive/projects/cover.png"
+        }))
+    }
+
+    func testPortableSidecarSynchronizesNonRebuildableStateAcrossWorkspaces() async throws {
+        let vault = try makeTemporaryDirectory()
+        let firstRoot = try makeTemporaryDirectory()
+        let secondRoot = try makeTemporaryDirectory()
+        let readOnlyRoot = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: vault)
+            try? FileManager.default.removeItem(at: firstRoot)
+            try? FileManager.default.removeItem(at: secondRoot)
+            try? FileManager.default.removeItem(at: readOnlyRoot)
+        }
+        let source = """
+        ---
+        slug: portable-note
+        title: Portable note
+        ---
+        Shared Markdown body
+        """
+        try Data(source.utf8).write(to: vault.appendingPathComponent("portable-note.md"))
+
+        let first = LocalBlogStore(rootURL: firstRoot)
+        _ = try await first.configureMarkdownWorkspaceSource(mode: .directEdit, directoryURL: vault)
+        _ = try await first.setPortableSidecarEnabled(true)
+        let comment = try await first.createArticleComment(
+            articleSlug: "portable-note",
+            authorName: "first-device",
+            text: "Synced comment",
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let revision = try await first.saveArticleAutosave(
+            draftKey: "portable-note",
+            articleSlug: "portable-note",
+            snapshot: revisionSnapshot(body: "Synced history"),
+            at: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+        let bookmark = try await first.saveBookmark(NativeBookmark(
+            title: "Portable bookmark",
+            target: .article(slug: "portable-note"),
+            createdAt: NativeTimestamp.string(from: Date(timeIntervalSince1970: 1_700_000_200))
+        ))
+        let portableUI = NativePortableUIState(
+            workspaceLayouts: NativePortableLayoutState(
+                profiles: [.defaultProfile(for: .reading)],
+                activeProfileID: NativeWorkspaceLayoutKind.reading.profileID
+            ),
+            readingProfile: NativeReadingProfile(
+                readingWidth: 920,
+                bodyFont: .serif,
+                codeFont: .menlo,
+                fontSize: 19,
+                lineSpacing: 7,
+                paragraphSpacing: 18,
+                theme: .sepia
+            )
+        )
+        try await first.writePortableUIState(portableUI)
+        try await first.verifyCompatibilityExports()
+
+        let sidecar = vault.appendingPathComponent(".leonbook", isDirectory: true)
+        for filename in ["manifest.json", "comments.json", "history.json", "bookmarks.json", "layouts.json"] {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: sidecar.appendingPathComponent(filename).path))
+        }
+
+        let second = LocalBlogStore(rootURL: secondRoot)
+        _ = try await second.configureMarkdownWorkspaceSource(mode: .directEdit, directoryURL: vault)
+        let imported = try await second.setPortableSidecarEnabled(true)
+        XCTAssertTrue(imported.didChange)
+        XCTAssertEqual(try await second.listArticleComments(articleSlug: "portable-note"), [comment])
+        XCTAssertEqual(
+            try await second.listArticleRevisions(
+                articleSlug: "portable-note",
+                draftKey: "portable-note"
+            ).first?.syncID,
+            revision.syncID
+        )
+        XCTAssertEqual(try await second.listBookmarks(), [bookmark])
+        XCTAssertEqual(try await second.readPortableUIState(), portableUI)
+
+        try await first.deleteArticleComment(id: comment.id, articleSlug: comment.articleSlug)
+        try await first.deleteBookmark(id: bookmark.id)
+        try await first.verifyCompatibilityExports()
+        let deleted = try await second.synchronizePortableSidecar()
+        XCTAssertEqual(deleted.deletedCommentCount, 1)
+        XCTAssertEqual(deleted.deletedBookmarkCount, 1)
+        XCTAssertTrue(try await second.listArticleComments(articleSlug: "portable-note").isEmpty)
+        XCTAssertTrue(try await second.listBookmarks().isEmpty)
+
+        let readOnly = LocalBlogStore(rootURL: readOnlyRoot)
+        _ = try await readOnly.configureMarkdownWorkspaceSource(mode: .readOnlyMount, directoryURL: vault)
+        _ = try await readOnly.setPortableSidecarEnabled(true)
+        let readOnlyStatus = try await readOnly.portableSidecarStatus()
+        XCTAssertTrue(readOnlyStatus.isEnabled)
+        XCTAssertFalse(readOnlyStatus.isWritable)
+        do {
+            try await readOnly.writePortableUIState(portableUI)
+            XCTFail("read-only mounts must not write portable sidecars")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("只读"))
+        }
+    }
+
+    func testPortableSidecarPreservesRecordsUntilMarkdownArrives() async throws {
+        let vault = try makeTemporaryDirectory()
+        let sourceRoot = try makeTemporaryDirectory()
+        let receivingRoot = try makeTemporaryDirectory()
+        let stagedNote = try makeTemporaryDirectory().appendingPathComponent("delayed-note.md")
+        defer {
+            try? FileManager.default.removeItem(at: vault)
+            try? FileManager.default.removeItem(at: sourceRoot)
+            try? FileManager.default.removeItem(at: receivingRoot)
+            try? FileManager.default.removeItem(at: stagedNote.deletingLastPathComponent())
+        }
+        let noteURL = vault.appendingPathComponent("delayed-note.md")
+        let source = """
+        ---
+        slug: delayed-note
+        title: Delayed note
+        ---
+        Markdown can arrive after its sidecar.
+        """
+        try Data(source.utf8).write(to: noteURL)
+
+        let sourceStore = LocalBlogStore(rootURL: sourceRoot)
+        _ = try await sourceStore.configureMarkdownWorkspaceSource(
+            mode: .directEdit,
+            directoryURL: vault
+        )
+        _ = try await sourceStore.setPortableSidecarEnabled(true)
+        let comment = try await sourceStore.createArticleComment(
+            articleSlug: "delayed-note",
+            authorName: "source-device",
+            text: "Keep me until the Markdown file arrives."
+        )
+        try await sourceStore.verifyCompatibilityExports()
+
+        try FileManager.default.moveItem(at: noteURL, to: stagedNote)
+        let receivingStore = LocalBlogStore(rootURL: receivingRoot)
+        _ = try await receivingStore.configureMarkdownWorkspaceSource(
+            mode: .directEdit,
+            directoryURL: vault
+        )
+        _ = try await receivingStore.setPortableSidecarEnabled(true)
+        XCTAssertTrue(
+            try await receivingStore.listArticleComments(articleSlug: "delayed-note").isEmpty
+        )
+
+        try FileManager.default.moveItem(at: stagedNote, to: noteURL)
+        _ = try await receivingStore.refreshMarkdownSources()
+        _ = try await receivingStore.synchronizePortableSidecar()
+        XCTAssertEqual(
+            try await receivingStore.listArticleComments(articleSlug: "delayed-note"),
+            [comment]
+        )
+    }
 }
 
 final class UserWorkspaceStoreTests {
@@ -3377,6 +3770,8 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testBaseFormulasCalculatePropertiesDatesAndSummaries", { NativeModelsTests().testBaseFormulasCalculatePropertiesDatesAndSummaries() }),
             ("NativeModelsTests.testArticleGraphProjectionFiltersOrphansAndClipsByDegree", { NativeModelsTests().testArticleGraphProjectionFiltersOrphansAndClipsByDegree() }),
             ("PerformanceRegressionTests.testEditorSessionOwnsHighFrequencyDraftState", { PerformanceRegressionTests().testEditorSessionOwnsHighFrequencyDraftState() }),
+            ("PerformanceRegressionTests.testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries", { PerformanceRegressionTests().testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries() }),
+            ("PerformanceRegressionTests.testArticleNavigationPersistenceCoalescesToLatestSnapshot", { try await PerformanceRegressionTests().testArticleNavigationPersistenceCoalescesToLatestSnapshot() }),
             ("PerformanceRegressionTests.testMarkdownRefreshPlanSkipsUnrelatedDomains", { PerformanceRegressionTests().testMarkdownRefreshPlanSkipsUnrelatedDomains() }),
             ("PerformanceRegressionTests.testMarkdownLiveStylingLimitsOrdinaryEditsToNearbyParagraphs", { PerformanceRegressionTests().testMarkdownLiveStylingLimitsOrdinaryEditsToNearbyParagraphs() }),
             ("PerformanceRegressionTests.testArticleMarkdownAnalysisIsCachedAndSharedAcrossConsumers", { PerformanceRegressionTests().testArticleMarkdownAnalysisIsCachedAndSharedAcrossConsumers() }),
@@ -3412,6 +3807,9 @@ struct LeonBookUnitTests {
             ("LocalBlogStoreTests.testReadOnlyMarkdownMountIndexesExternalChangesWithoutWritingVault", { try await LocalBlogStoreTests().testReadOnlyMarkdownMountIndexesExternalChangesWithoutWritingVault() }),
             ("LocalBlogStoreTests.testDirectEditMarkdownMountWritesBackInPlace", { try await LocalBlogStoreTests().testDirectEditMarkdownMountWritesBackInPlace() }),
             ("LocalBlogStoreTests.testSwitchingBackToManagedMarkdownRevivesWorkspaceArticles", { try await LocalBlogStoreTests().testSwitchingBackToManagedMarkdownRevivesWorkspaceArticles() }),
+            ("LocalBlogStoreTests.testWorkspaceResourceTreeMixesArticlesAttachmentsAndMovesFolders", { try await LocalBlogStoreTests().testWorkspaceResourceTreeMixesArticlesAttachmentsAndMovesFolders() }),
+            ("LocalBlogStoreTests.testPortableSidecarSynchronizesNonRebuildableStateAcrossWorkspaces", { try await LocalBlogStoreTests().testPortableSidecarSynchronizesNonRebuildableStateAcrossWorkspaces() }),
+            ("LocalBlogStoreTests.testPortableSidecarPreservesRecordsUntilMarkdownArrives", { try await LocalBlogStoreTests().testPortableSidecarPreservesRecordsUntilMarkdownArrives() }),
             ("UserWorkspaceStoreTests.testWorkspacePreparationCreatesAndPersistsDefaultUser", { try await UserWorkspaceStoreTests().testWorkspacePreparationCreatesAndPersistsDefaultUser() }),
             ("UserWorkspaceStoreTests.testTwoWindowRegistriesCanShareTheDataRootInTheSameProcess", { try await UserWorkspaceStoreTests().testTwoWindowRegistriesCanShareTheDataRootInTheSameProcess() }),
             ("LocalBackupManagerTests.testSnapshotCopiesDataWritesManifestAndSkipsLockFile", { try LocalBackupManagerTests().testSnapshotCopiesDataWritesManifestAndSkipsLockFile() }),
@@ -3434,6 +3832,10 @@ struct LeonBookUnitTests {
             tests.append((
                 "PerformanceRegressionTests.testMomentTimestampReuseBenchmark",
                 { PerformanceRegressionTests().testMomentTimestampReuseBenchmark() }
+            ))
+            tests.append((
+                "PerformanceRegressionTests.testArticleTabUserInteractionBenchmark",
+                { try await PerformanceRegressionTests().testArticleTabUserInteractionBenchmark() }
             ))
         }
         let filter = ProcessInfo.processInfo.environment["LEON_BOOK_TEST_FILTER"]?
