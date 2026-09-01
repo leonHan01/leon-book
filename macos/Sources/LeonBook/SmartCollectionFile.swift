@@ -95,6 +95,7 @@ enum NativeSmartCollectionFile {
                 layout: legacy?.layout ?? .table,
                 sorts: legacy?.sorts ?? [NativeArticleSortDescriptor()],
                 groupBy: legacy?.groupBy ?? .none,
+                calendarDatePropertyKey: legacy?.calendarDatePropertyKey,
                 columns: legacy?.columns ?? NativeSmartCollection.defaultColumns
             )]
             : parsedViews
@@ -107,6 +108,7 @@ enum NativeSmartCollectionFile {
             rules: projection?.rules ?? legacy?.rules ?? [],
             sorts: first.sorts,
             groupBy: first.groupBy,
+            calendarDatePropertyKey: first.calendarDatePropertyKey,
             layout: first.layout,
             columns: first.columns,
             formulas: formulas,
@@ -146,6 +148,7 @@ enum NativeSmartCollectionFile {
             let filter = node.value(forKey: "filters").flatMap(parseFilter)
             let order = scalarList(node.value(forKey: "order"))
             let summaries = summaryMap(node.value(forKey: "summaries"))
+            let propertyKinds = propertyKindMap(node.value(forKey: "leonBookPropertyKinds"))
             let widths = numberMap(
                 node.value(forKey: "leonBookColumnWidths") ?? node.value(forKey: "columnSize")
             )
@@ -164,6 +167,9 @@ enum NativeSmartCollectionFile {
                 }
                 column.isHidden = hidden.contains(normalizedKey(propertyName))
                 column.summary = summaries[normalizedKey(propertyName)]
+                if let kind = propertyKinds[normalizedKey(propertyName)] {
+                    column.propertyKind = kind
+                }
                 return column
             }
             for hiddenName in scalarList(node.value(forKey: "leonBookHidden"))
@@ -175,9 +181,15 @@ enum NativeSmartCollectionFile {
                     legacy: legacyColumns
                 )
                 hiddenColumn.isHidden = true
+                if let kind = propertyKinds[normalizedKey(hiddenName)] {
+                    hiddenColumn.propertyKind = kind
+                }
                 columns.append(hiddenColumn)
             }
             let groupBy = parseGroup(node.value(forKey: "groupBy"))
+            let calendarDatePropertyKey = decodedScalar(
+                node.value(forKey: "leonBookCalendarDateProperty")
+            )
             let sorts = parseSorts(node.value(forKey: "leonBookSorts"))
                 ?? (index == 0 ? legacy?.sorts : nil)
                 ?? [NativeArticleSortDescriptor(id: stableUUID("sort:\(baseID):\(index):default"))]
@@ -190,6 +202,7 @@ enum NativeSmartCollectionFile {
                 filter: filter,
                 sorts: sorts,
                 groupBy: groupBy,
+                calendarDatePropertyKey: calendarDatePropertyKey,
                 columns: columns,
                 limit: limit
             )
@@ -268,6 +281,17 @@ enum NativeSmartCollectionFile {
         return Dictionary(uniqueKeysWithValues: pairs.compactMap { pair in
             guard let value = decodedScalar(pair.value).flatMap(Double.init) else { return nil }
             return (normalizedKey(pair.key), value)
+        })
+    }
+
+    private static func propertyKindMap(
+        _ node: NativeBaseYAMLValue?
+    ) -> [String: NativeArticlePropertyKind] {
+        guard let pairs = node?.pairs else { return [:] }
+        return Dictionary(uniqueKeysWithValues: pairs.compactMap { pair in
+            guard let value = decodedScalar(pair.value),
+                  let kind = NativeArticlePropertyKind(rawValue: value) else { return nil }
+            return (normalizedKey(pair.key), kind)
         })
     }
 
@@ -377,6 +401,7 @@ enum NativeSmartCollectionFile {
                 layout: collection.layout,
                 sorts: collection.sorts,
                 groupBy: collection.groupBy,
+                calendarDatePropertyKey: collection.calendarDatePropertyKey,
                 columns: collection.columns
             )]
             : collection.views
@@ -393,6 +418,10 @@ enum NativeSmartCollectionFile {
             } else if parseGroup(node.value(forKey: "groupBy")) != .none {
                 node.set(nil, forKey: "groupBy")
             }
+            node.set(
+                view.calendarDatePropertyKey.map { .scalar(yamlString($0)) },
+                forKey: "leonBookCalendarDateProperty"
+            )
             node.set(.sequence(view.columns.filter { !$0.isHidden }.map {
                 .scalar(yamlKey($0.basePropertyName))
             }), forKey: "order")
@@ -412,6 +441,10 @@ enum NativeSmartCollectionFile {
             node.set(.mapping(view.columns.map {
                 NativeBaseYAMLPair(key: $0.basePropertyName, value: .scalar(String(Int($0.width.rounded()))))
             }), forKey: "leonBookColumnWidths")
+            let typedProperties = view.columns.filter { $0.source == .property }
+            node.set(typedProperties.isEmpty ? nil : .mapping(typedProperties.map {
+                NativeBaseYAMLPair(key: $0.basePropertyName, value: .scalar($0.propertyKind.rawValue))
+            }), forKey: "leonBookPropertyKinds")
             let hidden = view.columns.filter(\.isHidden)
             node.set(hidden.isEmpty ? nil : .sequence(hidden.map {
                 .scalar(yamlKey($0.basePropertyName))

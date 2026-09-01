@@ -54,6 +54,7 @@
 
 ```bash
 ./scripts/leonblog start   # open 的别名
+./scripts/leonblog restart # 关闭当前应用，重新构建后启动
 ./scripts/leonblog build   # 构建 macOS 应用
 ./scripts/leonblog test    # 运行原生检查
 ./scripts/leonblog help    # 显示命令帮助

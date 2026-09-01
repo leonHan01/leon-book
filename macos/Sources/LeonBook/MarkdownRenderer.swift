@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -688,7 +689,10 @@ private struct MarkdownParseResult {
 
 private enum MarkdownParser {
     static func parse(_ source: String, lineOffset: Int = 0) -> MarkdownParseResult {
-        let extracted = extractFootnotes(from: source.components(separatedBy: .newlines))
+        let semanticLines = source.components(separatedBy: .newlines).map {
+            NativeBlockHierarchyMetadata.removingMarkers(from: $0)
+        }
+        let extracted = extractFootnotes(from: semanticLines)
         let lines = extracted.lines
         var blocks: [MarkdownBlock] = []
         var blockAnchorIDs: [String?] = []
@@ -1189,16 +1193,21 @@ private func markdownInlineFragment(
     )
     let resolvedSource = MarkdownArticleLinkRenderer.markdown(from: normalizedSource, articleLinks: articleLinks)
     if var attributed = try? AttributedString(markdown: resolvedSource) {
+        attributed = MarkdownTypography.compressedCJKPunctuation(in: attributed)
         if highlighted { attributed.backgroundColor = Color.yellow.opacity(0.35) }
         return Text(attributed)
     }
     return Text(resolvedSource)
 }
 
-private enum MarkdownTypography {
+enum MarkdownTypography {
     private static let cjkPunctuationSpacing = try! NSRegularExpression(
         pattern: #"([，。！？；：、])[ \t]+(?=\p{Han})"#
     )
+    private static let compressibleCJKPunctuation = try! NSRegularExpression(
+        pattern: #"[，。！？；：、](?=\S)"#
+    )
+    private static let cjkPunctuationKern: CGFloat = -5
 
     static func normalizedCJKSpacing(in source: String) -> String {
         cjkPunctuationSpacing.stringByReplacingMatches(
@@ -1206,6 +1215,18 @@ private enum MarkdownTypography {
             range: NSRange(source.startIndex..., in: source),
             withTemplate: "$1"
         )
+    }
+
+    static func compressedCJKPunctuation(in source: AttributedString) -> AttributedString {
+        let rendered = NSMutableAttributedString(attributedString: NSAttributedString(source))
+        let matches = compressibleCJKPunctuation.matches(
+            in: rendered.string,
+            range: NSRange(location: 0, length: rendered.length)
+        )
+        for match in matches {
+            rendered.addAttribute(.kern, value: cjkPunctuationKern, range: match.range)
+        }
+        return AttributedString(rendered)
     }
 
     static func normalizedFootnotes(in source: String) -> String {

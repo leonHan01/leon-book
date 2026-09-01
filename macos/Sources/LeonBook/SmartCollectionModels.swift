@@ -4,6 +4,8 @@ public enum NativeSmartCollectionLayout: String, Codable, CaseIterable, Hashable
     case list
     case table
     case cards
+    case board
+    case calendar
 
     public var id: String { rawValue }
 
@@ -12,6 +14,8 @@ public enum NativeSmartCollectionLayout: String, Codable, CaseIterable, Hashable
         case .list: return "列表"
         case .table: return "表格"
         case .cards: return "卡片"
+        case .board: return "看板"
+        case .calendar: return "日历"
         }
     }
 
@@ -20,6 +24,8 @@ public enum NativeSmartCollectionLayout: String, Codable, CaseIterable, Hashable
         case .list: return "list.bullet"
         case .table: return "tablecells"
         case .cards: return "rectangle.grid.2x2"
+        case .board: return "rectangle.3.group"
+        case .calendar: return "calendar"
         }
     }
 }
@@ -507,6 +513,7 @@ public struct NativeSmartCollectionView: Codable, Hashable, Identifiable {
     public var filter: NativeSmartCollectionFilter?
     public var sorts: [NativeArticleSortDescriptor]
     public var groupBy: NativeArticleGroupField
+    public var calendarDatePropertyKey: String?
     public var columns: [NativeSmartCollectionColumn]
     public var limit: Int?
 
@@ -518,6 +525,7 @@ public struct NativeSmartCollectionView: Codable, Hashable, Identifiable {
         filter: NativeSmartCollectionFilter? = nil,
         sorts: [NativeArticleSortDescriptor] = [NativeArticleSortDescriptor()],
         groupBy: NativeArticleGroupField = .none,
+        calendarDatePropertyKey: String? = nil,
         columns: [NativeSmartCollectionColumn] = NativeSmartCollection.defaultColumns,
         limit: Int? = nil
     ) {
@@ -528,6 +536,10 @@ public struct NativeSmartCollectionView: Codable, Hashable, Identifiable {
         self.filter = filter
         self.sorts = Array(sorts.prefix(3))
         self.groupBy = groupBy
+        self.calendarDatePropertyKey = calendarDatePropertyKey.flatMap {
+            let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
         self.columns = Array(columns.prefix(30))
         self.limit = limit.map { max(1, $0) }
     }
@@ -540,6 +552,7 @@ public struct NativeSmartCollection: Codable, Hashable, Identifiable {
     public var rules: [NativeSmartCollectionRule]
     public var sorts: [NativeArticleSortDescriptor]
     public var groupBy: NativeArticleGroupField
+    public var calendarDatePropertyKey: String?
     public var layout: NativeSmartCollectionLayout
     public var columns: [NativeSmartCollectionColumn]
     public var formulas: [NativeSmartCollectionFormula]
@@ -557,6 +570,7 @@ public struct NativeSmartCollection: Codable, Hashable, Identifiable {
         rules: [NativeSmartCollectionRule] = [],
         sorts: [NativeArticleSortDescriptor] = [NativeArticleSortDescriptor()],
         groupBy: NativeArticleGroupField = .none,
+        calendarDatePropertyKey: String? = nil,
         layout: NativeSmartCollectionLayout = .list,
         columns: [NativeSmartCollectionColumn] = NativeSmartCollection.defaultColumns,
         formulas: [NativeSmartCollectionFormula] = [],
@@ -573,6 +587,10 @@ public struct NativeSmartCollection: Codable, Hashable, Identifiable {
         self.rules = rules
         self.sorts = Array(sorts.prefix(3))
         self.groupBy = groupBy
+        self.calendarDatePropertyKey = calendarDatePropertyKey.flatMap {
+            let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
         self.layout = layout
         self.columns = Array(columns.prefix(30))
         self.formulas = Array(formulas.prefix(20))
@@ -595,7 +613,7 @@ public struct NativeSmartCollection: Codable, Hashable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, matchMode, rules, sorts, groupBy, layout, columns, formulas
+        case id, name, matchMode, rules, sorts, groupBy, calendarDatePropertyKey, layout, columns, formulas
         case filter, views, activeViewID, sourceYAML, createdAt, updatedAt
     }
 
@@ -609,6 +627,7 @@ public struct NativeSmartCollection: Codable, Hashable, Identifiable {
             sorts: try container.decodeIfPresent([NativeArticleSortDescriptor].self, forKey: .sorts)
                 ?? [NativeArticleSortDescriptor()],
             groupBy: try container.decodeIfPresent(NativeArticleGroupField.self, forKey: .groupBy) ?? .none,
+            calendarDatePropertyKey: try container.decodeIfPresent(String.self, forKey: .calendarDatePropertyKey),
             layout: try container.decodeIfPresent(NativeSmartCollectionLayout.self, forKey: .layout) ?? .list,
             columns: try container.decodeIfPresent([NativeSmartCollectionColumn].self, forKey: .columns)
                 ?? Self.defaultColumns,
@@ -659,6 +678,7 @@ public struct NativeSmartCollection: Codable, Hashable, Identifiable {
         result.layout = view.layout
         result.sorts = view.sorts
         result.groupBy = view.groupBy
+        result.calendarDatePropertyKey = view.calendarDatePropertyKey
         result.columns = view.columns
         return result
     }
@@ -672,6 +692,7 @@ public struct NativeSmartCollection: Codable, Hashable, Identifiable {
         }
         views[index].sorts = Array(sorts.prefix(3))
         views[index].groupBy = groupBy
+        views[index].calendarDatePropertyKey = calendarDatePropertyKey
         views[index].columns = Array(columns.prefix(30))
         activeViewID = views[index].id
     }

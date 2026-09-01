@@ -11,6 +11,7 @@ let macosRoot = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
     .deletingLastPathComponent()
     .deletingLastPathComponent()
+let projectRoot = macosRoot.deletingLastPathComponent()
 let sourcePath = { (name: String) in macosRoot.appendingPathComponent("Sources/LeonBook/\(name)").path }
 let moduleSourcePath = { (module: String, name: String) in
     macosRoot.appendingPathComponent("Sources/\(module)/\(name)").path
@@ -59,6 +60,9 @@ expect(FileManager.default.fileExists(atPath: sourcePath("ObsidianVaultImporter.
 expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionModels.swift")), "smart collection models should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionSQL.swift")), "smart collection SQL compiler should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionViews.swift")), "smart collection views should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionBoardCalendarViews.swift")), "board and calendar collection views should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("ArticlePageHierarchy.swift")), "article page hierarchy should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("ArticlePageTemplates.swift")), "whole-page templates should be isolated from the editor view")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticleLinkIdentityIndex.swift")), "article link identity index should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("AutomationRouting.swift")), "automation URL routing should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("WorkspaceLayouts.swift")), "saved workspace layouts should exist")
@@ -83,6 +87,24 @@ if let buildScript = try? String(contentsOfFile: scriptPath("build-app.sh"), enc
 } else {
     failures.append("release build script should be readable")
 }
+if let managementScript = try? String(
+    contentsOf: projectRoot.appendingPathComponent("scripts/leonblog"),
+    encoding: .utf8
+) {
+    expect(managementScript.contains("leonblog restart"), "management CLI should document the restart command")
+    expect(
+        managementScript.contains("restart_native_app() {\n  quit_native_app\n  build_native_app\n  launch_native_app\n}"),
+        "restart should quit the running app before rebuilding and relaunching"
+    )
+    expect(
+        managementScript.contains("MACOS_BUNDLE_IDENTIFIER=\"com.leon-book.macos\"")
+            && managementScript.contains("tell application id \\\"$MACOS_BUNDLE_IDENTIFIER\\\" to quit"),
+        "restart should request a graceful native app quit"
+    )
+    expect(managementScript.contains("restart) restart_native_app ;;"), "management CLI should dispatch restart")
+} else {
+    failures.append("management CLI should be readable")
+}
 expect(
     FileManager.default.isExecutableFile(atPath: scriptPath("benchmark-performance.sh")),
     "release performance benchmark script should be executable"
@@ -95,7 +117,10 @@ if let benchmarkScript = try? String(
 }
 
 if let properties = try? String(contentsOfFile: sourcePath("ArticleProperties.swift"), encoding: .utf8) {
-    for kind in ["case text", "case list", "case number", "case date", "case checkbox", "case tags"] {
+    for kind in [
+        "case text", "case list", "case number", "case date", "case checkbox", "case tags",
+        "case select", "case status", "case relation", "case rollup",
+    ] {
         expect(properties.contains(kind), "article properties should support \(kind.replacingOccurrences(of: "case ", with: "")) values")
     }
     expect(properties.contains("public static func validated("), "property validation should live behind one module interface")
@@ -111,6 +136,7 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     articleViews += (try? String(contentsOfFile: sourcePath("MarkdownRichEmbedViews.swift"), encoding: .utf8)) ?? ""
     articleViews += (try? String(contentsOfFile: sourcePath("MarkdownRenderer.swift"), encoding: .utf8)) ?? ""
     articleViews += (try? String(contentsOfFile: sourcePath("NativeMarkdownLiveStyler.swift"), encoding: .utf8)) ?? ""
+    articleViews += (try? String(contentsOfFile: sourcePath("ArticlePageTemplates.swift"), encoding: .utf8)) ?? ""
     expect(articleViews.contains("ArticleHistoryView"), "article reader and editor should expose version history")
     expect(articleViews.contains("ArticleRevisionDiffView"), "version history should compare revisions with current content")
     expect(articleViews.contains("ArticleTableOfContents"), "article reader should display a Markdown table of contents")
@@ -195,11 +221,23 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("private var editorPropertiesSidebar"), "article editor should expose editable properties")
     expect(articleViews.contains("ForEach(NativeArticlePropertyKind.allCases)"), "article properties should expose typed value editors")
     expect(articleViews.contains("EditorPropertyRenameSheet"), "article properties should support workspace-wide rename")
+    expect(articleViews.contains("ArticlePageTemplatePicker"), "new pages should expose whole-page templates")
+    expect(articleViews.contains("将当前页面保存为模板"), "the editor should save custom whole-page templates")
     expect(articleViews.contains("[属性名:值]"), "property editor should document structured search syntax")
     expect(articleViews.contains("private var editorOutlineSidebar"), "article editor should expose a live outline")
     expect(articleViews.contains("private var editorLinksSidebar"), "article editor should expose outgoing and incoming links")
-    expect(articleViews.contains("切换编辑模式（⌘⌥1–5）"), "article editing modes should expose keyboard shortcuts")
+    expect(articleViews.contains(".keyboardShortcut(shortcut, modifiers: [.command, .option])"), "article editing modes should expose keyboard shortcuts")
     expect(articleViews.contains("private struct ArticleTabBar"), "article reader should expose a persistent tab strip")
+    if let tabBarStart = articleViews.range(of: "private struct ArticleTabBar"),
+       let tabItemStart = articleViews.range(
+           of: "private struct ArticleTabItem",
+           range: tabBarStart.upperBound..<articleViews.endIndex
+       ) {
+        let tabBarSource = articleViews[tabBarStart.lowerBound..<tabItemStart.lowerBound]
+        expect(tabBarSource.contains(".frame(height: 38)"), "article tab strip should not expand vertically above the reader")
+    } else {
+        expect(false, "article tab strip source should be readable")
+    }
     expect(articleViews.contains("model.navigateArticleBack"), "article tabs should expose back navigation")
     expect(articleViews.contains("model.navigateArticleForward"), "article tabs should expose forward navigation")
     expect(articleViews.contains("model.recentArticles"), "article tabs should expose recently viewed articles")

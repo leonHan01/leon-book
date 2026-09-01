@@ -466,6 +466,24 @@ final class NativeModelsTests {
         XCTAssertTrue(hasInlineMath)
     }
 
+    func testMarkdownTypographyCompressesCJKPunctuationWithoutChangingText() throws {
+        let source = "中国台湾独立摇滚乐队，前身**草东街派对**；继续，[链接](https://example.com)。"
+        let parsed = try AttributedString(markdown: source)
+        let compressed = MarkdownTypography.compressedCJKPunctuation(in: parsed)
+        let rendered = NSAttributedString(compressed)
+
+        XCTAssertEqual(String(compressed.characters), String(parsed.characters))
+        let commaLocation = (rendered.string as NSString).range(of: "，").location
+        let semicolonLocation = (rendered.string as NSString).range(of: "；").location
+        XCTAssertEqual(rendered.attribute(NSAttributedString.Key.kern, at: commaLocation, effectiveRange: nil) as? CGFloat, -5)
+        XCTAssertEqual(rendered.attribute(NSAttributedString.Key.kern, at: semicolonLocation, effectiveRange: nil) as? CGFloat, -5)
+        XCTAssertNil(rendered.attribute(NSAttributedString.Key.kern, at: 0, effectiveRange: nil))
+        XCTAssertTrue(compressed.runs.contains {
+            $0.inlinePresentationIntent?.contains(InlinePresentationIntent.stronglyEmphasized) == true
+        })
+        XCTAssertTrue(compressed.runs.contains { $0.link != nil })
+    }
+
     func testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes() {
         let source = """
         # 计划
@@ -504,6 +522,70 @@ final class NativeModelsTests {
             "第二块\n\n第三块\n\n第一块"
         )
 
+        var multiMovable = NativeBlockEditorDocument.parse("A\n\nB\n\nC\n\nD")
+        let selectedIDs = Set([multiMovable[1].id, multiMovable[2].id])
+        let firstDestinationID = multiMovable[0].id
+        XCTAssertTrue(NativeBlockEditorDocument.move(
+            &multiMovable,
+            blockIDs: selectedIDs,
+            relativeTo: firstDestinationID
+        ))
+        XCTAssertEqual(NativeBlockEditorDocument.render(multiMovable), "B\n\nC\n\nA\n\nD")
+        let regroupedIDs = Set([multiMovable[0].id, multiMovable[1].id])
+        let lastDestinationID = multiMovable[3].id
+        XCTAssertTrue(NativeBlockEditorDocument.move(
+            &multiMovable,
+            blockIDs: regroupedIDs,
+            relativeTo: lastDestinationID
+        ))
+        XCTAssertEqual(NativeBlockEditorDocument.render(multiMovable), "A\n\nD\n\nB\n\nC")
+        XCTAssertEqual(
+            NativeBlockEditorDocument.appending(
+                ["## 搬入标题", "- [ ] 搬入任务"],
+                to: "目标笔记正文"
+            ),
+            "目标笔记正文\n\n## 搬入标题\n\n- [ ] 搬入任务"
+        )
+
+        let parent = EditorMarkdownBlock(markdown: "- 父块", isCollapsed: true)
+        let child = EditorMarkdownBlock(markdown: "- 子块", depth: 1)
+        let grandchild = EditorMarkdownBlock(markdown: "- 孙块", depth: 2)
+        let sibling = EditorMarkdownBlock(markdown: "同级正文")
+        var hierarchy = [parent, child, grandchild, sibling]
+        let hierarchyMarkdown = NativeBlockEditorDocument.render(hierarchy)
+        XCTAssertTrue(hierarchyMarkdown.contains("leon:block depth=0 collapsed=true"))
+        XCTAssertTrue(hierarchyMarkdown.contains("  - 子块"))
+        let hierarchyRoundTrip = NativeBlockEditorDocument.parse(hierarchyMarkdown)
+        XCTAssertEqual(hierarchyRoundTrip.map(\.depth), [0, 1, 2, 0])
+        XCTAssertEqual(hierarchyRoundTrip.map(\.isCollapsed), [true, false, false, false])
+        XCTAssertEqual(NativeBlockEditorDocument.visibleBlocks(hierarchyRoundTrip).map(\.markdown), [
+            "- 父块", "同级正文",
+        ])
+        var renderedListDepths: [Int] = []
+        for articleBlock in NativeMarkdownArticleDocument(markdown: hierarchyMarkdown).blocks {
+            guard case let .text(markdownBlocks, _, _, _) = articleBlock else { continue }
+            for markdownBlock in markdownBlocks {
+                if case let .list(items) = markdownBlock {
+                    renderedListDepths.append(contentsOf: items.map(\.depth))
+                }
+            }
+        }
+        XCTAssertEqual(renderedListDepths, [0, 1, 2])
+        XCTAssertEqual(
+            NativeBlockEditorDocument.descendantIDs(of: [parent.id], in: hierarchy),
+            Set([parent.id, child.id, grandchild.id])
+        )
+        XCTAssertTrue(NativeBlockEditorDocument.move(
+            &hierarchy,
+            blockIDs: Set([parent.id, child.id, grandchild.id]),
+            relativeTo: sibling.id
+        ))
+        XCTAssertEqual(hierarchy.map(\.markdown), ["同级正文", "- 父块", "- 子块", "- 孙块"])
+        XCTAssertEqual(
+            NativeBlockEditorDocument.syncedBlockReference(in: "![[source-note#^decision]]"),
+            "source-note#^decision"
+        )
+
         XCTAssertEqual(
             NativeBlockEditorDocument.converting("决定 ^choice", to: .heading2),
             "## 决定 ^choice"
@@ -522,9 +604,81 @@ final class NativeModelsTests {
         XCTAssertEqual(split?.1, "- [ ] ")
         XCTAssertNil(NativeBlockEditorDocument.split("```\nlet x = 1\n```", atUTF16Location: 4))
 
+        let table = NativeBlockEditorDocument.converting("本周进度", to: .table)
+        XCTAssertEqual(EditorMarkdownBlockKind.detect(in: table), .table)
+        XCTAssertTrue(table.contains("| --- | --- |"))
+        XCTAssertNil(NativeBlockEditorDocument.split(table, atUTF16Location: 2))
+        let math = NativeBlockEditorDocument.converting("x^2 + y^2", to: .math)
+        XCTAssertEqual(EditorMarkdownBlockKind.detect(in: math), .math)
+        XCTAssertEqual(
+            NativeBlockEditorDocument.parse("$$\nx^2\n\n+ y^2\n$$").map(\.kind),
+            [.math]
+        )
+        XCTAssertEqual(NativeBlockEditorDocument.converting(math, to: .paragraph), "x^2 + y^2")
+
         let addressable = NativeBlockEditorDocument.ensuringBlockID(in: "一段内容")
         XCTAssertEqual(NativeBlockEditorDocument.blockID(in: addressable.markdown), addressable.id)
         XCTAssertEqual(NativeBlockEditorDocument.removingBlockID(from: addressable.markdown), "一段内容")
+    }
+
+    func testBlockTemplatesPersistAndBuiltInsParse() {
+        for template in EditorBlockTemplateCatalog.builtIn {
+            let blocks = NativeBlockEditorDocument.parse(template.body)
+            XCTAssertFalse(blocks.isEmpty)
+            XCTAssertFalse(NativeBlockEditorDocument.render(blocks).isEmpty)
+        }
+        XCTAssertTrue(
+            NativeBlockEditorDocument.parse(EditorBlockTemplateCatalog.builtIn[0].body)
+                .contains(where: { $0.depth > 0 })
+        )
+        XCTAssertTrue(
+            NativeBlockEditorDocument.parse(EditorBlockTemplateCatalog.builtIn[2].body)
+                .contains(where: { $0.kind == .table })
+        )
+
+        let suiteName = "leon-book-block-template-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let custom = [EditorBlockTemplate(name: "项目模板", body: "## 项目\n\n- [ ] 任务")]
+        EditorBlockTemplateCatalog.saveCustom(custom, defaults: defaults)
+        XCTAssertEqual(EditorBlockTemplateCatalog.loadCustom(defaults: defaults), custom)
+    }
+
+    @MainActor
+    func testPageTemplatesApplyMetadataAndPersistPerWorkspace() {
+        let meeting = NativeArticlePageTemplateCatalog.builtIn[0]
+        let fixedDate = ISO8601DateFormatter().date(from: "2026-08-30T09:15:00Z")!
+        var draft = NativeEditorDraft()
+        let recoveryID = draft.recoveryID
+        meeting.apply(to: &draft, at: fixedDate, timeZone: TimeZone(secondsFromGMT: 0)!)
+
+        XCTAssertEqual(draft.recoveryID, recoveryID)
+        XCTAssertEqual(draft.title, "会议记录 · 2026-08-30")
+        XCTAssertEqual(draft.category, "Meetings")
+        XCTAssertEqual(draft.tags, "#会议")
+        XCTAssertTrue(draft.body.contains("2026-08-30 09:15"))
+        XCTAssertEqual(draft.properties["日期"], .date("2026-08-30"))
+        XCTAssertEqual(draft.properties["状态"], .status("进行中"))
+        XCTAssertEqual(draft.status, .draft)
+        XCTAssertTrue(NativeArticlePageTemplate.canCapture(draft))
+
+        let suiteName = "leon-book-page-template-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let library = NativeArticlePageTemplateLibrary(defaults: defaults)
+
+        library.prepare(for: "workspace-one")
+        XCTAssertTrue(library.save(draft, named: "团队会议"))
+        XCTAssertEqual(library.customTemplates.map(\.name), ["团队会议"])
+
+        library.prepare(for: "workspace-two")
+        XCTAssertTrue(library.customTemplates.isEmpty)
+
+        library.prepare(for: "workspace-one")
+        XCTAssertEqual(library.customTemplates.first?.title, draft.title)
+        XCTAssertEqual(library.customTemplates.first?.properties, draft.properties)
+        XCTAssertTrue(library.save(draft, named: "团队会议"))
+        XCTAssertEqual(library.customTemplates.count, 1, "saving the same name should update instead of duplicate")
     }
 
     func testArticleTabMaintainsIndependentBackAndForwardHistory() throws {
@@ -703,6 +857,246 @@ final class NativeModelsTests {
             from: JSONEncoder().encode(renamed)
         )
         XCTAssertEqual(roundTrip, renamed)
+    }
+
+    func testWorkspaceResourceTreeHidesJSONFiles() {
+        let article = NativeArticleSummary(
+            banner: nil,
+            category: "Notes",
+            excerpt: "",
+            publishedAt: nil,
+            slug: "note",
+            sourceRelativePath: "note.md",
+            status: .draft,
+            tags: [],
+            title: "Note",
+            updatedAt: "2026-09-01T00:00:00Z",
+            wordCount: 1
+        )
+        let records = [
+            NativeWorkspaceResourceRecord(
+                kind: .file,
+                storage: .markdownSource,
+                relativePath: "note.md",
+                placementFolderPath: "",
+                absolutePath: "/vault/note.md"
+            ),
+            NativeWorkspaceResourceRecord(
+                kind: .file,
+                storage: .markdownSource,
+                relativePath: "note.json",
+                placementFolderPath: "",
+                absolutePath: "/vault/note.json"
+            ),
+            NativeWorkspaceResourceRecord(
+                kind: .file,
+                storage: .markdownSource,
+                relativePath: "index.json",
+                placementFolderPath: "",
+                absolutePath: "/vault/index.json"
+            ),
+            NativeWorkspaceResourceRecord(
+                kind: .file,
+                storage: .markdownSource,
+                relativePath: "nested/config.JSON",
+                placementFolderPath: "nested",
+                absolutePath: "/vault/nested/config.JSON"
+            ),
+            NativeWorkspaceResourceRecord(
+                kind: .file,
+                storage: .managedMedia,
+                relativePath: "note/data.json",
+                placementFolderPath: "",
+                absolutePath: "/vault/media/note/data.json",
+                displayName: "data.json"
+            ),
+            NativeWorkspaceResourceRecord(
+                kind: .file,
+                storage: .markdownSource,
+                relativePath: "attachment.pdf",
+                placementFolderPath: "",
+                absolutePath: "/vault/attachment.pdf"
+            ),
+        ]
+
+        let flattened = NativeWorkspaceResourceTree.flattened(
+            NativeWorkspaceResourceTree.build(articles: [article], records: records)
+        )
+        XCTAssertEqual(flattened.filter { $0.kind == .article }.map(\.articleSlug), ["note"])
+        XCTAssertEqual(flattened.filter { $0.kind == .attachment }.map(\.name), ["attachment.pdf"])
+        XCTAssertFalse(flattened.contains { $0.relativePath.lowercased().hasSuffix(".json") })
+        XCTAssertFalse(flattened.contains { $0.kind == .folder && $0.relativePath == "nested" })
+    }
+
+    func testP0PageHierarchyDatabaseLayoutsRelationsAndRollups() throws {
+        XCTAssertEqual(NativeArticlePageHierarchy.containerPath(for: "Projects/Alpha.md"), "Projects/Alpha")
+        XCTAssertEqual(NativeArticlePageHierarchy.containerPath(for: "Projects/index.md"), "Projects")
+        XCTAssertEqual(
+            NativeArticlePageHierarchy.breadcrumbs(folderPath: "Projects/Alpha").map(\.title),
+            ["Projects", "Alpha"]
+        )
+
+        func summary(_ slug: String, _ path: String, _ title: String) -> NativeArticleSummary {
+            NativeArticleSummary(
+                banner: nil,
+                category: "Notes",
+                excerpt: "",
+                publishedAt: nil,
+                slug: slug,
+                sourceRelativePath: path,
+                status: .draft,
+                tags: [],
+                title: title,
+                updatedAt: "2026-08-30T00:00:00Z",
+                wordCount: 1
+            )
+        }
+        let pageArticles = [
+            summary("project", "Project.md", "Project"),
+            summary("child", "Project/Child.md", "Child"),
+            summary("docs", "Docs/index.md", "Docs"),
+            summary("docs-child", "Docs/Guide.md", "Guide"),
+        ]
+        let records = [
+            NativeWorkspaceResourceRecord(kind: .folder, storage: .markdownSource, relativePath: "Project", placementFolderPath: "", absolutePath: "/vault/Project"),
+            NativeWorkspaceResourceRecord(kind: .folder, storage: .markdownSource, relativePath: "Docs", placementFolderPath: "", absolutePath: "/vault/Docs"),
+        ] + pageArticles.map {
+            NativeWorkspaceResourceRecord(
+                kind: .file,
+                storage: .markdownSource,
+                relativePath: $0.sourceRelativePath,
+                placementFolderPath: $0.sourceFolderPath,
+                absolutePath: "/vault/\($0.sourceRelativePath)"
+            )
+        }
+        let roots = NativeWorkspaceResourceTree.build(articles: pageArticles, records: records)
+        let project = roots.first(where: { $0.articleSlug == "project" })
+        let docs = roots.first(where: { $0.articleSlug == "docs" })
+        XCTAssertEqual(project?.children.map(\.articleSlug), ["child"])
+        XCTAssertEqual(docs?.children.map(\.articleSlug), ["docs-child"])
+        XCTAssertTrue(NativeWorkspaceResourceTree.folderPaths(in: roots).contains("Project"))
+
+        let layouts: [NativeSmartCollectionLayout] = [.board, .calendar]
+        XCTAssertEqual(
+            try JSONDecoder().decode([NativeSmartCollectionLayout].self, from: JSONEncoder().encode(layouts)),
+            layouts
+        )
+        let baseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("leon-book-p0-base-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: baseDirectory) }
+        let calendarView = NativeSmartCollectionView(
+            id: "calendar-view",
+            name: "计划",
+            layout: .calendar,
+            calendarDatePropertyKey: "due",
+            columns: [
+                .system(.title),
+                NativeSmartCollectionColumn(source: .property, key: "due", propertyKind: .date),
+                NativeSmartCollectionColumn(source: .property, key: "project", propertyKind: .relation),
+                NativeSmartCollectionColumn(source: .property, key: "total", propertyKind: .rollup),
+            ]
+        )
+        let calendarCollection = NativeSmartCollection(
+            id: "p0-calendar",
+            name: "计划",
+            calendarDatePropertyKey: "due",
+            layout: .calendar,
+            columns: calendarView.columns,
+            views: [calendarView],
+            activeViewID: calendarView.id
+        )
+        _ = try NativeSmartCollectionFile.write(calendarCollection, in: baseDirectory)
+        let persistedCalendar = try NativeSmartCollectionFile.readAll(in: baseDirectory)[0]
+        XCTAssertEqual(persistedCalendar.layout, .calendar)
+        XCTAssertEqual(persistedCalendar.calendarDatePropertyKey, "due")
+        XCTAssertEqual(
+            persistedCalendar.columns.first(where: { $0.key == "due" })?.propertyKind,
+            .date
+        )
+        XCTAssertEqual(
+            persistedCalendar.columns.first(where: { $0.key == "project" })?.propertyKind,
+            .relation
+        )
+
+        let relation = NativeArticlePropertyValue.relation(["Task One", "task-two"])
+        XCTAssertEqual(relation.listValues, ["Task One", "task-two"])
+        let relationRoundTrip = NativeArticlePropertyValue.fromYAML(relation.yamlValue)
+        XCTAssertEqual(relationRoundTrip.kind, .relation)
+        XCTAssertEqual(relationRoundTrip.listValues, relation.listValues)
+
+        let projectSummary = NativeArticleSummary(
+            banner: nil,
+            category: "Projects",
+            excerpt: "",
+            properties: [
+                "tasks": relation,
+                "effort": .rollup("tasks | points | sum"),
+            ],
+            publishedAt: nil,
+            slug: "project-rollup",
+            status: .draft,
+            tags: [],
+            title: "Project Rollup",
+            updatedAt: "2026-08-30T00:00:00Z",
+            wordCount: 1
+        )
+        let taskOne = NativeArticleSummary(
+            banner: nil, category: "Tasks", excerpt: "", properties: ["points": .number(2)],
+            publishedAt: nil, slug: "task-one", status: .draft, tags: [], title: "Task One",
+            updatedAt: "2026-08-30T00:00:00Z", wordCount: 1
+        )
+        let taskTwo = NativeArticleSummary(
+            banner: nil, category: "Tasks", excerpt: "", properties: ["points": .number(3)],
+            publishedAt: nil, slug: "task-two", status: .draft, tags: [], title: "Task Two",
+            updatedAt: "2026-08-30T00:00:00Z", wordCount: 1
+        )
+        XCTAssertEqual(
+            NativeArticleRollup.displayText(
+                specification: projectSummary.properties["effort"]?.value ?? "",
+                article: projectSummary,
+                articles: [projectSummary, taskOne, taskTwo]
+            ),
+            "5"
+        )
+    }
+
+    func testDatabaseViewQuickCreatePrefillsDraftFields() {
+        var draft = NativeEditorDraft()
+        XCTAssertTrue(NativeArticleDraftPrefill.applyBoardGroup(
+            label: NativeArticleStatus.published.label,
+            field: .status,
+            to: &draft
+        ))
+        XCTAssertEqual(draft.status, .published)
+        XCTAssertTrue(NativeArticleDraftPrefill.applyBoardGroup(
+            label: "Research",
+            field: .category,
+            to: &draft
+        ))
+        XCTAssertEqual(draft.category, "Research")
+        XCTAssertTrue(NativeArticleDraftPrefill.applyBoardGroup(
+            label: "#Swift",
+            field: .tag,
+            to: &draft
+        ))
+        XCTAssertEqual(draft.tags, "Swift")
+        XCTAssertFalse(NativeArticleDraftPrefill.applyBoardGroup(
+            label: "2026年8月",
+            field: .updatedMonth,
+            to: &draft
+        ))
+        XCTAssertTrue(NativeArticleDraftPrefill.applyCalendarDate(
+            "2026-08-30",
+            propertyKey: "due",
+            to: &draft
+        ))
+        XCTAssertEqual(draft.properties["due"], .date("2026-08-30"))
+        XCTAssertFalse(NativeArticleDraftPrefill.applyCalendarDate(
+            "not-a-date",
+            propertyKey: "due",
+            to: &draft
+        ))
     }
 
     func testSmartCollectionCombinesPropertiesDatesAndMultiSort() {
@@ -2406,6 +2800,75 @@ final class LocalBlogStoreTests {
         XCTAssertTrue(try await store.listArticles().isEmpty)
     }
 
+    func testAtomicArticleBodyUpdatesCommitAndUndoBothNotes() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let source = try await store.saveArticle(article(
+            slug: "block-source",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "来源正文\n\n可移动块 ^moving"
+        ))
+        let target = try await store.saveArticle(article(
+            slug: "block-target",
+            status: .draft,
+            expectedUpdatedAt: nil,
+            body: "目标正文"
+        ))
+
+        let moved = try await store.updateArticleBodiesAtomically([
+            NativeArticleBodyUpdate(
+                slug: source.slug,
+                body: "来源正文",
+                expectedUpdatedAt: source.updatedAt
+            ),
+            NativeArticleBodyUpdate(
+                slug: target.slug,
+                body: "目标正文\n\n可移动块 ^moving",
+                expectedUpdatedAt: target.updatedAt
+            ),
+        ])
+        let movedSource = moved.first { $0.slug == source.slug }!
+        let movedTarget = moved.first { $0.slug == target.slug }!
+        XCTAssertEqual(try await store.getArticle(slug: source.slug).body, "来源正文")
+        XCTAssertTrue(try await store.getArticle(slug: target.slug).body.contains("可移动块"))
+
+        do {
+            _ = try await store.updateArticleBodiesAtomically([
+                NativeArticleBodyUpdate(
+                    slug: source.slug,
+                    body: "不应写入",
+                    expectedUpdatedAt: source.updatedAt
+                ),
+                NativeArticleBodyUpdate(
+                    slug: target.slug,
+                    body: "也不应写入",
+                    expectedUpdatedAt: movedTarget.updatedAt
+                ),
+            ])
+            XCTFail("a stale source timestamp should reject the complete body transaction")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("其他窗口中更新"))
+        }
+        XCTAssertEqual(try await store.getArticle(slug: target.slug).body, movedTarget.body)
+
+        _ = try await store.updateArticleBodiesAtomically([
+            NativeArticleBodyUpdate(
+                slug: source.slug,
+                body: source.body,
+                expectedUpdatedAt: movedSource.updatedAt
+            ),
+            NativeArticleBodyUpdate(
+                slug: target.slug,
+                body: target.body,
+                expectedUpdatedAt: movedTarget.updatedAt
+            ),
+        ])
+        XCTAssertEqual(try await store.getArticle(slug: source.slug).body, source.body)
+        XCTAssertEqual(try await store.getArticle(slug: target.slug).body, target.body)
+    }
+
     func testArticleHashtagsPersistAsNormalizedTags() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -4065,7 +4528,10 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testArticleLinksExtractAndResolveTitlesOrSlugs", { try NativeModelsTests().testArticleLinksExtractAndResolveTitlesOrSlugs() }),
             ("NativeModelsTests.testArticleEmbedsSelectWholeNotesHeadingsAndBlocks", { NativeModelsTests().testArticleEmbedsSelectWholeNotesHeadingsAndBlocks() }),
             ("NativeModelsTests.testRichMarkdownEmbedsAndBlockLinkAnchors", { NativeModelsTests().testRichMarkdownEmbedsAndBlockLinkAnchors() }),
+            ("NativeModelsTests.testMarkdownTypographyCompressesCJKPunctuationWithoutChangingText", { try NativeModelsTests().testMarkdownTypographyCompressesCJKPunctuationWithoutChangingText() }),
             ("NativeModelsTests.testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes", { NativeModelsTests().testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes() }),
+            ("NativeModelsTests.testBlockTemplatesPersistAndBuiltInsParse", { NativeModelsTests().testBlockTemplatesPersistAndBuiltInsParse() }),
+            ("NativeModelsTests.testPageTemplatesApplyMetadataAndPersistPerWorkspace", { await MainActor.run { NativeModelsTests().testPageTemplatesApplyMetadataAndPersistPerWorkspace() } }),
             ("NativeModelsTests.testArticleTabMaintainsIndependentBackAndForwardHistory", { try NativeModelsTests().testArticleTabMaintainsIndependentBackAndForwardHistory() }),
             ("NativeModelsTests.testArticleCommentSelectionAnchorsToNearestHeading", { NativeModelsTests().testArticleCommentSelectionAnchorsToNearestHeading() }),
             ("NativeModelsTests.testArticleLineDiffMarksAddedAndRemovedLines", { NativeModelsTests().testArticleLineDiffMarksAddedAndRemovedLines() }),
@@ -4074,6 +4540,9 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testDateFiltersUseTheProvidedCalendarAndNow", { NativeModelsTests().testDateFiltersUseTheProvidedCalendarAndNow() }),
             ("NativeModelsTests.testGlobalSearchQueryParsesPhrasesAndFilters", { NativeModelsTests().testGlobalSearchQueryParsesPhrasesAndFilters() }),
             ("NativeModelsTests.testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename", { try NativeModelsTests().testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename() }),
+            ("NativeModelsTests.testWorkspaceResourceTreeHidesJSONFiles", { NativeModelsTests().testWorkspaceResourceTreeHidesJSONFiles() }),
+            ("NativeModelsTests.testP0PageHierarchyDatabaseLayoutsRelationsAndRollups", { try NativeModelsTests().testP0PageHierarchyDatabaseLayoutsRelationsAndRollups() }),
+            ("NativeModelsTests.testDatabaseViewQuickCreatePrefillsDraftFields", { NativeModelsTests().testDatabaseViewQuickCreatePrefillsDraftFields() }),
             ("NativeModelsTests.testSmartCollectionCombinesPropertiesDatesAndMultiSort", { NativeModelsTests().testSmartCollectionCombinesPropertiesDatesAndMultiSort() }),
             ("NativeModelsTests.testBaseFormulasCalculatePropertiesDatesAndSummaries", { NativeModelsTests().testBaseFormulasCalculatePropertiesDatesAndSummaries() }),
             ("NativeModelsTests.testDeclarativeExtensionsExposeFiveSafeCapabilities", { try NativeModelsTests().testDeclarativeExtensionsExposeFiveSafeCapabilities() }),
@@ -4095,6 +4564,7 @@ struct LeonBookUnitTests {
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),
             ("LocalBlogStoreTests.testQuestionAnswersAndTagSearchPersistInSQLite", { try await LocalBlogStoreTests().testQuestionAnswersAndTagSearchPersistInSQLite() }),
             ("LocalBlogStoreTests.testArticleLifecycleSupportsDraftPublishingAndConflictProtection", { try await LocalBlogStoreTests().testArticleLifecycleSupportsDraftPublishingAndConflictProtection() }),
+            ("LocalBlogStoreTests.testAtomicArticleBodyUpdatesCommitAndUndoBothNotes", { try await LocalBlogStoreTests().testAtomicArticleBodyUpdatesCommitAndUndoBothNotes() }),
             ("LocalBlogStoreTests.testArticleDeleteHidesRecord", { try await LocalBlogStoreTests().testArticleDeleteHidesRecord() }),
             ("LocalBlogStoreTests.testArticleHashtagsPersistAsNormalizedTags", { try await LocalBlogStoreTests().testArticleHashtagsPersistAsNormalizedTags() }),
             ("LocalBlogStoreTests.testSavingImportedMarkdownPreservesUnchangedFrontmatterSource", { try await LocalBlogStoreTests().testSavingImportedMarkdownPreservesUnchangedFrontmatterSource() }),

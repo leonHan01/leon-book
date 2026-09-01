@@ -231,7 +231,7 @@ enum ArticleKnowledgeComposer {
             let id = String(line[idRange])
             guard seen.insert(id).inserted,
                   let fragment = block(in: body, identifier: id) else { continue }
-            let preview = fragment
+            let preview = NativeBlockHierarchyMetadata.removingMarkers(from: fragment)
                 .replacingOccurrences(of: "\n", with: " ")
                 .replacingOccurrences(
                     of: #"(?:^|\s)\^[A-Za-z0-9-]+(?=\s|$)"#,

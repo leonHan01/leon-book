@@ -414,187 +414,6 @@ private struct MarkdownPreview: View {
     }
 }
 
-private struct EditorPropertyRow: Identifiable, Equatable {
-    let id: UUID
-    var key: String
-    var kind: NativeArticlePropertyKind
-    var value: String
-
-    init(
-        id: UUID = UUID(),
-        key: String = "",
-        kind: NativeArticlePropertyKind = .text,
-        value: String = ""
-    ) {
-        self.id = id
-        self.key = key
-        self.kind = kind
-        self.value = value
-    }
-
-    var typedValue: NativeArticlePropertyValue {
-        NativeArticlePropertyValue.fromEditor(kind: kind, text: value)
-    }
-}
-
-private struct EditorPropertyRenameRequest: Identifiable {
-    let id = UUID()
-    let oldKey: String
-}
-
-private struct EditorPropertyValueField: View {
-    @Binding var row: EditorPropertyRow
-
-    var body: some View {
-        switch row.kind {
-        case .checkbox:
-            Toggle("已选中", isOn: Binding(
-                get: { row.typedValue.booleanValue },
-                set: { row.value = $0 ? "true" : "false" }
-            ))
-            .toggleStyle(.checkbox)
-        case .date:
-            DatePicker(
-                "日期",
-                selection: Binding(
-                    get: { propertyDate(from: row.value) ?? Date() },
-                    set: { row.value = propertyDateString(from: $0) }
-                ),
-                displayedComponents: .date
-            )
-            .datePickerStyle(.field)
-        case .number:
-            TextField("数字", text: $row.value)
-                .textFieldStyle(.roundedBorder)
-        case .list:
-            TextField("用逗号或换行分隔列表项", text: $row.value, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...4)
-        case .tags:
-            TextField("用逗号分隔标签", text: $row.value, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...3)
-        case .text:
-            TextField("属性值", text: $row.value, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...5)
-        }
-    }
-
-    private func propertyDate(from value: String) -> Date? {
-        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
-        guard parts.count == 3,
-              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]) else { return nil }
-        return Calendar.current.date(from: DateComponents(year: year, month: month, day: day))
-    }
-
-    private func propertyDateString(from date: Date) -> String {
-        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
-    }
-}
-
-private struct EditorPropertyRenameSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let oldKey: String
-    let isRenaming: Bool
-    let onRename: (String) -> Void
-    @State private var newKey: String
-
-    init(oldKey: String, isRenaming: Bool, onRename: @escaping (String) -> Void) {
-        self.oldKey = oldKey
-        self.isRenaming = isRenaming
-        self.onRename = onRename
-        _newKey = State(initialValue: oldKey)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("统一重命名属性")
-                .font(.title3.weight(.semibold))
-            Text("所有文章中的“\(oldKey)”都会一起修改；如果目标名称已有不同值，操作会取消，不会覆盖数据。")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            TextField("新属性名", text: $newKey)
-                .textFieldStyle(.roundedBorder)
-            HStack {
-                Spacer()
-                Button("取消") { dismiss() }
-                Button("全部重命名") {
-                    onRename(newKey.trimmingCharacters(in: .whitespacesAndNewlines))
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(
-                    isRenaming
-                        || !NativeArticleProperties.isValidKey(newKey)
-                        || newKey.caseInsensitiveCompare(oldKey) == .orderedSame
-                )
-            }
-        }
-        .padding(20)
-        .frame(width: 420)
-    }
-}
-
-private struct EditorWikiLink: Identifiable {
-    let id: String
-    let reference: NativeArticleLink.Reference
-    let destination: NativeArticleLinkDestination
-}
-
-private struct EditorDocumentAnalysis: @unchecked Sendable {
-    let source: String
-    let document: NativeMarkdownArticleDocument
-    let wikiReferences: [NativeArticleLink.Reference]
-    let wordCount: Int
-
-    static let empty = EditorDocumentAnalysis(source: "")
-
-    init(source: String) {
-        self.source = source
-        document = NativeMarkdownArticleDocumentCache.shared.document(for: source)
-        wikiReferences = NativeArticleLink.parsedReferences(in: source)
-        wordCount = NativeWritingMetrics.characterCount(of: source)
-    }
-}
-
-@MainActor
-private final class EditorDocumentAnalysisModel: ObservableObject {
-    @Published private(set) var value = EditorDocumentAnalysis.empty
-    private var task: Task<Void, Never>?
-    private var generation = 0
-
-    func update(source: String, debounce: Bool = true) {
-        if source == value.source {
-            generation += 1
-            task?.cancel()
-            return
-        }
-        generation += 1
-        let requestedGeneration = generation
-        task?.cancel()
-        task = Task { [weak self] in
-            if debounce {
-                try? await Task.sleep(nanoseconds: 120_000_000)
-            }
-            guard !Task.isCancelled else { return }
-            let analysis = await Task.detached(priority: .userInitiated) {
-                EditorDocumentAnalysis(source: source)
-            }.value
-            guard !Task.isCancelled,
-                  let self,
-                  requestedGeneration == self.generation else { return }
-            self.value = analysis
-        }
-    }
-
-    deinit {
-        task?.cancel()
-    }
-}
-
 struct ArticleEditorView: View {
     @ObservedObject var model: NativeAppModel
     @ObservedObject private var editorSession: NativeEditorSessionState
@@ -603,6 +422,7 @@ struct ArticleEditorView: View {
     @StateObject private var articleLinkController = ArticleLinkAutocompleteController()
     @StateObject private var slashCommandController = EditorSlashCommandController()
     @StateObject private var documentAnalysis = EditorDocumentAnalysisModel()
+    @StateObject private var pageTemplateLibrary = NativeArticlePageTemplateLibrary()
     @State private var isPresentingHistory = false
     @State private var propertyRows: [EditorPropertyRow] = []
     @State private var propertyRenameRequest: EditorPropertyRenameRequest?
@@ -623,10 +443,6 @@ struct ArticleEditorView: View {
 
     private var editorMode: ArticleEditorMode {
         workspaceLayout.editorMode
-    }
-
-    private var editorModeBinding: Binding<ArticleEditorMode> {
-        $workspaceLayout.editorMode
     }
 
     var body: some View {
@@ -694,9 +510,11 @@ struct ArticleEditorView: View {
             model.scheduleEditorAutosave()
         }
         .onAppear {
+            pageTemplateLibrary.prepare(for: model.currentUser.id)
             synchronizePropertyRows()
             documentAnalysis.update(source: model.editor.body, debounce: false)
         }
+        .onChange(of: model.currentUser.id) { pageTemplateLibrary.prepare(for: $0) }
         .onChange(of: model.editor.body) { body in
             documentAnalysis.update(source: body)
         }
@@ -719,48 +537,40 @@ struct ArticleEditorView: View {
     }
 
     private var editorHeader: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Image(systemName: "square.and.pencil")
-                        .foregroundStyle(.tint)
-                    Text("写作工作台")
-                        .font(.headline)
+        HStack(spacing: 12) {
+            Image(systemName: "square.and.pencil")
+                .foregroundStyle(.tint)
 
-                    Text(model.editor.status.label)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(model.editor.status == .published ? .green : .orange)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(
-                            (model.editor.status == .published ? Color.green : Color.orange).opacity(0.12),
-                            in: Capsule()
-                        )
-                }
+            Text(model.editor.status.label)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(model.editor.status == .published ? .green : .orange)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    (model.editor.status == .published ? Color.green : Color.orange).opacity(0.12),
+                    in: Capsule()
+                )
 
-                if model.isMarkdownSourceReadOnly {
-                    Label("只读挂载 · 可阅读和监听外部修改，不能在 LeonBook 中写回", systemImage: "lock.fill")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.orange)
-                }
-
-                Text(model.editor.isNew ? "创建一篇新文章" : "继续编辑这篇文章")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 6) {
-                    if model.isEditorAutosaving {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "checkmark.circle")
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(model.editorAutosaveStatus)
-                        .font(.caption)
+            HStack(spacing: 6) {
+                if model.isEditorAutosaving {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "checkmark.circle")
                         .foregroundStyle(.secondary)
                 }
-                .help("编辑内容停止变化 3 秒后自动保存恢复快照")
+                Text(model.editorAutosaveStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .help("编辑内容停止变化 3 秒后自动保存恢复快照")
+
+            if model.isMarkdownSourceReadOnly {
+                Label("只读挂载", systemImage: "lock.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.orange)
+                    .help("可阅读和监听外部修改，不能在 LeonBook 中写回")
             }
 
             Spacer()
@@ -779,74 +589,67 @@ struct ArticleEditorView: View {
             .help(editorMode == .focus ? "专注写作模式会隐藏右侧面板" : "显示或隐藏编辑右侧面板")
 
             Menu {
-                modeMenuButton(.focus, shortcut: "1")
-                modeMenuButton(.livePreview, shortcut: "2")
-                modeMenuButton(.source, shortcut: "3")
-                modeMenuButton(.split, shortcut: "4")
-                modeMenuButton(.blocks, shortcut: "5")
-            } label: {
-                Label(editorMode.title, systemImage: editorMode.systemImage)
-            }
-            .help("切换编辑模式（⌘⌥1–5）")
-
-            Menu {
-                Button {
-                    model.promptToExtractArticleSelection(model.editorBodySelection)
-                } label: {
-                    Label("提取选区为新文章…", systemImage: "scissors")
+                Section("编辑视图") {
+                    modeMenuButton(.blocks, shortcut: "1")
+                    modeMenuButton(.focus, shortcut: "2")
+                    modeMenuButton(.livePreview, shortcut: "3")
+                    modeMenuButton(.source, shortcut: "4")
+                    modeMenuButton(.split, shortcut: "5")
                 }
-                .disabled(model.editor.isNew || model.editorBodySelection.length == 0)
 
                 Button {
-                    model.promptToSplitArticleByLevel2Headings()
+                    model.executeCommand(.saveDraft)
                 } label: {
-                    Label("按二级标题拆分…", systemImage: "square.split.2x1")
+                    Label(model.isSaving ? "保存中…" : "保存草稿", systemImage: "tray.and.arrow.down")
                 }
-                .disabled(model.editor.isNew)
-
-                Divider()
+                .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
 
                 Button {
-                    model.promptToMergeEditedArticle()
+                    model.refreshArticleHistory()
+                    isPresentingHistory = true
                 } label: {
-                    Label("合并到其他文章…", systemImage: "arrow.triangle.merge")
+                    Label("版本历史", systemImage: "clock.arrow.circlepath")
                 }
-                .disabled(model.editor.isNew || model.articles.count < 2)
-            } label: {
-                Label("重构", systemImage: "point.3.connected.trianglepath.dotted")
-            }
-            .disabled(model.isMarkdownSourceReadOnly)
-            .help("提取、拆分或合并文章，并自动维护双链")
 
-            Button {
-                model.refreshArticleHistory()
-                isPresentingHistory = true
-            } label: {
-                Label("版本历史", systemImage: "clock.arrow.circlepath")
-            }
+                Menu("内容重构") {
+                    Button("提取选区为新文章…", systemImage: "scissors") {
+                        model.promptToExtractArticleSelection(model.editorBodySelection)
+                    }
+                    .disabled(model.editor.isNew || model.editorBodySelection.length == 0)
 
-            Menu {
-                Button("添加封面") {
-                    model.chooseAndUpload(kind: "image", forArticle: model.editor.slug, banner: true)
-                }
-                Button("添加图片") {
-                    model.chooseAndUpload(kind: "image", forArticle: model.editor.slug)
-                }
-                Button("添加视频") {
-                    model.chooseAndUpload(kind: "video", forArticle: model.editor.slug)
-                }
-            } label: {
-                Label("添加素材", systemImage: "paperclip")
-            }
-            .disabled(model.isMarkdownSourceReadOnly)
-            .help("添加封面、图片或视频")
+                    Button("按二级标题拆分…", systemImage: "square.split.2x1") {
+                        model.promptToSplitArticleByLevel2Headings()
+                    }
+                    .disabled(model.editor.isNew)
 
-            Button {
-                model.executeCommand(.saveDraft)
+                    Button("合并到其他文章…", systemImage: "arrow.triangle.merge") {
+                        model.promptToMergeEditedArticle()
+                    }
+                    .disabled(model.editor.isNew || model.articles.count < 2)
+                }
+                .disabled(model.isMarkdownSourceReadOnly)
+
+                ArticlePageTemplateActions(model: model, library: pageTemplateLibrary)
+                    .disabled(model.isMarkdownSourceReadOnly)
+
+                Menu {
+                    Button("添加封面") {
+                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug, banner: true)
+                    }
+                    Button("添加图片") {
+                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug)
+                    }
+                    Button("添加视频") {
+                        model.chooseAndUpload(kind: "video", forArticle: model.editor.slug)
+                    }
+                } label: {
+                    Label("添加素材", systemImage: "paperclip")
+                }
+                .disabled(model.isMarkdownSourceReadOnly)
             } label: {
-                Label(model.isSaving ? "保存中…" : "保存草稿", systemImage: "tray.and.arrow.down")
+                Label("页面操作", systemImage: "ellipsis.circle")
             }
-            .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
+            .help("切换编辑视图、保存草稿或打开更多页面操作")
 
             Button {
                 model.executeCommand(.publishArticle)
@@ -856,7 +659,7 @@ struct ArticleEditorView: View {
             .buttonStyle(.borderedProminent)
             .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
         }
-        .controlSize(.large)
+        .controlSize(.regular)
         .padding(.horizontal, ArticleEditorLayout.contentInset)
         .padding(.vertical, 14)
     }
@@ -872,9 +675,20 @@ struct ArticleEditorView: View {
 
     private var titleSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(model.editor.isNew ? "新文章" : "编辑文章")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tint)
+            HStack(spacing: 12) {
+                ArticlePathBreadcrumb(
+                    sourceRelativePath: model.editor.isNew ? nil : model.selectedArticle?.sourceRelativePath,
+                    draftFolderPath: model.pendingNewArticleFolderPath,
+                    showsCreateSubpage: !model.editor.isNew && !model.isMarkdownSourceReadOnly,
+                    onSelectRoot: { model.showAllArticles() },
+                    onSelectFolder: { model.showArticleFolder($0) },
+                    onCreateSubpage: { model.newArticle(inFolder: $0) }
+                )
+                Spacer()
+                if model.editor.isNew {
+                    ArticlePageTemplatePicker(model: model, library: pageTemplateLibrary)
+                }
+            }
 
             TextField("给这篇文章起个标题", text: $editorSession.draft.title)
                 .font(.system(size: 40, weight: .bold, design: .serif))
@@ -893,9 +707,9 @@ struct ArticleEditorView: View {
 
     private var writingSection: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Label("正文", systemImage: "text.alignleft")
+                    Label(editorMode == .blocks ? "正文" : "正文 · \(editorMode.title)", systemImage: "text.alignleft")
                         .font(.headline)
                     Spacer()
 
@@ -907,23 +721,9 @@ struct ArticleEditorView: View {
                     .foregroundStyle(.secondary)
                 }
 
-                Picker("编辑模式", selection: editorModeBinding) {
-                    ForEach(ArticleEditorMode.allCases) { mode in
-                        Label(mode.title, systemImage: mode.systemImage)
-                            .tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 520)
-                .accessibilityLabel("编辑模式")
-
-                Text(editorMode.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, ArticleEditorLayout.contentInset)
-            .padding(.vertical, 14)
+            .padding(.vertical, 10)
 
             Divider()
 
@@ -935,9 +735,25 @@ struct ArticleEditorView: View {
                 case .blocks:
                     ArticleBlockEditor(
                         source: $editorSession.draft.body,
+                        documentID: model.editor.recoveryID,
+                        sourceSlug: model.editor.slug.isEmpty ? nil : model.editor.slug,
                         articleReference: model.editor.slug.isEmpty ? model.editor.title : model.editor.slug,
                         isEditable: !model.isMarkdownSourceReadOnly,
-                        typography: readingPreferences.typography
+                        typography: readingPreferences.typography,
+                        articleDestinations: model.articles.filter {
+                            $0.slug != model.editor.slug
+                        },
+                        onTransferBlocks: { blocks, sourceAfter, targetSlug, operation in
+                            await model.transferEditorBlocks(
+                                blocks,
+                                sourceBodyAfter: sourceAfter,
+                                toArticleSlug: targetSlug,
+                                operation: operation
+                            )
+                        },
+                        onUndoTransfer: { receipt in
+                            await model.undoEditorBlockTransfer(receipt)
+                        }
                     )
                     .padding(ArticleEditorLayout.contentInset)
                     .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1379,7 +1195,12 @@ struct ArticleEditorView: View {
                         .buttonStyle(.borderless)
                         .help("删除属性")
                     }
-                    EditorPropertyValueField(row: $row)
+                    EditorPropertyValueField(
+                        row: $row,
+                        rows: propertyRows,
+                        articles: model.articles,
+                        sourceSlug: model.editor.slug
+                    )
                     if !row.typedValue.isValid {
                         Label("值与所选类型不匹配", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)
@@ -1409,7 +1230,12 @@ struct ArticleEditorView: View {
                         if !NativeArticlePropertyValue.fromEditor(kind: .number, text: row.value).isValid {
                             row.value = "0"
                         }
-                    case .text, .list, .tags:
+                    case .rollup:
+                        let relationKey = propertyRows.first(where: {
+                            $0.kind == .relation && NativeArticleProperties.isValidKey($0.key)
+                        })?.key ?? ""
+                        row.value = "\(relationKey) |  | count"
+                    case .text, .list, .tags, .select, .status, .relation:
                         break
                     }
                 }

@@ -7,6 +7,10 @@ public enum NativeArticlePropertyKind: String, Codable, CaseIterable, Hashable, 
     case date
     case checkbox
     case tags
+    case select
+    case status
+    case relation
+    case rollup
 
     public var id: String { rawValue }
 
@@ -18,6 +22,10 @@ public enum NativeArticlePropertyKind: String, Codable, CaseIterable, Hashable, 
         case .date: return "日期"
         case .checkbox: return "复选框"
         case .tags: return "标签"
+        case .select: return "单选"
+        case .status: return "状态"
+        case .relation: return "关联页面"
+        case .rollup: return "汇总"
         }
     }
 
@@ -29,6 +37,10 @@ public enum NativeArticlePropertyKind: String, Codable, CaseIterable, Hashable, 
         case .date: return "calendar"
         case .checkbox: return "checkmark.square"
         case .tags: return "tag"
+        case .select: return "list.bullet.circle"
+        case .status: return "circle.dotted"
+        case .relation: return "arrow.triangle.branch"
+        case .rollup: return "function"
         }
     }
 }
@@ -72,6 +84,22 @@ public struct NativeArticlePropertyValue: Codable, Hashable, ExpressibleByString
         Self(kind: .tags, value: encodedList(normalizedList(values)))
     }
 
+    public static func select(_ value: String) -> Self {
+        Self(kind: .select, value: value.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    public static func status(_ value: String) -> Self {
+        Self(kind: .status, value: value.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    public static func relation(_ values: [String]) -> Self {
+        Self(kind: .relation, value: encodedList(normalizedList(values.map(relationTarget))))
+    }
+
+    public static func rollup(_ specification: String) -> Self {
+        Self(kind: .rollup, value: specification.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     public static func fromEditor(kind: NativeArticlePropertyKind, text: String) -> Self {
         switch kind {
         case .text:
@@ -89,23 +117,36 @@ public struct NativeArticlePropertyValue: Codable, Hashable, ExpressibleByString
             return .tags(splitEditorList(text).map {
                 $0.trimmingCharacters(in: CharacterSet(charactersIn: "#＃"))
             })
+        case .select:
+            return .select(text)
+        case .status:
+            return .status(text)
+        case .relation:
+            return .relation(splitEditorList(text))
+        case .rollup:
+            return .rollup(text)
         }
     }
 
     public static func fromYAML(_ source: String) -> Self {
         let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
         if let values = decodedList(trimmed) ?? decodedInlineYAMLList(trimmed) ?? decodedBlockList(trimmed) {
+            if !values.isEmpty, values.allSatisfy(isWikiLink) {
+                return .relation(values)
+            }
             return .list(values)
         }
+        let scalar = decodedScalar(trimmed)
+        if scalar.hasPrefix("rollup:") { return .rollup(String(scalar.dropFirst("rollup:".count))) }
         if let boolean = parseBoolean(trimmed) { return .checkbox(boolean) }
         if isValidDate(trimmed) { return .date(trimmed) }
         if let number = Double(trimmed), number.isFinite { return .number(number) }
-        return .text(decodedScalar(trimmed))
+        return .text(scalar)
     }
 
     public var editorText: String {
         switch kind {
-        case .list, .tags:
+        case .list, .tags, .relation:
             return listValues.joined(separator: ", ")
         default:
             return value
@@ -114,9 +155,9 @@ public struct NativeArticlePropertyValue: Codable, Hashable, ExpressibleByString
 
     public var listValues: [String] {
         switch kind {
-        case .list, .tags:
+        case .list, .tags, .relation:
             return Self.decodedList(value) ?? Self.splitEditorList(value)
-        case .text:
+        case .text, .select, .status:
             return [value].filter { !$0.isEmpty }
         default:
             return [value]
@@ -129,7 +170,7 @@ public struct NativeArticlePropertyValue: Codable, Hashable, ExpressibleByString
 
     public var isValid: Bool {
         switch kind {
-        case .text, .list, .tags:
+        case .text, .list, .tags, .select, .status, .relation, .rollup:
             return true
         case .number:
             return Double(value)?.isFinite == true
@@ -142,7 +183,7 @@ public struct NativeArticlePropertyValue: Codable, Hashable, ExpressibleByString
 
     public var searchValues: [String] {
         switch kind {
-        case .list, .tags: return listValues
+        case .list, .tags, .relation: return listValues
         default: return [value]
         }
     }
@@ -157,6 +198,12 @@ public struct NativeArticlePropertyValue: Codable, Hashable, ExpressibleByString
             return Self.quoted(value)
         case .list, .tags:
             return "[\(listValues.map(Self.quoted).joined(separator: ", "))]"
+        case .select, .status:
+            return Self.quoted(value)
+        case .relation:
+            return "[\(listValues.map { Self.quoted("[[\($0)]]") }.joined(separator: ", "))]"
+        case .rollup:
+            return Self.quoted("rollup:\(value)")
         case .number:
             return Double(value).map(Self.formattedNumber) ?? value
         case .date:
@@ -282,6 +329,107 @@ public enum NativeArticleProperties {
     }
 }
 
+public enum NativeArticleRollupCalculation: String, CaseIterable, Hashable {
+    case count
+    case sum
+    case average
+    case unique
+    case join
+
+    var label: String {
+        switch self {
+        case .count: return "计数"
+        case .sum: return "求和"
+        case .average: return "平均值"
+        case .unique: return "去重"
+        case .join: return "拼接"
+        }
+    }
+}
+
+public struct NativeArticleRollupSpecification: Hashable {
+    public let relationKey: String
+    public let targetKey: String
+    public let calculation: NativeArticleRollupCalculation
+
+    public init?(_ source: String) {
+        let parts = source.split(separator: "|", omittingEmptySubsequences: false).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard parts.count == 3,
+              !parts[0].isEmpty,
+              let calculation = NativeArticleRollupCalculation(rawValue: parts[2].lowercased()) else {
+            return nil
+        }
+        relationKey = parts[0]
+        targetKey = parts[1]
+        self.calculation = calculation
+    }
+}
+
+public enum NativeArticleRollup {
+    public static func displayText(
+        specification source: String,
+        article: NativeArticleSummary,
+        articles: [NativeArticleSummary]
+    ) -> String {
+        guard let specification = NativeArticleRollupSpecification(source),
+              let relation = property(named: specification.relationKey, in: article) else {
+            return "—"
+        }
+        let targets = relation.listValues.compactMap { reference in
+            articles.first(where: { candidate in
+                candidate.slug.caseInsensitiveCompare(reference) == .orderedSame
+                    || candidate.title.caseInsensitiveCompare(reference) == .orderedSame
+                    || candidate.aliases.contains(where: {
+                        $0.caseInsensitiveCompare(reference) == .orderedSame
+                    })
+            })
+        }
+        if specification.calculation == .count, specification.targetKey.isEmpty {
+            return String(targets.count)
+        }
+        let values = targets.flatMap { target in
+            property(named: specification.targetKey, in: target)?.searchValues ?? []
+        }.filter { !$0.isEmpty }
+
+        switch specification.calculation {
+        case .count:
+            return String(values.count)
+        case .sum:
+            return formatted(values.compactMap(Double.init).reduce(0, +))
+        case .average:
+            let numbers = values.compactMap(Double.init)
+            guard !numbers.isEmpty else { return "—" }
+            return formatted(numbers.reduce(0, +) / Double(numbers.count))
+        case .unique:
+            var unique: [String] = []
+            for value in values where !unique.contains(where: {
+                $0.caseInsensitiveCompare(value) == .orderedSame
+            }) {
+                unique.append(value)
+            }
+            return unique.joined(separator: ", ")
+        case .join:
+            return values.joined(separator: ", ")
+        }
+    }
+
+    private static func property(
+        named key: String,
+        in article: NativeArticleSummary
+    ) -> NativeArticlePropertyValue? {
+        article.properties[key] ?? article.properties.first(where: {
+            $0.key.caseInsensitiveCompare(key) == .orderedSame
+        })?.value
+    }
+
+    private static func formatted(_ value: Double) -> String {
+        guard value.isFinite else { return "—" }
+        return value.rounded() == value ? String(Int64(value)) : String(format: "%.2f", value)
+    }
+}
+
 private extension NativeArticlePropertyValue {
     static func formattedNumber(_ value: Double) -> String {
         guard value.isFinite else { return "0" }
@@ -297,6 +445,22 @@ private extension NativeArticlePropertyValue {
             result.append(value)
         }
         return Array(result.prefix(100))
+    }
+
+    static func relationTarget(_ source: String) -> String {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("[["), trimmed.hasSuffix("]]"), trimmed.count >= 4 else {
+            return trimmed
+        }
+        return String(trimmed.dropFirst(2).dropLast(2))
+            .split(separator: "|", maxSplits: 1)
+            .first
+            .map(String.init) ?? ""
+    }
+
+    static func isWikiLink(_ source: String) -> Bool {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("[[") && trimmed.hasSuffix("]]") && trimmed.count >= 4
     }
 
     static func splitEditorList(_ source: String) -> [String] {

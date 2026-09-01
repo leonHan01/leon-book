@@ -51,6 +51,7 @@ Run the following commands from the project root:
 
 ```bash
 ./scripts/leonblog start   # Alias for open
+./scripts/leonblog restart # Quit the running app, rebuild, and relaunch
 ./scripts/leonblog build   # Build the macOS app
 ./scripts/leonblog test    # Run native checks
 ./scripts/leonblog help    # Show command help

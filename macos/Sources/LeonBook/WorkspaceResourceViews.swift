@@ -11,7 +11,7 @@ struct NativeWorkspaceResourceSection: View {
         Section {
             rootRow
             if model.workspaceResources.isEmpty {
-                Text("还没有文件。可在根目录新建文章或文件夹。")
+                Text("还没有页面。可在根目录新建页面或文件夹。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 4)
@@ -25,7 +25,7 @@ struct NativeWorkspaceResourceSection: View {
             }
         } header: {
             HStack(spacing: 8) {
-                Text("文件资源")
+                Text("页面")
                 Spacer(minLength: 4)
                 Button {
                     model.newArticle(inFolder: "")
@@ -33,7 +33,7 @@ struct NativeWorkspaceResourceSection: View {
                     Image(systemName: "note.text.badge.plus")
                 }
                 .buttonStyle(.plain)
-                .help("在根目录新建文章")
+                .help("在根目录新建页面")
                 .disabled(model.isMarkdownSourceReadOnly)
 
                 Button {
@@ -66,7 +66,7 @@ struct NativeWorkspaceResourceSection: View {
             HStack(spacing: 7) {
                 Image(systemName: "externaldrive.fill")
                     .foregroundStyle(.secondary)
-                Text("资料库根目录")
+                Text("全部页面")
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text("\(model.articles.count)")
@@ -83,7 +83,7 @@ struct NativeWorkspaceResourceSection: View {
                 && selectedResourceIDs.isEmpty
         ))
         .contextMenu {
-            Button("新建文章") { model.newArticle(inFolder: "") }
+            Button("新建页面") { model.newArticle(inFolder: "") }
                 .disabled(model.isMarkdownSourceReadOnly)
             Button("新建文件夹…") { model.promptToCreateWorkspaceFolder(parentPath: "") }
                 .disabled(model.isMarkdownSourceReadOnly)
@@ -117,10 +117,11 @@ private struct NativeWorkspaceResourceBranch: View {
     let resources: [NativeWorkspaceResourceNode]
     @Binding var expandedFolderIDs: Set<String>
     @Binding var selectedResourceIDs: Set<String>
+    @State private var hoveredResourceID: String?
 
     var body: some View {
         ForEach(resources) { resource in
-            if resource.kind == .folder {
+            if resource.canContainPages && !resource.children.isEmpty {
                 DisclosureGroup(
                     isExpanded: expansionBinding(for: resource.id),
                     content: {
@@ -137,45 +138,68 @@ private struct NativeWorkspaceResourceBranch: View {
                 )
                 .id(resource.id)
                 .onDrop(of: [UTType.utf8PlainText.identifier], isTargeted: nil) { providers in
-                    acceptResourceDrop(providers, destinationFolder: resource.relativePath)
+                    acceptResourceDrop(providers, destinationFolder: resource.pageContainerPath)
                 }
             } else {
                 resourceRow(resource)
                     .id(resource.id)
+                    .onDrop(of: [UTType.utf8PlainText.identifier], isTargeted: nil) { providers in
+                        guard resource.canContainPages else { return false }
+                        return acceptResourceDrop(providers, destinationFolder: resource.pageContainerPath)
+                    }
             }
         }
     }
 
     private func resourceRow(_ resource: NativeWorkspaceResourceNode) -> some View {
-        Button {
-            select(resource)
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: resource.systemImage)
-                    .foregroundStyle(iconColor(resource))
-                    .frame(width: 16)
-                Text(resource.articleTitle ?? resource.name)
-                    .lineLimit(1)
-                    .help(resource.relativePath)
-                Spacer(minLength: 4)
-                if resource.storage == .managedMedia {
-                    Image(systemName: "link")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .help("由 LeonBook 管理的文章附件")
-                } else if resource.kind == .folder {
-                    Text("\(resource.articleCount)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        HStack(spacing: 3) {
+            Button {
+                select(resource)
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: resource.children.isEmpty ? resource.systemImage : "doc.on.doc.fill")
+                        .foregroundStyle(iconColor(resource))
+                        .frame(width: 16)
+                    Text(resource.articleTitle ?? resource.name)
+                        .lineLimit(1)
+                        .help(resource.relativePath)
+                    Spacer(minLength: 4)
+                    if resource.storage == .managedMedia {
+                        Image(systemName: "link")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .help("由 LeonBook 管理的文章附件")
+                    } else if resource.canContainPages && resource.articleCount > 1 {
+                        Text("\(resource.articleCount)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                .padding(.horizontal, 5)
+                .padding(.vertical, 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .background(rowBackground(resource), in: RoundedRectangle(cornerRadius: 5))
             }
-            .padding(.horizontal, 5)
-            .padding(.vertical, 3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .background(rowBackground(resource), in: RoundedRectangle(cornerRadius: 5))
+            .buttonStyle(.plain)
+
+            if hoveredResourceID == resource.id && resource.canContainPages {
+                Button {
+                    model.newArticle(inFolder: resource.pageContainerPath)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help("新建子页面")
+                .disabled(model.isMarkdownSourceReadOnly)
+            }
         }
-        .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering { hoveredResourceID = resource.id }
+            else if hoveredResourceID == resource.id { hoveredResourceID = nil }
+        }
         .contextMenu { resourceContextMenu(resource) }
         .onDrag {
             let ids = selectedResourceIDs.contains(resource.id)
@@ -191,19 +215,20 @@ private struct NativeWorkspaceResourceBranch: View {
     private func resourceContextMenu(_ resource: NativeWorkspaceResourceNode) -> some View {
         let resources = contextualResources(for: resource)
 
-        if resource.kind == .folder {
-            Button("新建文章") {
-                model.newArticle(inFolder: resource.relativePath)
+        if resource.canContainPages {
+            Button(resource.kind == .article ? "新建子页面" : "新建页面") {
+                model.newArticle(inFolder: resource.pageContainerPath)
             }
             .disabled(model.isMarkdownSourceReadOnly)
-            Button("新建子文件夹…") {
-                model.promptToCreateWorkspaceFolder(parentPath: resource.relativePath)
+            Button("新建文件夹…") {
+                model.promptToCreateWorkspaceFolder(parentPath: resource.pageContainerPath)
             }
             .disabled(model.isMarkdownSourceReadOnly)
             Divider()
-        } else if resource.kind == .article {
-            Button("打开") { select(resource, ignoresModifiers: true) }
-            Divider()
+            if resource.kind == .article {
+                Button("打开") { select(resource, ignoresModifiers: true) }
+                Divider()
+            }
         } else {
             Button("打开附件") { model.openWorkspaceAttachment(resource) }
             Divider()
@@ -251,7 +276,7 @@ private struct NativeWorkspaceResourceBranch: View {
             } else {
                 expandedFolderIDs.insert(resource.id)
             }
-            model.showArticleFolder(resource.relativePath)
+            model.showArticleFolder(resource.pageContainerPath)
         case .article:
             if let slug = resource.articleSlug { model.selectSlug(slug) }
         case .attachment:

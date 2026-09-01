@@ -1,7 +1,53 @@
 import AppKit
 import Foundation
+import LeonBookPublishingModule
 
 extension NativeAppModel {
+    @discardableResult
+    func applyArticlePageTemplate(_ template: NativeArticlePageTemplate) -> Bool {
+        guard editor.isNew else {
+            errorMessage = "整页模板只能应用到尚未保存的新页面。"
+            return false
+        }
+        if isEditorDirty {
+            let alert = NSAlert()
+            alert.messageText = "应用“\(template.name)”模板？"
+            alert.informativeText = "当前新页面已有内容。模板会替换标题、正文、分类、标签和属性，并移除尚未保存的附件。"
+            alert.addButton(withTitle: "应用模板")
+            alert.addButton(withTitle: "取消")
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        }
+
+        let bannerMedia = editor.banner.map {
+            NativeMedia(kind: "image", name: $0.name, size: $0.size, url: $0.url)
+        }
+        discardUnreferencedMedia(editor.media + (bannerMedia.map { [$0] } ?? []) + pendingEditorMediaCleanup)
+        pendingEditorMediaCleanup = []
+        template.apply(to: &editor)
+        editorBodySelection = NSRange(location: 0, length: 0)
+        editorAutosaveStatus = "已应用页面模板“\(template.name)”"
+        errorMessage = nil
+        return true
+    }
+
+    func newArticle(inBoardGroup label: String, field: NativeArticleGroupField) {
+        let previousRecoveryID = editor.recoveryID
+        newArticle()
+        guard editor.recoveryID != previousRecoveryID else { return }
+        if NativeArticleDraftPrefill.applyBoardGroup(label: label, field: field, to: &editor) {
+            editorAutosaveStatus = "已按“\(label)”预填新页面"
+        }
+    }
+
+    func newArticle(onCalendarDate value: String, propertyKey: String?) {
+        let previousRecoveryID = editor.recoveryID
+        newArticle()
+        guard editor.recoveryID != previousRecoveryID else { return }
+        if NativeArticleDraftPrefill.applyCalendarDate(value, propertyKey: propertyKey, to: &editor) {
+            editorAutosaveStatus = "已预填日期 \(value)"
+        }
+    }
+
     func schedulePostSaveArticleRefresh(_ saved: NativeArticle, recoveryID: String) {
         articlePostSaveTask?.cancel()
         let activeStore = store
@@ -66,6 +112,123 @@ extension NativeAppModel {
             } catch {
                 errorMessage = "更新任务失败：\(error.localizedDescription)"
             }
+        }
+    }
+
+    @MainActor
+    func transferEditorBlocks(
+        _ markdownBlocks: [String],
+        sourceBodyAfter: String?,
+        toArticleSlug targetSlug: String,
+        operation: EditorBlockTransferOperation
+    ) async -> EditorBlockTransferReceipt? {
+        guard !markdownBlocks.isEmpty, !isMarkdownSourceReadOnly else { return nil }
+        do {
+            let targetBefore = try await store.getArticle(slug: targetSlug)
+            var sourceBefore: NativeArticle?
+            var updates: [NativeArticleBodyUpdate] = []
+            if let sourceBodyAfter {
+                guard !editor.slug.isEmpty, let expectedUpdatedAt = editor.updatedAt else { return nil }
+                let source = try await store.getArticle(slug: editor.slug)
+                guard source.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
+                if source.body != sourceBodyAfter {
+                    sourceBefore = source
+                    updates.append(NativeArticleBodyUpdate(
+                        slug: source.slug,
+                        body: sourceBodyAfter,
+                        expectedUpdatedAt: expectedUpdatedAt
+                    ))
+                }
+            }
+            updates.append(NativeArticleBodyUpdate(
+                slug: targetBefore.slug,
+                body: NativeBlockEditorDocument.appending(markdownBlocks, to: targetBefore.body),
+                expectedUpdatedAt: targetBefore.updatedAt
+            ))
+            let saved = try await store.updateArticleBodiesAtomically(updates)
+            let sourceAfter = sourceBefore.flatMap { source in
+                saved.first(where: { $0.slug == source.slug })
+            }
+            guard let targetAfter = saved.first(where: { $0.slug == targetBefore.slug }) else {
+                throw NativeStoreError.notFound
+            }
+            await applyBlockTransferArticles(saved, sourceArticle: sourceAfter)
+            scheduleBackup()
+            errorMessage = nil
+            return EditorBlockTransferReceipt(
+                operation: operation,
+                sourceBefore: sourceBefore,
+                sourceAfter: sourceAfter,
+                targetBefore: targetBefore,
+                targetAfter: targetAfter
+            )
+        } catch {
+            errorMessage = "跨笔记写入块失败：\(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    @MainActor
+    func undoEditorBlockTransfer(_ receipt: EditorBlockTransferReceipt) async -> Bool {
+        do {
+            var updates: [NativeArticleBodyUpdate] = []
+            if let sourceBefore = receipt.sourceBefore, let sourceAfter = receipt.sourceAfter {
+                updates.append(NativeArticleBodyUpdate(
+                    slug: sourceBefore.slug,
+                    body: sourceBefore.body,
+                    expectedUpdatedAt: sourceAfter.updatedAt
+                ))
+            }
+            updates.append(NativeArticleBodyUpdate(
+                slug: receipt.targetBefore.slug,
+                body: receipt.targetBefore.body,
+                expectedUpdatedAt: receipt.targetAfter.updatedAt
+            ))
+            let restored = try await store.updateArticleBodiesAtomically(updates)
+            let restoredSource = receipt.sourceBefore.flatMap { source in
+                restored.first(where: { $0.slug == source.slug })
+            }
+            await applyBlockTransferArticles(restored, sourceArticle: restoredSource)
+            scheduleBackup()
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = "撤销跨笔记块操作失败：\(error.localizedDescription)"
+            return false
+        }
+    }
+
+    @MainActor
+    private func applyBlockTransferArticles(
+        _ updatedArticles: [NativeArticle],
+        sourceArticle: NativeArticle?
+    ) async {
+        var summaries = articles
+        for article in updatedArticles {
+            if let index = summaries.firstIndex(where: { $0.slug == article.slug }) {
+                summaries[index] = article.summary
+            } else {
+                summaries.append(article.summary)
+            }
+            if selectedArticle?.slug == article.slug { selectedArticle = article }
+        }
+        summaries.sort {
+            $0.updatedAt == $1.updatedAt ? $0.slug < $1.slug : $0.updatedAt > $1.updatedAt
+        }
+        await replaceArticleSummaries(summaries)
+        if let sourceArticle, editor.slug == sourceArticle.slug {
+            editor.body = sourceArticle.body
+            editor.updatedAt = sourceArticle.updatedAt
+            editorOriginalArticle = sourceArticle
+            editorAutosaveTask?.cancel()
+            editorAutosaveStatus = "跨笔记块操作已保存"
+        }
+        if selectedSmartCollection != nil {
+            try? await refreshSelectedSmartCollection()
+        }
+        try? await reloadKnowledgeGraph()
+        if let selectedSlug {
+            selectedArticleRelations = (try? await store.articleRelations(for: selectedSlug)) ?? .empty
         }
     }
 
@@ -483,6 +646,37 @@ extension NativeAppModel {
         Task { _ = await saveSmartCollection(collection) }
     }
 
+    func setSmartCollectionGroupBy(_ field: NativeArticleGroupField) {
+        guard var collection = selectedSmartCollection, collection.groupBy != field else { return }
+        collection.groupBy = field
+        Task { _ = await saveSmartCollection(collection) }
+    }
+
+    func setSmartCollectionCalendarDateProperty(_ rawKey: String?) {
+        guard var collection = selectedSmartCollection else { return }
+        let key = rawKey.flatMap { rawValue -> String? in
+            let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalized.isEmpty ? nil : normalized
+        }
+        guard collection.calendarDatePropertyKey != key else { return }
+        collection.calendarDatePropertyKey = key
+        if let key {
+            if let index = collection.columns.firstIndex(where: {
+                $0.source == .property && $0.key.caseInsensitiveCompare(key) == .orderedSame
+            }) {
+                collection.columns[index].propertyKind = .date
+            } else if collection.columns.count < 30 {
+                collection.columns.append(NativeSmartCollectionColumn(
+                    source: .property,
+                    key: key,
+                    title: key,
+                    propertyKind: .date
+                ))
+            }
+        }
+        Task { _ = await saveSmartCollection(collection) }
+    }
+
     func selectSmartCollectionView(_ viewID: String) {
         guard let definition = selectedSmartCollectionDefinition,
               definition.views.contains(where: { $0.id == viewID }),
@@ -520,6 +714,94 @@ extension NativeAppModel {
                 errorMessage = nil
             } catch {
                 errorMessage = "更新 Property 失败：\(error.localizedDescription)"
+                try? await reload()
+            }
+        }
+    }
+
+    func moveArticle(
+        _ article: NativeArticleSummary,
+        toGroup label: String,
+        field: NativeArticleGroupField
+    ) {
+        guard field != .updatedMonth, field != .none else {
+            errorMessage = field == .updatedMonth ? "更新时间分组不可通过拖动修改。" : nil
+            return
+        }
+        Task {
+            do {
+                let stored = try await store.getArticle(slug: article.slug)
+                var status = stored.status
+                var category = stored.category
+                var tags = stored.tags
+
+                switch field {
+                case .status:
+                    if label == NativeArticleStatus.published.label || label == NativeArticleStatus.published.rawValue {
+                        status = .published
+                    } else if label == NativeArticleStatus.draft.label || label == NativeArticleStatus.draft.rawValue {
+                        status = .draft
+                    } else {
+                        throw NativeStoreError.fileSystem("不支持的文章状态：\(label)")
+                    }
+                case .category:
+                    category = label == "未分类" ? "Notes" : label
+                case .tag:
+                    if label == "无标签" {
+                        tags = []
+                    } else {
+                        let tag = label.trimmingCharacters(in: CharacterSet(charactersIn: "#＃"))
+                        tags = [tag] + tags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame }
+                    }
+                case .none, .updatedMonth:
+                    return
+                }
+
+                if stored.status != .published, status == .published {
+                    guard authorizeFirstPartyModule(
+                        PublishingFirstPartyModule.id,
+                        permission: .contentPublish,
+                        action: "通过看板发布文章"
+                    ) else { return }
+                    do {
+                        try FirstPartyPublicationPolicy.validate(.init(
+                            kind: .article,
+                            title: stored.title,
+                            body: stored.body,
+                            attachmentCount: stored.media.count
+                        ))
+                    } catch {
+                        errorMessage = error.localizedDescription
+                        return
+                    }
+                    recordFirstPartyModuleEvent(
+                        moduleID: PublishingFirstPartyModule.id,
+                        name: "publishing.requested",
+                        payload: ["kind": "article", "source": "board"]
+                    )
+                }
+
+                let updated = try await store.saveArticle(NativeSaveArticle(
+                    banner: stored.banner,
+                    body: stored.body,
+                    category: category,
+                    excerpt: stored.excerpt,
+                    media: stored.media,
+                    slug: stored.slug,
+                    status: status,
+                    tags: tags,
+                    title: stored.title,
+                    expectedUpdatedAt: stored.updatedAt,
+                    properties: stored.properties
+                ))
+                await replaceArticleSummaries(try await store.listArticles())
+                try await refreshSelectedSmartCollection()
+                if selectedArticle?.slug == updated.slug { selectedArticle = updated }
+                try await reloadKnowledgeGraph()
+                scheduleBackup()
+                errorMessage = nil
+            } catch {
+                errorMessage = "移动看板卡片失败：\(error.localizedDescription)"
                 try? await reload()
             }
         }

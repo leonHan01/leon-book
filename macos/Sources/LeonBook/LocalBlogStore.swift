@@ -2531,6 +2531,110 @@ public actor LocalBlogStore {
         return sourcedSaved
     }
 
+    /// Commits body-only changes to existing articles as one logical mutation.
+    /// Markdown files are restored if a file write or the SQLite transaction fails.
+    public func updateArticleBodiesAtomically(
+        _ updates: [NativeArticleBodyUpdate]
+    ) throws -> [NativeArticle] {
+        try prepare()
+        try requireWritableArticleSource()
+        guard !updates.isEmpty else { return [] }
+
+        var seen = Set<String>()
+        var prepared: [(previous: NativeArticle, updated: NativeArticle)] = []
+        for update in updates {
+            let slug = try requireSafeSegment(update.slug, label: "文章 slug")
+            guard seen.insert(slug).inserted,
+                  let previous = try storedArticle(withSlug: slug),
+                  previous.updatedAt == update.expectedUpdatedAt else {
+                throw NativeStoreError.conflict
+            }
+            let updatedAt = nextTimestamp(after: previous.updatedAt)
+            let body = normalizeBody(update.body)
+            prepared.append((
+                previous,
+                NativeArticle(
+                    banner: previous.banner,
+                    body: body,
+                    category: previous.category,
+                    excerpt: previous.excerpt,
+                    media: previous.media,
+                    slug: previous.slug,
+                    status: previous.status,
+                    tags: previous.tags,
+                    title: previous.title,
+                    updatedAt: updatedAt,
+                    publishedAt: previous.publishedAt,
+                    wordCount: wordCount(body),
+                    pageViews: previous.pageViews,
+                    properties: previous.properties,
+                    sourceRelativePath: previous.sourceRelativePath,
+                    sourceContentHash: previous.sourceContentHash,
+                    sourceImportedAt: previous.sourceImportedAt
+                )
+            ))
+        }
+
+        func restoreMarkdownFiles() {
+            for item in prepared {
+                _ = try? MarkdownArticleSource.write(
+                    item.previous,
+                    relativePath: item.previous.sourceRelativePath,
+                    in: articlesURL
+                )
+            }
+        }
+
+        var sourcedUpdates: [NativeArticle] = []
+        do {
+            for item in prepared {
+                let record = try MarkdownArticleSource.write(
+                    item.updated,
+                    relativePath: item.updated.sourceRelativePath,
+                    in: articlesURL
+                )
+                sourcedUpdates.append(applyingSourceRecord(record, to: item.updated))
+            }
+        } catch {
+            restoreMarkdownFiles()
+            throw error
+        }
+
+        do {
+            try db().transaction {
+                for (index, item) in prepared.enumerated() {
+                    let updated = sourcedUpdates[index]
+                    _ = try insertArticleRevision(
+                        draftKey: item.previous.slug,
+                        articleSlug: item.previous.slug,
+                        reason: .savedVersion,
+                        snapshot: NativeArticleRevisionSnapshot(article: item.previous),
+                        createdAt: updated.updatedAt,
+                        updatedAt: updated.updatedAt
+                    )
+                    try insertArticle(updated, into: db())
+                    try recordActivityEvent(
+                        type: "article_edited",
+                        at: activityDate(from: updated.updatedAt) ?? Date()
+                    )
+                }
+            }
+        } catch {
+            restoreMarkdownFiles()
+            throw error
+        }
+
+        for item in prepared { try trimArticleRevisions(draftKey: item.previous.slug) }
+        do {
+            for article in sourcedUpdates { try writeArticleJSONSidecars(article) }
+            try rebuildIndex()
+            try writeActivityEventsAfterMutation()
+        } catch {
+            markJSONBackupNeedsRebuild()
+        }
+        return sourcedUpdates
+    }
+
     public func deleteArticle(slug: String, expectedUpdatedAt: String) throws {
         try requireWritableArticleSource()
         let article = try getArticle(slug: slug)

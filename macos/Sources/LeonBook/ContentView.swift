@@ -250,23 +250,21 @@ private struct NativeSidebar: View {
                 )
             }
 
-            Section("leon-book") {
-                sidebarButton(.dashboard, title: "概览", icon: "rectangle.grid.2x2")
-                articleLibraryButton
-                if model.isKnowledgeGraphModuleEnabled {
-                    sidebarButton(.graph, title: "关系图", icon: "point.3.connected.trianglepath.dotted")
-                }
-                sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
-                sidebarButton(.qAndA, title: "问答", icon: "questionmark.bubble")
-                sidebarButton(.editor, title: "写作", icon: "square.and.pencil")
-                sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
-            }
-
                 NativeWorkspaceResourceSection(
                     model: model,
                     expandedFolderIDs: $expandedWorkspaceFolderIDs,
                     selectedResourceIDs: $selectedWorkspaceResourceIDs
                 )
+
+            Section("工作区") {
+                sidebarButton(.dashboard, title: "概览", icon: "rectangle.grid.2x2")
+                if model.isKnowledgeGraphModuleEnabled {
+                    sidebarButton(.graph, title: "关系图", icon: "point.3.connected.trianglepath.dotted")
+                }
+                sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
+                sidebarButton(.qAndA, title: "问答", icon: "questionmark.bubble")
+                sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
+            }
 
             Section("智能集合") {
                 ForEach(model.smartCollections) { collection in
@@ -363,27 +361,6 @@ private struct NativeSidebar: View {
                 proxy.scrollTo(resourceID, anchor: .center)
             }
         }
-    }
-
-    private var articleLibraryButton: some View {
-        Button {
-            model.showAllArticles()
-        } label: {
-            Label("全部文章", systemImage: "doc.text")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarNavigationButtonStyle(
-            isSelected: navigation.section == .articles
-                && model.selectedSmartCollectionID == nil
-                && model.selectedArticleFolderPath == nil
-        ))
-        .foregroundStyle(
-            navigation.section == .articles
-                && model.selectedSmartCollectionID == nil
-                && model.selectedArticleFolderPath == nil
-                ? Color.accentColor : .primary
-        )
     }
 
     @ViewBuilder

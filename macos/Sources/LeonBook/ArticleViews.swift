@@ -136,6 +136,15 @@ struct ArticleReaderView: View {
     ) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
+                ArticlePathBreadcrumb(
+                    sourceRelativePath: article.sourceRelativePath,
+                    draftFolderPath: nil,
+                    showsCreateSubpage: !model.isMarkdownSourceReadOnly,
+                onSelectRoot: { model.showAllArticles() },
+                onSelectFolder: { model.showArticleFolder($0) },
+                onCreateSubpage: { model.newArticle(inFolder: $0) }
+                )
+
                 HStack {
                     Label(
                         article.status.label,
@@ -363,6 +372,7 @@ private struct ArticleTabBar: View {
                 }
                 .padding(.vertical, 5)
             }
+            .frame(height: 38)
 
             Divider().frame(height: 22)
 

@@ -16,7 +16,9 @@ Press `⌘O` to search and open an article quickly. Press `⌘P` for a fuzzy com
 
 ## Smart collections and bookmarks
 
-Smart collections are saved virtual queries over the current user's SQLite workspace. Filtering and sorting compile into parameterized SQL, so only matching article summaries are decoded instead of loading every body into memory first. A collection can combine article status, category, tags, title or body text, YAML/Properties values, update or publish dates, word count, and page views with all/any logic. Up to three sort keys, one grouping field, and a list, table, or cards layout are stored with each collection. Selecting a collection never moves or duplicates an article.
+Smart collections are saved virtual queries over the current user's SQLite workspace. Filtering and sorting compile into parameterized SQL, so only matching article summaries are decoded instead of loading every body into memory first. A collection can combine article status, category, tags, title or body text, YAML/Properties values, update or publish dates, word count, and page views with all/any logic. Up to three sort keys, one grouping field, and list, table, cards, board, or calendar layouts are stored with each collection. Board grouping can be switched inline and cards can move between status/category/tag lanes; each lane can also create a page with its group value prefilled. Calendar date sources can be switched inline, each day can create a predated page, and undated pages stay in an unscheduled tray that also accepts cards to clear their date. Properties include text, list, number, date, checkbox, tags, select, status, relation, and rollup values; table and editor controls reuse existing options, select related pages, and configure rollups without hand-writing a formula string. Selecting a collection never moves or duplicates an article.
+
+The sidebar is page-first: `folder/index.md` and `Page.md` plus an adjacent `Page/` directory become expandable pages with subpages. Reader and editor breadcrumbs expose the current hierarchy and can create a child page without changing Markdown portability.
 
 Bookmarks are separate shortcuts in the sidebar. Articles, individual Markdown headings, full-text searches, and the global article graph can be added or removed from their source view and reopened directly.
 
@@ -46,12 +48,14 @@ The writing workspace offers five modes; the selection is saved with the active 
 
 - **Focus** uses the full-width inline preview editor and hides article settings and formatting hints.
 - **Live Preview** styles headings, emphasis, code, quotes, lists, links, and wiki links directly inside the editable body while de-emphasizing Markdown markers.
-- **Blocks** presents Markdown as independently insertable, convertible, duplicable, removable, and draggable content blocks. It includes a `/` type menu, Enter-to-split, Shift+Enter line breaks, interactive tasks, and copyable `^block-id` links.
+- **Blocks** presents Markdown as independently insertable, convertible, duplicable, removable, and draggable content blocks, including tables and block math. Command-click the left handles or Shift-click to select multiple blocks for grouped moves, `⌥⌘↑/↓` moves them from the keyboard, and `Tab`/`Shift+Tab` changes hierarchy. `⌘D`, block-aware copy/cut/paste, two-stage `⌘A`, and Escape speed up keyboard editing. Parent operations include descendants, nested blocks can be collapsed, and structural edits participate in undo/redo. A selected group can be transactionally moved or copied to another note, the latest transfer can be undone, and synchronized blocks use live `![[note#^block-id]]` embeds. Built-in and custom block templates can be inserted from the toolbar or with `/template-name`. It also includes Enter-to-split, Shift+Enter line breaks, interactive tasks, and copyable `^block-id` links.
 - **Source** shows unrendered Markdown for precise syntax control.
 - **Split** keeps source editing on the left and the complete rendered result, including images and embeds, on the right.
 
 All five modes share the same Markdown body, autosave, and version history, so changing layout does not discard editing state.
 Use `⌘⌥1` through `⌘⌥5` to switch through the five modes in order.
+
+New pages can apply a whole-page template directly from the title area, filling the title, excerpt, body, category, tags, and typed properties together. The built-in Meeting Notes, Project Plan, and Weekly Review templates support `{{date}}` and `{{time}}` variables. **Page Actions → Page Templates** can save the current page as a custom template. Custom page templates are stored locally per user workspace and omit attachments and publication state; Markdown remains authoritative for article content.
 
 The editor's right sidebar switches among Settings, Properties, Outline, and Links. Properties provides typed editors for text, lists, numbers, dates, checkboxes, and tags, preserves those types in SQLite/JSON, emits valid YAML, and can rename a key across every article without overwriting conflicting values. Outline follows body headings live, and Links combines live wiki links with saved backlinks and unlinked mentions. The selected pane and sidebar visibility are part of the saved layout.
 
@@ -111,9 +115,10 @@ Requirements: macOS 13 or later and Swift 5.10 or later. From the project root, 
 ```bash
 ./scripts/leonblog build
 ./scripts/leonblog open
+./scripts/leonblog restart
 ```
 
-The built app is located at `macos/dist/leon-book.app` and uses ad-hoc signing for local use.
+`restart` gracefully quits the running app, waits for it to exit, rebuilds it, and launches the new version. The built app is located at `macos/dist/leon-book.app` and uses ad-hoc signing for local use.
 
 To run the SwiftPM executable directly:
 

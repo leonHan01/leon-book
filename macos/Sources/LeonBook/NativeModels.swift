@@ -3,7 +3,8 @@ import LeonBookSearchModule
 
 public enum NativeWritingMetrics {
     public static func characterCount(of body: String) -> Int {
-        body.trimmingCharacters(in: .whitespacesAndNewlines).count
+        NativeBlockHierarchyMetadata.removingMarkers(from: body)
+            .trimmingCharacters(in: .whitespacesAndNewlines).count
     }
 }
 
@@ -1072,6 +1073,18 @@ public struct NativeSaveArticle: Encodable {
         self.title = title
         self.expectedUpdatedAt = expectedUpdatedAt
         self.sourceRelativePath = sourceRelativePath
+    }
+}
+
+public struct NativeArticleBodyUpdate: Sendable {
+    public let slug: String
+    public let body: String
+    public let expectedUpdatedAt: String
+
+    public init(slug: String, body: String, expectedUpdatedAt: String) {
+        self.slug = slug
+        self.body = body
+        self.expectedUpdatedAt = expectedUpdatedAt
     }
 }
 

@@ -64,6 +64,15 @@ struct NativeWorkspaceResourceNode: Identifiable, Hashable, Sendable {
 
     var isFolder: Bool { kind == .folder }
     var canMutateSource: Bool { storage == .markdownSource && sourceRelativePath != nil }
+    var canContainPages: Bool { kind == .folder || kind == .article }
+
+    /// Markdown stays authoritative: a folder page uses `folder/index.md`, while
+    /// a regular `page.md` owns children from the adjacent `page/` directory.
+    var pageContainerPath: String {
+        if kind == .folder { return relativePath }
+        guard kind == .article, let sourceRelativePath else { return relativePath }
+        return NativeArticlePageHierarchy.containerPath(for: sourceRelativePath)
+    }
 
     var systemImage: String {
         switch kind {
@@ -144,8 +153,10 @@ enum NativeWorkspaceResourceTree {
         }
 
         for record in records where record.kind == .file {
-            let targetFolder = folder(record.placementFolderPath)
             let filename = URL(fileURLWithPath: record.relativePath).lastPathComponent
+            guard URL(fileURLWithPath: filename).pathExtension
+                .caseInsensitiveCompare("json") != .orderedSame else { continue }
+            let targetFolder = folder(record.placementFolderPath)
             let displayName = record.displayName ?? filename
             let normalizedPath = normalized(record.relativePath)
             if record.storage == .markdownSource,
@@ -188,7 +199,16 @@ enum NativeWorkspaceResourceTree {
     }
 
     static func folderPaths(in roots: [NativeWorkspaceResourceNode]) -> [String] {
-        flattened(roots).compactMap { $0.kind == .folder ? $0.sourceRelativePath : nil }
+        Array(Set(flattened(roots).compactMap { resource -> String? in
+            switch resource.kind {
+            case .folder:
+                return resource.sourceRelativePath
+            case .article:
+                return resource.pageContainerPath
+            case .attachment:
+                return nil
+            }
+        })).sorted()
     }
 
     static func ancestors(
@@ -201,7 +221,7 @@ enum NativeWorkspaceResourceTree {
         ) -> [String]? {
             for node in nodes {
                 if node.id == resourceID { return parents }
-                let nextParents = node.kind == .folder ? parents + [node.id] : parents
+                let nextParents = node.canContainPages ? parents + [node.id] : parents
                 if let match = search(node.children, parents: nextParents) { return match }
             }
             return nil
@@ -209,9 +229,16 @@ enum NativeWorkspaceResourceTree {
         return search(roots, parents: []) ?? []
     }
 
-    private static func materializeChildren(of folder: FolderBox) -> [NativeWorkspaceResourceNode] {
-        let folders = folder.childFolders.values.map { child -> NativeWorkspaceResourceNode in
-            let children = materializeChildren(of: child)
+    private static func materializeChildren(
+        of folder: FolderBox,
+        excludingLeafID: String? = nil
+    ) -> [NativeWorkspaceResourceNode] {
+        var folderNodes = folder.childFolders.values.map { child -> NativeWorkspaceResourceNode in
+            let indexPage = child.leaves.first(where: isFolderIndexPage)
+            let children = materializeChildren(of: child, excludingLeafID: indexPage?.id)
+            if let indexPage {
+                return pageNode(indexPage, children: children)
+            }
             return NativeWorkspaceResourceNode(
                 id: "workspace-folder:\(child.path)",
                 kind: .folder,
@@ -226,14 +253,62 @@ enum NativeWorkspaceResourceTree {
                 articleCount: children.reduce(0) { $0 + $1.articleCount }
             )
         }
-        let nodes = folders + folder.leaves
+
+        var leaves = folder.leaves.filter { $0.id != excludingLeafID }
+        // `Project.md` + `Project/` is the second portable representation of a
+        // page with subpages. Merge the two in navigation without moving files.
+        for leafIndex in leaves.indices.reversed() {
+            let leaf = leaves[leafIndex]
+            guard leaf.kind == .article,
+                  let matchingFolderIndex = folderNodes.firstIndex(where: {
+                      $0.kind == .folder
+                          && $0.name.caseInsensitiveCompare(articleStem(leaf)) == .orderedSame
+                  }) else { continue }
+            let matchingFolder = folderNodes.remove(at: matchingFolderIndex)
+            folderNodes.append(pageNode(leaf, children: matchingFolder.children))
+            leaves.remove(at: leafIndex)
+        }
+
+        let nodes = folderNodes + leaves
         return nodes.sorted { lhs, rhs in
-            if lhs.kind == .folder, rhs.kind != .folder { return true }
-            if lhs.kind != .folder, rhs.kind == .folder { return false }
+            let lhsContainer = lhs.kind == .folder || !lhs.children.isEmpty
+            let rhsContainer = rhs.kind == .folder || !rhs.children.isEmpty
+            if lhsContainer != rhsContainer { return lhsContainer }
             let comparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
             if comparison != .orderedSame { return comparison == .orderedAscending }
             return lhs.id < rhs.id
         }
+    }
+
+    private static func isFolderIndexPage(_ node: NativeWorkspaceResourceNode) -> Bool {
+        guard node.kind == .article, let path = node.sourceRelativePath else { return false }
+        return URL(fileURLWithPath: path)
+            .deletingPathExtension().lastPathComponent
+            .caseInsensitiveCompare("index") == .orderedSame
+    }
+
+    private static func articleStem(_ node: NativeWorkspaceResourceNode) -> String {
+        guard let path = node.sourceRelativePath else { return node.name }
+        return URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+    }
+
+    private static func pageNode(
+        _ article: NativeWorkspaceResourceNode,
+        children: [NativeWorkspaceResourceNode]
+    ) -> NativeWorkspaceResourceNode {
+        NativeWorkspaceResourceNode(
+            id: article.id,
+            kind: .article,
+            storage: article.storage,
+            name: article.name,
+            relativePath: article.relativePath,
+            sourceRelativePath: article.sourceRelativePath,
+            absolutePath: article.absolutePath,
+            articleSlug: article.articleSlug,
+            articleTitle: article.articleTitle,
+            children: children,
+            articleCount: 1 + children.reduce(0) { $0 + $1.articleCount }
+        )
     }
 
     private static func articleNode(

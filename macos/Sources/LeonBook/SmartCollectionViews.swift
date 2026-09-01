@@ -8,6 +8,7 @@ struct SmartCollectionEditorRequest: Identifiable {
 struct SmartArticleLibraryView: View {
     @ObservedObject var model: NativeAppModel
     @AppStorage("articleLibraryLayout") private var allArticlesLayoutRaw = NativeSmartCollectionLayout.list.rawValue
+    @AppStorage("articleLibraryBoardGroup") private var allArticlesBoardGroupRaw = NativeArticleGroupField.status.rawValue
     @State private var editorRequest: SmartCollectionEditorRequest?
 
     private var layout: NativeSmartCollectionLayout {
@@ -20,6 +21,9 @@ struct SmartArticleLibraryView: View {
         let filteredArticles = model.filteredArticles
         let tagFilters = model.availableArticleTagFilters
         let currentLayout = layout
+        let boardGroupBy = model.selectedSmartCollection.map {
+            $0.groupBy == .none ? NativeArticleGroupField.status : $0.groupBy
+        } ?? NativeArticleGroupField(rawValue: allArticlesBoardGroupRaw) ?? .status
         let groups = SmartArticleDisplayGroup.groups(
             articles: filteredArticles,
             by: model.selectedSmartCollection?.groupBy ?? .none
@@ -45,6 +49,25 @@ struct SmartArticleLibraryView: View {
                 case .list: listLayout(groups: groups)
                 case .table: tableLayout(groups: groups)
                 case .cards: cardLayout(groups: groups)
+                case .board:
+                    SmartCollectionBoardView(
+                        model: model,
+                        articles: filteredArticles,
+                        groupBy: boardGroupBy,
+                        onChangeGroupBy: { field in
+                            if model.selectedSmartCollection == nil {
+                                allArticlesBoardGroupRaw = field.rawValue
+                            } else {
+                                model.setSmartCollectionGroupBy(field)
+                            }
+                        }
+                    )
+                case .calendar:
+                    SmartCollectionCalendarView(
+                        model: model,
+                        articles: filteredArticles,
+                        collection: model.selectedSmartCollection
+                    )
                 }
             }
         }
@@ -90,22 +113,25 @@ struct SmartArticleLibraryView: View {
                 .help("切换 .base 中的命名视图")
             }
 
-            Picker("视图", selection: Binding(
-                get: { currentLayout },
-                set: { nextLayout in
-                    if model.selectedSmartCollection == nil {
-                        allArticlesLayoutRaw = nextLayout.rawValue
-                    } else {
-                        model.setSmartCollectionLayout(nextLayout)
+            Menu {
+                ForEach(NativeSmartCollectionLayout.allCases) { option in
+                    Button {
+                        if model.selectedSmartCollection == nil {
+                            allArticlesLayoutRaw = option.rawValue
+                        } else {
+                            model.setSmartCollectionLayout(option)
+                        }
+                    } label: {
+                        Label(
+                            option.label,
+                            systemImage: currentLayout == option ? "checkmark" : option.systemImage
+                        )
                     }
                 }
-            )) {
-                ForEach(NativeSmartCollectionLayout.allCases) { option in
-                    Label(option.label, systemImage: option.systemImage).tag(option)
-                }
+            } label: {
+                Label(currentLayout.label, systemImage: currentLayout.systemImage)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 220)
+            .help("切换列表、表格、卡片、看板或日历视图")
 
             TextField("搜索标题、摘要、正文或标签", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
@@ -213,6 +239,8 @@ struct SmartCollectionEmbedView: View {
                 case .table: embeddedTable(collection)
                 case .list: embeddedList
                 case .cards: embeddedCards
+                case .board: embeddedCards
+                case .calendar: embeddedList
                 }
             } else if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
@@ -473,11 +501,12 @@ private struct SmartCollectionCell: View {
                 model: model,
                 article: article,
                 key: column.key,
-                kind: article.properties[column.key]?.kind
-                    ?? article.properties.first(where: {
+                kind: column.propertyKind == .text
+                    ? article.properties[column.key]?.kind
+                        ?? article.properties.first(where: {
                         $0.key.caseInsensitiveCompare(column.key) == .orderedSame
-                    })?.value.kind
-                    ?? column.propertyKind
+                    })?.value.kind ?? .text
+                    : column.propertyKind
             )
         } else if column.source == .system,
                   NativeSmartCollectionSystemField(rawValue: column.key) == .title {
@@ -516,33 +545,143 @@ private struct SmartEditablePropertyCell: View {
     }
 
     var body: some View {
-        Group {
-            if kind == .checkbox {
-                let checked = NativeArticlePropertyValue.fromEditor(kind: .checkbox, text: text).booleanValue
-                Button {
-                    text = checked ? "false" : "true"
-                    commit()
-                } label: {
-                    Image(systemName: checked ? "checkmark.square.fill" : "square")
-                        .foregroundStyle(checked ? Color.accentColor : .secondary)
-                }
-                .buttonStyle(.plain)
-            } else {
-                TextField("空", text: $text)
-                    .textFieldStyle(.plain)
-                    .onSubmit(commit)
-            }
-        }
+        propertyEditor
         .onChange(of: article.updatedAt) { _ in
             text = article.properties.first(where: {
                 $0.key.caseInsensitiveCompare(key) == .orderedSame
             })?.value.editorText ?? ""
         }
-        .help("直接编辑 Property：\(key)，回车保存到 Markdown frontmatter")
+        .help(propertyHelp)
     }
 
     private func commit() {
         model.updateArticleProperty(article: article, key: key, kind: kind, text: text)
+    }
+
+    @ViewBuilder
+    private var propertyEditor: some View {
+        switch kind {
+        case .rollup:
+            Text(NativeArticleRollup.displayText(
+                specification: text,
+                article: article,
+                articles: model.articles
+            ))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        case .checkbox:
+            let checked = NativeArticlePropertyValue.fromEditor(kind: .checkbox, text: text).booleanValue
+            Button {
+                setAndCommit(checked ? "false" : "true")
+            } label: {
+                Image(systemName: checked ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(checked ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+        case .select, .status:
+            Menu {
+                ForEach(scalarOptions, id: \.self) { option in
+                    Button {
+                        setAndCommit(option)
+                    } label: {
+                        Label(option, systemImage: text == option ? "checkmark" : kind.systemImage)
+                    }
+                }
+                if !text.isEmpty {
+                    Divider()
+                    Button("清空", role: .destructive) { setAndCommit("") }
+                }
+            } label: {
+                Label(text.isEmpty ? "选择" : text, systemImage: kind.systemImage)
+                    .lineLimit(1)
+            }
+            .menuStyle(.borderlessButton)
+        case .relation:
+            Menu {
+                ForEach(model.articles.filter { $0.slug != article.slug }) { destination in
+                    Button {
+                        toggleRelation(destination)
+                    } label: {
+                        Label(
+                            destination.title,
+                            systemImage: relationContains(destination) ? "checkmark" : "doc.text"
+                        )
+                    }
+                }
+                if !relationValues.isEmpty {
+                    Divider()
+                    Button("清空关联", role: .destructive) { setAndCommit("") }
+                }
+            } label: {
+                Label(
+                    relationValues.isEmpty ? "选择页面" : "\(relationValues.count) 个页面",
+                    systemImage: "arrow.triangle.branch"
+                )
+            }
+            .menuStyle(.borderlessButton)
+        default:
+            TextField("空", text: $text)
+                .textFieldStyle(.plain)
+                .onSubmit(commit)
+        }
+    }
+
+    private var scalarOptions: [String] {
+        var values = kind == .status ? ["未开始", "进行中", "已完成"] : []
+        if !text.isEmpty { values.append(text) }
+        for candidate in model.articles {
+            guard let value = candidate.properties.first(where: {
+                $0.key.caseInsensitiveCompare(key) == .orderedSame
+            })?.value.editorText, !value.isEmpty else { continue }
+            values.append(value)
+        }
+        var unique: [String] = []
+        for value in values where !unique.contains(where: {
+            $0.caseInsensitiveCompare(value) == .orderedSame
+        }) {
+            unique.append(value)
+        }
+        return unique
+    }
+
+    private var relationValues: [String] {
+        NativeArticlePropertyValue.fromEditor(kind: .relation, text: text).listValues
+    }
+
+    private func relationContains(_ destination: NativeArticleSummary) -> Bool {
+        relationValues.contains(where: { reference in
+            destination.slug.caseInsensitiveCompare(reference) == .orderedSame
+                || destination.title.caseInsensitiveCompare(reference) == .orderedSame
+                || destination.aliases.contains(where: {
+                    $0.caseInsensitiveCompare(reference) == .orderedSame
+                })
+        })
+    }
+
+    private func toggleRelation(_ destination: NativeArticleSummary) {
+        var values = relationValues.filter { reference in
+            destination.slug.caseInsensitiveCompare(reference) != .orderedSame
+                && destination.title.caseInsensitiveCompare(reference) != .orderedSame
+                && !destination.aliases.contains(where: {
+                    $0.caseInsensitiveCompare(reference) == .orderedSame
+                })
+        }
+        if !relationContains(destination) { values.append(destination.slug) }
+        setAndCommit(values.joined(separator: ", "))
+    }
+
+    private func setAndCommit(_ value: String) {
+        text = value
+        model.updateArticleProperty(article: article, key: key, kind: kind, text: value)
+    }
+
+    private var propertyHelp: String {
+        switch kind {
+        case .rollup: return "根据关联页面实时计算汇总结果"
+        case .select, .status: return "选择工作区中已有的选项"
+        case .relation: return "选择或取消关联页面"
+        default: return "直接编辑属性：\(key)，回车保存到 Markdown frontmatter"
+        }
     }
 }
 

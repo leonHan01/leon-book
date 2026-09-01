@@ -183,7 +183,7 @@ struct NativeWorkspaceLayoutProfile: Codable, Equatable, Identifiable {
             destination: try container.decodeIfPresent(NativeWorkspaceLayoutDestination.self, forKey: .destination)
                 ?? .editor,
             editorMode: try container.decodeIfPresent(ArticleEditorMode.self, forKey: .editorMode)
-                ?? .livePreview,
+                ?? .blocks,
             editorSidebarPane: try container.decodeIfPresent(NativeEditorSidebarPane.self, forKey: .editorSidebarPane)
                 ?? .settings,
             isEditorSidebarVisible: try container.decodeIfPresent(Bool.self, forKey: .isEditorSidebarVisible)
@@ -245,7 +245,7 @@ struct NativeWorkspaceLayoutProfile: Codable, Equatable, Identifiable {
                 systemImage: kind.systemImage,
                 builtInKind: kind,
                 destination: .editor,
-                editorMode: .livePreview,
+                editorMode: .blocks,
                 editorSidebarPane: .settings,
                 isEditorSidebarVisible: true,
                 readerInspectorPane: .context,
@@ -260,7 +260,7 @@ struct NativeWorkspaceLayoutProfile: Codable, Equatable, Identifiable {
                 systemImage: kind.systemImage,
                 builtInKind: kind,
                 destination: .reader,
-                editorMode: .livePreview,
+                editorMode: .blocks,
                 editorSidebarPane: .outline,
                 isEditorSidebarVisible: false,
                 readerInspectorPane: .context,
@@ -312,7 +312,7 @@ final class NativeWorkspaceLayoutState: ObservableObject {
 
     @Published private(set) var profiles: [NativeWorkspaceLayoutProfile] = []
     @Published private(set) var activeLayoutID = NativeWorkspaceLayoutKind.writing.profileID
-    @Published var editorMode = ArticleEditorMode.livePreview
+    @Published var editorMode = ArticleEditorMode.blocks
     @Published var editorSidebarPane = NativeEditorSidebarPane.settings
     @Published var isEditorSidebarVisible = true
     @Published var readerInspectorPane = ArticleInspectorPane.context
@@ -323,15 +323,24 @@ final class NativeWorkspaceLayoutState: ObservableObject {
     @Published var splitFraction: Double = 0.5
 
     private let defaults: UserDefaults
-    private let defaultsKey = "leon-book.workspace-layouts.v2"
-    private let legacyDefaultsKey = "leon-book.workspace-layouts.v1"
+    private let defaultsKey = "leon-book.workspace-layouts.v3"
+    private let legacyDefaultsKeys = ["leon-book.workspace-layouts.v2", "leon-book.workspace-layouts.v1"]
     private var archive: Archive
     private var currentUserID: String?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let data = defaults.data(forKey: defaultsKey) ?? defaults.data(forKey: legacyDefaultsKey)
-        archive = data.flatMap { try? JSONDecoder().decode(Archive.self, from: $0) } ?? Archive()
+        let currentData = defaults.data(forKey: defaultsKey)
+        let legacyData = legacyDefaultsKeys.lazy.compactMap { defaults.data(forKey: $0) }.first
+        archive = (currentData ?? legacyData).flatMap {
+            try? JSONDecoder().decode(Archive.self, from: $0)
+        } ?? Archive()
+        if currentData == nil, legacyData != nil {
+            migrateBlockEditorDefault()
+            if let migrated = try? JSONEncoder().encode(archive) {
+                defaults.set(migrated, forKey: defaultsKey)
+            }
+        }
     }
 
     var activeProfile: NativeWorkspaceLayoutProfile? {
@@ -582,10 +591,24 @@ final class NativeWorkspaceLayoutState: ObservableObject {
     }
 
     private func reloadArchive() {
-        let data = defaults.data(forKey: defaultsKey) ?? defaults.data(forKey: legacyDefaultsKey)
+        let data = defaults.data(forKey: defaultsKey)
+            ?? legacyDefaultsKeys.lazy.compactMap { self.defaults.data(forKey: $0) }.first
         guard let data,
               let stored = try? JSONDecoder().decode(Archive.self, from: data) else { return }
         archive = stored
+    }
+
+    private func migrateBlockEditorDefault() {
+        for userID in archive.profilesByUser.keys {
+            archive.profilesByUser[userID] = archive.profilesByUser[userID]?.map { profile in
+                guard profile.builtInKind == .writing, profile.editorMode == .livePreview else {
+                    return profile
+                }
+                var migrated = profile
+                migrated.editorMode = .blocks
+                return migrated
+            }
+        }
     }
 }
 

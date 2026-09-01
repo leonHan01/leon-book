@@ -352,8 +352,8 @@ public enum NativeSmartCollectionFormulaEngine {
         })?.value
         guard let value else { return .empty }
         switch value.kind {
-        case .text: return .string(value.value)
-        case .list, .tags: return .list(value.listValues)
+        case .text, .select, .status, .rollup: return .string(value.value)
+        case .list, .tags, .relation: return .list(value.listValues)
         case .number: return Double(value.value).map(NativeBaseValue.number) ?? .empty
         case .date:
             return NativeBaseValue.parseDate(value.value).map(NativeBaseValue.date) ?? .string(value.value)
