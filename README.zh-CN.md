@@ -6,6 +6,30 @@
 
 应用使用 SwiftUI 构建，数据直接保存到本地文件系统，不依赖外部浏览器、Node.js 服务或 HTTP API。
 
+## 软件截图
+
+以下截图来自独立的“产品演示”工作区，其中加入了 mock 文章、双链、微博和问答数据。
+
+### 工作区概览
+
+![LeonBook 工作区概览，展示已发布文章、草稿、微博和创作活动](docs/screenshots/leonbook-dashboard.jpg)
+
+### 文章阅读与双链
+
+![LeonBook 文章阅读页，展示任务内容、大纲、反向链接和出链](docs/screenshots/leonbook-article.jpg)
+
+### 知识关系图
+
+![LeonBook 知识关系图，展示四篇 mock 文章之间的引用关系](docs/screenshots/leonbook-graph.jpg)
+
+### 微博动态
+
+![LeonBook 微博时间线，展示标签和 mock 产品动态](docs/screenshots/leonbook-moments.jpg)
+
+### 问答
+
+![LeonBook 问答详情，展示 Markdown 与 SQLite 架构问题及回答](docs/screenshots/leonbook-qna.jpg)
+
 ## 功能
 
 - 阅读、编辑和发布文章

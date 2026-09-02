@@ -6,6 +6,30 @@
 
 The app is built with SwiftUI and stores data directly on the local filesystem. It does not depend on an external browser, Node.js service, or HTTP API.
 
+## Screenshots
+
+The screenshots below use an isolated `产品演示` workspace populated with mock articles, backlinks, moments, and a Q&A thread.
+
+### Workspace overview
+
+![LeonBook workspace overview with published articles, a draft, moments, and creative activity](docs/screenshots/leonbook-dashboard.jpg)
+
+### Article reading and backlinks
+
+![LeonBook article reader with task content, an outline, backlinks, and outgoing links](docs/screenshots/leonbook-article.jpg)
+
+### Knowledge graph
+
+![LeonBook knowledge graph connecting four mock articles](docs/screenshots/leonbook-graph.jpg)
+
+### Moments
+
+![LeonBook moments timeline with tags and mock product updates](docs/screenshots/leonbook-moments.jpg)
+
+### Q&A
+
+![LeonBook Q&A detail with a Markdown and SQLite architecture question and answer](docs/screenshots/leonbook-qna.jpg)
+
 ## Features
 
 - Read, edit, and publish articles
