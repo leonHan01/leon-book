@@ -2,11 +2,17 @@ import AppKit
 import AVKit
 import SwiftUI
 
-private let momentFeedMaximumWidth: CGFloat = 1_760
+private let momentFeedMaximumWidth: CGFloat = 1_360
+
+private enum MomentVisualStyle {
+    static let accent = Color(red: 0.94, green: 0.30, blue: 0.22)
+    static let cardBackground = Color(nsColor: .controlBackgroundColor)
+}
 
 struct MomentFeedView: View {
     @ObservedObject var model: NativeAppModel
     @ObservedObject var pageState: NativeMomentFeedPageState
+    @Environment(\.locale) private var locale
     @State private var imageBrowser: MomentImageBrowserState?
     @State private var isPresentingImmersiveBrowser = false
     @AppStorage("momentFeedLayout") private var momentFeedLayoutRawValue = MomentFeedLayout.singleColumn.rawValue
@@ -25,299 +31,280 @@ struct MomentFeedView: View {
         let availableMomentTagFilters = model.availableMomentTagFilters
         let momentTimeline = model.momentTimeline
 
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 26) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("微博")
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
-                    Text("用图片、视频和一句话记录此刻，内容只保存在本机资料库中。")
-                        .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 22) {
+                    HStack(spacing: 15) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [MomentVisualStyle.accent, .orange],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                            Image(systemName: "quote.bubble.fill")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 52, height: 52)
+                        .shadow(color: MomentVisualStyle.accent.opacity(0.22), radius: 10, y: 5)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("微博")
+                                .font(.system(size: 31, weight: .bold, design: .rounded))
+                            Text("记下灵感、日常和稍纵即逝的想法")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        Label("仅存本机", systemImage: "lock.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 7)
+                            .background(Color.primary.opacity(0.05), in: Capsule())
+                    }
+
+                    MomentComposerSection(model: model)
                 }
+                .padding(.bottom, 30)
 
-                MomentComposerSection(model: model)
-
-                HStack(alignment: .firstTextBaseline) {
-                    Text("历史微博")
-                        .font(.title2.weight(.bold))
-                    Text(
-                        !model.isFilteringMoments
-                            ? "\(model.totalMomentCount) 条"
-                            : "已加载 \(model.moments.count) / \(model.filteredMomentCount) 条"
-                    )
-                        .foregroundStyle(.secondary)
-                    Spacer()
-
-                    Button {
-                        isPresentingImmersiveBrowser = true
-                    } label: {
-                        Label("沉浸浏览", systemImage: "play.rectangle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.filteredMoments.isEmpty)
-                    .help("像幻灯片一样逐页浏览当前微博，使用方向键翻页")
-                    .accessibilityLabel("进入微博沉浸浏览模式")
-
-                    Menu {
-                        ForEach(MomentFeedLayout.allCases) { layout in
-                            Button {
-                                momentFeedLayoutRawValue = layout.rawValue
-                            } label: {
-                                if momentFeedLayout == layout {
-                                    Label(layout.title, systemImage: "checkmark")
-                                } else {
-                                    Label(layout.title, systemImage: layout.systemImage)
-                                }
-                            }
-                        }
-                    } label: {
-                        Label(momentFeedLayout.title, systemImage: momentFeedLayout.systemImage)
-                    }
-                    .help("切换微博的单列或多列瀑布流布局")
-                    .accessibilityLabel("微博布局：\(momentFeedLayout.title)")
-
-                    TextField("搜索正文、标签或日期", text: $model.momentSearchText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 240)
-                        .help("可搜索正文、#标签、2026-08-22 或 2026年8月22日")
-                        .onChange(of: model.momentSearchText) { _ in
-                            model.refreshMomentFeed(after: 0.25)
-                        }
-
-                    Menu {
-                        Button {
-                            model.selectMomentDateFilter(.all)
-                        } label: {
-                            if model.momentDateFilter == .all {
-                                Label("全部时间", systemImage: "checkmark")
-                            } else {
-                                Text("全部时间")
-                            }
-                        }
-                        Button {
-                            model.selectMomentDateFilter(.today)
-                        } label: {
-                            if model.momentDateFilter == .today {
-                                Label("今天", systemImage: "checkmark")
-                            } else {
-                                Text("今天")
-                            }
-                        }
-                        Button {
-                            model.selectMomentDateFilter(.thisWeek)
-                        } label: {
-                            if model.momentDateFilter == .thisWeek {
-                                Label("本周", systemImage: "checkmark")
-                            } else {
-                                Text("本周")
-                            }
-                        }
-
-                        if !availableMomentMonths.isEmpty {
-                            Divider()
-                            Menu("按月份回顾") {
-                                ForEach(availableMomentMonths) { month in
-                                    let filter = NativeMomentDateFilter.month(year: month.year, month: month.month)
-                                    Button {
-                                        model.selectMomentDateFilter(filter)
-                                    } label: {
-                                        if model.momentDateFilter == filter {
-                                            Label(month.label, systemImage: "checkmark")
-                                        } else {
-                                            Text(month.label)
-                                        }
-                                    }
-                                }
-                            }
-                            Menu("按年份回顾") {
-                                ForEach(availableMomentYears, id: \.self) { year in
-                                    let filter = NativeMomentDateFilter.year(year)
-                                    Button {
-                                        model.selectMomentDateFilter(filter)
-                                    } label: {
-                                        if model.momentDateFilter == filter {
-                                            Label("\(year)年", systemImage: "checkmark")
-                                        } else {
-                                            Text("\(year)年")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        Label(model.momentDateFilter.label, systemImage: "calendar")
-                    }
-                    .help("按今天、本周、月份或年份回顾微博")
-
-                    Button {
-                        model.toggleFavoriteMomentFilter()
-                    } label: {
-                        Label(
-                            model.showsOnlyFavoriteMoments ? "已筛选收藏" : "仅看收藏",
-                            systemImage: model.showsOnlyFavoriteMoments ? "heart.fill" : "heart"
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .center, spacing: 10) {
+                        Text("历史微博")
+                            .font(.title2.weight(.bold))
+                        Text(
+                            !model.isFilteringMoments
+                                ? "\(model.totalMomentCount) 条"
+                                : "已加载 \(model.moments.count) / \(model.filteredMomentCount) 条"
                         )
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(model.showsOnlyFavoriteMoments ? .pink : .gray)
-                    .help("仅显示已收藏的微博")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
 
-                    if model.isFilteringMoments {
-                        Button("清除筛选") {
-                            model.clearMomentFilters()
+                        Spacer()
+
+                        Button {
+                            isPresentingImmersiveBrowser = true
+                        } label: {
+                            Label("沉浸浏览", systemImage: "play.rectangle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.filteredMoments.isEmpty)
+                        .help("像幻灯片一样逐页浏览当前微博，使用方向键翻页")
+                        .accessibilityLabel("进入微博沉浸浏览模式")
+                    }
+
+                    HStack(spacing: 10) {
+                        TextField("搜索正文、标签或日期", text: $model.momentSearchText)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(minWidth: 220, maxWidth: 380)
+                            .help("可搜索正文、#标签、2026-08-22 或 2026年8月22日")
+                            .onChange(of: model.momentSearchText) { _ in
+                                model.refreshMomentFeed(after: 0.25)
+                            }
+
+                        Menu {
+                            ForEach(MomentFeedLayout.allCases) { layout in
+                                Button {
+                                    momentFeedLayoutRawValue = layout.rawValue
+                                } label: {
+                                    if momentFeedLayout == layout {
+                                        Label(LocalizedStringKey(layout.title), systemImage: "checkmark")
+                                    } else {
+                                        Label(LocalizedStringKey(layout.title), systemImage: layout.systemImage)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(LocalizedStringKey(momentFeedLayout.title), systemImage: momentFeedLayout.systemImage)
+                        }
+                        .help("切换微博的单列或多列瀑布流布局")
+                        .accessibilityLabel("微博布局：\(momentFeedLayout.title)")
+
+                        Menu {
+                            Button {
+                                model.selectMomentDateFilter(.all)
+                            } label: {
+                                if model.momentDateFilter == .all {
+                                    Label("全部时间", systemImage: "checkmark")
+                                } else {
+                                    Text("全部时间")
+                                }
+                            }
+                            Button {
+                                model.selectMomentDateFilter(.today)
+                            } label: {
+                                if model.momentDateFilter == .today {
+                                    Label("今天", systemImage: "checkmark")
+                                } else {
+                                    Text("今天")
+                                }
+                            }
+                            Button {
+                                model.selectMomentDateFilter(.thisWeek)
+                            } label: {
+                                if model.momentDateFilter == .thisWeek {
+                                    Label("本周", systemImage: "checkmark")
+                                } else {
+                                    Text("本周")
+                                }
+                            }
+
+                            if !availableMomentMonths.isEmpty {
+                                Divider()
+                                Menu("按月份回顾") {
+                                    ForEach(availableMomentMonths) { month in
+                                        let filter = NativeMomentDateFilter.month(year: month.year, month: month.month)
+                                        Button {
+                                            model.selectMomentDateFilter(filter)
+                                        } label: {
+                                            if model.momentDateFilter == filter {
+                                                Label(monthLabel(month), systemImage: "checkmark")
+                                            } else {
+                                                Text(monthLabel(month))
+                                            }
+                                        }
+                                    }
+                                }
+                                Menu("按年份回顾") {
+                                    ForEach(availableMomentYears, id: \.self) { year in
+                                        let filter = NativeMomentDateFilter.year(year)
+                                        Button {
+                                            model.selectMomentDateFilter(filter)
+                                        } label: {
+                                            if model.momentDateFilter == filter {
+                                                Label(yearLabel(year), systemImage: "checkmark")
+                                            } else {
+                                                Text(yearLabel(year))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(dateFilterLabel(model.momentDateFilter), systemImage: "calendar")
+                        }
+                        .help("按今天、本周、月份或年份回顾微博")
+
+                        Button {
+                            model.toggleFavoriteMomentFilter()
+                        } label: {
+                            Label(
+                                model.showsOnlyFavoriteMoments ? "已筛选收藏" : "仅看收藏",
+                                systemImage: model.showsOnlyFavoriteMoments ? "heart.fill" : "heart"
+                            )
                         }
                         .buttonStyle(.bordered)
-                    }
-                }
+                        .tint(model.showsOnlyFavoriteMoments ? .pink : .gray)
+                        .help("仅显示已收藏的微博")
 
-                if !availableMomentTagFilters.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 8) {
-                            Label("标签筛选", systemImage: "tag")
+                        if model.isFilteringMoments {
+                            Button("清除筛选") {
+                                model.clearMomentFilters()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                    .controlSize(.large)
+
+                    if !availableMomentTagFilters.isEmpty {
+                        HStack(spacing: 12) {
+                            Label("标签", systemImage: "tag")
                                 .font(.subheadline.weight(.semibold))
-                            Text("可多选 · 任一匹配")
-                                .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Spacer()
+
+                            ScrollView(.horizontal) {
+                                HStack(spacing: 8) {
+                                    ForEach(availableMomentTagFilters) { tagFilter in
+                                        let isSelected = model.isMomentTagSelected(tagFilter.tag)
+                                        Button {
+                                            model.toggleMomentTagFilter(tagFilter.tag)
+                                        } label: {
+                                            HStack(spacing: 6) {
+                                                Image(systemName: isSelected ? "checkmark" : "number")
+                                                Text(tagFilter.tag)
+                                                Text("\(tagFilter.count)")
+                                                    .foregroundStyle(isSelected ? Color.white.opacity(0.78) : Color.secondary)
+                                            }
+                                            .font(.caption.weight(.medium))
+                                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                                            .padding(.horizontal, 11)
+                                            .padding(.vertical, 7)
+                                            .background(
+                                                isSelected ? MomentVisualStyle.accent : Color.primary.opacity(0.055),
+                                                in: Capsule()
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help("筛选标签 #\(tagFilter.tag)：\(tagFilter.count) 条微博")
+                                        .accessibilityLabel("标签 #\(tagFilter.tag)，\(tagFilter.count) 条微博")
+                                        .accessibilityValue(isSelected ? "已选中" : "未选中")
+                                    }
+                                }
+                            }
+                            .scrollIndicators(.hidden)
+
                             if !model.selectedMomentTags.isEmpty {
                                 Text("已选 \(model.selectedMomentTags.count) 个")
                                     .font(.caption.weight(.medium))
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(MomentVisualStyle.accent)
                             }
                         }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
 
-                        LazyVGrid(
-                            columns: [GridItem(.adaptive(minimum: 118, maximum: 210), spacing: 8)],
-                            alignment: .leading,
-                            spacing: 8
-                        ) {
-                            ForEach(availableMomentTagFilters) { tagFilter in
-                                let isSelected = model.isMomentTagSelected(tagFilter.tag)
-                                Button {
-                                    model.toggleMomentTagFilter(tagFilter.tag)
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: isSelected ? "checkmark.circle.fill" : "tag")
-                                        Text("#\(tagFilter.tag)")
-                                            .lineLimit(1)
-                                        Spacer(minLength: 0)
-                                        Text("\(tagFilter.count)")
-                                            .font(.caption.monospacedDigit())
-                                    }
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(isSelected ? Color.white : Color.primary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 7)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(
-                                        isSelected ? Color.accentColor : Color.accentColor.opacity(0.1),
-                                        in: Capsule()
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                .help("筛选标签 #\(tagFilter.tag)：\(tagFilter.count) 条微博")
-                                .accessibilityLabel("标签 #\(tagFilter.tag)，\(tagFilter.count) 条微博")
-                                .accessibilityValue(isSelected ? "已选中" : "未选中")
-                            }
+                    if model.filteredMoments.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: model.isFilteringMoments ? "line.3.horizontal.decrease.circle" : "quote.bubble")
+                                .font(.system(size: 34, weight: .light))
+                                .foregroundStyle(MomentVisualStyle.accent)
+                                .frame(width: 68, height: 68)
+                                .background(MomentVisualStyle.accent.opacity(0.1), in: Circle())
+                            Text(LocalizedStringKey(model.isFilteringMoments ? "没有符合筛选条件的微博" : "还没有微博"))
+                                .font(.headline)
+                            Text(
+                                !model.isFilteringMoments
+                                    ? "发布第一条图文动态，它会显示在这里。"
+                                    : "可清空搜索关键词或标签筛选后重试。"
+                            )
+                            .foregroundStyle(.secondary)
                         }
-                    }
-                    .padding(14)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-                    }
-                }
-            }
-            .frame(maxWidth: momentFeedMaximumWidth, alignment: .leading)
-            .padding(.horizontal, 34)
-            .padding(.top, 34)
-            .padding(.bottom, 20)
-
-            Divider()
-
-            if model.filteredMoments.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "rectangle.3.group")
-                        .font(.system(size: 38))
-                        .foregroundStyle(.secondary)
-                    Text(model.isFilteringMoments ? "没有符合筛选条件的微博" : "还没有微博")
-                        .font(.headline)
-                    Text(
-                        !model.isFilteringMoments
-                            ? "发布第一条图文动态，它会显示在这里。"
-                            : "可清空搜索关键词或标签筛选后重试。"
-                    )
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 24) {
-                        ForEach(Array(momentTimeline.enumerated()), id: \.element.id) { index, group in
-                            HStack(alignment: .top, spacing: 14) {
-                                VStack(spacing: 0) {
-                                    ZStack {
-                                        Circle()
-                                            .fill(Color.accentColor.opacity(0.14))
-                                            .frame(width: 30, height: 30)
-                                        Circle()
-                                            .fill(Color.accentColor)
-                                            .frame(width: 10, height: 10)
-                                    }
-                                    .padding(.top, 5)
-                                    if index < momentTimeline.count - 1 {
-                                        Rectangle()
-                                            .fill(
-                                                LinearGradient(
-                                                    colors: [
-                                                        Color.accentColor.opacity(0.48),
-                                                        Color.accentColor.opacity(0.06),
-                                                    ],
-                                                    startPoint: .top,
-                                                    endPoint: .bottom
-                                                )
-                                            )
-                                            .frame(width: 2)
-                                            .frame(minHeight: pageState.collapsedTimelineDays.contains(group.id) ? 52 : 112)
-                                            .frame(maxHeight: .infinity)
-                                            .padding(.top, 6)
-                                    }
-                                }
-                                .frame(width: 30)
-
-                                VStack(alignment: .leading, spacing: 12) {
+                        .frame(maxWidth: .infinity, minHeight: 280)
+                    } else {
+                        LazyVStack(spacing: 28) {
+                            ForEach(momentTimeline) { group in
+                                VStack(alignment: .leading, spacing: 14) {
                                     Button {
                                         toggleTimelineDay(group.id)
                                     } label: {
-                                        HStack(spacing: 12) {
-                                            VStack(alignment: .leading, spacing: 3) {
-                                                Text(group.label)
-                                                    .font(.title3.weight(.semibold))
-                                                HStack(spacing: 6) {
-                                                    Label("\(group.moments.count) 条微博", systemImage: "rectangle.3.group")
-                                                    Text(
-                                                        pageState.collapsedTimelineDays.contains(group.id)
-                                                            ? "点击展开"
-                                                            : "点击折叠"
-                                                    )
-                                                }
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                            }
+                                        HStack(spacing: 10) {
+                                            Text(group.label)
+                                                .font(.headline)
 
-                                            Spacer(minLength: 8)
+                                            Text("\(group.moments.count)")
+                                                .font(.caption.monospacedDigit().weight(.semibold))
+                                                .foregroundStyle(MomentVisualStyle.accent)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 3)
+                                                .background(MomentVisualStyle.accent.opacity(0.1), in: Capsule())
+
+                                            Rectangle()
+                                                .fill(Color.primary.opacity(0.08))
+                                                .frame(height: 1)
 
                                             Image(systemName: pageState.collapsedTimelineDays.contains(group.id) ? "chevron.right" : "chevron.down")
                                                 .font(.caption.weight(.bold))
                                                 .foregroundStyle(.secondary)
-                                                .frame(width: 28, height: 28)
-                                                .background(.quaternary.opacity(0.55), in: Circle())
-                                        }
-                                        .padding(.horizontal, 15)
-                                        .padding(.vertical, 11)
-                                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-                                        .overlay {
-                                            RoundedRectangle(cornerRadius: 14)
-                                                .strokeBorder(Color.primary.opacity(0.08))
+                                                .frame(width: 26, height: 26)
+                                                .background(Color.primary.opacity(0.05), in: Circle())
                                         }
                                         .contentShape(Rectangle())
                                     }
@@ -326,52 +313,62 @@ struct MomentFeedView: View {
                                     .accessibilityLabel(pageState.collapsedTimelineDays.contains(group.id) ? "展开 \(group.label) 的微博" : "折叠 \(group.label) 的微博")
 
                                     if pageState.collapsedTimelineDays.contains(group.id) {
-                                        Label("已折叠 \(group.moments.count) 条微博", systemImage: "rectangle.stack")
-                                            .font(.caption.weight(.medium))
+                                        Text("已折叠 \(group.moments.count) 条内容")
+                                            .font(.caption)
                                             .foregroundStyle(.secondary)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 9)
-                                            .background(Color.accentColor.opacity(0.08), in: Capsule())
+                                            .padding(.leading, 2)
+                                    } else if momentFeedLayout.columnCount == 1 {
+                                        LazyVStack(spacing: 16) {
+                                            momentCards(for: group.moments)
+                                        }
                                     } else {
-                                        if momentFeedLayout.columnCount == 1 {
-                                            LazyVStack(spacing: 16) {
-                                                momentCards(for: group.moments)
-                                            }
+                                        momentWaterfallColumns(for: group.moments)
+                                    }
+                                }
+                            }
+
+                            if model.hasMoreMoments {
+                                HStack {
+                                    Spacer()
+                                    Button {
+                                        model.loadMoreMoments()
+                                    } label: {
+                                        if model.isLoadingMoreMoments {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                            Text("正在加载…")
                                         } else {
-                                            momentWaterfallColumns(for: group.moments)
+                                            Label("加载更多历史微博", systemImage: "arrow.down.circle")
                                         }
                                     }
+                                    .buttonStyle(.bordered)
+                                    .disabled(model.isLoadingMoreMoments)
+                                    Spacer()
                                 }
+                                .padding(.vertical, 8)
                             }
                         }
-
-                        if model.hasMoreMoments {
-                            HStack {
-                                Spacer()
-                                Button {
-                                    model.loadMoreMoments()
-                                } label: {
-                                    if model.isLoadingMoreMoments {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                        Text("正在加载…")
-                                    } else {
-                                        Label("加载更多历史微博", systemImage: "arrow.down.circle")
-                                    }
-                                }
-                                .disabled(model.isLoadingMoreMoments)
-                                Spacer()
-                            }
-                            .padding(.vertical, 8)
-                        }
+                        .padding(.top, 8)
                     }
-                    .frame(maxWidth: momentFeedMaximumWidth, alignment: .leading)
-                    .padding(.horizontal, 34)
-                    .padding(.vertical, 22)
                 }
             }
+            .frame(maxWidth: momentFeedMaximumWidth, alignment: .leading)
+            .padding(.horizontal, 34)
+            .padding(.top, 32)
+            .padding(.bottom, 44)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(
+            LinearGradient(
+                colors: [
+                    MomentVisualStyle.accent.opacity(0.045),
+                    Color(nsColor: .windowBackgroundColor),
+                    Color(nsColor: .windowBackgroundColor),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .tint(MomentVisualStyle.accent)
         .sheet(item: $imageBrowser) { browser in
             MomentImageBrowserView(
                 images: browser.images,
@@ -381,6 +378,38 @@ struct MomentFeedView: View {
         }
         .sheet(isPresented: $isPresentingImmersiveBrowser) {
             MomentImmersiveBrowserView(model: model)
+        }
+    }
+
+    private func monthLabel(_ month: NativeMomentMonth) -> String {
+        guard let date = Calendar(identifier: .gregorian).date(from: DateComponents(
+            year: month.year,
+            month: month.month,
+            day: 1
+        )) else { return month.label }
+        return date.formatted(.dateTime.year().month(.wide).locale(locale))
+    }
+
+    private func yearLabel(_ year: Int) -> String {
+        guard let date = Calendar(identifier: .gregorian).date(from: DateComponents(
+            year: year,
+            month: 1,
+            day: 1
+        )) else { return String(year) }
+        return date.formatted(.dateTime.year().locale(locale))
+    }
+
+    private func dateFilterLabel(_ filter: NativeMomentDateFilter) -> String {
+        switch filter {
+        case .all, .today, .thisWeek:
+            let language: NativeAppLanguage = locale.identifier.lowercased().hasPrefix("en")
+                ? .english
+                : .simplifiedChinese
+            return NativeLocalization.string(filter.label, language: language)
+        case let .month(year, month):
+            return monthLabel(NativeMomentMonth(year: year, month: month))
+        case let .year(year):
+            return yearLabel(year)
         }
     }
 
@@ -401,12 +430,13 @@ struct MomentFeedView: View {
             } onDelete: {
                 model.deleteMoment(moment)
             }
+            .frame(maxWidth: momentFeedLayout.columnCount == 1 ? 860 : .infinity)
         }
     }
 
     @ViewBuilder
     private func momentWaterfallColumns(for moments: [NativeMoment]) -> some View {
-        let columnCount = momentFeedLayout.columnCount
+        let columnCount = min(momentFeedLayout.columnCount, max(moments.count, 1))
         HStack(alignment: .top, spacing: 16) {
             ForEach(0..<columnCount, id: \.self) { columnIndex in
                 LazyVStack(spacing: 16) {
@@ -471,36 +501,39 @@ private struct MomentComposerSection: View {
     private var isEditing: Bool { model.editingMomentID != nil }
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 0) {
             Button {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     isExpanded.toggle()
                 }
             } label: {
-                HStack(spacing: 10) {
-                    Label(
-                        isEditing ? "编辑微博" : "发布微博",
-                        systemImage: isEditing ? "pencil" : "square.and.pencil"
-                    )
-                    .font(.headline)
+                HStack(spacing: 12) {
+                    Image(systemName: isEditing ? "pencil" : "square.and.pencil")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(MomentVisualStyle.accent, in: Circle())
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(LocalizedStringKey(isEditing ? "继续编辑" : "记录此刻"))
+                            .font(.headline)
+                        Text(LocalizedStringKey(isEditing ? "修改内容后保存更新" : "写点什么，或分享照片与视频"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
                     Spacer()
 
-                    Text(isExpanded ? "收起" : "展开")
+                    Text(LocalizedStringKey(isExpanded ? "收起" : "开始创作"))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isExpanded ? Color.secondary : MomentVisualStyle.accent)
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(isExpanded ? Color.secondary : MomentVisualStyle.accent)
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 14)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 15)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16)
-                        .strokeBorder(.quaternary)
-                }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -508,10 +541,18 @@ private struct MomentComposerSection: View {
             .accessibilityValue(isExpanded ? "已展开" : "已折叠")
 
             if isExpanded {
+                Divider()
+                    .padding(.horizontal, 18)
                 MomentComposerView(model: model)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .background(MomentVisualStyle.cardBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07))
+        }
+        .shadow(color: .black.opacity(0.055), radius: 16, y: 7)
         .onAppear {
             // Do not hide an unsaved draft or an edit session when returning to this page.
             isExpanded = isEditing || !model.momentDraft.isEmpty
@@ -546,18 +587,6 @@ private struct MomentComposerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label(
-                    model.editingMomentID == nil ? "发布一条微博" : "编辑微博",
-                    systemImage: model.editingMomentID == nil ? "square.and.pencil" : "pencil"
-                )
-                    .font(.headline)
-                Spacer()
-                Text("\(model.momentDraft.text.count) / 500")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-
             HStack(spacing: 8) {
                 Button {
                     richTextController.toggleBold()
@@ -576,7 +605,7 @@ private struct MomentComposerView: View {
                         Button {
                             richTextController.apply(color: color)
                         } label: {
-                            Label(color.label, systemImage: "circle.fill")
+                            Label(LocalizedStringKey(color.label), systemImage: "circle.fill")
                                 .foregroundStyle(color.swiftUIColor)
                         }
                     }
@@ -590,6 +619,10 @@ private struct MomentComposerView: View {
                 Text("拖入或粘贴图片可直接添加")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Text("\(model.momentDraft.text.count) / 500")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
 
             MomentRichTextEditor(
@@ -598,11 +631,11 @@ private struct MomentComposerView: View {
                 controller: richTextController,
                 onPasteImages: model.uploadMomentPastedImages
             )
-                .frame(height: 63)
-                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .frame(height: 104)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(.quaternary)
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Color.primary.opacity(0.1))
                 }
 
             if let query = richTextController.activeTagQuery, !tagSuggestions.isEmpty {
@@ -685,6 +718,7 @@ private struct MomentComposerView: View {
                 } label: {
                     Label("添加图片", systemImage: "photo.on.rectangle.angled")
                 }
+                .buttonStyle(.bordered)
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
 
                 Button {
@@ -692,6 +726,7 @@ private struct MomentComposerView: View {
                 } label: {
                     Label("添加视频", systemImage: "video.badge.plus")
                 }
+                .buttonStyle(.bordered)
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
 
                 Text("最多 9 个图片或视频 · 视频仅支持 MP4")
@@ -727,12 +762,7 @@ private struct MomentComposerView: View {
                 .disabled(model.momentDraft.isEmpty || model.isPublishingMoment || model.isUploadingMedia)
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(.quaternary)
-        }
+        .padding(18)
     }
 }
 
@@ -806,6 +836,7 @@ private struct MomentCard: View {
     let onToggleFavorite: () -> Void
     let onSelectTag: (String) -> Void
     let onDelete: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         let displayContent = moment.displayContent
@@ -813,55 +844,77 @@ private struct MomentCard: View {
         let images = moment.imageAttachments
         let videos = moment.videoAttachments
 
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "person.crop.circle.fill")
-                    .foregroundStyle(.tint)
-                Text("leon-book")
-                    .font(.subheadline.weight(.semibold))
-                Spacer(minLength: 8)
-                HStack(alignment: .center, spacing: 8) {
+        VStack(alignment: .leading, spacing: 15) {
+            HStack(alignment: .center, spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [MomentVisualStyle.accent, .orange],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("leon-book")
+                        .font(.subheadline.weight(.semibold))
                     Text(dateLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-
-                    HStack(spacing: 8) {
-                        Button(action: onToggleFavorite) {
-                            Label(
-                                moment.isFavorite ? "已收藏" : "收藏",
-                                systemImage: moment.isFavorite ? "heart.fill" : "heart"
-                            )
-                            .foregroundStyle(moment.isFavorite ? .pink : .primary)
-                            .frame(minWidth: 58, minHeight: 28)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.bordered)
-                        .help(moment.isFavorite ? "取消收藏这条微博" : "收藏这条微博")
-                        .accessibilityLabel(moment.isFavorite ? "取消收藏这条微博" : "收藏这条微博")
-
-                        Button(action: onEdit) {
-                            Label("编辑", systemImage: "pencil")
-                                .frame(minWidth: 58, minHeight: 28)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.bordered)
-                        .help("编辑这条微博")
-                        .accessibilityLabel("编辑这条微博")
-
-                        Button(action: confirmDeletion) {
-                            Label("删除", systemImage: "trash")
-                                .frame(minWidth: 58, minHeight: 28)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.red)
-                        .help("删除这条微博")
-                        .accessibilityLabel("删除这条微博")
-                    }
+                        .lineLimit(1)
                 }
+
+                Spacer(minLength: 8)
+
+                Button(action: onToggleFavorite) {
+                    Image(systemName: moment.isFavorite ? "heart.fill" : "heart")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(moment.isFavorite ? .pink : .secondary)
+                        .frame(width: 30, height: 30)
+                        .background(Color.primary.opacity(0.045), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(moment.isFavorite ? "取消收藏这条微博" : "收藏这条微博")
+                .accessibilityLabel(moment.isFavorite ? "取消收藏这条微博" : "收藏这条微博")
+
+                Menu {
+                    Button(action: onEdit) {
+                        Label("编辑微博", systemImage: "pencil")
+                    }
+                    Button(action: onToggleFavorite) {
+                        Label(
+                            moment.isFavorite ? "取消收藏" : "收藏微博",
+                            systemImage: moment.isFavorite ? "heart.slash" : "heart"
+                        )
+                    }
+                    Divider()
+                    Button(role: .destructive, action: confirmDeletion) {
+                        Label("移入回收站", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30)
+                        .background(Color.primary.opacity(0.045), in: Circle())
+                        .contentShape(Circle())
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("更多操作")
+                .accessibilityLabel("微博更多操作")
             }
             if !displayContent.text.isEmpty {
                 MomentStyledText(text: displayContent.text, runs: displayContent.runs)
+                    .font(.body)
+                    .lineSpacing(3)
             }
 
             if !moment.tags.isEmpty {
@@ -873,10 +926,10 @@ private struct MomentCard: View {
                             } label: {
                                 Text("#\(tag)")
                                     .font(.caption.weight(.medium))
-                                    .foregroundStyle(.tint)
+                                    .foregroundStyle(MomentVisualStyle.accent)
                                     .padding(.horizontal, 9)
                                     .padding(.vertical, 5)
-                                    .background(.tint.opacity(0.12), in: Capsule())
+                                    .background(MomentVisualStyle.accent.opacity(0.09), in: Capsule())
                             }
                             .buttonStyle(.plain)
                             .help("筛选标签 #\(tag)")
@@ -898,13 +951,17 @@ private struct MomentCard: View {
                 }
             }
         }
-        .padding(16)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 15))
+        .padding(18)
+        .background(MomentVisualStyle.cardBackground, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 15)
-                .strokeBorder(.quaternary)
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .strokeBorder(Color.primary.opacity(isHovered ? 0.12 : 0.07))
                 .allowsHitTesting(false)
         }
+        .shadow(color: .black.opacity(isHovered ? 0.085 : 0.045), radius: isHovered ? 14 : 9, y: 4)
+        .scaleEffect(isHovered ? 1.002 : 1)
+        .animation(.easeOut(duration: 0.16), value: isHovered)
+        .onHover { isHovered = $0 }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: videos.isEmpty ? .ignore : .contain)
         .accessibilityLabel(accessibilitySummary(text: displayContent.text, dateLabel: dateLabel))
