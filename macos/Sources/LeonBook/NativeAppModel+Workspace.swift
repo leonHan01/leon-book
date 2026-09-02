@@ -40,7 +40,7 @@ extension NativeAppModel {
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             updateArticleListSearch(searchText, debounce: false)
         }
-        articleGraph = .empty
+        try await reloadKnowledgeGraph()
     }
 
     private func reloadWorkspaceAncillaryState(generation: Int) async throws {

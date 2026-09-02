@@ -112,7 +112,11 @@ struct ArticleGraphView: View {
             } else {
                 ScrollView([.horizontal, .vertical]) {
                     let canvasSize = ArticleGraphLayout.canvasSize(for: graph.nodes.count)
-                    ArticleGraphCanvas(graph: graph, onOpenArticle: model.openArticleLink)
+                    ArticleGraphCanvas(
+                        graph: graph,
+                        manualPositions: $pageState.nodePositions,
+                        onOpenArticle: model.openArticleLink
+                    )
                         .frame(
                             width: canvasSize.width,
                             height: canvasSize.height
@@ -139,11 +143,20 @@ struct ArticleGraphView: View {
 
 private struct ArticleGraphCanvas: View {
     let graph: NativeArticleGraph
+    @Binding var manualPositions: [String: CGPoint]
     let onOpenArticle: (String) -> Void
+    @State private var dragOrigins: [String: CGPoint] = [:]
+    @State private var suppressOpenSlugs: Set<String> = []
+
+    private static let coordinateSpaceName = "article-graph-canvas"
 
     var body: some View {
         GeometryReader { proxy in
-            let positions = ArticleGraphLayout.positions(for: graph.nodes, in: proxy.size)
+            let positions = ArticleGraphLayout.resolvedPositions(
+                for: graph.nodes,
+                in: proxy.size,
+                manualPositions: manualPositions
+            )
 
             ZStack {
                 Canvas { context, _ in
@@ -159,15 +172,52 @@ private struct ArticleGraphCanvas: View {
                 ForEach(graph.nodes) { article in
                     if let position = positions[article.slug] {
                         ArticleGraphNode(article: article) {
+                            guard !suppressOpenSlugs.contains(article.slug) else { return }
                             onOpenArticle(article.slug)
                         }
                         .position(position)
+                        .highPriorityGesture(
+                            nodeDragGesture(
+                                slug: article.slug,
+                                position: position,
+                                canvasSize: proxy.size
+                            )
+                        )
                     }
                 }
             }
+            .coordinateSpace(name: Self.coordinateSpaceName)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("文章关系图，共 \(graph.nodes.count) 个文章节点和 \(graph.edges.count) 条引用连线")
         }
+    }
+
+    private func nodeDragGesture(
+        slug: String,
+        position: CGPoint,
+        canvasSize: CGSize
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 3, coordinateSpace: .named(Self.coordinateSpaceName))
+            .onChanged { value in
+                let origin = dragOrigins[slug] ?? position
+                if dragOrigins[slug] == nil {
+                    dragOrigins[slug] = origin
+                    suppressOpenSlugs.insert(slug)
+                }
+                manualPositions[slug] = ArticleGraphLayout.clampedPosition(
+                    CGPoint(
+                        x: origin.x + value.translation.width,
+                        y: origin.y + value.translation.height
+                    ),
+                    in: canvasSize
+                )
+            }
+            .onEnded { _ in
+                dragOrigins.removeValue(forKey: slug)
+                DispatchQueue.main.async {
+                    suppressOpenSlugs.remove(slug)
+                }
+            }
     }
 
     private func draw(edge: NativeArticleGraphEdge, from source: CGPoint, to target: CGPoint, in context: inout GraphicsContext) {
@@ -241,7 +291,7 @@ private struct ArticleGraphNode: View {
             }
         }
         .buttonStyle(.plain)
-        .help("打开文章：\(article.title)")
+        .help("拖动调整位置；单击打开：\(article.title)")
         .accessibilityLabel("打开文章：\(article.title)，\(article.status.label)")
     }
 
@@ -250,7 +300,7 @@ private struct ArticleGraphNode: View {
     }
 }
 
-private enum ArticleGraphLayout {
+enum ArticleGraphLayout {
     static let nodeSize = CGSize(width: 148, height: 66)
     private static let initialRadius: CGFloat = 130
     private static let ringSpacing: CGFloat = 142
@@ -295,6 +345,28 @@ private enum ArticleGraphLayout {
         }
 
         return positions
+    }
+
+    static func resolvedPositions(
+        for nodes: [NativeArticleSummary],
+        in size: CGSize,
+        manualPositions: [String: CGPoint]
+    ) -> [String: CGPoint] {
+        var resolved = positions(for: nodes, in: size)
+        for article in nodes {
+            guard let manualPosition = manualPositions[article.slug] else { continue }
+            resolved[article.slug] = clampedPosition(manualPosition, in: size)
+        }
+        return resolved
+    }
+
+    static func clampedPosition(_ position: CGPoint, in size: CGSize) -> CGPoint {
+        let halfWidth = nodeSize.width / 2
+        let halfHeight = nodeSize.height / 2
+        return CGPoint(
+            x: min(max(position.x, halfWidth), max(halfWidth, size.width - halfWidth)),
+            y: min(max(position.y, halfHeight), max(halfHeight, size.height - halfHeight))
+        )
     }
 
     private static func outerRadius(for nodeCount: Int) -> CGFloat {

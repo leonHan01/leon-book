@@ -28,6 +28,7 @@ final class NativeArticleGraphPageState: ObservableObject {
     @Published var includesOrphans = true
     @Published var nodeLimit = 100
     @Published var zoom: Double = 1
+    @Published var nodePositions: [String: CGPoint] = [:]
 
     func zoomIn() {
         zoom = min(1.8, ((zoom + 0.1) * 10).rounded() / 10)
@@ -43,5 +44,6 @@ final class NativeArticleGraphPageState: ObservableObject {
         includesOrphans = true
         nodeLimit = 100
         zoom = 1
+        nodePositions = [:]
     }
 }

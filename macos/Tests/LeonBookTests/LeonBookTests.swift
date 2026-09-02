@@ -1510,6 +1510,75 @@ final class NativeModelsTests {
         )
         XCTAssertEqual(drafts.graph.nodes.map { $0.slug }, ["note-11"])
     }
+
+    func testArticleGraphLayoutAppliesAndClampsManualNodePositions() {
+        let nodes = [
+            graphArticle(
+                slug: "first",
+                title: "First",
+                status: .published,
+                updatedAt: "2026-09-01T00:00:00Z"
+            ),
+            graphArticle(
+                slug: "second",
+                title: "Second",
+                status: .published,
+                updatedAt: "2026-09-02T00:00:00Z"
+            ),
+        ]
+        let canvasSize = CGSize(width: 640, height: 520)
+        let resolved = ArticleGraphLayout.resolvedPositions(
+            for: nodes,
+            in: canvasSize,
+            manualPositions: [
+                "first": CGPoint(x: 230, y: 310),
+                "second": CGPoint(x: -100, y: 900),
+            ]
+        )
+
+        XCTAssertEqual(resolved["first"], CGPoint(x: 230, y: 310))
+        XCTAssertEqual(
+            resolved["second"],
+            CGPoint(
+                x: ArticleGraphLayout.nodeSize.width / 2,
+                y: canvasSize.height - ArticleGraphLayout.nodeSize.height / 2
+            )
+        )
+    }
+
+    @MainActor
+    func testReloadPopulatesKnowledgeGraphWithIsolatedArticles() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let suiteName = "NativeKnowledgeGraphReloadTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("expected isolated UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        model.firstPartyModuleRuntime = NativeFirstPartyModules.loadRuntime(defaults: defaults)
+        model.store = LocalBlogStore(rootURL: root)
+        _ = try await model.store.saveArticle(article(
+            slug: "isolated-note",
+            status: .published,
+            expectedUpdatedAt: nil,
+            body: "没有 Wiki 链接的正文",
+            title: "孤立文章"
+        ))
+
+        try await model.reload()
+
+        XCTAssertEqual(model.articles.map(\.slug), ["isolated-note"])
+        XCTAssertEqual(
+            model.articleGraph.nodes.map(\.slug),
+            ["isolated-note"],
+            "reloading the article library should also populate isolated graph nodes"
+        )
+        XCTAssertTrue(model.articleGraph.edges.isEmpty)
+    }
 }
 
 private final class NativeImageDecodeProbe: @unchecked Sendable {
@@ -4573,6 +4642,8 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testDeclarativeExtensionsExposeFiveSafeCapabilities", { try NativeModelsTests().testDeclarativeExtensionsExposeFiveSafeCapabilities() }),
             ("NativeModelsTests.testDeclarativeExtensionRejectsExecutableTemplates", { try NativeModelsTests().testDeclarativeExtensionRejectsExecutableTemplates() }),
             ("NativeModelsTests.testArticleGraphProjectionFiltersOrphansAndClipsByDegree", { NativeModelsTests().testArticleGraphProjectionFiltersOrphansAndClipsByDegree() }),
+            ("NativeModelsTests.testArticleGraphLayoutAppliesAndClampsManualNodePositions", { NativeModelsTests().testArticleGraphLayoutAppliesAndClampsManualNodePositions() }),
+            ("NativeModelsTests.testReloadPopulatesKnowledgeGraphWithIsolatedArticles", { try await NativeModelsTests().testReloadPopulatesKnowledgeGraphWithIsolatedArticles() }),
             ("PerformanceRegressionTests.testEditorSessionOwnsHighFrequencyDraftState", { PerformanceRegressionTests().testEditorSessionOwnsHighFrequencyDraftState() }),
             ("PerformanceRegressionTests.testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries", { PerformanceRegressionTests().testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries() }),
             ("PerformanceRegressionTests.testArticleNavigationPersistenceCoalescesToLatestSnapshot", { try await PerformanceRegressionTests().testArticleNavigationPersistenceCoalescesToLatestSnapshot() }),
