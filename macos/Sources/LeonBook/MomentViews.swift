@@ -1,4 +1,5 @@
 import AppKit
+import AVKit
 import SwiftUI
 
 private let momentFeedMaximumWidth: CGFloat = 1_760
@@ -29,7 +30,7 @@ struct MomentFeedView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("微博")
                         .font(.system(size: 34, weight: .bold, design: .rounded))
-                    Text("用图片和一句话记录此刻，内容只保存在本机资料库中。")
+                    Text("用图片、视频和一句话记录此刻，内容只保存在本机资料库中。")
                         .foregroundStyle(.secondary)
                 }
 
@@ -388,7 +389,7 @@ struct MomentFeedView: View {
         ForEach(moments) { moment in
             MomentCard(moment: moment, store: model.store) { imageIndex in
                 imageBrowser = MomentImageBrowserState(
-                    images: moment.images,
+                    images: moment.imageAttachments,
                     initialIndex: imageIndex
                 )
             } onEdit: {
@@ -637,18 +638,25 @@ private struct MomentComposerView: View {
             if !model.momentDraft.images.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 10) {
-                        ForEach(model.momentDraft.images) { image in
+                        ForEach(model.momentDraft.images) { media in
                             ZStack(alignment: .topTrailing) {
-                                MomentImage(
-                                    media: image,
-                                    store: model.store,
-                                    loadMode: .thumbnail(maxPixelSize: 240)
-                                )
+                                Group {
+                                    if media.isVideo {
+                                        MomentVideoThumbnail(media: media, store: model.store)
+                                    } else {
+                                        MomentImage(
+                                            media: media,
+                                            store: model.store,
+                                            loadMode: .thumbnail(maxPixelSize: 240)
+                                        )
+                                    }
+                                }
                                     .frame(width: 96, height: 96)
+                                    .background(.black.opacity(media.isVideo ? 0.9 : 0.04))
                                     .clipShape(RoundedRectangle(cornerRadius: 9))
 
                                 Button {
-                                    model.removeMomentImage(image)
+                                    model.removeMomentMedia(media)
                                 } label: {
                                     Image(systemName: "xmark")
                                         .font(.system(size: 10, weight: .bold))
@@ -662,8 +670,8 @@ private struct MomentComposerView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .padding(6)
-                                .help("移除图片")
-                                .accessibilityLabel("移除图片 \(image.name)")
+                                .help(media.isVideo ? "移除视频" : "移除图片")
+                                .accessibilityLabel("移除\(media.isVideo ? "视频" : "图片") \(media.name)")
                             }
                         }
                     }
@@ -677,10 +685,24 @@ private struct MomentComposerView: View {
                 } label: {
                     Label("添加图片", systemImage: "photo.on.rectangle.angled")
                 }
+                .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
 
-                Text("最多 9 张图片")
+                Button {
+                    model.chooseMomentVideo()
+                } label: {
+                    Label("添加视频", systemImage: "video.badge.plus")
+                }
+                .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
+
+                Text("最多 9 个图片或视频 · 视频仅支持 MP4")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if model.isUploadingMedia {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("正在上传媒体")
+                }
 
                 Spacer()
 
@@ -702,7 +724,7 @@ private struct MomentComposerView: View {
                     )
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.momentDraft.isEmpty || model.isPublishingMoment)
+                .disabled(model.momentDraft.isEmpty || model.isPublishingMoment || model.isUploadingMedia)
             }
         }
         .padding(20)
@@ -788,6 +810,8 @@ private struct MomentCard: View {
     var body: some View {
         let displayContent = moment.displayContent
         let dateLabel = moment.createdAt.nativeDateLabel
+        let images = moment.imageAttachments
+        let videos = moment.videoAttachments
 
         VStack(alignment: .leading, spacing: 13) {
             HStack(alignment: .top, spacing: 8) {
@@ -862,8 +886,16 @@ private struct MomentCard: View {
                 .scrollIndicators(.hidden)
             }
 
-            if !moment.images.isEmpty {
-                MomentImageGrid(images: moment.images, store: store, onOpenImage: onOpenImage)
+            if !images.isEmpty {
+                MomentImageGrid(images: images, store: store, onOpenImage: onOpenImage)
+            }
+
+            if !videos.isEmpty {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(videos) { video in
+                        MomentInlineVideoPlayer(media: video, store: store)
+                    }
+                }
             }
         }
         .padding(16)
@@ -874,9 +906,9 @@ private struct MomentCard: View {
                 .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: videos.isEmpty ? .ignore : .contain)
         .accessibilityLabel(accessibilitySummary(text: displayContent.text, dateLabel: dateLabel))
-        .accessibilityHint("可执行收藏、编辑、删除、筛选标签和查看图片操作")
+        .accessibilityHint("可执行收藏、编辑、删除、筛选标签和查看媒体操作")
         .accessibilityAction(named: Text(moment.isFavorite ? "取消收藏" : "收藏")) {
             onToggleFavorite()
         }
@@ -895,7 +927,7 @@ private struct MomentCard: View {
         }
         .modifier(
             MomentCardImageAccessibilityModifier(
-                hasImages: !moment.images.isEmpty,
+                hasImages: !images.isEmpty,
                 onOpenImage: { onOpenImage(0) }
             )
         )
@@ -910,8 +942,11 @@ private struct MomentCard: View {
         if !moment.tags.isEmpty {
             parts.append("标签 " + moment.tags.map { "#\($0)" }.joined(separator: "、"))
         }
-        if !moment.images.isEmpty {
-            parts.append("\(moment.images.count) 张图片")
+        if !moment.imageAttachments.isEmpty {
+            parts.append("\(moment.imageAttachments.count) 张图片")
+        }
+        if !moment.videoAttachments.isEmpty {
+            parts.append("\(moment.videoAttachments.count) 个视频")
         }
         if moment.isFavorite {
             parts.append("已收藏")
@@ -923,7 +958,7 @@ private struct MomentCard: View {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "将这条微博移入回收站？"
-        alert.informativeText = "微博和图片会保留 30 天，可在回收站中恢复，之后自动永久删除。"
+        alert.informativeText = "微博和媒体文件会保留 30 天，可在回收站中恢复，之后自动永久删除。"
         alert.addButton(withTitle: "移入回收站")
         alert.addButton(withTitle: "取消")
         alert.buttons.first?.hasDestructiveAction = true
@@ -1109,6 +1144,199 @@ private struct MomentImage: View {
     }
 }
 
+private struct MomentVideoThumbnail: View {
+    let media: NativeMedia
+    let store: LocalBlogStore
+
+    @State private var poster: NSImage?
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.9)
+            if let poster {
+                Image(nsImage: poster)
+                    .resizable()
+                    .scaledToFit()
+            }
+            Image(systemName: "play.circle.fill")
+                .font(.system(size: 30))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+            Text("MP4")
+                .font(.caption2.monospaced().weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 3)
+                .background(.black.opacity(0.7), in: Capsule())
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(6)
+        }
+        .clipped()
+        .task(id: media.url) {
+            poster = nil
+            guard let url = await store.mediaURL(for: media.url) else { return }
+            let result = await NativeVideoThumbnailPipeline.shared.thumbnail(for: url, maxPixelSize: 240)
+            guard !Task.isCancelled else { return }
+            poster = result.image
+        }
+        .accessibilityLabel("视频 \(media.name)")
+    }
+}
+
+private struct MomentInlineVideoPlayer: View {
+    let media: NativeMedia
+    let store: LocalBlogStore
+
+    @StateObject private var playback: NativeInlineVideoPlayerModel
+
+    init(media: NativeMedia, store: LocalBlogStore) {
+        self.media = media
+        self.store = store
+        _playback = StateObject(
+            wrappedValue: NativeInlineVideoPlayerModel(mediaID: media.url)
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ZStack {
+                Color.black.opacity(0.92)
+                switch playback.phase {
+                case .resolving:
+                    ProgressView("正在读取视频…")
+                        .foregroundStyle(.white)
+                case .poster:
+                    posterButton
+                case .preparing:
+                    if let player = playback.player {
+                        MomentAVPlayerView(player: player)
+                        loadingOverlay
+                    } else {
+                        ProgressView("正在验证视频…")
+                            .foregroundStyle(.white)
+                    }
+                case .ready:
+                    if let player = playback.player {
+                        MomentAVPlayerView(player: player)
+                    } else {
+                        ProgressView("正在准备播放器…")
+                            .foregroundStyle(.white)
+                    }
+                case let .failed(message):
+                    failureView(message: message)
+                }
+            }
+            .frame(maxWidth: 840)
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+
+            HStack(spacing: 8) {
+                Label(media.name, systemImage: "video")
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if playback.phase == .ready {
+                    Text(playback.progressLabel)
+                        .font(.caption.monospacedDigit())
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: 840)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: media.url) {
+            await playback.resolve(using: store)
+        }
+        .onDisappear {
+            playback.release()
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("视频 \(media.name)")
+    }
+
+    private var posterButton: some View {
+        Button {
+            Task { await playback.play() }
+        } label: {
+            ZStack {
+                if let poster = playback.poster {
+                    Image(nsImage: poster)
+                        .resizable()
+                        .scaledToFit()
+                }
+                Color.black.opacity(playback.poster == nil ? 0.04 : 0.18)
+                VStack(spacing: 7) {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 46))
+                        .symbolRenderingMode(.hierarchical)
+                    Text(playback.resumeLabel ?? "点击播放")
+                        .font(.callout.weight(.semibold))
+                }
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("在瀑布流中播放视频")
+    }
+
+    private var loadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.3)
+            ProgressView("正在准备播放…")
+                .foregroundStyle(.white)
+        }
+    }
+
+    private func failureView(message: String) -> some View {
+        VStack(spacing: 9) {
+            Label("无法播放视频", systemImage: "video.slash")
+                .font(.headline)
+            Text(message)
+                .font(.caption)
+                .multilineTextAlignment(.center)
+            Button("重试") {
+                Task { await playback.retry() }
+            }
+            .buttonStyle(.bordered)
+        }
+        .foregroundStyle(.white)
+        .padding(18)
+    }
+}
+
+private struct MomentAVPlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let playerView = AVPlayerView()
+        playerView.controlsStyle = .inline
+        playerView.showsFullScreenToggleButton = true
+        playerView.allowsPictureInPicturePlayback = true
+        playerView.allowsVideoFrameAnalysis = false
+        playerView.updatesNowPlayingInfoCenter = false
+        playerView.player = player
+        return playerView
+    }
+
+    func updateNSView(_ playerView: AVPlayerView, context: Context) {
+        playerView.player = player
+    }
+
+    static func dismantleNSView(_ playerView: AVPlayerView, coordinator: ()) {
+        playerView.player?.pause()
+        playerView.player = nil
+    }
+}
+
 private struct MomentImmersiveBrowserView: View {
     @ObservedObject var model: NativeAppModel
 
@@ -1184,7 +1412,7 @@ private struct MomentImmersiveBrowserView: View {
                         onOpenImage: { imageIndex in
                             removeKeyboardMonitor()
                             imageBrowser = MomentImageBrowserState(
-                                images: selectedMoment.images,
+                                images: selectedMoment.imageAttachments,
                                 initialIndex: imageIndex
                             )
                         }
@@ -1329,6 +1557,8 @@ private struct MomentImmersiveSlide: View {
 
     var body: some View {
         let displayContent = moment.displayContent
+        let images = moment.imageAttachments
+        let videos = moment.videoAttachments
 
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -1379,12 +1609,20 @@ private struct MomentImmersiveSlide: View {
                     .scrollIndicators(.hidden)
                 }
 
-                if !moment.images.isEmpty {
+                if !images.isEmpty {
                     MomentImmersiveImageGrid(
-                        images: moment.images,
+                        images: images,
                         store: store,
                         onOpenImage: onOpenImage
                     )
+                }
+
+                if !videos.isEmpty {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(videos) { video in
+                            MomentInlineVideoPlayer(media: video, store: store)
+                        }
+                    }
                 }
             }
             .padding(34)

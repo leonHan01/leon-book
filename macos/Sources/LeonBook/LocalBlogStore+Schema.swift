@@ -492,7 +492,7 @@ extension LocalBlogStore {
                 category, properties, status, created_at, updated_at
             ) VALUES (
                 'moment', new.id,
-                CASE WHEN trim(new.text) = '' THEN '图片微博'
+                CASE WHEN trim(new.text) = '' THEN '媒体微博'
                      ELSE substr(replace(replace(new.text, char(10), ' '), char(13), ' '), 1, 80) END,
                 '', new.text, '', COALESCE(new.tags_json, '[]'), '', '{}', '',
                 new.created_at, new.updated_at
@@ -507,7 +507,7 @@ extension LocalBlogStore {
                 category, properties, status, created_at, updated_at
             )
             SELECT 'moment', new.id,
-                   CASE WHEN trim(new.text) = '' THEN '图片微博'
+                   CASE WHEN trim(new.text) = '' THEN '媒体微博'
                         ELSE substr(replace(replace(new.text, char(10), ' '), char(13), ' '), 1, 80) END,
                    '', new.text, '', COALESCE(new.tags_json, '[]'), '', '{}', '',
                    new.created_at, new.updated_at
@@ -565,7 +565,7 @@ extension LocalBlogStore {
                 category, properties, status, created_at, updated_at
             )
             SELECT 'moment', id,
-                   CASE WHEN trim(text) = '' THEN '图片微博'
+                   CASE WHEN trim(text) = '' THEN '媒体微博'
                         ELSE substr(replace(replace(text, char(10), ' '), char(13), ' '), 1, 80) END,
                    '', text, '', COALESCE(tags_json, '[]'), '', '{}', '', created_at, updated_at
             FROM moments WHERE deleted_at IS NULL;

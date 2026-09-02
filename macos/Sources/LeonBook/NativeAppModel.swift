@@ -5,6 +5,7 @@ import LeonBookExtensionKit
 import LeonBookModuleKit
 import LeonBookPublishingModule
 import SwiftUI
+import UniformTypeIdentifiers
 
 
 @MainActor
@@ -1252,10 +1253,10 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func chooseMomentImages() {
-        guard !isBackingUp else { return }
+        guard !isBackingUp, !isUploadingMedia else { return }
         let remaining = max(0, 9 - momentDraft.images.count)
         guard remaining > 0 else {
-            errorMessage = "每条微博最多添加 9 张图片。"
+            errorMessage = "每条微博最多添加 9 个图片或视频。"
             return
         }
 
@@ -1288,9 +1289,55 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
-    func removeMomentImage(_ image: NativeMedia) {
-        momentDraft.images.removeAll { $0.id == image.id }
-        discardUnreferencedMedia([image])
+    func chooseMomentVideo() {
+        guard !isBackingUp, !isUploadingMedia else { return }
+        guard momentDraft.images.count < 9 else {
+            errorMessage = "每条微博最多添加 9 个图片或视频。"
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.message = "选择一个 MP4 视频"
+        guard panel.runModal() == .OK, let fileURL = panel.url else { return }
+        guard fileURL.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame else {
+            errorMessage = "微博视频仅支持 MP4 格式。"
+            return
+        }
+
+        Task {
+            let generation = beginUpload()
+            defer { endUpload() }
+            do {
+                let uploaded = try await store.uploadMedia(
+                    fileURL: fileURL,
+                    kind: "video",
+                    slug: "moments"
+                )
+                guard generation == workspaceGeneration else { return }
+                momentDraft.images.append(
+                    NativeMedia(
+                        kind: uploaded.kind,
+                        name: uploaded.name,
+                        size: uploaded.size,
+                        url: uploaded.url
+                    )
+                )
+                try await refreshActivity()
+                scheduleBackup()
+                errorMessage = nil
+            } catch {
+                guard generation == workspaceGeneration else { return }
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func removeMomentMedia(_ media: NativeMedia) {
+        momentDraft.images.removeAll { $0.id == media.id }
+        discardUnreferencedMedia([media])
     }
 
     func removeEditorMedia(_ media: NativeMedia) {
@@ -1428,10 +1475,10 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func uploadMomentPastedImages(_ images: [NSImage]) {
-        guard !isBackingUp else { return }
+        guard !isBackingUp, !isUploadingMedia else { return }
         let remaining = max(0, 9 - momentDraft.images.count)
         guard remaining > 0 else {
-            errorMessage = "每条微博最多添加 9 张图片。"
+            errorMessage = "每条微博最多添加 9 个图片或视频。"
             return
         }
 
@@ -1802,11 +1849,11 @@ public final class NativeAppModel: ObservableObject {
         let draftCount = [isEditorDirty, willDiscardMomentDraft, willDiscardQuestionAnswerDraft]
             .filter { $0 }.count
         if draftCount > 1 {
-            alert.informativeText = "当前有多份草稿包含未保存的内容或图片。"
+            alert.informativeText = "当前有多份草稿包含未保存的内容或媒体。"
         } else if willDiscardQuestionAnswerDraft {
             alert.informativeText = "当前回答草稿还有未发布的文字或图片。"
         } else if willDiscardMomentDraft {
-            alert.informativeText = "当前微博草稿还有未发布的内容或图片。"
+            alert.informativeText = "当前微博草稿还有未发布的内容或媒体。"
         } else {
             alert.informativeText = "当前文章还有未保存的标题、正文或附件。"
         }
@@ -1819,7 +1866,7 @@ public final class NativeAppModel: ObservableObject {
         guard isMomentDraftDirty else { return true }
         let alert = NSAlert()
         alert.messageText = "放弃未发布的微博？"
-        alert.informativeText = "当前微博草稿中的文字和图片将被放弃。"
+        alert.informativeText = "当前微博草稿中的文字和媒体将被放弃。"
         alert.addButton(withTitle: "放弃并编辑")
         alert.addButton(withTitle: "继续编辑")
         return alert.runModal() == .alertFirstButtonReturn

@@ -144,7 +144,7 @@ extension LocalBlogStore {
                 documentType: documentType,
                 documentID: documentID,
                 title: storedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? (documentType == .moment ? "图片微博" : "未命名文章")
+                    ? (documentType == .moment ? "媒体微博" : "未命名文章")
                     : storedTitle,
                 snippet: snippet,
                 tags: (try? decode(tagsJSON)) ?? [],

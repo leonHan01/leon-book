@@ -1203,7 +1203,7 @@ public actor LocalBlogStore {
             textRuns: normalizedInput.runs
         )
         let normalizedImages = Array(images
-            .filter { !$0.isVideo && !$0.url.isEmpty }
+            .filter(isSupportedMomentMedia)
             .map(normalizeMedia)
             .prefix(9))
         guard !normalizedText.text.isEmpty || !normalizedImages.isEmpty else {
@@ -1253,7 +1253,7 @@ public actor LocalBlogStore {
             textRuns: normalizedInput.runs
         )
         let normalizedImages = Array(images
-            .filter { !$0.isVideo && !$0.url.isEmpty }
+            .filter(isSupportedMomentMedia)
             .map(normalizeMedia)
             .prefix(9))
         guard !normalizedText.text.isEmpty || !normalizedImages.isEmpty else {
@@ -3114,6 +3114,10 @@ public actor LocalBlogStore {
     func uploadMedia(fileURL: URL, kind: String, slug: String? = nil) async throws -> NativeUploadedMedia {
         try prepare()
         let targetSlug = try requireSafeSegment(slug?.isEmpty == false ? slug! : "inbox", label: "媒体目录")
+        if kind == "video", targetSlug == "moments",
+           fileURL.pathExtension.caseInsensitiveCompare("mp4") != .orderedSame {
+            throw NativeStoreError.fileSystem("微博视频仅支持 MP4 格式")
+        }
         let targetDirectory = mediaURL.appendingPathComponent(targetSlug, isDirectory: true)
         try FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
 
@@ -4321,6 +4325,13 @@ public actor LocalBlogStore {
 
     private func normalizeMedia(_ media: NativeMedia) -> NativeMedia {
         NativeMedia(kind: media.kind, name: media.name, size: media.size, url: normalizeMediaURL(media.url))
+    }
+
+    private func isSupportedMomentMedia(_ media: NativeMedia) -> Bool {
+        guard !media.url.isEmpty else { return false }
+        if media.isImage { return true }
+        return media.isVideo
+            && (media.url as NSString).pathExtension.caseInsensitiveCompare("mp4") == .orderedSame
     }
 
     private func normalizedMomentText(

@@ -2590,12 +2590,13 @@ final class LocalBlogStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = LocalBlogStore(rootURL: root)
 
-        let images = (1...10).map { index in
-            NativeMedia(kind: "image", name: "image-\(index).png", size: index, url: "media/moment/image-\(index).png")
-        } + [
+        let images = [
             NativeMedia(kind: "video", name: "clip.mp4", size: 1, url: "/media/moment/clip.mp4"),
+            NativeMedia(kind: "video", name: "legacy.mov", size: 1, url: "/media/moment/legacy.mov"),
             NativeMedia(kind: "image", name: "missing.png", size: 1, url: ""),
-        ]
+        ] + (1...10).map { index in
+            NativeMedia(kind: "image", name: "image-\(index).png", size: index, url: "media/moment/image-\(index).png")
+        }
         let saved = try await store.saveMoment(
             text: "  first note #Swift ",
             textRuns: [NativeMomentTextRun(text: "  first note #Swift ", bold: false, color: nil)],
@@ -2605,8 +2606,11 @@ final class LocalBlogStoreTests {
         XCTAssertEqual(saved.text, "first note")
         XCTAssertEqual(saved.tags, ["Swift"])
         XCTAssertEqual(saved.images.count, 9)
-        XCTAssertTrue(saved.images.allSatisfy { !$0.isVideo && $0.url.hasPrefix("/") })
+        XCTAssertEqual(saved.videoAttachments.map(\.name), ["clip.mp4"])
+        XCTAssertEqual(saved.imageAttachments.count, 8)
+        XCTAssertTrue(saved.images.allSatisfy { ($0.isImage || $0.isVideo) && $0.url.hasPrefix("/") })
         XCTAssertEqual(try await store.listMoments().map(\.id), [saved.id])
+        XCTAssertEqual(try await store.listMoments().first?.videoAttachments.map(\.name), ["clip.mp4"])
 
         let favorited = try await store.setMomentFavorite(id: saved.id, isFavorite: true)
         XCTAssertTrue(favorited.isFavorite)
@@ -2621,6 +2625,27 @@ final class LocalBlogStoreTests {
 
         let activity = try await store.listActivity(since: Date().addingTimeInterval(-60))
         XCTAssertEqual(activity.reduce(0) { $0 + $1.count }, 1)
+    }
+
+    func testMomentVideoUploadOnlyAcceptsMP4() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+
+        let mp4Source = root.appendingPathComponent("clip.MP4")
+        try Data([0, 0, 0, 20, 102, 116, 121, 112]).write(to: mp4Source)
+        let uploaded = try await store.uploadMedia(fileURL: mp4Source, kind: "video", slug: "moments")
+        XCTAssertEqual(uploaded.kind, "video")
+        XCTAssertTrue(uploaded.url.hasSuffix(".mp4"))
+
+        let movSource = root.appendingPathComponent("clip.mov")
+        try Data([0, 0, 0, 20, 102, 116, 121, 112]).write(to: movSource)
+        do {
+            _ = try await store.uploadMedia(fileURL: movSource, kind: "video", slug: "moments")
+            XCTFail("expected non-MP4 moment video to be rejected")
+        } catch let error as NativeStoreError {
+            XCTAssertTrue(error.localizedDescription.contains("仅支持 MP4"))
+        }
     }
 
     func testMomentUpdatePreservesIdentityAndDeleteHidesIt() async throws {
@@ -4561,6 +4586,7 @@ struct LeonBookUnitTests {
             ("PerformanceRegressionTests.testCalendarChangeRebuildsCachedMomentFacets", { await PerformanceRegressionTests().testCalendarChangeRebuildsCachedMomentFacets() }),
             ("PerformanceRegressionTests.testPairedPerformanceSamplingAlternatesOrder", { PerformanceRegressionTests().testPairedPerformanceSamplingAlternatesOrder() }),
             ("LocalBlogStoreTests.testMomentLifecycleNormalizesInputFiltersAndRecordsActivity", { try await LocalBlogStoreTests().testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() }),
+            ("LocalBlogStoreTests.testMomentVideoUploadOnlyAcceptsMP4", { try await LocalBlogStoreTests().testMomentVideoUploadOnlyAcceptsMP4() }),
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),
             ("LocalBlogStoreTests.testQuestionAnswersAndTagSearchPersistInSQLite", { try await LocalBlogStoreTests().testQuestionAnswersAndTagSearchPersistInSQLite() }),
             ("LocalBlogStoreTests.testArticleLifecycleSupportsDraftPublishingAndConflictProtection", { try await LocalBlogStoreTests().testArticleLifecycleSupportsDraftPublishingAndConflictProtection() }),

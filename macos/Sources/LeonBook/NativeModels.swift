@@ -1448,6 +1448,14 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         return (content.text, content.runs)
     }
 
+    public var imageAttachments: [NativeMedia] {
+        images.filter(\.isImage)
+    }
+
+    public var videoAttachments: [NativeMedia] {
+        images.filter(\.isVideo)
+    }
+
     public func matches(search query: String) -> Bool {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedQuery.isEmpty else { return true }
@@ -1719,7 +1727,7 @@ enum NativeStoreError: LocalizedError {
         case .invalidArticleMerge:
             return "不能将文章合并到自身，或合并目标已经不存在。"
         case .invalidMoment:
-            return "微博需要文字或至少一张图片。"
+            return "微博需要文字、至少一张图片或一个视频。"
         case .invalidQuestion:
             return "问题标题需要 1 到 200 个字符。"
         case .invalidAnswer:
