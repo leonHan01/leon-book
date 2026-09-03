@@ -82,7 +82,7 @@ struct ArticlePathBreadcrumb: View {
                     Label("新建子页面", systemImage: "plus.square.on.square")
                 }
                 .buttonStyle(.borderless)
-                .help(containerPath.isEmpty ? "在资料库根目录新建页面" : "在 \(containerPath) 下新建子页面")
+                .help(containerPath.isEmpty ? Text("在资料库根目录新建页面") : Text("在 \(containerPath) 下新建子页面"))
             }
         }
         .font(.caption)

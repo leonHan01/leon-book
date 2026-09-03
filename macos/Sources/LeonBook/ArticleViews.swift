@@ -4,6 +4,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
 
+// MARK: - Reader and tabs
+
 struct ArticleReaderView: View {
     @ObservedObject var model: NativeAppModel
     @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
@@ -147,7 +149,7 @@ struct ArticleReaderView: View {
 
                 HStack {
                     Label(
-                        article.status.label,
+                        LocalizedStringKey(article.status.label),
                         systemImage: article.status == .published
                             ? "checkmark.circle.fill" : "pencil.circle.fill"
                     )
@@ -157,8 +159,8 @@ struct ArticleReaderView: View {
                         Button {
                             model.toggleArticleBookmark(summary)
                         } label: {
-                            Label(
-                                model.isBookmarked(.article(slug: article.slug)) ? "取消收藏" : "收藏文章",
+                                    Label(
+                                        LocalizedStringKey(model.isBookmarked(.article(slug: article.slug)) ? "取消收藏" : "收藏文章"),
                                 systemImage: model.isBookmarked(.article(slug: article.slug)) ? "bookmark.fill" : "bookmark"
                             )
                         }
@@ -194,11 +196,11 @@ struct ArticleReaderView: View {
                         }
                     } label: {
                         Label(
-                            usesCompactInspector || !workspaceLayout.isReaderInspectorVisible ? "文章面板" : "隐藏面板",
+                            LocalizedStringKey(usesCompactInspector || !workspaceLayout.isReaderInspectorVisible ? "文章面板" : "隐藏面板"),
                             systemImage: "sidebar.right"
                         )
                     }
-                    .help(usesCompactInspector || !workspaceLayout.isReaderInspectorVisible ? "打开文章大纲与关系" : "隐藏文章大纲与关系")
+                    .help(Text(LocalizedStringKey(usesCompactInspector || !workspaceLayout.isReaderInspectorVisible ? "打开文章大纲与关系" : "隐藏文章大纲与关系")))
                     Button("版本历史") {
                         model.refreshArticleHistory()
                         isPresentingHistory = true
@@ -380,7 +382,7 @@ private struct ArticleTabBar: View {
                 Image(systemName: model.isActiveArticleTabPinned ? "pin.slash" : "pin")
             }
             .buttonStyle(.borderless)
-            .help(model.isActiveArticleTabPinned ? "取消固定当前标签页" : "固定当前标签页")
+            .help(Text(LocalizedStringKey(model.isActiveArticleTabPinned ? "取消固定当前标签页" : "固定当前标签页")))
 
             Button(action: model.closeActiveArticleTab) {
                 Image(systemName: "xmark")
@@ -419,7 +421,7 @@ private struct ArticleTabItem: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(title)\(tab.isPinned ? "，已固定" : "")")
+            .accessibilityLabel(tab.isPinned ? Text("\(title)，已固定") : Text(title))
             .accessibilityAddTraits(isActive ? .isSelected : [])
 
             if isHovered || isActive {
@@ -445,12 +447,14 @@ private struct ArticleTabItem: View {
         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .onHover { isHovered = $0 }
         .contextMenu {
-            Button(tab.isPinned ? "取消固定" : "固定标签页", action: onTogglePin)
+            Button(LocalizedStringKey(tab.isPinned ? "取消固定" : "固定标签页"), action: onTogglePin)
             Button("关闭标签页", action: onClose)
         }
-        .help(tab.isPinned ? "已固定；打开其他文章时不会替换此标签页" : title)
+        .help(tab.isPinned ? Text("已固定；打开其他文章时不会替换此标签页") : Text(title))
     }
 }
+
+// MARK: - Inspector and comments
 
 private struct ArticleInspectorView: View {
     @ObservedObject var model: NativeAppModel
@@ -483,7 +487,7 @@ private struct ArticleInspectorView: View {
                     Label("阅读面板", systemImage: "sidebar.right")
                         .font(.headline)
                     Spacer()
-                    Text(selectedPane == .comments ? "划词评论" : "上下文导航")
+                    Text(LocalizedStringKey(selectedPane == .comments ? "划词评论" : "上下文导航"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -585,7 +589,7 @@ private struct ArticleInspectorView: View {
     }
 
     @ViewBuilder
-    private func articleLinks(_ articles: [NativeArticleSummary], emptyMessage: String) -> some View {
+    private func articleLinks(_ articles: [NativeArticleSummary], emptyMessage: LocalizedStringKey) -> some View {
         if articles.isEmpty {
             ArticleInspectorEmpty(message: emptyMessage)
         } else {
@@ -753,7 +757,7 @@ private struct ArticleCommentsSidebar: View {
                 if model.isSavingArticleComment {
                     ProgressView().controlSize(.small)
                 }
-                Button(replyingTo == nil ? "发表评论" : "回复") {
+                Button(LocalizedStringKey(replyingTo == nil ? "发表评论" : "回复")) {
                     let parentID = replyingTo?.id
                     Task {
                         if await model.createArticleComment(text: commentText, parentID: parentID) {
@@ -855,6 +859,8 @@ private struct ArticleCommentRow: View {
         }
     }
 }
+
+// MARK: - Native text selection
 
 private struct ArticleTextSelectionObserver: NSViewRepresentable {
     let onSelection: (String) -> Void
@@ -989,7 +995,7 @@ private struct NativePasteboardSnapshot {
 }
 
 private struct ArticleInspectorSection<Content: View>: View {
-    let title: String
+    let title: LocalizedStringKey
     let systemImage: String
     let count: Int
     @ViewBuilder let content: () -> Content
@@ -1076,7 +1082,7 @@ struct ArticleInspectorLinkRow: View {
                     Text(article.title)
                         .font(.callout.weight(.medium))
                         .lineLimit(2)
-                    Text("\(article.status.label) · \(article.updatedAt.nativeDateLabel)")
+                    Text("\(NativeLocalization.string(article.status.label, language: NativeLocalization.currentLanguage)) · \(article.updatedAt.nativeDateLabel)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -1135,7 +1141,7 @@ struct ArticleUnlinkedMentionRow: View {
 }
 
 struct ArticleInspectorEmpty: View {
-    let message: String
+    let message: LocalizedStringKey
 
     var body: some View {
         Text(message)
@@ -1248,7 +1254,7 @@ private struct ArticleLocalGraphNode: View {
         }
         .buttonStyle(.plain)
         .articleHoverPreview(article)
-        .help(isSelected ? "当前文章" : "打开文章：\(article.title)")
+        .help(isSelected ? Text("当前文章") : Text("打开文章：\(article.title)"))
     }
 }
 
@@ -1313,7 +1319,7 @@ private struct ArticleHoverPreviewCard: View {
             HStack(spacing: 8) {
                 Image(systemName: article.status == .published ? "doc.text" : "doc.text.fill")
                     .foregroundStyle(article.status == .published ? Color.accentColor : .orange)
-                Text(article.status.label)
+                Text(LocalizedStringKey(article.status.label))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1323,7 +1329,13 @@ private struct ArticleHoverPreviewCard: View {
             }
             Text(article.title)
                 .font(.headline)
-            Text(article.excerpt.isEmpty ? "暂无摘要" : article.excerpt)
+            Group {
+                if article.excerpt.isEmpty {
+                    Text("暂无摘要")
+                } else {
+                    Text(article.excerpt)
+                }
+            }
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(6)
@@ -1350,228 +1362,7 @@ private extension View {
     }
 }
 
-struct ArticleHistoryView: View {
-    @ObservedObject var model: NativeAppModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var selectedRevisionID: Int?
-
-    private var selectedRevision: NativeArticleRevision? {
-        guard let selectedRevisionID else { return model.articleRevisions.first }
-        return model.articleRevisions.first { $0.id == selectedRevisionID }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("版本历史", systemImage: "clock.arrow.circlepath")
-                        .font(.title2.weight(.semibold))
-                    Text(model.currentArticleHistoryTitle)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("自动版本保留 30 天")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("完成") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-            }
-            .padding(20)
-
-            Divider()
-
-            if model.articleRevisions.isEmpty {
-                EmptyState(
-                    title: "还没有历史版本",
-                    message: "停止输入 3 秒后会生成第一份自动保存；再次正式保存文章时，也会保留保存前的版本。",
-                    actionTitle: "关闭"
-                ) {
-                    dismiss()
-                }
-            } else {
-                HSplitView {
-                    List(model.articleRevisions, selection: $selectedRevisionID) { revision in
-                        ArticleRevisionRow(revision: revision)
-                            .tag(revision.id)
-                    }
-                    .listStyle(.sidebar)
-                    .frame(minWidth: 230, idealWidth: 270, maxWidth: 340)
-
-                    if let selectedRevision {
-                        ArticleRevisionDiffView(
-                            revision: selectedRevision,
-                            current: model.currentArticleHistorySnapshot
-                        ) {
-                            if model.restoreArticleRevision(selectedRevision) {
-                                dismiss()
-                            }
-                        }
-                        .frame(minWidth: 650)
-                    }
-                }
-            }
-        }
-        .frame(minWidth: 980, minHeight: 640)
-        .task {
-            model.refreshArticleHistory()
-            selectNewestRevisionIfNeeded()
-        }
-        .onChange(of: model.articleRevisions.map(\.id)) { _ in
-            selectNewestRevisionIfNeeded()
-        }
-    }
-
-    private func selectNewestRevisionIfNeeded() {
-        guard selectedRevisionID == nil || selectedRevision == nil else { return }
-        selectedRevisionID = model.articleRevisions.first?.id
-    }
-}
-
-private struct ArticleRevisionRow: View {
-    let revision: NativeArticleRevision
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 7) {
-                Image(systemName: revision.reason == .autosave ? "bolt.circle" : "tray.full")
-                    .foregroundStyle(revision.reason == .autosave ? Color.accentColor : Color.orange)
-                Text(revision.reason.label)
-                    .font(.subheadline.weight(.medium))
-            }
-            Text(revision.updatedAt.nativeDateLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(revision.snapshot.title.isEmpty ? "未命名文章" : revision.snapshot.title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(.vertical, 5)
-    }
-}
-
-private struct ArticleRevisionDiffView: View {
-    let revision: NativeArticleRevision
-    let current: NativeArticleRevisionSnapshot
-    let onRestore: () -> Void
-
-    private var diff: NativeArticleLineDiff {
-        NativeArticleLineDiff(previous: revision.snapshot.body, current: current.body)
-    }
-
-    private var metadataChanges: [String] {
-        var changes: [String] = []
-        if revision.snapshot.title != current.title { changes.append("标题") }
-        if revision.snapshot.category != current.category { changes.append("分类") }
-        if revision.snapshot.tags != current.tags { changes.append("标签") }
-        if revision.snapshot.excerpt != current.excerpt { changes.append("摘要") }
-        if revision.snapshot.status != current.status { changes.append("状态") }
-        if revision.snapshot.banner != current.banner { changes.append("封面") }
-        if revision.snapshot.media != current.media { changes.append("附件") }
-        return changes
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("与当前内容比较")
-                        .font(.headline)
-                    HStack(spacing: 10) {
-                        Label("删除 \(diff.removedLineOffsets.count) 行", systemImage: "minus.circle")
-                            .foregroundStyle(.red)
-                        Label("新增 \(diff.addedLineOffsets.count) 行", systemImage: "plus.circle")
-                            .foregroundStyle(.green)
-                        if !metadataChanges.isEmpty {
-                            Text("属性变化：\(metadataChanges.joined(separator: "、"))")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.caption)
-                }
-                Spacer()
-                Button(action: onRestore) {
-                    Label("恢复此版本", systemImage: "arrow.uturn.backward.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding(16)
-
-            Divider()
-
-            HSplitView {
-                ArticleRevisionCodeColumn(
-                    title: "历史版本",
-                    source: revision.snapshot.body,
-                    highlightedOffsets: diff.removedLineOffsets,
-                    highlightColor: .red
-                )
-                ArticleRevisionCodeColumn(
-                    title: "当前内容",
-                    source: current.body,
-                    highlightedOffsets: diff.addedLineOffsets,
-                    highlightColor: .green
-                )
-            }
-        }
-    }
-}
-
-private struct ArticleRevisionCodeColumn: View {
-    let title: String
-    let source: String
-    let highlightedOffsets: Set<Int>
-    let highlightColor: Color
-
-    private var lines: [String] {
-        source.components(separatedBy: .newlines)
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text("\(lines.count) 行")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
-
-            ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(lines.indices, id: \.self) { index in
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Text("\(index + 1)")
-                                .foregroundStyle(.tertiary)
-                                .frame(width: 38, alignment: .trailing)
-                            Text(lines[index].isEmpty ? " " : lines[index])
-                                .foregroundStyle(.primary)
-                                .textSelection(.enabled)
-                        }
-                        .font(.system(.caption, design: .monospaced))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            highlightedOffsets.contains(index)
-                                ? highlightColor.opacity(0.14)
-                                : Color.clear
-                        )
-                    }
-                }
-                .padding(.vertical, 6)
-            }
-            .background(Color(nsColor: .textBackgroundColor))
-        }
-    }
-}
+// MARK: - Markdown document
 
 enum MarkdownArticleBlock {
     case image(url: String, alt: String)
@@ -1871,6 +1662,8 @@ struct MarkdownArticleBody: View {
         NativeMarkdownArticleDocumentCache.shared.document(for: markdown).imageURLs
     }
 }
+
+// MARK: - Embeds and media
 
 private struct MarkdownArticleTransclusionView: View {
     let reference: String
@@ -2309,7 +2102,13 @@ private struct InlineVideoPlayer: View {
                     Image(systemName: "play.circle.fill")
                         .font(.system(size: 56))
                         .symbolRenderingMode(.hierarchical)
-                    Text(playback.resumeLabel ?? "点击播放")
+                    Group {
+                        if let resumeLabel = playback.resumeLabel {
+                            Text(resumeLabel)
+                        } else {
+                            Text("点击播放")
+                        }
+                    }
                         .font(.headline)
                 }
                 .foregroundStyle(playback.poster == nil ? Color.accentColor : .white)

@@ -1,6 +1,8 @@
 import Foundation
 import LeonBookSearchModule
 
+// MARK: - Shared values
+
 public enum NativeWritingMetrics {
     public static func characterCount(of body: String) -> Int {
         NativeBlockHierarchyMetadata.removingMarkers(from: body)
@@ -51,6 +53,8 @@ public enum NativeTimestamp {
         return fractionalFormatter.string(from: date)
     }
 }
+
+// MARK: - Search
 
 public enum NativeSearchDocumentType: String, Codable, CaseIterable, Hashable, Identifiable {
     case article
@@ -151,6 +155,8 @@ public struct NativeGlobalSearchResult: Hashable, Identifiable {
         self.timestamp = timestamp
     }
 }
+
+// MARK: - Users and articles
 
 public struct NativeUser: Codable, Hashable, Identifiable {
     public let id: String
@@ -379,6 +385,8 @@ public struct NativeArticleTab: Codable, Hashable, Identifiable, Sendable {
         return nextSlug
     }
 }
+
+// MARK: - Article comments and knowledge graph
 
 public struct NativeArticleCommentSelection: Codable, Hashable {
     public let quote: String
@@ -1088,6 +1096,8 @@ public struct NativeArticleBodyUpdate: Sendable {
     }
 }
 
+// MARK: - Article revisions
+
 public enum NativeArticleRevisionReason: String, Codable, Hashable {
     case autosave
     case savedVersion
@@ -1233,6 +1243,8 @@ struct NativeUploadedMedia: Codable {
     let size: Int
     let url: String
 }
+
+// MARK: - Moments
 
 public enum NativeMomentTextColor: String, Codable, CaseIterable, Hashable, Identifiable {
     case red
@@ -1608,6 +1620,8 @@ public struct NativeMomentMonth: Hashable, Identifiable {
     var label: String { "\(year)年\(month)月" }
 }
 
+// MARK: - View state
+
 enum NativeTrashKind: String, Hashable, Identifiable {
     case article
     case moment
@@ -1688,6 +1702,8 @@ enum NativeSearchPresentation: String, Identifiable {
 
     var id: String { rawValue }
 }
+
+// MARK: - Store errors
 
 enum NativeStoreError: LocalizedError {
     case conflict

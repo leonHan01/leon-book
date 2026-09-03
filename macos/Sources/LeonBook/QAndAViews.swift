@@ -124,7 +124,7 @@ struct QAndAView: View {
                         }
                     }
                 } label: {
-                    Label(model.selectedQuestionTag ?? "全部标签", systemImage: "tag")
+                    Label(LocalizedStringKey(model.selectedQuestionTag ?? "全部标签"), systemImage: "tag")
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -167,9 +167,9 @@ struct QAndAView: View {
                 Image(systemName: model.isFilteringQuestions ? "magnifyingglass" : "questionmark.bubble")
                     .font(.system(size: 34))
                     .foregroundStyle(.secondary)
-                Text(model.isFilteringQuestions ? "没有找到符合条件的问题" : "还没有问题")
+                Text(LocalizedStringKey(model.isFilteringQuestions ? "没有找到符合条件的问题" : "还没有问题"))
                     .font(.title3.weight(.semibold))
-                Text(model.isFilteringQuestions ? "换一个标签或搜索词试试" : "发布第一个问题，其他人可以进入问题详情回答。")
+                Text(LocalizedStringKey(model.isFilteringQuestions ? "换一个标签或搜索词试试" : "发布第一个问题，其他人可以进入问题详情回答。"))
                     .foregroundStyle(.secondary)
                 if !model.isFilteringQuestions {
                     Button("发布问题") { isPresentingQuestionComposer = true }
@@ -186,7 +186,7 @@ struct QAndAView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text(model.isFilteringQuestions ? "筛选结果" : "全部问题")
+                    Text(LocalizedStringKey(model.isFilteringQuestions ? "筛选结果" : "全部问题"))
                         .font(.title3.weight(.semibold))
                     Spacer()
                     Text("\(model.questions.count) 条")
@@ -379,7 +379,7 @@ private struct QuestionDetailView: View {
                                     answerComposerMode = .edit
                                 } label: {
                                     Label(
-                                        model.editingQuestionAnswerID == answer.id ? "正在编辑" : "编辑",
+                                        LocalizedStringKey(model.editingQuestionAnswerID == answer.id ? "正在编辑" : "编辑"),
                                         systemImage: "pencil"
                                     )
                                 }
@@ -430,14 +430,14 @@ private struct QuestionDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label(
-                    model.editingQuestionAnswerID == nil ? "写回答" : "编辑回答",
+                    LocalizedStringKey(model.editingQuestionAnswerID == nil ? "写回答" : "编辑回答"),
                     systemImage: model.editingQuestionAnswerID == nil ? "square.and.pencil" : "pencil"
                 )
                 .font(.title3.weight(.semibold))
                 Spacer()
                 Picker("回答模式", selection: $answerComposerMode) {
                     ForEach(QuestionAnswerComposerMode.allCases) { mode in
-                        Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                        Label(LocalizedStringKey(mode.title), systemImage: mode.systemImage).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -533,7 +533,7 @@ private struct QuestionDetailView: View {
                         ProgressView().controlSize(.small)
                     } else {
                         Label(
-                            model.editingQuestionAnswerID == nil ? "发布回答" : "保存修改",
+                            LocalizedStringKey(model.editingQuestionAnswerID == nil ? "发布回答" : "保存修改"),
                             systemImage: model.editingQuestionAnswerID == nil ? "paperplane.fill" : "checkmark"
                         )
                     }
@@ -728,7 +728,7 @@ private struct QuestionAnswerImage: View {
             image = result.image
             didFinishLoading = true
         }
-        .accessibilityLabel(media.name.isEmpty ? "回答图片" : media.name)
+        .accessibilityLabel(media.name.isEmpty ? Text("回答图片") : Text(media.name))
     }
 }
 

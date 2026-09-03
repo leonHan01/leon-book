@@ -5,20 +5,47 @@ import SwiftUI
 public struct NativeSettingsView: View {
     @ObservedObject var model: NativeAppModel
     @ObservedObject var readingPreferences: NativeReadingPreferences
+    @ObservedObject var languagePreferences: NativeLanguagePreferences
     @Environment(\.colorScheme) private var systemColorScheme
 
     public init(model: NativeAppModel) {
         self.model = model
         readingPreferences = NativeReadingPreferences()
+        languagePreferences = .shared
     }
 
-    init(model: NativeAppModel, readingPreferences: NativeReadingPreferences) {
+    init(
+        model: NativeAppModel,
+        readingPreferences: NativeReadingPreferences
+    ) {
         self.model = model
         self.readingPreferences = readingPreferences
+        languagePreferences = .shared
+    }
+
+    init(
+        model: NativeAppModel,
+        readingPreferences: NativeReadingPreferences,
+        languagePreferences: NativeLanguagePreferences
+    ) {
+        self.model = model
+        self.readingPreferences = readingPreferences
+        self.languagePreferences = languagePreferences
     }
 
     public var body: some View {
         Form {
+            Section("通用") {
+                Picker("语言", selection: $languagePreferences.language) {
+                    ForEach(NativeAppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language)
+                    }
+                }
+                Text("语言更改会立即应用，并在下次启动时保留。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("用户与工作空间") {
                 LabeledContent("当前用户") { Text(model.currentUser.name) }
                 LabeledContent("用户数量") { Text("\(model.users.count) 位") }
@@ -28,7 +55,7 @@ public struct NativeSettingsView: View {
 
             Section("本地文件") {
                 LabeledContent("状态") {
-                    Label(model.storageReady ? "已连接" : "未连接", systemImage: model.storageReady ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    Label(LocalizedStringKey(model.storageReady ? "已连接" : "未连接"), systemImage: model.storageReady ? "checkmark.circle.fill" : "xmark.circle.fill")
                         .foregroundStyle(model.storageReady ? .green : .red)
                 }
                 LabeledContent("存储方式") { Text("SQLite + 本地文件") }
@@ -47,17 +74,17 @@ public struct NativeSettingsView: View {
             Section("阅读与编辑排版") {
                 Picker("正文字体", selection: $readingPreferences.profile.bodyFont) {
                     ForEach(NativeReadingFontFamily.allCases) { font in
-                        Text(font.title).tag(font)
+                        Text(LocalizedStringKey(font.title)).tag(font)
                     }
                 }
                 Picker("代码字体", selection: $readingPreferences.profile.codeFont) {
                     ForEach(NativeCodeFontFamily.allCases) { font in
-                        Text(font.title).tag(font)
+                        Text(LocalizedStringKey(font.title)).tag(font)
                     }
                 }
                 Picker("阅读主题", selection: $readingPreferences.profile.theme) {
                     ForEach(NativeReadingTheme.allCases) { theme in
-                        Text(theme.title).tag(theme)
+                        Text(LocalizedStringKey(theme.title)).tag(theme)
                     }
                 }
 
@@ -132,8 +159,8 @@ public struct NativeSettingsView: View {
                     )) {
                         Label {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(module.name)
-                                Text(module.summary)
+                                Text(LocalizedStringKey(module.name))
+                                Text(LocalizedStringKey(module.summary))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -166,18 +193,18 @@ public struct NativeSettingsView: View {
             Section("Markdown 工作区 / Obsidian Vault") {
                 Picker("使用方式", selection: $model.selectedMarkdownWorkspaceMode) {
                     ForEach(NativeMarkdownWorkspaceMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+                        Text(LocalizedStringKey(mode.title)).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
                 .disabled(model.isScanningObsidianVault || model.isImportingObsidianVault)
 
-                Text(model.selectedMarkdownWorkspaceMode.detail)
+                Text(LocalizedStringKey(model.selectedMarkdownWorkspaceMode.detail))
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
                 LabeledContent("当前模式") {
-                    Text(model.activeMarkdownWorkspaceMode.title)
+                    Text(LocalizedStringKey(model.activeMarkdownWorkspaceMode.title))
                         .foregroundStyle(model.isMarkdownSourceReadOnly ? .orange : .secondary)
                 }
                 LabeledContent("Markdown 目录") {
@@ -190,7 +217,7 @@ public struct NativeSettingsView: View {
                         if model.isScanningObsidianVault || model.isImportingObsidianVault {
                             ProgressView().controlSize(.small)
                         }
-                        Text(model.obsidianImportStatus)
+                        Text(LocalizedStringKey(model.obsidianImportStatus))
                     }
                 }
 
@@ -216,10 +243,10 @@ public struct NativeSettingsView: View {
                             if model.isSynchronizingPortableSidecar {
                                 ProgressView().controlSize(.small)
                             }
-                            Text(model.portableSidecarStatus)
+                            Text(LocalizedStringKey(model.portableSidecarStatus))
                         }
                     }
-                    Button(model.isPortableSidecarWritable ? "立即合并并写入" : "重新导入只读 Sidecar") {
+                    Button(LocalizedStringKey(model.isPortableSidecarWritable ? "立即合并并写入" : "重新导入只读 Sidecar")) {
                         model.synchronizePortableSidecarNow()
                     }
                     .disabled(model.isSynchronizingPortableSidecar)
@@ -236,14 +263,17 @@ public struct NativeSettingsView: View {
                             .textSelection(.enabled)
                     }
                     HStack(spacing: 18) {
-                        Label(
-                            model.selectedMarkdownWorkspaceMode == .copyImport
-                                ? "\(preview.importableCount) 篇可复制"
-                                : "\(preview.notes.count) 篇 Markdown",
-                            systemImage: model.selectedMarkdownWorkspaceMode == .copyImport
+                        Label {
+                            if model.selectedMarkdownWorkspaceMode == .copyImport {
+                                Text("\(preview.importableCount) 篇可复制")
+                            } else {
+                                Text("\(preview.notes.count) 篇 Markdown")
+                            }
+                        } icon: {
+                            Image(systemName: model.selectedMarkdownWorkspaceMode == .copyImport
                                 ? "doc.badge.plus"
-                                : "folder"
-                        )
+                                : "folder")
+                        }
                         if model.selectedMarkdownWorkspaceMode == .copyImport {
                             Label("\(preview.attachmentCount) 个附件", systemImage: "paperclip")
                         }
@@ -293,8 +323,10 @@ public struct NativeSettingsView: View {
                     }
 
                     HStack {
-                        Button(markdownSourceConfirmationTitle(preview)) {
+                        Button {
                             model.confirmObsidianImport()
+                        } label: {
+                            markdownSourceConfirmationTitle(preview)
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(
@@ -318,13 +350,19 @@ public struct NativeSettingsView: View {
 
             Section("备份") {
                 LabeledContent("备份目录") {
-                    Text(model.backupDirectoryPath.isEmpty ? "未设置" : model.backupDirectoryPath)
+                    Group {
+                        if model.backupDirectoryPath.isEmpty {
+                            Text("未设置")
+                        } else {
+                            Text(model.backupDirectoryPath)
+                        }
+                    }
                         .textSelection(.enabled)
                 }
                 LabeledContent("状态") {
                     HStack(spacing: 8) {
                         if model.isBackingUp { ProgressView().controlSize(.small) }
-                        Text(model.backupStatus)
+                        Text(LocalizedStringKey(model.backupStatus))
                     }
                 }
                 if !model.lastBackupPath.isEmpty {
@@ -414,7 +452,7 @@ public struct NativeSettingsView: View {
                 }
 
                 HStack {
-                    Button(model.backupDirectoryPath.isEmpty ? "设置备份路径" : "更改备份路径") {
+                    Button(LocalizedStringKey(model.backupDirectoryPath.isEmpty ? "设置备份路径" : "更改备份路径")) {
                         model.chooseBackupDirectory()
                     }
                     .disabled(model.isRestoringBackup)
@@ -449,7 +487,7 @@ public struct NativeSettingsView: View {
                     LabeledContent("校验状态") {
                         HStack(spacing: 8) {
                             if model.isValidatingBackup { ProgressView().controlSize(.small) }
-                            Text(model.backupValidationStatus)
+                            Text(LocalizedStringKey(model.backupValidationStatus))
                         }
                     }
                 }
@@ -476,7 +514,7 @@ public struct NativeSettingsView: View {
     }
 
     private func typographySlider(
-        title: String,
+        title: LocalizedStringKey,
         value: Binding<Double>,
         range: ClosedRange<Double>,
         step: Double,
@@ -493,11 +531,12 @@ public struct NativeSettingsView: View {
         }
     }
 
-    private func markdownSourceConfirmationTitle(_ preview: NativeObsidianImportPreview) -> String {
+    @ViewBuilder
+    private func markdownSourceConfirmationTitle(_ preview: NativeObsidianImportPreview) -> some View {
         switch model.selectedMarkdownWorkspaceMode {
-        case .copyImport: return "确认复制 \(preview.importableCount) 篇"
-        case .readOnlyMount: return "只读挂载此文件夹"
-        case .directEdit: return "直接编辑此文件夹"
+        case .copyImport: Text("确认复制 \(preview.importableCount) 篇")
+        case .readOnlyMount: Text("只读挂载此文件夹")
+        case .directEdit: Text("直接编辑此文件夹")
         }
     }
 }
@@ -586,8 +625,8 @@ private struct NativeCommandShortcutRow: View {
                     .frame(width: 22)
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(definition.title).font(.callout.weight(.medium))
-                    Text(definition.detail)
+                    Text(LocalizedStringKey(definition.title)).font(.callout.weight(.medium))
+                    Text(LocalizedStringKey(definition.detail))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -599,7 +638,7 @@ private struct NativeCommandShortcutRow: View {
                         Image(systemName: preferences.isPinned(definition.id) ? "pin.fill" : "pin")
                     }
                     .buttonStyle(.borderless)
-                    .help(preferences.isPinned(definition.id) ? "取消固定命令" : "固定到命令面板顶部")
+                    .help(Text(LocalizedStringKey(preferences.isPinned(definition.id) ? "取消固定命令" : "固定到命令面板顶部")))
                 }
                 NativeShortcutRecorder(shortcut: shortcut) { captured in
                     conflictMessage = nil
@@ -636,7 +675,15 @@ private struct NativeShortcutRecorder: View {
         Button {
             isRecording = true
         } label: {
-            Text(isRecording ? "请按快捷键…" : (shortcut?.displayLabel ?? "未设置"))
+            Group {
+                if isRecording {
+                    Text("请按快捷键…")
+                } else if let shortcut {
+                    Text(shortcut.displayLabel)
+                } else {
+                    Text("未设置")
+                }
+            }
                 .font(.caption.monospaced())
                 .frame(minWidth: 82)
         }

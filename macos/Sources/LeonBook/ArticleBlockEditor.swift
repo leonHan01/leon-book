@@ -185,6 +185,102 @@ struct EditorMarkdownBlock: Identifiable, Equatable {
     var kind: EditorMarkdownBlockKind { .detect(in: markdown) }
 }
 
+enum EditorBlockSelectionMode {
+    case replace
+    case extend(additive: Bool)
+    case toggle
+}
+
+/// Owns selection invariants independently from SwiftUI and AppKit event handling.
+/// The view translates input events into one of the small selection modes above.
+struct EditorBlockSelection: Equatable {
+    var focusedID: UUID?
+    var selectedIDs: Set<UUID> = []
+    var anchorID: UUID?
+
+    mutating func reset() {
+        focusedID = nil
+        selectedIDs = []
+        anchorID = nil
+    }
+
+    mutating func restore(focusedID: UUID?, selectedIDs: Set<UUID>) {
+        self.focusedID = focusedID
+        self.selectedIDs = selectedIDs
+        anchorID = focusedID
+    }
+
+    mutating func reconcile(validIDs: [UUID]) {
+        let valid = Set(validIDs)
+        selectedIDs.formIntersection(valid)
+        if let focusedID, !valid.contains(focusedID) {
+            self.focusedID = nil
+        }
+        if let anchorID, !valid.contains(anchorID) {
+            self.anchorID = nil
+        }
+        if selectedIDs.isEmpty, let focusedID {
+            selectedIDs = [focusedID]
+        }
+    }
+
+    mutating func focus(_ id: UUID, preservesSelection: Bool) {
+        focusedID = id
+        if !selectedIDs.contains(id), !preservesSelection {
+            selectedIDs = [id]
+            anchorID = id
+        }
+    }
+
+    mutating func select(_ id: UUID, orderedIDs: [UUID], mode: EditorBlockSelectionMode) {
+        switch mode {
+        case let .extend(additive):
+            guard let anchorID,
+                  let anchor = orderedIDs.firstIndex(of: anchorID),
+                  let current = orderedIDs.firstIndex(of: id) else {
+                if additive {
+                    if selectedIDs.contains(id), selectedIDs.count > 1 {
+                        selectedIDs.remove(id)
+                    } else {
+                        selectedIDs.insert(id)
+                    }
+                } else {
+                    selectedIDs = [id]
+                }
+                self.anchorID = id
+                focusedID = id
+                return
+            }
+            let range = min(anchor, current)...max(anchor, current)
+            let rangeIDs = Set(range.map { orderedIDs[$0] })
+            selectedIDs = additive ? selectedIDs.union(rangeIDs) : rangeIDs
+        case .toggle:
+            if selectedIDs.contains(id), selectedIDs.count > 1 {
+                selectedIDs.remove(id)
+            } else {
+                selectedIDs.insert(id)
+            }
+            anchorID = id
+        case .replace:
+            selectedIDs = [id]
+            anchorID = id
+        }
+        focusedID = id
+    }
+
+    mutating func selectAll(_ orderedIDs: [UUID], focusedID: UUID?) {
+        selectedIDs = Set(orderedIDs)
+        anchorID = orderedIDs.first
+        self.focusedID = focusedID
+    }
+
+    mutating func escape(to id: UUID) {
+        selectedIDs = [id]
+        anchorID = id
+        focusedID = nil
+    }
+}
+
 /// A Markdown-preserving seam for the block editor. Articles continue to save
 /// plain Markdown; this type only maps that source into editable visual units.
 enum NativeBlockEditorDocument {
@@ -923,9 +1019,7 @@ struct ArticleBlockEditor: View {
     @Environment(\.undoManager) private var undoManager
     @StateObject private var undoCoordinator = EditorBlockUndoCoordinator()
     @State private var blocks: [EditorMarkdownBlock] = []
-    @State private var focusedBlockID: UUID?
-    @State private var selectedBlockIDs: Set<UUID> = []
-    @State private var selectionAnchorID: UUID?
+    @State private var blockSelection = EditorBlockSelection()
     @State private var draggedBlockIDs: Set<UUID> = []
     @State private var dragDidRegisterUndo = false
     @State private var dropTargetBlockID: UUID?
@@ -940,16 +1034,35 @@ struct ArticleBlockEditor: View {
         NativeBlockEditorDocument.visibleBlocks(blocks)
     }
 
+    private var focusedBlockID: UUID? {
+        get { blockSelection.focusedID }
+        nonmutating set { blockSelection.focusedID = newValue }
+    }
+
+    private var selectedBlockIDs: Set<UUID> {
+        get { blockSelection.selectedIDs }
+        nonmutating set { blockSelection.selectedIDs = newValue }
+    }
+
+    private var selectionAnchorID: UUID? {
+        get { blockSelection.anchorID }
+        nonmutating set { blockSelection.anchorID = newValue }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Label("块编辑", systemImage: "square.grid.3x1.folder.badge.plus")
                     .font(.subheadline.weight(.medium))
-                Text(selectedBlockIDs.count > 1
-                    ? "已选择 \(selectedBlockIDs.count) 块 · 拖动手柄可成组搬运"
-                    : "⌘点手柄/⇧连选 · 拖动搬运 · ⌥⌘↑↓ 键盘移动")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                if selectedBlockIDs.count > 1 {
+                    Text("已选择 \(selectedBlockIDs.count) 块 · 拖动手柄可成组搬运")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text("⌘点手柄/⇧连选 · 拖动搬运 · ⌥⌘↑↓ 键盘移动")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer()
                 Button { undoManager?.undo() } label: {
                     Image(systemName: "arrow.uturn.backward")
@@ -1010,7 +1123,7 @@ struct ArticleBlockEditor: View {
                     .disabled(sourceSlug == nil)
                     if let lastTransferReceipt {
                         Divider()
-                        Button("撤销上次\(lastTransferReceipt.operation.shortTitle)", systemImage: "arrow.uturn.backward.circle") {
+                        Button("撤销上次\(lastTransferReceipt.operation.localizedShortTitle)", systemImage: "arrow.uturn.backward.circle") {
                             undoLastTransfer(lastTransferReceipt)
                         }
                         .disabled(isUndoingTransfer)
@@ -1075,9 +1188,7 @@ struct ArticleBlockEditor: View {
         }
         .onChange(of: documentID) { _ in
             undoManager?.removeAllActions(withTarget: undoCoordinator)
-            selectedBlockIDs = []
-            selectionAnchorID = nil
-            focusedBlockID = nil
+            blockSelection.reset()
             reloadBlocks(from: source)
             synchronizeUndoCoordinator()
         }
@@ -1093,9 +1204,10 @@ struct ArticleBlockEditor: View {
         }
         .onReceive(undoCoordinator.$restoration.compactMap { $0 }) { restoration in
             blocks = restoration.blocks
-            focusedBlockID = restoration.focusedID
-            selectedBlockIDs = restoration.selectedIDs
-            selectionAnchorID = restoration.focusedID
+            blockSelection.restore(
+                focusedID: restoration.focusedID,
+                selectedIDs: restoration.selectedIDs
+            )
             commit()
             synchronizeUndoCoordinator()
         }
@@ -1119,7 +1231,7 @@ struct ArticleBlockEditor: View {
                             .frame(width: 16, height: 24)
                     }
                     .buttonStyle(.plain)
-                    .help(block.isCollapsed ? "展开子块" : "折叠子块")
+                    .help(Text(LocalizedStringKey(block.isCollapsed ? "展开子块" : "折叠子块")))
                 } else {
                     Color.clear.frame(width: 16, height: 24)
                 }
@@ -1179,7 +1291,7 @@ struct ArticleBlockEditor: View {
                     Button("减少缩进", systemImage: "decrease.indent") { changeIndent(block.id, delta: -1) }
                         .disabled(block.depth == 0)
                     if NativeBlockEditorDocument.hasDescendants(block.id, in: blocks) {
-                        Button(block.isCollapsed ? "展开子块" : "折叠子块", systemImage: "rectangle.compress.vertical") {
+                        Button(LocalizedStringKey(block.isCollapsed ? "展开子块" : "折叠子块"), systemImage: "rectangle.compress.vertical") {
                             toggleCollapsed(block.id)
                         }
                     }
@@ -1319,7 +1431,7 @@ struct ArticleBlockEditor: View {
         Menu("转换为", systemImage: "arrow.triangle.2.circlepath") {
             ForEach(EditorMarkdownBlockKind.allCases) { kind in
                 Button { convert(id, to: kind) } label: {
-                    Label(kind.title, systemImage: kind.systemImage)
+                    Label(LocalizedStringKey(kind.title), systemImage: kind.systemImage)
                 }
             }
         }
@@ -1367,10 +1479,7 @@ struct ArticleBlockEditor: View {
             }
             return parsedBlock
         }
-        selectedBlockIDs = selectedBlockIDs.intersection(Set(blocks.map(\.id)))
-        if selectedBlockIDs.isEmpty, let focusedBlockID, blocks.contains(where: { $0.id == focusedBlockID }) {
-            selectedBlockIDs = [focusedBlockID]
-        }
+        blockSelection.reconcile(validIDs: blocks.map(\.id))
     }
 
     private func commit() {
@@ -1402,39 +1511,25 @@ struct ArticleBlockEditor: View {
     }
 
     private func focus(_ id: UUID) {
-        focusedBlockID = id
         let modifiers = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if !selectedBlockIDs.contains(id),
-           !modifiers.contains(.command),
-           !modifiers.contains(.shift) {
-            selectedBlockIDs = [id]
-            selectionAnchorID = id
-        }
+        blockSelection.focus(
+            id,
+            preservesSelection: modifiers.contains(.command) || modifiers.contains(.shift)
+        )
         synchronizeUndoCoordinator()
     }
 
     private func select(_ id: UUID, modifiers: NSEvent.ModifierFlags) {
         let flags = modifiers.intersection(.deviceIndependentFlagsMask)
-        if flags.contains(.shift),
-           let anchorID = selectionAnchorID,
-           let anchor = blocks.firstIndex(where: { $0.id == anchorID }),
-           let current = blocks.firstIndex(where: { $0.id == id }) {
-            let range = min(anchor, current)...max(anchor, current)
-            let rangeIDs = Set(range.map { blocks[$0].id })
-            selectedBlockIDs = flags.contains(.command)
-                ? selectedBlockIDs.union(rangeIDs) : rangeIDs
+        let mode: EditorBlockSelectionMode
+        if flags.contains(.shift) {
+            mode = .extend(additive: flags.contains(.command))
         } else if flags.contains(.command) {
-            if selectedBlockIDs.contains(id), selectedBlockIDs.count > 1 {
-                selectedBlockIDs.remove(id)
-            } else {
-                selectedBlockIDs.insert(id)
-            }
-            selectionAnchorID = id
+            mode = .toggle
         } else {
-            selectedBlockIDs = [id]
-            selectionAnchorID = id
+            mode = .replace
         }
-        focusedBlockID = id
+        blockSelection.select(id, orderedIDs: blocks.map(\.id), mode: mode)
         synchronizeUndoCoordinator()
     }
 
@@ -1467,15 +1562,11 @@ struct ArticleBlockEditor: View {
             remove(id)
             return true
         case .selectAllBlocks:
-            selectedBlockIDs = Set(blocks.map(\.id))
-            selectionAnchorID = blocks.first?.id
-            focusedBlockID = id
+            blockSelection.selectAll(blocks.map(\.id), focusedID: id)
             synchronizeUndoCoordinator()
             return true
         case .escape:
-            selectedBlockIDs = [id]
-            selectionAnchorID = id
-            focusedBlockID = nil
+            blockSelection.escape(to: id)
             synchronizeUndoCoordinator()
             return true
         }
@@ -2018,6 +2109,9 @@ enum EditorBlockTransferOperation: String {
         case .sync: return "同步块创建"
         }
     }
+    var localizedShortTitle: String {
+        NativeLocalization.string(shortTitle, language: NativeLocalization.currentLanguage)
+    }
     var actionTitle: String {
         switch self {
         case .move: return "移动到这里"
@@ -2071,7 +2165,7 @@ private struct EditorBlockTransferSheet: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Label(request.operation.title, systemImage: request.operation.systemImage)
+                    Label(LocalizedStringKey(request.operation.title), systemImage: request.operation.systemImage)
                         .font(.title2.weight(.semibold))
                     Text("已选择 \(request.blockIDs.count) 个内容块")
                         .font(.caption)
@@ -2125,7 +2219,7 @@ private struct EditorBlockTransferSheet: View {
                             if transferringSlug == article.slug {
                                 ProgressView().controlSize(.small)
                             } else {
-                                Text(request.operation.actionTitle)
+                                Text(LocalizedStringKey(request.operation.actionTitle))
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(.tint)
                             }
@@ -2159,7 +2253,7 @@ private struct EditorBlockSlashMenu: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(query.isEmpty ? "基础块" : "转换块")
+            Text(LocalizedStringKey(query.isEmpty ? "基础块" : "转换块"))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
@@ -2178,9 +2272,9 @@ private struct EditorBlockSlashMenu: View {
                                 .frame(width: 20)
                                 .foregroundStyle(.tint)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(kind.title)
+                                Text(LocalizedStringKey(kind.title))
                                     .font(.callout.weight(.medium))
-                                Text(kind.detail)
+                                Text(LocalizedStringKey(kind.detail))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }

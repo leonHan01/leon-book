@@ -3,9 +3,12 @@ import SwiftUI
 
 @main
 struct LeonBookApp: App {
+    @StateObject private var languagePreferences = NativeLanguagePreferences.shared
+
     var body: some Scene {
         WindowGroup("leon-book") {
             LeonBookWindowRoot()
+                .environment(\.locale, languagePreferences.language.locale)
         }
         .defaultSize(width: 1280, height: 820)
         .commands {
@@ -14,6 +17,7 @@ struct LeonBookApp: App {
 
         Settings {
             LeonBookSettingsRoot()
+                .environment(\.locale, languagePreferences.language.locale)
         }
     }
 }
@@ -50,11 +54,12 @@ private struct LeonBookSettingsRoot: View {
 private struct LeonBookCommands: Commands {
     @FocusedObject private var model: NativeAppModel?
     @ObservedObject private var preferences = NativeCommandPreferences.shared
+    @ObservedObject private var languagePreferences = NativeLanguagePreferences.shared
 
     var body: some Commands {
-        CommandMenu("笔记") {
+        CommandMenu(NativeLocalization.string("笔记", language: languagePreferences.language)) {
             ForEach(menuCommands) { definition in
-                Button(definition.title) {
+                Button(NativeLocalization.string(definition.title, language: languagePreferences.language)) {
                     model?.executeCommand(definition.id)
                 }
                 .modifier(NativeOptionalKeyboardShortcut(

@@ -63,7 +63,7 @@ struct NativeDeclarativeExtensionSettingsPanel: View {
                     .lineLimit(2)
                     .textSelection(.enabled)
             }
-            LabeledContent("状态") { Text(model.declarativeExtensionStatus) }
+            LabeledContent("状态") { Text(LocalizedStringKey(model.declarativeExtensionStatus)) }
 
             HStack {
                 Button("打开扩展目录") { model.openDeclarativeExtensionDirectory() }

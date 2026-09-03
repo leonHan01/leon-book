@@ -601,7 +601,7 @@ private struct MarkdownListView: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(onToggleTask == nil)
-                            .accessibilityLabel(taskState ? "标记为未完成" : "标记为已完成")
+                            .accessibilityLabel(LocalizedStringKey(taskState ? "标记为未完成" : "标记为已完成"))
                         } else {
                             Text(item.marker)
                                 .frame(minWidth: 20, alignment: .trailing)

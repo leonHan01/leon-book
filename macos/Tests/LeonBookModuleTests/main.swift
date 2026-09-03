@@ -149,6 +149,42 @@ struct LeonBookModuleTestsMain {
         )
         try expect(Set(projection.orderedNodeIDs) == ["a", "b"], "orphan filtering must remain inside graph module")
         try expect(projection.edges == [.init(sourceID: "a", targetID: "b")], "visible edges must be preserved")
+
+        let pathNodes = ["a", "b", "c", "d", "isolated"].map {
+            FirstPartyGraphNode(id: $0, status: "published", searchableText: $0, updatedAt: now)
+        }
+        let pathEdges: [FirstPartyGraphEdge] = [
+            .init(sourceID: "a", targetID: "c"),
+            .init(sourceID: "c", targetID: "d"),
+            .init(sourceID: "a", targetID: "b"),
+            .init(sourceID: "b", targetID: "d"),
+        ]
+        let shortestPath = FirstPartyKnowledgeGraphPathFinder.shortestPath(
+            from: "a",
+            to: "d",
+            nodes: pathNodes,
+            edges: pathEdges
+        )
+        try expect(shortestPath?.nodeIDs == ["a", "b", "d"], "path finder must return a deterministic shortest directed route")
+        try expect(shortestPath?.hopCount == 2, "path finder must report the number of reference hops")
+        try expect(
+            FirstPartyKnowledgeGraphPathFinder.shortestPath(
+                from: "d",
+                to: "a",
+                nodes: pathNodes,
+                edges: pathEdges
+            ) == nil,
+            "path finder must respect reference direction"
+        )
+        try expect(
+            FirstPartyKnowledgeGraphPathFinder.shortestPath(
+                from: "isolated",
+                to: "isolated",
+                nodes: pathNodes,
+                edges: pathEdges
+            )?.nodeIDs == ["isolated"],
+            "a node must have a zero-hop path to itself"
+        )
     }
 
     private static func testPublicationPolicy() throws {

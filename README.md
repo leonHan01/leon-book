@@ -8,27 +8,27 @@ The app is built with SwiftUI and stores data directly on the local filesystem. 
 
 ## Screenshots
 
-The screenshots below use an isolated `产品演示` workspace populated with mock articles, backlinks, moments, and a Q&A thread.
+The screenshots below use an isolated `Product Demo` workspace populated with English mock articles, backlinks, posts, and a Q&A thread.
 
 ### Workspace overview
 
-![LeonBook workspace overview with published articles, a draft, moments, and creative activity](docs/screenshots/leonbook-dashboard.jpg)
+![LeonBook workspace overview with published articles, a draft, posts, and creative activity](docs/screenshots/leonbook-dashboard-en.jpg)
 
 ### Article reading and backlinks
 
-![LeonBook article reader with task content, an outline, backlinks, and outgoing links](docs/screenshots/leonbook-article.jpg)
+![LeonBook article reader with task content, an outline, backlinks, and outgoing links](docs/screenshots/leonbook-article-en.jpg)
 
 ### Knowledge graph
 
-![LeonBook knowledge graph connecting four mock articles](docs/screenshots/leonbook-graph.jpg)
+![LeonBook knowledge graph connecting four English mock articles](docs/screenshots/leonbook-graph-en.jpg)
 
-### Moments
+### Posts
 
-![LeonBook moments timeline with tags and mock product updates](docs/screenshots/leonbook-moments.jpg)
+![LeonBook posts timeline with tags and mock product updates](docs/screenshots/leonbook-posts-en.jpg)
 
 ### Q&A
 
-![LeonBook Q&A detail with a Markdown and SQLite architecture question and answer](docs/screenshots/leonbook-qna.jpg)
+![LeonBook Q&A detail with a Markdown and SQLite architecture question and answer](docs/screenshots/leonbook-qna-en.jpg)
 
 ## Features
 
@@ -38,7 +38,7 @@ The screenshots below use an isolated `产品演示` workspace populated with mo
 - Save smart collections that SQLite filters and sorts directly, combining status, category, property, date, and numeric conditions with multi-sort, grouping, and list, table, or card layouts
 - Bookmark articles, headings, searches, and the global graph as shortcuts in the sidebar
 - Use the reader's right inspector for the outline, backlinks, outgoing links, convertible unlinked mentions, a local graph, and hover previews
-- Filter, zoom, and degree-clip the global graph before rendering large workspaces
+- Filter, zoom, and degree-clip the global graph before rendering large workspaces; drag nodes and find the shortest directed reference path between two articles
 - Incrementally update link and mention indexes when a body changes; the inspector queries only the current article's candidate relations, while the global graph reuses indexed edges instead of rescanning every body
 - Follow `[[wiki links]]` by title, slug, or alias; create missing targets from a click and jump through `[[note#heading]]` links
 - Automate new articles, article opening, search, and today's moments through `leonbook://` URLs or macOS Shortcuts/App Intents

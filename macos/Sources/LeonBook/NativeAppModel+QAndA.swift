@@ -4,8 +4,7 @@ import LeonBookPublishingModule
 
 extension NativeAppModel {
     var isFilteringQuestions: Bool {
-        selectedQuestionTag != nil
-            || !questionSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        questionSession.isFiltering
     }
 
     func reloadQuestionList(selecting questionID: String? = nil) async throws {
@@ -30,19 +29,14 @@ extension NativeAppModel {
 
         guard generation == workspaceGeneration else { return }
 
-        questions = loadedQuestions
-        questionTagFacets = loadedFacets
-        totalQuestionCount = loadedTotal
-        if nextSelection?.id != currentQuestionID {
-            let discardedMedia = questionAnswerDraft.images
-            questionAnswerDraft = NativeQuestionAnswerDraft()
-            editingQuestionAnswerID = nil
-            editingQuestionAnswerUpdatedAt = nil
-            discardUnreferencedMedia(discardedMedia)
-        }
-        selectedQuestion = nextSelection
-        questionAnswers = loadedAnswers
-        isLoadingQuestionAnswers = false
+        let discardedMedia = questionSession.applyReload(
+            questions: loadedQuestions,
+            totalCount: loadedTotal,
+            tagFacets: loadedFacets,
+            selectedQuestion: nextSelection,
+            answers: loadedAnswers
+        )
+        discardUnreferencedMedia(discardedMedia)
     }
 
     func refreshQuestionList(after delay: TimeInterval = 0) {
@@ -67,14 +61,8 @@ extension NativeAppModel {
         if !questionAnswerDraft.isEmpty || editingQuestionAnswerID != nil {
             guard confirmDiscardQuestionAnswerDraft() else { return false }
         }
-        let discardedMedia = questionAnswerDraft.images
-        questionAnswerDraft = NativeQuestionAnswerDraft()
-        editingQuestionAnswerID = nil
-        editingQuestionAnswerUpdatedAt = nil
+        let discardedMedia = questionSession.beginSelecting(question)
         discardUnreferencedMedia(discardedMedia)
-        selectedQuestion = question
-        questionAnswers = []
-        isLoadingQuestionAnswers = true
         let generation = workspaceGeneration
         let activeStore = store
         Task {
@@ -163,30 +151,14 @@ extension NativeAppModel {
         let activeStore = store
         Task {
             let generation = beginUpload()
-            var uploadedImages: [NativeMedia] = []
             defer { endUpload() }
             do {
-                for image in imagesToUpload {
-                    guard let imageData = image.pngData else {
-                        throw NativeStoreError.fileSystem("无法读取拖入或粘贴的图片。")
-                    }
-                    let temporaryURL = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("question-answer-\(UUID().uuidString.lowercased()).png")
-                    try imageData.write(to: temporaryURL, options: .atomic)
-                    defer { try? FileManager.default.removeItem(at: temporaryURL) }
-
-                    let uploaded = try await activeStore.uploadMedia(
-                        fileURL: temporaryURL,
-                        kind: "image",
-                        slug: "question-answers"
-                    )
-                    uploadedImages.append(NativeMedia(
-                        kind: uploaded.kind,
-                        name: uploaded.name,
-                        size: uploaded.size,
-                        url: uploaded.url
-                    ))
-                }
+                let uploadedImages = try await NativeMediaUpload.images(
+                    imagesToUpload,
+                    destination: .questionAnswers,
+                    temporaryNamePrefix: "question-answer",
+                    store: activeStore
+                )
                 guard generation == workspaceGeneration, selectedQuestion?.id == questionID else {
                     try? await activeStore.discardUnreferencedMedia(uploadedImages)
                     return
@@ -196,7 +168,6 @@ extension NativeAppModel {
                 scheduleBackup()
                 errorMessage = nil
             } catch {
-                try? await activeStore.discardUnreferencedMedia(uploadedImages)
                 guard generation == workspaceGeneration else { return }
                 errorMessage = error.localizedDescription
             }
@@ -212,26 +183,15 @@ extension NativeAppModel {
         guard !isPublishingQuestionAnswer, answer.questionID == selectedQuestion?.id else { return }
         if !questionAnswerDraft.isEmpty || editingQuestionAnswerID != nil {
             guard confirmDiscardQuestionAnswerDraft() else { return }
-            discardUnreferencedMedia(questionAnswerDraft.images)
         }
-        editingQuestionAnswerID = answer.id
-        editingQuestionAnswerUpdatedAt = answer.updatedAt
-        questionAnswerDraft = NativeQuestionAnswerDraft(
-            body: answer.body,
-            textRuns: answer.body.isEmpty ? [] : [
-                NativeMomentTextRun(text: answer.body, bold: false, color: nil),
-            ],
-            images: answer.images
-        )
+        let discardedMedia = questionSession.beginEditing(answer)
+        discardUnreferencedMedia(discardedMedia)
         errorMessage = nil
     }
 
     func cancelQuestionAnswerEditing() {
         guard !isPublishingQuestionAnswer else { return }
-        let discardedMedia = questionAnswerDraft.images
-        questionAnswerDraft = NativeQuestionAnswerDraft()
-        editingQuestionAnswerID = nil
-        editingQuestionAnswerUpdatedAt = nil
+        let discardedMedia = questionSession.discardAnswerDraft()
         discardUnreferencedMedia(discardedMedia)
         errorMessage = nil
     }
@@ -271,9 +231,7 @@ extension NativeAppModel {
                     images: questionAnswerDraft.images
                 )
             }
-            questionAnswerDraft = NativeQuestionAnswerDraft()
-            editingQuestionAnswerID = nil
-            editingQuestionAnswerUpdatedAt = nil
+            questionSession.discardAnswerDraft()
             try await reloadQuestionList(selecting: selectedQuestion.id)
             scheduleBackup()
             errorMessage = nil

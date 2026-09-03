@@ -1,0 +1,5 @@
+/* Simplified Chinese is LeonBook's source language. */
+"通用" = "通用";
+"语言" = "语言";
+"语言更改会立即应用，并在下次启动时保留。" = "语言更改会立即应用，并在下次启动时保留。";
+

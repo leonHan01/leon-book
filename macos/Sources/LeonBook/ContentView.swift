@@ -192,7 +192,7 @@ private struct ArticleSourceConflictSheet: View {
 
     private func conflictVersion(title: String, subtitle: String, body: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.headline)
+            Text(LocalizedStringKey(title)).font(.headline)
             Text(subtitle).font(.callout.weight(.medium)).lineLimit(2)
             ScrollView {
                 Text(body)
@@ -320,7 +320,7 @@ private struct NativeSidebar: View {
 
             Section("状态") {
                 Label {
-                    Text(model.storageReady ? "本地文件已连接" : "正在读取本地文件")
+                    Text(LocalizedStringKey(model.storageReady ? "本地文件已连接" : "正在读取本地文件"))
                 } icon: {
                     Image(systemName: model.storageReady ? "checkmark.circle.fill" : "circle.dotted")
                         .foregroundStyle(model.storageReady ? .green : .secondary)
@@ -369,7 +369,7 @@ private struct NativeSidebar: View {
             model.section = section
             if section == .editor && model.editor.isNew == false { model.newArticle() }
         } label: {
-            Label(title, systemImage: icon)
+            Label(LocalizedStringKey(title), systemImage: icon)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }
@@ -596,8 +596,8 @@ private struct ActivityHeatmapView: View {
                                         .fill(color(for: day.count))
                                         .frame(width: cellSize, height: cellSize)
                                         .opacity(day.tracked ? 1 : 0)
-                                        .help(day.tracked ? "\(day.date)：\(day.count) 次创作活动" : "")
-                                        .accessibilityLabel(day.tracked ? "\(day.date)，\(day.count) 次创作活动" : "")
+                                        .help(day.tracked ? Text("\(day.date)：\(day.count) 次创作活动") : Text(""))
+                                        .accessibilityLabel(day.tracked ? Text("\(day.date)，\(day.count) 次创作活动") : Text(""))
                                 }
                             }
                         }
@@ -635,12 +635,15 @@ private struct ActivityHeatmapView: View {
     }
 
     private var heatmapWeekdaySymbols: [String] {
-        let symbols = ["日", "一", "二", "三", "四", "五", "六"]
-        let start = Calendar.current.firstWeekday - 1
-        let shown = Set(["一", "三", "五"])
+        var calendar = Calendar.current
+        calendar.locale = NativeLocalization.currentLanguage.locale
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let start = calendar.firstWeekday - 1
+        let shownWeekdays = Set([2, 4, 6])
         return (0..<7).map { index in
-            let symbol = symbols[(index + start) % 7]
-            return shown.contains(symbol) ? symbol : ""
+            let weekdayIndex = (index + start) % 7
+            let weekday = weekdayIndex + 1
+            return shownWeekdays.contains(weekday) ? symbols[weekdayIndex] : ""
         }
     }
 
@@ -675,7 +678,7 @@ private struct StatCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.callout).foregroundStyle(.secondary)
+            Text(LocalizedStringKey(title)).font(.callout).foregroundStyle(.secondary)
             Text(value).font(.system(size: 30, weight: .bold, design: .rounded)).foregroundStyle(color)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -763,7 +766,7 @@ private struct ArticleRow: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(article.status.label).font(.caption.weight(.medium))
+                    Text(LocalizedStringKey(article.status.label)).font(.caption.weight(.medium))
                         .foregroundStyle(article.status == .published ? .green : .orange)
                     Label("\(article.pageViews) PV", systemImage: "eye")
                         .font(.caption)
@@ -787,9 +790,12 @@ struct EmptyState: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "doc.text.magnifyingglass").font(.system(size: 34)).foregroundStyle(.secondary)
-            Text(title).font(.headline)
-            Text(message).font(.callout).foregroundStyle(.secondary)
-            Button(actionTitle, action: action).buttonStyle(.borderedProminent)
+            Text(LocalizedStringKey(title)).font(.headline)
+            Text(LocalizedStringKey(message)).font(.callout).foregroundStyle(.secondary)
+            Button(action: action) {
+                Text(LocalizedStringKey(actionTitle))
+            }
+            .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(40)
@@ -799,6 +805,9 @@ struct EmptyState: View {
 extension String {
     var nativeDateLabel: String {
         guard let date = NativeTimestamp.date(from: self) else { return self }
-        return date.formatted(date: .abbreviated, time: .omitted)
+        return date.formatted(
+            .dateTime.year().month(.abbreviated).day()
+                .locale(NativeLocalization.currentLanguage.locale)
+        )
     }
 }

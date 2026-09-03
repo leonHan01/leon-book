@@ -40,6 +40,13 @@ mkdir -p "${CONTENTS_DIR}/MacOS" "${CONTENTS_DIR}/Resources"
 COPYFILE_DISABLE=1 cp "${BIN_PATH}/${EXECUTABLE_NAME}" "${CONTENTS_DIR}/MacOS/${EXECUTABLE_NAME}"
 COPYFILE_DISABLE=1 cp "${MACOS_DIR}/Resources/Info.plist" "${CONTENTS_DIR}/Info.plist"
 COPYFILE_DISABLE=1 cp "${MACOS_DIR}/Resources/Notes.icns" "${CONTENTS_DIR}/Resources/Notes.icns"
+for LOCALIZATION_DIR in "${MACOS_DIR}/Sources/LeonBook/Resources/"*.lproj; do
+    [[ -d "${LOCALIZATION_DIR}" ]] || continue
+    COPYFILE_DISABLE=1 cp -R "${LOCALIZATION_DIR}" "${CONTENTS_DIR}/Resources/"
+done
+if [[ -d "${BIN_PATH}/LeonBookMac_LeonBook.bundle" ]]; then
+    COPYFILE_DISABLE=1 cp -R "${BIN_PATH}/LeonBookMac_LeonBook.bundle" "${CONTENTS_DIR}/Resources/"
+fi
 codesign --force --sign - --timestamp=none "${STAGING_APP}"
 codesign --verify --deep --strict "${STAGING_APP}"
 

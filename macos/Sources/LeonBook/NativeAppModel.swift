@@ -54,14 +54,59 @@ public final class NativeAppModel: ObservableObject {
     }
     @Published var totalMomentCount = 0
     @Published var filteredMomentCount = 0
-    @Published var questions: [NativeQuestion] = []
-    @Published var totalQuestionCount = 0
-    @Published var questionTagFacets: [NativeQuestionTagFacet] = []
-    @Published var selectedQuestion: NativeQuestion?
-    @Published var questionAnswers: [NativeQuestionAnswer] = []
-    @Published var isLoadingQuestionAnswers = false
-    @Published var questionAnswerDraft = NativeQuestionAnswerDraft()
-    @Published var editingQuestionAnswerID: String?
+    @Published var questionSession = NativeQuestionSessionState()
+    var questions: [NativeQuestion] {
+        get { questionSession.questions }
+        set { questionSession.questions = newValue }
+    }
+    var totalQuestionCount: Int {
+        get { questionSession.totalCount }
+        set { questionSession.totalCount = newValue }
+    }
+    var questionTagFacets: [NativeQuestionTagFacet] {
+        get { questionSession.tagFacets }
+        set { questionSession.tagFacets = newValue }
+    }
+    var selectedQuestion: NativeQuestion? {
+        get { questionSession.selectedQuestion }
+        set { questionSession.selectedQuestion = newValue }
+    }
+    var questionAnswers: [NativeQuestionAnswer] {
+        get { questionSession.answers }
+        set { questionSession.answers = newValue }
+    }
+    var isLoadingQuestionAnswers: Bool {
+        get { questionSession.isLoadingAnswers }
+        set { questionSession.isLoadingAnswers = newValue }
+    }
+    var questionAnswerDraft: NativeQuestionAnswerDraft {
+        get { questionSession.answerDraft }
+        set { questionSession.answerDraft = newValue }
+    }
+    var editingQuestionAnswerID: String? {
+        get { questionSession.editingAnswerID }
+        set { questionSession.editingAnswerID = newValue }
+    }
+    var editingQuestionAnswerUpdatedAt: String? {
+        get { questionSession.editingAnswerUpdatedAt }
+        set { questionSession.editingAnswerUpdatedAt = newValue }
+    }
+    var isPublishingQuestion: Bool {
+        get { questionSession.isPublishingQuestion }
+        set { questionSession.isPublishingQuestion = newValue }
+    }
+    var isPublishingQuestionAnswer: Bool {
+        get { questionSession.isPublishingAnswer }
+        set { questionSession.isPublishingAnswer = newValue }
+    }
+    var questionSearchText: String {
+        get { questionSession.searchText }
+        set { questionSession.searchText = newValue }
+    }
+    var selectedQuestionTag: String? {
+        get { questionSession.selectedTag }
+        set { questionSession.selectedTag = newValue }
+    }
     @Published var trashItems: [NativeTrashItem] = []
     @Published var selectedArticle: NativeArticle? {
         didSet {
@@ -112,8 +157,6 @@ public final class NativeAppModel: ObservableObject {
     @Published var showsOnlyFavoriteMoments = false
     @Published var isLoading = true
     @Published private(set) var isPublishingMoment = false
-    @Published var isPublishingQuestion = false
-    @Published var isPublishingQuestionAnswer = false
     @Published private(set) var isLoadingMoreMoments = false
     @Published var hasMoreMoments = false
     @Published var isSaving = false
@@ -154,8 +197,6 @@ public final class NativeAppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var searchText = ""
     @Published var momentSearchText = ""
-    @Published var questionSearchText = ""
-    @Published var selectedQuestionTag: String?
     @Published var searchPresentation: NativeSearchPresentation?
     @Published var globalSearchResults: [NativeGlobalSearchResult] = []
     @Published var isSearchingGlobally = false
@@ -201,7 +242,6 @@ public final class NativeAppModel: ObservableObject {
     var momentFeedGeneration = 0
     private var momentSearchTask: Task<Void, Never>?
     var questionSearchTask: Task<Void, Never>?
-    var editingQuestionAnswerUpdatedAt: String?
     var globalSearchTask: Task<Void, Never>?
     var globalSearchGeneration = 0
     var articleListSearchTask: Task<Void, Never>?
@@ -222,11 +262,16 @@ public final class NativeAppModel: ObservableObject {
         self.init(navigationScopeID: navigationScopeID, startsAutomatically: true)
     }
 
-    init(navigationScopeID: String?, startsAutomatically: Bool) {
+    init(
+        navigationScopeID: String?,
+        startsAutomatically: Bool,
+        store injectedStore: LocalBlogStore? = nil,
+        userWorkspaces injectedUserWorkspaces: UserWorkspaceStore? = nil
+    ) {
         self.navigationScopeID = navigationScopeID
-        let rootURL = LocalBlogStore.defaultRootURL
-        userWorkspaces = UserWorkspaceStore(rootURL: rootURL)
-        store = LocalBlogStore(rootURL: rootURL)
+        let store = injectedStore ?? LocalBlogStore()
+        self.store = store
+        userWorkspaces = injectedUserWorkspaces ?? UserWorkspaceStore(rootURL: store.rootURL)
         automationObserver = NotificationCenter.default.addObserver(
             forName: NativeAutomationInbox.didEnqueueNotification,
             object: nil,
@@ -1218,19 +1263,33 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
-    func chooseAndUpload(kind: String, forArticle slug: String? = nil, banner: Bool = false) {
+    func chooseAndUpload(
+        kind: NativeMediaUploadKind,
+        forArticle slug: String? = nil,
+        banner: Bool = false
+    ) {
         guard !isBackingUp else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = kind == "video" ? [.movie] : [.image]
+        panel.allowedContentTypes = kind == .video ? [.movie] : [.image]
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        let activeStore = store
+        let destination = slug.map(NativeMediaUploadDestination.article(slug:)) ?? .inbox
         Task {
             let generation = beginUpload()
             defer { endUpload() }
             do {
-                let uploaded = try await store.uploadMedia(fileURL: url, kind: kind, slug: slug)
-                guard generation == workspaceGeneration else { return }
+                guard let uploaded = try await NativeMediaUpload.files(
+                    [url],
+                    kind: kind,
+                    destination: destination,
+                    store: activeStore
+                ).first else { return }
+                guard generation == workspaceGeneration else {
+                    try? await activeStore.discardUnreferencedMedia([uploaded])
+                    return
+                }
                 if banner {
                     replaceEditorBanner(
                         NativeBanner(
@@ -1241,7 +1300,7 @@ public final class NativeAppModel: ObservableObject {
                         )
                     )
                 } else {
-                    editor.media.append(NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url))
+                    editor.media.append(uploaded)
                 }
                 try await refreshActivity()
                 scheduleBackup()
@@ -1268,16 +1327,21 @@ public final class NativeAppModel: ObservableObject {
         let selectedURLs = Array(panel.urls.prefix(remaining))
         guard !selectedURLs.isEmpty else { return }
 
+        let activeStore = store
         Task {
             let generation = beginUpload()
             defer { endUpload() }
             do {
-                var uploadedImages: [NativeMedia] = []
-                for fileURL in selectedURLs {
-                    let uploaded = try await store.uploadMedia(fileURL: fileURL, kind: "image", slug: "moments")
-                    uploadedImages.append(NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url))
+                let uploadedImages = try await NativeMediaUpload.files(
+                    selectedURLs,
+                    kind: .image,
+                    destination: .moments,
+                    store: activeStore
+                )
+                guard generation == workspaceGeneration else {
+                    try? await activeStore.discardUnreferencedMedia(uploadedImages)
+                    return
                 }
-                guard generation == workspaceGeneration else { return }
                 momentDraft.images.append(contentsOf: uploadedImages)
                 try await refreshActivity()
                 scheduleBackup()
@@ -1307,24 +1371,22 @@ public final class NativeAppModel: ObservableObject {
             return
         }
 
+        let activeStore = store
         Task {
             let generation = beginUpload()
             defer { endUpload() }
             do {
-                let uploaded = try await store.uploadMedia(
-                    fileURL: fileURL,
-                    kind: "video",
-                    slug: "moments"
-                )
-                guard generation == workspaceGeneration else { return }
-                momentDraft.images.append(
-                    NativeMedia(
-                        kind: uploaded.kind,
-                        name: uploaded.name,
-                        size: uploaded.size,
-                        url: uploaded.url
-                    )
-                )
+                guard let uploaded = try await NativeMediaUpload.files(
+                    [fileURL],
+                    kind: .video,
+                    destination: .moments,
+                    store: activeStore
+                ).first else { return }
+                guard generation == workspaceGeneration else {
+                    try? await activeStore.discardUnreferencedMedia([uploaded])
+                    return
+                }
+                momentDraft.images.append(uploaded)
                 try await refreshActivity()
                 scheduleBackup()
                 errorMessage = nil
@@ -1485,30 +1547,21 @@ public final class NativeAppModel: ObservableObject {
         let imagesToUpload = Array(images.prefix(remaining))
         guard !imagesToUpload.isEmpty else { return }
 
+        let activeStore = store
         Task {
             let generation = beginUpload()
             defer { endUpload() }
             do {
-                var uploadedImages: [NativeMedia] = []
-                for image in imagesToUpload {
-                    guard let imageData = image.pngData else {
-                        throw NativeStoreError.fileSystem("无法读取拖入或粘贴的图片。")
-                    }
-                    let temporaryURL = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("moment-image-\(UUID().uuidString.lowercased()).png")
-                    try imageData.write(to: temporaryURL, options: .atomic)
-                    defer { try? FileManager.default.removeItem(at: temporaryURL) }
-
-                    let uploaded = try await store.uploadMedia(
-                        fileURL: temporaryURL,
-                        kind: "image",
-                        slug: "moments"
-                    )
-                    uploadedImages.append(
-                        NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url)
-                    )
+                let uploadedImages = try await NativeMediaUpload.images(
+                    imagesToUpload,
+                    destination: .moments,
+                    temporaryNamePrefix: "moment-image",
+                    store: activeStore
+                )
+                guard generation == workspaceGeneration else {
+                    try? await activeStore.discardUnreferencedMedia(uploadedImages)
+                    return
                 }
-                guard generation == workspaceGeneration else { return }
                 momentDraft.images.append(contentsOf: uploadedImages)
                 try await refreshActivity()
                 scheduleBackup()
@@ -1593,24 +1646,26 @@ public final class NativeAppModel: ObservableObject {
 
     func uploadPastedImage(_ image: NSImage, placeholder: String) {
         guard !isBackingUp else { return }
-        guard let imageData = image.pngData else {
-            replacePastedImage(placeholder, with: "[图片粘贴失败]")
-            errorMessage = "无法读取剪贴板中的图片。"
-            return
-        }
-
-        let filename = "pasted-image-\(UUID().uuidString.lowercased()).png"
-        let temporaryURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        let activeStore = store
+        let destination = editor.slug.isEmpty
+            ? NativeMediaUploadDestination.inbox
+            : .article(slug: editor.slug)
         Task {
             let generation = beginUpload()
             defer { endUpload() }
             do {
-                try imageData.write(to: temporaryURL, options: .atomic)
-                defer { try? FileManager.default.removeItem(at: temporaryURL) }
-
-                let uploaded = try await store.uploadMedia(fileURL: temporaryURL, kind: "image", slug: editor.slug)
-                guard generation == workspaceGeneration else { return }
-                editor.media.append(NativeMedia(kind: uploaded.kind, name: uploaded.name, size: uploaded.size, url: uploaded.url))
+                guard let uploaded = try await NativeMediaUpload.images(
+                    [image],
+                    destination: destination,
+                    temporaryNamePrefix: "pasted-image",
+                    invalidImageMessage: "无法读取剪贴板中的图片。",
+                    store: activeStore
+                ).first else { return }
+                guard generation == workspaceGeneration else {
+                    try? await activeStore.discardUnreferencedMedia([uploaded])
+                    return
+                }
+                editor.media.append(uploaded)
                 replacePastedImage(placeholder, with: "![粘贴的图片](\(uploaded.url))")
                 try await refreshActivity()
                 scheduleBackup()
@@ -1931,10 +1986,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     private func discardCurrentQuestionAnswerDraft() async {
-        let discardedMedia = questionAnswerDraft.images
-        questionAnswerDraft = NativeQuestionAnswerDraft()
-        editingQuestionAnswerID = nil
-        editingQuestionAnswerUpdatedAt = nil
+        let discardedMedia = questionSession.discardAnswerDraft()
         guard !discardedMedia.isEmpty else { return }
         let sourceStore = store
         try? await sourceStore.discardUnreferencedMedia(discardedMedia)
@@ -1989,15 +2041,5 @@ public final class NativeAppModel: ObservableObject {
 
     private func refreshTrash() async throws {
         trashItems = try await store.listTrash()
-    }
-}
-
-extension NSImage {
-    var pngData: Data? {
-        guard let tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffRepresentation) else {
-            return nil
-        }
-        return bitmap.representation(using: .png, properties: [:])
     }
 }

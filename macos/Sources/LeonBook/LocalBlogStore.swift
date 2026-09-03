@@ -7,73 +7,8 @@ public actor LocalBlogStore {
     private static let articleRevisionRetentionDays = 30
     private static let articleAutosaveRevisionInterval: TimeInterval = 5 * 60
     private static let maximumArticleRevisionsPerDraft = 100
-    private static let savedWorkDirectoryKey = "leonBook.workDirectoryPath"
-    private static let savedBackupDirectoryKey = "leonBook.backupDirectoryPath"
-    private static let savedBackupPolicyKey = "leonBook.backupPolicy.v2"
-
-    public static let defaultWorkDirectoryURL = URL(
-        fileURLWithPath: "/Volumes/T7Shield/myblog",
-        isDirectory: true
-    )
 
     static let reservedMediaDirectories: Set<String> = ["inbox", "moments", "question-answers"]
-
-    static var applicationSupportURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("leon-book", isDirectory: true)
-    }
-
-    public static var defaultRootURL: URL {
-        if let configured = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"],
-           !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(fileURLWithPath: configured, isDirectory: true)
-        }
-        if let saved = UserDefaults.standard.string(forKey: savedWorkDirectoryKey),
-           !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(fileURLWithPath: saved, isDirectory: true)
-        }
-        return defaultWorkDirectoryURL
-    }
-
-    public static var needsWorkDirectorySelection: Bool {
-        let hasConfiguredDirectory = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        guard !hasConfiguredDirectory else { return false }
-        return !FileManager.default.fileExists(atPath: defaultRootURL.path)
-    }
-
-    public static func rememberWorkDirectory(_ url: URL) {
-        UserDefaults.standard.set(url.standardizedFileURL.path, forKey: savedWorkDirectoryKey)
-    }
-
-    public static var savedBackupDirectoryURL: URL? {
-        guard let saved = UserDefaults.standard.string(forKey: savedBackupDirectoryKey),
-              !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return nil
-        }
-        return URL(fileURLWithPath: saved, isDirectory: true)
-    }
-
-    public static func rememberBackupDirectory(_ url: URL) {
-        UserDefaults.standard.set(url.standardizedFileURL.path, forKey: savedBackupDirectoryKey)
-    }
-
-    public static func clearBackupDirectory() {
-        UserDefaults.standard.removeObject(forKey: savedBackupDirectoryKey)
-    }
-
-    public static var savedBackupPolicy: NativeBackupPolicy {
-        guard let data = UserDefaults.standard.data(forKey: savedBackupPolicyKey),
-              let policy = try? JSONDecoder().decode(NativeBackupPolicy.self, from: data) else {
-            return .standard
-        }
-        return policy
-    }
-
-    public static func rememberBackupPolicy(_ policy: NativeBackupPolicy) {
-        guard let data = try? JSONEncoder().encode(policy) else { return }
-        UserDefaults.standard.set(data, forKey: savedBackupPolicyKey)
-    }
 
     let rootURL: URL
     private var database: SQLiteDatabase?
@@ -112,11 +47,15 @@ public actor LocalBlogStore {
     private var trashURL: URL { rootURL.appendingPathComponent("trash", isDirectory: true) }
     private var trashIndexURL: URL { trashURL.appendingPathComponent("index.json") }
 
+    // MARK: - Lifecycle
+
     public init(rootURL: URL = LocalBlogStore.defaultRootURL) {
         let standardizedRoot = rootURL.standardizedFileURL
         self.rootURL = standardizedRoot
         markdownWorkspaceSource = Self.loadMarkdownWorkspaceSource(from: standardizedRoot)
     }
+
+    // MARK: - Markdown workspace
 
     public func markdownWorkspaceSourceState() throws -> NativeMarkdownWorkspaceSource {
         try prepare()
@@ -889,6 +828,8 @@ public actor LocalBlogStore {
         return changes.count
     }
 
+    // MARK: - Smart collections and bookmarks
+
     public func listArticles(in collection: NativeSmartCollection) throws -> [NativeArticleSummary] {
         try prepare()
         let query = NativeSmartCollectionSQLCompiler.compile(collection)
@@ -1110,6 +1051,8 @@ public actor LocalBlogStore {
         try recordPortableSidecarTombstone(kind: "bookmark", id: safeID)
     }
 
+    // MARK: - Moments
+
     public func listMoments() throws -> [NativeMoment] {
         try prepare()
         return try allMoments()
@@ -1326,6 +1269,8 @@ public actor LocalBlogStore {
         removeMomentSidecar(id: safeID)
         try writeTrashBackup()
     }
+
+    // MARK: - Questions and answers
 
     public func listQuestions(
         searchText: String = "",
@@ -1588,6 +1533,8 @@ public actor LocalBlogStore {
     ) throws {
         try removeUnreferencedMediaFiles(images, includingDeleted: includingDeleted)
     }
+
+    // MARK: - Articles and refactoring workflows
 
     public func listActivity(since: Date) throws -> [NativeActivityDay] {
         try prepare()
@@ -2060,6 +2007,8 @@ public actor LocalBlogStore {
         return revision
     }
 
+    // MARK: - Article revisions and comments
+
     public func listArticleRevisions(articleSlug: String?, draftKey: String) throws -> [NativeArticleRevision] {
         try prepare()
         let safeDraftKey = try requireSafeSegment(draftKey, label: "版本历史标识")
@@ -2247,6 +2196,8 @@ public actor LocalBlogStore {
             try recordPortableSidecarTombstone(kind: "comment", id: removedID)
         }
     }
+
+    // MARK: - Import and persistence
 
     public func allocateSlug(from title: String) throws -> String {
         try prepare()
@@ -2655,6 +2606,8 @@ public actor LocalBlogStore {
         try writeTrashBackup()
         markJSONBackupNeedsRebuild()
     }
+
+    // MARK: - Trash
 
     func listTrash() throws -> [NativeTrashItem] {
         try prepare()
@@ -3111,6 +3064,8 @@ public actor LocalBlogStore {
         return (nextBody, nextBanner, nextMedia)
     }
 
+    // MARK: - Media
+
     func uploadMedia(fileURL: URL, kind: String, slug: String? = nil) async throws -> NativeUploadedMedia {
         try prepare()
         let targetSlug = try requireSafeSegment(slug?.isEmpty == false ? slug! : "inbox", label: "媒体目录")
@@ -3205,6 +3160,8 @@ public actor LocalBlogStore {
             try? FileManager.default.removeItem(at: fileURL)
         }
     }
+
+    // MARK: - Database and compatibility exports
 
     func db() throws -> SQLiteDatabase {
         guard let database else { throw NativeStoreError.fileSystem("SQLite：数据库尚未准备好") }
@@ -4296,6 +4253,8 @@ public actor LocalBlogStore {
         }
     }
 
+    // MARK: - Normalization and decoding
+
     private func normalize(_ article: NativeArticle) -> NativeArticle {
         let body = normalizeBody(article.body)
         return NativeArticle(
@@ -4418,25 +4377,6 @@ public actor LocalBlogStore {
         return url.path
     }
 
-    private func summary(for article: NativeArticle) -> NativeArticleSummary {
-        NativeArticleSummary(
-            aliases: NativeArticleAlias.values(from: article.properties),
-            banner: article.banner,
-            category: article.category,
-            excerpt: article.excerpt,
-            pageViews: article.pageViews,
-            properties: article.properties,
-            publishedAt: article.publishedAt,
-            slug: article.slug,
-            sourceRelativePath: article.sourceRelativePath,
-            status: article.status,
-            tags: article.tags,
-            title: article.title,
-            updatedAt: article.updatedAt,
-            wordCount: article.wordCount ?? wordCount(article.body)
-        )
-    }
-
     private func wordCount(_ body: String) -> Int {
         NativeWritingMetrics.characterCount(of: body)
     }
@@ -4515,102 +4455,4 @@ public actor LocalBlogStore {
         return value
     }
 
-    private var articleSelect: String {
-        "SELECT slug, title, body, category, excerpt, banner_json, media_json, status, tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at, properties_json, source_relative_path, source_content_hash, source_imported_at FROM articles"
-    }
-
-    private func qualifiedArticleSelect(_ alias: String) -> String {
-        let columns = [
-            "slug", "title", "body", "category", "excerpt", "banner_json", "media_json", "status",
-            "tags_json", "updated_at", "published_at", "word_count", "page_views", "deleted_at",
-            "delete_expires_at", "properties_json", "source_relative_path", "source_content_hash",
-            "source_imported_at",
-        ].map { "\(alias).\($0)" }.joined(separator: ", ")
-        return "SELECT \(columns) FROM articles AS \(alias)"
-    }
-
-    private var articleSummarySelect: String {
-        "SELECT slug, title, category, excerpt, banner_json, status, tags_json, updated_at, published_at, word_count, page_views, properties_json, source_relative_path FROM articles"
-    }
-
-    private func qualifiedArticleSummarySelect(_ alias: String) -> String {
-        let columns = [
-            "slug", "title", "category", "excerpt", "banner_json", "status", "tags_json", "updated_at",
-            "published_at", "word_count", "page_views", "properties_json", "source_relative_path",
-        ].map { "\(alias).\($0)" }.joined(separator: ", ")
-        return "SELECT \(columns) FROM articles AS \(alias)"
-    }
-
-    private var momentSelect: String {
-        "SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at FROM moments"
-    }
-
-    private var questionSelect: String {
-        """
-        SELECT q.id, q.title, q.body, q.tags_json, q.created_at, q.updated_at,
-               (SELECT COUNT(*) FROM question_answers AS a WHERE a.question_id = q.id)
-        FROM questions AS q
-        """
-    }
-
-    private var questionAnswerSelect: String {
-        "SELECT id, question_id, body, images_json, created_at, updated_at FROM question_answers"
-    }
-
-    var revisionSelect: String {
-        "SELECT id, sync_id, draft_key, article_slug, reason, snapshot_json, created_at, updated_at FROM article_revisions"
-    }
-
-    var commentSelect: String {
-        "SELECT id, article_slug, parent_id, author_name, text, quoted_text, anchor_id, created_at, updated_at FROM article_comments"
-    }
-
-    func decodeArticleComment(_ row: SQLiteRow) throws -> NativeArticleComment {
-        guard let id = row.text(at: 0),
-              let articleSlug = row.text(at: 1),
-              let authorName = row.text(at: 3),
-              let text = row.text(at: 4),
-              let createdAt = row.text(at: 7),
-              let updatedAt = row.text(at: 8) else {
-            throw NativeStoreError.fileSystem("SQLite：文章评论记录不完整")
-        }
-        let selection: NativeArticleCommentSelection?
-        if let quote = row.text(at: 5), let anchorID = row.text(at: 6) {
-            selection = NativeArticleCommentSelection(quote: quote, anchorID: anchorID)
-        } else {
-            selection = nil
-        }
-        return NativeArticleComment(
-            id: id,
-            articleSlug: articleSlug,
-            parentID: row.text(at: 2),
-            authorName: authorName,
-            text: text,
-            selection: selection,
-            createdAt: createdAt,
-            updatedAt: updatedAt
-        )
-    }
-}
-
-struct NativeActivityEvent: Codable, Equatable {
-    let type: String
-    let createdAt: String
-}
-
-struct NativeTrashedArticle: Codable, Equatable {
-    let article: NativeArticle
-    let deletedAt: String
-    let expiresAt: String
-}
-
-struct NativeTrashedMoment: Codable, Equatable {
-    let moment: NativeMoment
-    let deletedAt: String
-    let expiresAt: String
-}
-
-struct NativeTrashBackup: Codable, Equatable {
-    let articles: [NativeTrashedArticle]
-    let moments: [NativeTrashedMoment]
 }

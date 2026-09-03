@@ -50,6 +50,56 @@ public struct NativeArticleGraphProjection: Equatable {
     }
 }
 
+public struct NativeArticleGraphPath: Equatable {
+    public let nodes: [NativeArticleSummary]
+    public let edges: [NativeArticleGraphEdge]
+
+    public var hopCount: Int {
+        edges.count
+    }
+
+    public init(nodes: [NativeArticleSummary], edges: [NativeArticleGraphEdge]) {
+        self.nodes = nodes
+        self.edges = edges
+    }
+}
+
+public enum NativeArticleGraphPathFinder {
+    public static func shortestPath(
+        in graph: NativeArticleGraph,
+        from sourceSlug: String,
+        to targetSlug: String
+    ) -> NativeArticleGraphPath? {
+        let moduleNodes = graph.nodes.map { article in
+            FirstPartyGraphNode(
+                id: article.slug,
+                status: article.status.rawValue,
+                searchableText: article.title,
+                updatedAt: NativeTimestamp.date(from: article.updatedAt) ?? .distantPast
+            )
+        }
+        let moduleEdges = graph.edges.map {
+            FirstPartyGraphEdge(sourceID: $0.sourceSlug, targetID: $0.targetSlug)
+        }
+        guard let path = FirstPartyKnowledgeGraphPathFinder.shortestPath(
+            from: sourceSlug,
+            to: targetSlug,
+            nodes: moduleNodes,
+            edges: moduleEdges
+        ) else {
+            return nil
+        }
+
+        let nodesBySlug = Dictionary(uniqueKeysWithValues: graph.nodes.map { ($0.slug, $0) })
+        return NativeArticleGraphPath(
+            nodes: path.nodeIDs.compactMap { nodesBySlug[$0] },
+            edges: path.edges.map {
+                NativeArticleGraphEdge(sourceSlug: $0.sourceID, targetSlug: $0.targetID)
+            }
+        )
+    }
+}
+
 /// The graph module's single projection interface. Filtering, orphan removal,
 /// degree ranking, node clipping, and edge cleanup stay local to this seam.
 public enum NativeArticleGraphProjector {

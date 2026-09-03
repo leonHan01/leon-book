@@ -266,15 +266,7 @@ extension NativeAppModel {
         moments = []
         totalMomentCount = 0
         filteredMomentCount = 0
-        questions = []
-        totalQuestionCount = 0
-        questionTagFacets = []
-        selectedQuestion = nil
-        questionAnswers = []
-        isLoadingQuestionAnswers = false
-        questionAnswerDraft = NativeQuestionAnswerDraft()
-        editingQuestionAnswerID = nil
-        editingQuestionAnswerUpdatedAt = nil
+        questionSession.reset()
         clearMomentFacetRecords()
         nextMomentCursor = nil
         hasMoreMoments = false
@@ -300,8 +292,6 @@ extension NativeAppModel {
         editingMomentID = nil
         searchText = ""
         momentSearchText = ""
-        questionSearchText = ""
-        selectedQuestionTag = nil
         globalSearchText = ""
         globalSearchResults = []
         searchPresentation = nil

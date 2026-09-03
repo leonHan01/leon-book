@@ -132,7 +132,7 @@ enum MarkdownArticleSource {
         }
         if source.hasPrefix("\u{feff}") { source.removeFirst() }
 
-        let frontmatter = parseFrontmatter(source)
+        let frontmatter = NativeFrontmatterDocument(source: source)
         let fileTitle = url.deletingPathExtension().lastPathComponent
         let folder = safePath.split(separator: "/").dropLast().joined(separator: "/")
         let title = frontmatter.scalar(for: ["title"]).flatMap(nonEmpty) ?? fileTitle
@@ -326,88 +326,6 @@ enum MarkdownArticleSource {
         return segments.joined(separator: "/").precomposedStringWithCanonicalMapping
     }
 
-    private struct Frontmatter {
-        let body: String
-        let values: [String: String]
-
-        func rawValue(for keys: [String]) -> String? {
-            for key in keys {
-                if let pair = values.first(where: { $0.key.caseInsensitiveCompare(key) == .orderedSame }) {
-                    return pair.value
-                }
-            }
-            return nil
-        }
-
-        func scalar(for keys: [String]) -> String? {
-            rawValue(for: keys).map(MarkdownArticleSource.parseScalar)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        func list(for keys: [String]) -> [String] {
-            guard let raw = rawValue(for: keys) else { return [] }
-            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            let parsed = NativeArticlePropertyValue.fromYAML(value)
-            if parsed.kind == .list || parsed.kind == .tags { return parsed.listValues }
-            return MarkdownArticleSource.parseScalar(value)
-                .split(whereSeparator: { ",，".contains($0) })
-                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        }
-    }
-
-    private static func parseFrontmatter(_ source: String) -> Frontmatter {
-        var normalized = source.replacingOccurrences(of: "\r\n", with: "\n")
-        if normalized.hasPrefix("\u{feff}") { normalized.removeFirst() }
-        let lines = normalized.components(separatedBy: "\n")
-        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
-              let closingIndex = lines.indices.dropFirst().first(where: {
-                  let marker = lines[$0].trimmingCharacters(in: .whitespaces)
-                  return marker == "---" || marker == "..."
-              }) else {
-            return Frontmatter(body: normalized, values: [:])
-        }
-
-        var values: [String: String] = [:]
-        var index = 1
-        while index < closingIndex {
-            let line = lines[index]
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, !trimmed.hasPrefix("#"), let colon = line.firstIndex(of: ":") else {
-                index += 1
-                continue
-            }
-            let key = parseScalar(String(line[..<colon]).trimmingCharacters(in: .whitespaces))
-            guard NativeArticleProperties.isValidKey(key) else {
-                index += 1
-                continue
-            }
-            var raw = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
-            var childLines: [String] = []
-            var next = index + 1
-            while next < closingIndex {
-                let candidate = lines[next]
-                let candidateTrimmed = candidate.trimmingCharacters(in: .whitespaces)
-                if candidate.first?.isWhitespace == true || candidateTrimmed.hasPrefix("-") || candidateTrimmed.isEmpty {
-                    childLines.append(candidate)
-                    next += 1
-                } else {
-                    break
-                }
-            }
-            if !childLines.isEmpty {
-                raw += (raw.isEmpty ? "" : "\n") + childLines.joined(separator: "\n")
-            }
-            values[key] = raw
-            index = next
-        }
-        let bodyStart = closingIndex + 1
-        let body = bodyStart < lines.count
-            ? lines[bodyStart...].joined(separator: "\n").trimmingCharacters(in: .newlines)
-            : ""
-        return Frontmatter(body: body, values: values)
-    }
-
     private struct FrontmatterSourceEntry {
         let key: String
         let lineRange: Range<Int>
@@ -529,7 +447,7 @@ enum MarkdownArticleSource {
         source: String,
         document: FrontmatterSourceDocument
     ) -> String {
-        let parsed = parseFrontmatter(source)
+        let parsed = NativeFrontmatterDocument(source: source)
         var patches: [FrontmatterSourcePatch] = []
         var additions: [String] = []
         var claimedEntryStarts = Set<Int>()
@@ -789,7 +707,7 @@ enum MarkdownArticleSource {
             let prefix = String(line.prefix { $0.isWhitespace })
             return prefix.isEmpty ? nil : prefix
         }.first ?? "  "
-        let value = parseScalar(desiredRawValue)
+        let value = NativeFrontmatterDocument.scalarValue(from: desiredRawValue)
         return [header] + value.components(separatedBy: "\n").map { line in
             line.isEmpty ? "" : indentation + line
         }
@@ -893,7 +811,7 @@ enum MarkdownArticleSource {
               desiredRawValue.hasPrefix("\""), desiredRawValue.hasSuffix("\"") else {
             return desiredRawValue
         }
-        let value = parseScalar(desiredRawValue)
+        let value = NativeFrontmatterDocument.scalarValue(from: desiredRawValue)
         if existing.hasPrefix("'") && existing.hasSuffix("'") {
             return "'\(value.replacingOccurrences(of: "'", with: "''"))'"
         }
@@ -928,7 +846,9 @@ enum MarkdownArticleSource {
         guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
               line.first?.isWhitespace != true,
               let colon = line.firstIndex(of: ":") else { return nil }
-        let key = parseScalar(String(line[..<colon]).trimmingCharacters(in: .whitespaces))
+        let key = NativeFrontmatterDocument.scalarValue(
+            from: String(line[..<colon]).trimmingCharacters(in: .whitespaces)
+        )
         return NativeArticleProperties.isValidKey(key) ? key : nil
     }
 
@@ -949,37 +869,9 @@ enum MarkdownArticleSource {
 
     private static func decodedMedia(_ value: String?) -> [NativeMedia] {
         guard let value,
-              let data = parseScalar(value).data(using: .utf8),
+              let data = NativeFrontmatterDocument.scalarValue(from: value).data(using: .utf8),
               let media = try? JSONDecoder().decode([NativeMedia].self, from: data) else { return [] }
         return media
-    }
-
-    private static func parseScalar(_ raw: String) -> String {
-        let value = stripComment(raw).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard value.count >= 2 else { return value }
-        if value.hasPrefix("\"") && value.hasSuffix("\"") {
-            return (try? JSONDecoder().decode(String.self, from: Data(value.utf8)))
-                ?? String(value.dropFirst().dropLast())
-        }
-        if value.hasPrefix("'") && value.hasSuffix("'") {
-            return String(value.dropFirst().dropLast()).replacingOccurrences(of: "''", with: "'")
-        }
-        return value
-    }
-
-    private static func stripComment(_ value: String) -> String {
-        var quote: Character?
-        var previous: Character?
-        for index in value.indices {
-            let character = value[index]
-            if character == "\"" || character == "'" {
-                if quote == character { quote = nil } else if quote == nil { quote = character }
-            } else if character == "#", quote == nil, previous?.isWhitespace == true {
-                return String(value[..<index])
-            }
-            previous = character
-        }
-        return value
     }
 
     private static func generatedExcerpt(from body: String) -> String {

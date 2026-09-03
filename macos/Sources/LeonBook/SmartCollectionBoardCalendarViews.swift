@@ -37,13 +37,13 @@ struct SmartCollectionBoardView: View {
                             onChangeGroupBy(field)
                         } label: {
                             Label(
-                                field.label,
+                                LocalizedStringKey(field.label),
                                 systemImage: effectiveGroupBy == field ? "checkmark" : "rectangle.3.group"
                             )
                         }
                     }
                 } label: {
-                    Label(effectiveGroupBy.label, systemImage: "rectangle.3.group")
+                    Label(LocalizedStringKey(effectiveGroupBy.label), systemImage: "rectangle.3.group")
                 }
                 Text("分组；拖动卡片即可修改对应字段。")
                     .foregroundStyle(.secondary)
@@ -256,7 +256,15 @@ struct SmartCollectionCalendarView: View {
                             }
                         }
                     } label: {
-                        Label(datePropertyKey ?? "更新时间", systemImage: "calendar.badge.clock")
+                        Label {
+                            if let datePropertyKey {
+                                Text(datePropertyKey)
+                            } else {
+                                Text("更新时间")
+                            }
+                        } icon: {
+                            Image(systemName: "calendar.badge.clock")
+                        }
                     }
                     .help("选择日历使用的日期属性")
                 }

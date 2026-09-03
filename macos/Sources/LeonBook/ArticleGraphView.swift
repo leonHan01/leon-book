@@ -18,6 +18,18 @@ struct ArticleGraphView: View {
 
     private var graph: NativeArticleGraph { projection.graph }
 
+    private var highlightedPath: NativeArticleGraphPath? {
+        guard let sourceSlug = pageState.pathStartSlug,
+              let destinationSlug = pageState.pathDestinationSlug else {
+            return nil
+        }
+        return NativeArticleGraphPathFinder.shortestPath(
+            in: graph,
+            from: sourceSlug,
+            to: destinationSlug
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
@@ -30,14 +42,14 @@ struct ArticleGraphView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(graphSummary)
+                    graphSummary
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     Button {
                         model.bookmarkGraph()
                     } label: {
                         Label(
-                            model.isBookmarked(.graph) ? "取消收藏" : "收藏图谱",
+                            LocalizedStringKey(model.isBookmarked(.graph) ? "取消收藏" : "收藏图谱"),
                             systemImage: model.isBookmarked(.graph) ? "bookmark.fill" : "bookmark"
                         )
                     }
@@ -50,7 +62,7 @@ struct ArticleGraphView: View {
 
                     Picker("状态", selection: $pageState.statusFilter) {
                         ForEach(NativeArticleGraphStatusFilter.allCases) { status in
-                            Text(status.title).tag(status)
+                            Text(LocalizedStringKey(status.title)).tag(status)
                         }
                     }
                     .pickerStyle(.menu)
@@ -89,6 +101,53 @@ struct ArticleGraphView: View {
                         .buttonStyle(.borderless)
                 }
                 .controlSize(.small)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Label("最短路径", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                            .font(.callout.weight(.medium))
+
+                        TextField("起始节点（标题、slug 或别名）", text: pathStartText)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(minWidth: 180, idealWidth: 230, maxWidth: 280)
+
+                        Image(systemName: "arrow.right")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+
+                        TextField("目的节点（标题、slug 或别名）", text: pathDestinationText)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(minWidth: 180, idealWidth: 230, maxWidth: 280)
+
+                        Button("查找路径", action: findShortestPath)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(
+                                pageState.pathStartText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    || pageState.pathDestinationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            )
+                            .keyboardShortcut(.return, modifiers: [])
+
+                        if pageState.pathFeedback != nil {
+                            Button("清除", action: clearPathSearch)
+                                .buttonStyle(.borderless)
+                        }
+
+                        Spacer(minLength: 8)
+                    }
+                    .controlSize(.small)
+
+                    if let feedback = pageState.pathFeedback {
+                        Text(feedback)
+                            .font(.caption)
+                            .foregroundStyle(highlightedPath == nil ? Color.orange : Color.secondary)
+                            .lineLimit(2)
+                            .accessibilityLabel(feedback)
+                    } else {
+                        Text("在当前可见图谱中沿箭头方向查找，支持唯一的部分匹配。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .padding(22)
 
@@ -115,6 +174,7 @@ struct ArticleGraphView: View {
                     ArticleGraphCanvas(
                         graph: graph,
                         manualPositions: $pageState.nodePositions,
+                        highlightedPath: highlightedPath,
                         onOpenArticle: model.openArticleLink
                     )
                         .frame(
@@ -132,18 +192,134 @@ struct ArticleGraphView: View {
                 .background(Color(nsColor: .windowBackgroundColor))
             }
         }
+        .onChange(of: graph) { _ in
+            pageState.clearPathResult()
+        }
     }
 
-    private var graphSummary: String {
-        var value = "\(graph.nodes.count) / \(projection.matchingNodeCount) 篇 · \(graph.edges.count) 条引用"
-        if projection.isClipped { value += " · 已裁剪 \(projection.clippedNodeCount) 篇" }
+    private var graphSummary: Text {
+        var value = Text("\(graph.nodes.count) / \(projection.matchingNodeCount) 篇 · \(graph.edges.count) 条引用")
+        if projection.isClipped {
+            value = value + Text(" · 已裁剪 \(projection.clippedNodeCount) 篇")
+        }
         return value
+    }
+
+    private var pathStartText: Binding<String> {
+        Binding(
+            get: { pageState.pathStartText },
+            set: {
+                pageState.pathStartText = $0
+                pageState.clearPathResult()
+            }
+        )
+    }
+
+    private var pathDestinationText: Binding<String> {
+        Binding(
+            get: { pageState.pathDestinationText },
+            set: {
+                pageState.pathDestinationText = $0
+                pageState.clearPathResult()
+            }
+        )
+    }
+
+    private func findShortestPath() {
+        let sourceMatches = matchingArticles(for: pageState.pathStartText)
+        guard let source = uniqueArticle(
+            from: sourceMatches,
+            role: "起始",
+            query: pageState.pathStartText
+        ) else { return }
+
+        let destinationMatches = matchingArticles(for: pageState.pathDestinationText)
+        guard let destination = uniqueArticle(
+            from: destinationMatches,
+            role: "目的",
+            query: pageState.pathDestinationText
+        ) else { return }
+
+        guard let path = NativeArticleGraphPathFinder.shortestPath(
+            in: graph,
+            from: source.slug,
+            to: destination.slug
+        ) else {
+            pageState.showPathError("当前可见图谱中不存在从“\(source.title)”到“\(destination.title)”的有向路径。")
+            return
+        }
+
+        let route = compactPathDescription(path.nodes.map(\.title))
+        pageState.showPath(
+            from: source.slug,
+            to: destination.slug,
+            feedback: "最短路径：\(route) · \(path.hopCount) 跳"
+        )
+    }
+
+    private func matchingArticles(for query: String) -> [NativeArticleSummary] {
+        let normalizedQuery = normalizedNodeQuery(query)
+        guard !normalizedQuery.isEmpty else { return [] }
+
+        if let slugMatch = graph.nodes.first(where: {
+            normalizedNodeQuery($0.slug) == normalizedQuery
+        }) {
+            return [slugMatch]
+        }
+
+        let exactNameMatches = graph.nodes.filter { article in
+            normalizedNodeQuery(article.title) == normalizedQuery
+                || article.aliases.contains { normalizedNodeQuery($0) == normalizedQuery }
+        }
+        if !exactNameMatches.isEmpty { return exactNameMatches }
+
+        return graph.nodes.filter { article in
+            ([article.title, article.slug] + article.aliases)
+                .map(normalizedNodeQuery)
+                .contains { $0.contains(normalizedQuery) }
+        }
+        .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    private func uniqueArticle(
+        from matches: [NativeArticleSummary],
+        role: String,
+        query: String
+    ) -> NativeArticleSummary? {
+        guard !matches.isEmpty else {
+            pageState.showPathError("当前可见图谱中找不到\(role)节点“\(query.trimmingCharacters(in: .whitespacesAndNewlines))”。")
+            return nil
+        }
+        guard matches.count == 1 else {
+            let examples = matches.prefix(3).map { "\($0.title)（\($0.slug)）" }.joined(separator: "、")
+            pageState.showPathError("\(role)节点匹配到多个结果：\(examples)。请改用准确的 slug。")
+            return nil
+        }
+        return matches[0]
+    }
+
+    private func normalizedNodeQuery(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased(with: .current)
+    }
+
+    private func compactPathDescription(_ titles: [String]) -> String {
+        guard titles.count > 7 else { return titles.joined(separator: " → ") }
+        return (Array(titles.prefix(4)) + ["…"] + Array(titles.suffix(2))).joined(separator: " → ")
+    }
+
+    private func clearPathSearch() {
+        pageState.pathStartText = ""
+        pageState.pathDestinationText = ""
+        pageState.clearPathResult()
     }
 }
 
 private struct ArticleGraphCanvas: View {
     let graph: NativeArticleGraph
     @Binding var manualPositions: [String: CGPoint]
+    let highlightedPath: NativeArticleGraphPath?
     let onOpenArticle: (String) -> Void
     @State private var dragOrigins: [String: CGPoint] = [:]
     @State private var suppressOpenSlugs: Set<String> = []
@@ -157,21 +333,41 @@ private struct ArticleGraphCanvas: View {
                 in: proxy.size,
                 manualPositions: manualPositions
             )
+            let highlightedEdges = Set(highlightedPath?.edges ?? [])
+            let highlightedNodeSlugs = Set(highlightedPath?.nodes.map(\.slug) ?? [])
+            let hasHighlightedPath = highlightedPath != nil
 
             ZStack {
                 Canvas { context, _ in
-                    for edge in graph.edges {
+                    for edge in graph.edges where !highlightedEdges.contains(edge) {
                         guard let source = positions[edge.sourceSlug],
                               let target = positions[edge.targetSlug] else {
                             continue
                         }
-                        draw(edge: edge, from: source, to: target, in: &context)
+                        draw(
+                            edge: edge,
+                            from: source,
+                            to: target,
+                            style: hasHighlightedPath ? .dimmed : .standard,
+                            in: &context
+                        )
+                    }
+                    for edge in graph.edges where highlightedEdges.contains(edge) {
+                        guard let source = positions[edge.sourceSlug],
+                              let target = positions[edge.targetSlug] else {
+                            continue
+                        }
+                        draw(edge: edge, from: source, to: target, style: .highlighted, in: &context)
                     }
                 }
 
                 ForEach(graph.nodes) { article in
                     if let position = positions[article.slug] {
-                        ArticleGraphNode(article: article) {
+                        ArticleGraphNode(
+                            article: article,
+                            pathRole: pathRole(for: article.slug),
+                            isDimmed: hasHighlightedPath && !highlightedNodeSlugs.contains(article.slug)
+                        ) {
                             guard !suppressOpenSlugs.contains(article.slug) else { return }
                             onOpenArticle(article.slug)
                         }
@@ -220,15 +416,33 @@ private struct ArticleGraphCanvas: View {
             }
     }
 
-    private func draw(edge: NativeArticleGraphEdge, from source: CGPoint, to target: CGPoint, in context: inout GraphicsContext) {
-        let lineColor = Color.secondary.opacity(0.56)
+    private func draw(
+        edge: NativeArticleGraphEdge,
+        from source: CGPoint,
+        to target: CGPoint,
+        style: ArticleGraphEdgeStyle,
+        in context: inout GraphicsContext
+    ) {
+        let lineColor: Color
+        let lineWidth: CGFloat
+        switch style {
+        case .standard:
+            lineColor = Color.secondary.opacity(0.56)
+            lineWidth = 1.3
+        case .dimmed:
+            lineColor = Color.secondary.opacity(0.16)
+            lineWidth = 1
+        case .highlighted:
+            lineColor = Color.accentColor.opacity(0.95)
+            lineWidth = 3
+        }
         guard edge.sourceSlug != edge.targetSlug else {
             let loopCenter = CGPoint(
                 x: source.x + ArticleGraphLayout.nodeSize.width * 0.33,
                 y: source.y - ArticleGraphLayout.nodeSize.height * 0.42
             )
             let loopRect = CGRect(x: loopCenter.x - 17, y: loopCenter.y - 17, width: 34, height: 34)
-            context.stroke(Path(ellipseIn: loopRect), with: .color(lineColor), lineWidth: 1.3)
+            context.stroke(Path(ellipseIn: loopRect), with: .color(lineColor), lineWidth: lineWidth)
             return
         }
 
@@ -245,7 +459,7 @@ private struct ArticleGraphCanvas: View {
         var line = Path()
         line.move(to: start)
         line.addLine(to: end)
-        context.stroke(line, with: .color(lineColor), lineWidth: 1.3)
+        context.stroke(line, with: .color(lineColor), lineWidth: lineWidth)
 
         let arrowLength: CGFloat = 8
         let arrowHalfWidth: CGFloat = 4
@@ -264,10 +478,56 @@ private struct ArticleGraphCanvas: View {
         arrow.closeSubpath()
         context.fill(arrow, with: .color(lineColor))
     }
+
+    private func pathRole(for slug: String) -> ArticleGraphPathNodeRole? {
+        guard let path = highlightedPath,
+              let first = path.nodes.first?.slug,
+              let last = path.nodes.last?.slug,
+              path.nodes.contains(where: { $0.slug == slug }) else {
+            return nil
+        }
+        if slug == first && slug == last { return .startAndDestination }
+        if slug == first { return .start }
+        if slug == last { return .destination }
+        return .waypoint
+    }
+}
+
+private enum ArticleGraphEdgeStyle {
+    case standard
+    case dimmed
+    case highlighted
+}
+
+private enum ArticleGraphPathNodeRole {
+    case start
+    case waypoint
+    case destination
+    case startAndDestination
+
+    var label: String {
+        switch self {
+        case .start: return "起点"
+        case .waypoint: return "路径节点"
+        case .destination: return "终点"
+        case .startAndDestination: return "起点与终点"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .start: return .green
+        case .waypoint: return .accentColor
+        case .destination: return .pink
+        case .startAndDestination: return .purple
+        }
+    }
 }
 
 private struct ArticleGraphNode: View {
     let article: NativeArticleSummary
+    let pathRole: ArticleGraphPathNodeRole?
+    let isDimmed: Bool
     let onOpen: () -> Void
 
     var body: some View {
@@ -277,9 +537,9 @@ private struct ArticleGraphNode: View {
                     .font(.callout.weight(.semibold))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(article.status.label)
+                Text(LocalizedStringKey(pathRole?.label ?? article.status.label))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(pathRole?.color ?? Color.secondary)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -287,16 +547,23 @@ private struct ArticleGraphNode: View {
             .background(nodeBackground, in: RoundedRectangle(cornerRadius: 10))
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(article.status == .published ? Color.accentColor.opacity(0.38) : Color.orange.opacity(0.48))
+                    .strokeBorder(nodeBorder, lineWidth: pathRole == nil ? 1 : 2.5)
             }
         }
         .buttonStyle(.plain)
+        .opacity(isDimmed ? 0.42 : 1)
         .help("拖动调整位置；单击打开：\(article.title)")
-        .accessibilityLabel("打开文章：\(article.title)，\(article.status.label)")
+        .accessibilityLabel("打开文章：\(article.title)，\(NativeLocalization.string(article.status.label, language: NativeLocalization.currentLanguage))")
     }
 
     private var nodeBackground: Color {
-        article.status == .published ? Color.accentColor.opacity(0.12) : Color.orange.opacity(0.12)
+        if let pathRole { return pathRole.color.opacity(0.18) }
+        return article.status == .published ? Color.accentColor.opacity(0.12) : Color.orange.opacity(0.12)
+    }
+
+    private var nodeBorder: Color {
+        if let pathRole { return pathRole.color.opacity(0.9) }
+        return article.status == .published ? Color.accentColor.opacity(0.38) : Color.orange.opacity(0.48)
     }
 }
 

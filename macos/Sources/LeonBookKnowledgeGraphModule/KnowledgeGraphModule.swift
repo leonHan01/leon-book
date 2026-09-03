@@ -71,6 +71,84 @@ public struct FirstPartyGraphProjection: Equatable, Sendable {
     }
 }
 
+public struct FirstPartyGraphPath: Equatable, Sendable {
+    public let nodeIDs: [String]
+
+    public var hopCount: Int {
+        max(0, nodeIDs.count - 1)
+    }
+
+    public var edges: [FirstPartyGraphEdge] {
+        zip(nodeIDs, nodeIDs.dropFirst()).map {
+            FirstPartyGraphEdge(sourceID: $0.0, targetID: $0.1)
+        }
+    }
+
+    public init(nodeIDs: [String]) {
+        self.nodeIDs = nodeIDs
+    }
+}
+
+/// Finds the shortest authored route through directed article references.
+/// A breadth-first traversal guarantees the fewest number of reference hops.
+public enum FirstPartyKnowledgeGraphPathFinder {
+    public static func shortestPath(
+        from sourceID: String,
+        to targetID: String,
+        nodes: [FirstPartyGraphNode],
+        edges: [FirstPartyGraphEdge]
+    ) -> FirstPartyGraphPath? {
+        let nodeIDs = Set(nodes.map(\.id))
+        guard nodeIDs.contains(sourceID), nodeIDs.contains(targetID) else { return nil }
+        guard sourceID != targetID else { return FirstPartyGraphPath(nodeIDs: [sourceID]) }
+
+        var adjacency: [String: Set<String>] = [:]
+        for edge in edges where nodeIDs.contains(edge.sourceID) && nodeIDs.contains(edge.targetID) {
+            adjacency[edge.sourceID, default: []].insert(edge.targetID)
+        }
+
+        var queue = [sourceID]
+        var nextIndex = 0
+        var visited: Set<String> = [sourceID]
+        var predecessor: [String: String] = [:]
+
+        while nextIndex < queue.count {
+            let current = queue[nextIndex]
+            nextIndex += 1
+
+            for neighbor in (adjacency[current] ?? []).sorted() where visited.insert(neighbor).inserted {
+                predecessor[neighbor] = current
+                if neighbor == targetID {
+                    return FirstPartyGraphPath(
+                        nodeIDs: reconstructedPath(
+                            from: sourceID,
+                            to: targetID,
+                            predecessor: predecessor
+                        )
+                    )
+                }
+                queue.append(neighbor)
+            }
+        }
+
+        return nil
+    }
+
+    private static func reconstructedPath(
+        from sourceID: String,
+        to targetID: String,
+        predecessor: [String: String]
+    ) -> [String] {
+        var reversedPath = [targetID]
+        var current = targetID
+        while current != sourceID, let previous = predecessor[current] {
+            reversedPath.append(previous)
+            current = previous
+        }
+        return Array(reversedPath.reversed())
+    }
+}
+
 /// A storage-agnostic graph projection engine. SQLite/domain models are only
 /// adapted at the LeonBook boundary.
 public enum FirstPartyKnowledgeGraphProjector {

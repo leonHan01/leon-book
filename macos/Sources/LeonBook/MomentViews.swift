@@ -77,11 +77,13 @@ struct MomentFeedView: View {
                     HStack(alignment: .center, spacing: 10) {
                         Text("历史微博")
                             .font(.title2.weight(.bold))
-                        Text(
-                            !model.isFilteringMoments
-                                ? "\(model.totalMomentCount) 条"
-                                : "已加载 \(model.moments.count) / \(model.filteredMomentCount) 条"
-                        )
+                        Group {
+                            if model.isFilteringMoments {
+                                Text("已加载 \(model.moments.count) / \(model.filteredMomentCount) 条")
+                            } else {
+                                Text("\(model.totalMomentCount) 条")
+                            }
+                        }
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
 
@@ -123,7 +125,7 @@ struct MomentFeedView: View {
                             Label(LocalizedStringKey(momentFeedLayout.title), systemImage: momentFeedLayout.systemImage)
                         }
                         .help("切换微博的单列或多列瀑布流布局")
-                        .accessibilityLabel("微博布局：\(momentFeedLayout.title)")
+                        .accessibilityLabel("微博布局：\(NativeLocalization.string(momentFeedLayout.title, language: NativeLocalization.currentLanguage))")
 
                         Menu {
                             Button {
@@ -194,7 +196,7 @@ struct MomentFeedView: View {
                             model.toggleFavoriteMomentFilter()
                         } label: {
                             Label(
-                                model.showsOnlyFavoriteMoments ? "已筛选收藏" : "仅看收藏",
+                                LocalizedStringKey(model.showsOnlyFavoriteMoments ? "已筛选收藏" : "仅看收藏"),
                                 systemImage: model.showsOnlyFavoriteMoments ? "heart.fill" : "heart"
                             )
                         }
@@ -244,7 +246,7 @@ struct MomentFeedView: View {
                                         .buttonStyle(.plain)
                                         .help("筛选标签 #\(tagFilter.tag)：\(tagFilter.count) 条微博")
                                         .accessibilityLabel("标签 #\(tagFilter.tag)，\(tagFilter.count) 条微博")
-                                        .accessibilityValue(isSelected ? "已选中" : "未选中")
+                                        .accessibilityValue(Text(LocalizedStringKey(isSelected ? "已选中" : "未选中")))
                                     }
                                 }
                             }
@@ -270,11 +272,13 @@ struct MomentFeedView: View {
                                 .background(MomentVisualStyle.accent.opacity(0.1), in: Circle())
                             Text(LocalizedStringKey(model.isFilteringMoments ? "没有符合筛选条件的微博" : "还没有微博"))
                                 .font(.headline)
-                            Text(
-                                !model.isFilteringMoments
-                                    ? "发布第一条图文动态，它会显示在这里。"
-                                    : "可清空搜索关键词或标签筛选后重试。"
-                            )
+                            Group {
+                                if model.isFilteringMoments {
+                                    Text("可清空搜索关键词或标签筛选后重试。")
+                                } else {
+                                    Text("发布第一条图文动态，它会显示在这里。")
+                                }
+                            }
                             .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, minHeight: 280)
@@ -286,7 +290,7 @@ struct MomentFeedView: View {
                                         toggleTimelineDay(group.id)
                                     } label: {
                                         HStack(spacing: 10) {
-                                            Text(group.label)
+                                            Text(timelineLabel(group))
                                                 .font(.headline)
 
                                             Text("\(group.moments.count)")
@@ -309,8 +313,8 @@ struct MomentFeedView: View {
                                         .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
-                                    .help(pageState.collapsedTimelineDays.contains(group.id) ? "展开 \(group.label) 的微博" : "折叠 \(group.label) 的微博")
-                                    .accessibilityLabel(pageState.collapsedTimelineDays.contains(group.id) ? "展开 \(group.label) 的微博" : "折叠 \(group.label) 的微博")
+                                    .help(pageState.collapsedTimelineDays.contains(group.id) ? Text("展开 \(timelineLabel(group)) 的微博") : Text("折叠 \(timelineLabel(group)) 的微博"))
+                                    .accessibilityLabel(pageState.collapsedTimelineDays.contains(group.id) ? Text("展开 \(timelineLabel(group)) 的微博") : Text("折叠 \(timelineLabel(group)) 的微博"))
 
                                     if pageState.collapsedTimelineDays.contains(group.id) {
                                         Text("已折叠 \(group.moments.count) 条内容")
@@ -411,6 +415,24 @@ struct MomentFeedView: View {
         case let .year(year):
             return yearLabel(year)
         }
+    }
+
+    private func timelineLabel(_ group: NativeMomentTimelineGroup) -> String {
+        let language: NativeAppLanguage = locale.identifier.lowercased().hasPrefix("en")
+            ? .english
+            : .simplifiedChinese
+        if ["今天", "昨天", "未知日期"].contains(group.label) {
+            return NativeLocalization.string(group.label, language: language)
+        }
+
+        let components = group.id.split(separator: "-").compactMap { Int($0) }
+        guard components.count == 3,
+              let date = Calendar(identifier: .gregorian).date(from: DateComponents(
+                year: components[0],
+                month: components[1],
+                day: components[2]
+              )) else { return group.label }
+        return date.formatted(.dateTime.year().month(.wide).day().locale(locale))
     }
 
     @ViewBuilder
@@ -537,8 +559,8 @@ private struct MomentComposerSection: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(isEditing ? "编辑微博" : "发布微博")
-            .accessibilityValue(isExpanded ? "已展开" : "已折叠")
+            .accessibilityLabel(LocalizedStringKey(isEditing ? "编辑微博" : "发布微博"))
+            .accessibilityValue(Text(LocalizedStringKey(isExpanded ? "已展开" : "已折叠")))
 
             if isExpanded {
                 Divider()
@@ -703,8 +725,8 @@ private struct MomentComposerView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .padding(6)
-                                .help(media.isVideo ? "移除视频" : "移除图片")
-                                .accessibilityLabel("移除\(media.isVideo ? "视频" : "图片") \(media.name)")
+                                .help(Text(LocalizedStringKey(media.isVideo ? "移除视频" : "移除图片")))
+                                .accessibilityLabel(media.isVideo ? Text("移除视频 \(media.name)") : Text("移除图片 \(media.name)"))
                             }
                         }
                     }
@@ -752,9 +774,11 @@ private struct MomentComposerView: View {
                     model.publishMoment()
                 } label: {
                     Label(
-                        model.isPublishingMoment
-                            ? "正在保存…"
-                            : model.editingMomentID == nil ? "发布" : "保存修改",
+                        LocalizedStringKey(
+                            model.isPublishingMoment
+                                ? "正在保存…"
+                                : model.editingMomentID == nil ? "发布" : "保存修改"
+                        ),
                         systemImage: model.editingMomentID == nil ? "paperplane.fill" : "checkmark"
                     )
                 }
@@ -776,7 +800,7 @@ private struct MomentTagSuggestionMenu: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Label(
-                    query.isEmpty ? "选择已有标签" : "匹配的标签",
+                    LocalizedStringKey(query.isEmpty ? "选择已有标签" : "匹配的标签"),
                     systemImage: "number.circle"
                 )
                 .font(.caption.weight(.medium))
@@ -881,8 +905,8 @@ private struct MomentCard: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .help(moment.isFavorite ? "取消收藏这条微博" : "收藏这条微博")
-                .accessibilityLabel(moment.isFavorite ? "取消收藏这条微博" : "收藏这条微博")
+                .help(Text(LocalizedStringKey(moment.isFavorite ? "取消收藏这条微博" : "收藏这条微博")))
+                .accessibilityLabel(LocalizedStringKey(moment.isFavorite ? "取消收藏这条微博" : "收藏这条微博"))
 
                 Menu {
                     Button(action: onEdit) {
@@ -890,7 +914,7 @@ private struct MomentCard: View {
                     }
                     Button(action: onToggleFavorite) {
                         Label(
-                            moment.isFavorite ? "取消收藏" : "收藏微博",
+                            LocalizedStringKey(moment.isFavorite ? "取消收藏" : "收藏微博"),
                             systemImage: moment.isFavorite ? "heart.slash" : "heart"
                         )
                     }
@@ -966,7 +990,7 @@ private struct MomentCard: View {
         .accessibilityElement(children: videos.isEmpty ? .ignore : .contain)
         .accessibilityLabel(accessibilitySummary(text: displayContent.text, dateLabel: dateLabel))
         .accessibilityHint("可执行收藏、编辑、删除、筛选标签和查看媒体操作")
-        .accessibilityAction(named: Text(moment.isFavorite ? "取消收藏" : "收藏")) {
+        .accessibilityAction(named: Text(LocalizedStringKey(moment.isFavorite ? "取消收藏" : "收藏"))) {
             onToggleFavorite()
         }
         .accessibilityAction(named: Text("编辑")) {
@@ -1131,7 +1155,7 @@ private struct MomentImageGrid: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(images.count == 1 ? "1 张图片" : "\(images.count) 张图片")
+        .accessibilityLabel(images.count == 1 ? Text("1 张图片") : Text("\(images.count) 张图片"))
         .accessibilityHint("打开图片浏览器，可在浏览器中逐张查看")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onOpenImage(0) }
@@ -1332,7 +1356,13 @@ private struct MomentInlineVideoPlayer: View {
                     Image(systemName: "play.circle.fill")
                         .font(.system(size: 46))
                         .symbolRenderingMode(.hierarchical)
-                    Text(playback.resumeLabel ?? "点击播放")
+                    Group {
+                        if let resumeLabel = playback.resumeLabel {
+                            Text(resumeLabel)
+                        } else {
+                            Text("点击播放")
+                        }
+                    }
                         .font(.callout.weight(.semibold))
                 }
                 .foregroundStyle(.white)
@@ -1511,7 +1541,7 @@ private struct MomentImmersiveBrowserView: View {
                 )
                 .frame(maxWidth: 420)
                 .accessibilityLabel("沉浸浏览进度")
-                .accessibilityValue(moments.isEmpty ? "没有微博" : "第 \(selectedIndex + 1) 页，共 \(totalMomentCount) 页")
+                .accessibilityValue(moments.isEmpty ? Text("没有微博") : Text("第 \(selectedIndex + 1) 页，共 \(totalMomentCount) 页"))
 
                 Button {
                     showNextMoment()

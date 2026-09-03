@@ -216,7 +216,7 @@ private struct NativeWorkspaceResourceBranch: View {
         let resources = contextualResources(for: resource)
 
         if resource.canContainPages {
-            Button(resource.kind == .article ? "新建子页面" : "新建页面") {
+            Button(LocalizedStringKey(resource.kind == .article ? "新建子页面" : "新建页面")) {
                 model.newArticle(inFolder: resource.pageContainerPath)
             }
             .disabled(model.isMarkdownSourceReadOnly)
@@ -238,7 +238,7 @@ private struct NativeWorkspaceResourceBranch: View {
             Button("重命名…") { model.promptToRenameWorkspaceResource(resource) }
         }
         if resources.contains(where: { $0.canMutateSource }) {
-            Button(resources.count > 1 ? "移动所选项目…" : "移动…") {
+            Button(LocalizedStringKey(resources.count > 1 ? "移动所选项目…" : "移动…")) {
                 model.promptToMoveWorkspaceResources(resources)
             }
         }
@@ -246,7 +246,7 @@ private struct NativeWorkspaceResourceBranch: View {
             .disabled(resource.absolutePath.isEmpty)
         if resources.contains(where: { $0.canMutateSource }) {
             Divider()
-            Button(resources.count > 1 ? "将所选项目移到废纸篓" : "移到废纸篓", role: .destructive) {
+            Button(LocalizedStringKey(resources.count > 1 ? "将所选项目移到废纸篓" : "移到废纸篓"), role: .destructive) {
                 model.promptToTrashWorkspaceResources(resources)
             }
         }

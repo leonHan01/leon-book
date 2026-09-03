@@ -249,9 +249,7 @@ enum NativeSmartCollectionSQLCompiler {
     }
 
     private static func normalizedIdentity(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
+        NativeSmartCollectionSemantics.normalizedText(value)
     }
 
     private static func sortExpression(
@@ -270,14 +268,6 @@ enum NativeSmartCollectionSQLCompiler {
     }
 
     private static func normalizedTimestamp(_ source: String) -> String? {
-        let value = source.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let date = NativeTimestamp.date(from: value) {
-            return NativeTimestamp.string(from: date)
-        }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: value).map(NativeTimestamp.string(from:))
+        NativeSmartCollectionSemantics.date(from: source).map(NativeTimestamp.string(from:))
     }
 }

@@ -4,6 +4,7 @@ import PackageDescription
 
 let package = Package(
     name: "LeonBookMac",
+    defaultLocalization: "zh-Hans",
     platforms: [
         .macOS(.v13),
     ],
@@ -60,7 +61,10 @@ let package = Package(
                 "LeonBookBackupModule",
                 "LeonBookCaptureModule",
             ],
-            path: "Sources/LeonBook"
+            path: "Sources/LeonBook",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .executableTarget(
             name: "LeonBookApp",

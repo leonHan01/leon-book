@@ -41,6 +41,8 @@ if let packageManifest = try? String(
 
 expect(FileManager.default.fileExists(atPath: sourcePath("ContentView.swift")), "native SwiftUI content view should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore.swift")), "native local store should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore+Configuration.swift")), "store configuration should be split from the core store")
+expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore+SQLFragments.swift")), "shared SQLite fragments should be split from the core store")
 expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore+SearchGraph.swift")), "search and graph SQLite adapters should be split from the core store")
 expect(FileManager.default.fileExists(atPath: sourcePath("LocalBlogStore+Schema.swift")), "SQLite schema should be split from the core store")
 expect(FileManager.default.fileExists(atPath: sourcePath("FirstPartyModules.swift")), "first-party module runtime adapter should exist")
@@ -56,9 +58,12 @@ expect(FileManager.default.fileExists(atPath: sourcePath("SQLiteDatabase.swift")
 expect(FileManager.default.fileExists(atPath: moduleSourcePath("LeonBookBackupModule", "LocalBackupManager.swift")), "backup engine should live in its feature target")
 expect(FileManager.default.fileExists(atPath: sourcePath("MarkdownRenderer.swift")), "native Markdown renderer should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("MarkdownSourceEventMonitor.swift")), "Markdown filesystem event monitor should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("NativeFrontmatterDocument.swift")), "Markdown frontmatter semantics should be shared")
+expect(FileManager.default.fileExists(atPath: sourcePath("NativeMediaUpload.swift")), "media upload lifecycle should be centralized")
 expect(FileManager.default.fileExists(atPath: sourcePath("ObsidianVaultImporter.swift")), "Obsidian Vault importer should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionModels.swift")), "smart collection models should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionSQL.swift")), "smart collection SQL compiler should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionSemantics.swift")), "shared smart collection semantics should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionViews.swift")), "smart collection views should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionBoardCalendarViews.swift")), "board and calendar collection views should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticlePageHierarchy.swift")), "article page hierarchy should exist")
@@ -67,12 +72,16 @@ expect(FileManager.default.fileExists(atPath: sourcePath("ArticleLinkIdentityInd
 expect(FileManager.default.fileExists(atPath: sourcePath("AutomationRouting.swift")), "automation URL routing should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("WorkspaceLayouts.swift")), "saved workspace layouts should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticleEditorViews.swift")), "article editor views should be a separate module")
+expect(FileManager.default.fileExists(atPath: sourcePath("ArticleRevisionViews.swift")), "article revision views should be a separate module")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticleLinkAutocomplete.swift")), "article link autocomplete should be a separate module")
 expect(FileManager.default.fileExists(atPath: sourcePath("MarkdownRichEmbedViews.swift")), "rich Markdown embeds should be a separate module")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticleProperties.swift")), "typed article properties should be a separate module")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticleGraphProjection.swift")), "article graph projection module should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NavigationPageState.swift")), "lightweight navigation page state cache should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Article.swift")), "article app-model module should exist")
+expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+ArticleNavigation.swift")), "article navigation should be split from article mutations")
+expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+ArticleComments.swift")), "article comments should be split from article mutations")
+expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+SmartCollections.swift")), "smart collection model actions should be split from article mutations")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Backup.swift")), "backup app-model module should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Import.swift")), "import app-model module should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Search.swift")), "search app-model module should exist")
@@ -132,6 +141,7 @@ if let properties = try? String(contentsOfFile: sourcePath("ArticleProperties.sw
 
 if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift"), encoding: .utf8) {
     articleViews += (try? String(contentsOfFile: sourcePath("ArticleEditorViews.swift"), encoding: .utf8)) ?? ""
+    articleViews += (try? String(contentsOfFile: sourcePath("ArticleRevisionViews.swift"), encoding: .utf8)) ?? ""
     articleViews += (try? String(contentsOfFile: sourcePath("ArticleLinkAutocomplete.swift"), encoding: .utf8)) ?? ""
     articleViews += (try? String(contentsOfFile: sourcePath("MarkdownRichEmbedViews.swift"), encoding: .utf8)) ?? ""
     articleViews += (try? String(contentsOfFile: sourcePath("MarkdownRenderer.swift"), encoding: .utf8)) ?? ""
@@ -429,9 +439,12 @@ if let graphProjection = try? String(contentsOfFile: sourcePath("ArticleGraphPro
     expect(graphProjection.contains("nodeLimit"), "graph projection should clip nodes before rendering")
     expect(graphProjection.contains("FirstPartyKnowledgeGraphProjector.project"), "LeonBook should adapt graph records through the feature target")
     expect(graphModule.contains("degree[edge.sourceID"), "graph clipping should prioritize connected nodes inside the graph target")
+    expect(graphModule.contains("FirstPartyKnowledgeGraphPathFinder"), "shortest-path traversal should stay inside the graph target")
     expect(graphView.contains("Slider(value: $pageState.zoom"), "graph view should expose zoom control")
     expect(graphView.contains("筛选标题、slug、标签或别名"), "graph view should expose text filtering")
     expect(graphView.contains("显示孤立节点"), "graph view should expose orphan filtering")
+    expect(graphView.contains("DragGesture"), "graph nodes should remain draggable")
+    expect(graphView.contains("查找路径"), "graph view should expose shortest-path controls")
     expect(pageState.contains("NativeNavigationPageStateCache"), "inactive pages should retain only lightweight state")
     expect(!pageState.contains("recordedPageViewIDs"), "moment page state should not retain impression counters")
 } else {
@@ -502,6 +515,8 @@ if let infoPlist = try? String(contentsOfFile: resourcePath("Info.plist"), encod
 }
 
 if var localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8) {
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Configuration.swift"), encoding: .utf8)) ?? ""
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+SQLFragments.swift"), encoding: .utf8)) ?? ""
     localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+SearchGraph.swift"), encoding: .utf8)) ?? ""
     localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Schema.swift"), encoding: .utf8)) ?? ""
     localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Indexes.swift"), encoding: .utf8)) ?? ""
@@ -638,11 +653,15 @@ if let settingsView = try? String(contentsOfFile: sourcePath("NativeSettingsView
 if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift"), encoding: .utf8) {
     for module in [
         "NativeAppModel+Article.swift",
+        "NativeAppModel+ArticleNavigation.swift",
+        "NativeAppModel+ArticleComments.swift",
+        "NativeAppModel+SmartCollections.swift",
         "NativeAppModel+Backup.swift",
         "NativeAppModel+Import.swift",
         "NativeAppModel+Search.swift",
         "NativeAppModel+Workspace.swift",
         "NativeAppModelSupport.swift",
+        "NativeMediaUpload.swift",
     ] {
         appModel += (try? String(contentsOfFile: sourcePath(module), encoding: .utf8)) ?? ""
     }
@@ -655,7 +674,8 @@ if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
     expect(appModel.contains("func chooseMomentVideo()"), "NativeAppModel should choose MP4 moment videos")
     expect(appModel.contains("panel.allowedContentTypes = [.mpeg4Movie]"), "Moment video picker should only expose MP4 files")
     expect(appModel.contains("func uploadMomentPastedImages"), "NativeAppModel should save pasted and dropped moment images")
-    expect(appModel.contains("moment-image-\\(UUID().uuidString.lowercased()).png"), "moment paste temp files should interpolate a unique UUID")
+    expect(appModel.contains("temporaryNamePrefix: \"moment-image\""), "moment paste temp files should use a stable descriptive prefix")
+    expect(appModel.contains("UUID().uuidString.lowercased()"), "media temp files should interpolate a unique UUID")
     expect(appModel.contains("func publishMoment()"), "NativeAppModel should publish moments")
     expect(appModel.contains("func beginEditingMoment(_ moment: NativeMoment)"), "NativeAppModel should begin moment editing")
     expect(appModel.contains("func cancelMomentEditing()"), "NativeAppModel should cancel moment editing")
@@ -664,7 +684,7 @@ if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
     expect(appModel.contains("trashItems"), "NativeAppModel should publish recycle bin items")
     expect(appModel.contains("func restoreTrash"), "NativeAppModel should restore recycle bin items")
     expect(appModel.contains("func permanentlyDeleteTrash"), "NativeAppModel should permanently delete recycle bin items")
-    expect(appModel.contains("slug: \"moments\""), "Moment images should be stored in the moments media directory")
+    expect(appModel.contains("case .moments") && appModel.contains("return \"moments\""), "Moment images should use the typed moments media destination")
     expect(appModel.contains("func createUser(named name: String)"), "app model should create users")
     expect(appModel.contains("func selectUser(_ user: NativeUser)"), "app model should switch users")
     expect(appModel.contains("selectedMomentTags: Set<String>"), "Moment tag filters should support selecting multiple tags")

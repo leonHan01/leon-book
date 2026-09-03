@@ -419,6 +419,7 @@ struct ArticleEditorView: View {
     @ObservedObject private var editorSession: NativeEditorSessionState
     @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
     @ObservedObject var readingPreferences: NativeReadingPreferences
+    @Environment(\.locale) private var locale
     @StateObject private var articleLinkController = ArticleLinkAutocompleteController()
     @StateObject private var slashCommandController = EditorSlashCommandController()
     @StateObject private var documentAnalysis = EditorDocumentAnalysisModel()
@@ -541,7 +542,7 @@ struct ArticleEditorView: View {
             Image(systemName: "square.and.pencil")
                 .foregroundStyle(.tint)
 
-            Text(model.editor.status.label)
+            Text(LocalizedStringKey(model.editor.status.label))
                 .font(.caption.weight(.medium))
                 .foregroundStyle(model.editor.status == .published ? .green : .orange)
                 .padding(.horizontal, 8)
@@ -559,7 +560,7 @@ struct ArticleEditorView: View {
                     Image(systemName: "checkmark.circle")
                         .foregroundStyle(.secondary)
                 }
-                Text(model.editorAutosaveStatus)
+                editorAutosaveStatusText
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -581,12 +582,12 @@ struct ArticleEditorView: View {
                 workspaceLayout.isEditorSidebarVisible.toggle()
             } label: {
                 Label(
-                    workspaceLayout.isEditorSidebarVisible ? "隐藏右栏" : "显示右栏",
+                    LocalizedStringKey(workspaceLayout.isEditorSidebarVisible ? "隐藏右栏" : "显示右栏"),
                     systemImage: "sidebar.right"
                 )
             }
             .disabled(editorMode == .focus)
-            .help(editorMode == .focus ? "专注写作模式会隐藏右侧面板" : "显示或隐藏编辑右侧面板")
+            .help(Text(LocalizedStringKey(editorMode == .focus ? "专注写作模式会隐藏右侧面板" : "显示或隐藏编辑右侧面板")))
 
             Menu {
                 Section("编辑视图") {
@@ -600,7 +601,7 @@ struct ArticleEditorView: View {
                 Button {
                     model.executeCommand(.saveDraft)
                 } label: {
-                    Label(model.isSaving ? "保存中…" : "保存草稿", systemImage: "tray.and.arrow.down")
+                    Label(LocalizedStringKey(model.isSaving ? "保存中…" : "保存草稿"), systemImage: "tray.and.arrow.down")
                 }
                 .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
 
@@ -634,13 +635,13 @@ struct ArticleEditorView: View {
 
                 Menu {
                     Button("添加封面") {
-                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug, banner: true)
+                        model.chooseAndUpload(kind: .image, forArticle: model.editor.slug, banner: true)
                     }
                     Button("添加图片") {
-                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug)
+                        model.chooseAndUpload(kind: .image, forArticle: model.editor.slug)
                     }
                     Button("添加视频") {
-                        model.chooseAndUpload(kind: "video", forArticle: model.editor.slug)
+                        model.chooseAndUpload(kind: .video, forArticle: model.editor.slug)
                     }
                 } label: {
                     Label("添加素材", systemImage: "paperclip")
@@ -668,7 +669,7 @@ struct ArticleEditorView: View {
         Button {
             workspaceLayout.editorMode = mode
         } label: {
-            Label(mode.title, systemImage: editorMode == mode ? "checkmark" : mode.systemImage)
+            Label(LocalizedStringKey(mode.title), systemImage: editorMode == mode ? "checkmark" : mode.systemImage)
         }
         .keyboardShortcut(shortcut, modifiers: [.command, .option])
     }
@@ -709,7 +710,17 @@ struct ArticleEditorView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Label(editorMode == .blocks ? "正文" : "正文 · \(editorMode.title)", systemImage: "text.alignleft")
+                    Label {
+                        HStack(spacing: 0) {
+                            Text("正文")
+                            if editorMode != .blocks {
+                                Text(" · ")
+                                Text(LocalizedStringKey(editorMode.title))
+                            }
+                        }
+                    } icon: {
+                        Image(systemName: "text.alignleft")
+                    }
                         .font(.headline)
                     Spacer()
 
@@ -857,7 +868,7 @@ struct ArticleEditorView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Label(
-                    appearance == .livePreview ? "行内实时预览" : "Markdown 源码",
+                    LocalizedStringKey(appearance == .livePreview ? "行内实时预览" : "Markdown 源码"),
                     systemImage: appearance == .livePreview ? "textformat" : "pencil.line"
                 )
                     .font(.subheadline.weight(.medium))
@@ -941,14 +952,14 @@ struct ArticleEditorView: View {
                     Label("编辑面板", systemImage: "sidebar.right")
                         .font(.headline)
                     Spacer()
-                    Text(workspaceLayout.editorSidebarPane.title)
+                    Text(LocalizedStringKey(workspaceLayout.editorSidebarPane.title))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 Picker("编辑面板", selection: $workspaceLayout.editorSidebarPane) {
                     ForEach(NativeEditorSidebarPane.allCases) { pane in
-                        Label(pane.title, systemImage: pane.systemImage)
+                        Label(LocalizedStringKey(pane.title), systemImage: pane.systemImage)
                             .tag(pane)
                     }
                 }
@@ -987,7 +998,7 @@ struct ArticleEditorView: View {
                         .font(.title3)
                         .foregroundStyle(model.editor.status == .published ? .green : .orange)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(model.editor.status == .published ? "已发布" : "草稿")
+                        Text(LocalizedStringKey(model.editor.status == .published ? "已发布" : "草稿"))
                             .font(.subheadline.weight(.semibold))
                         if let updatedAt = model.editor.updatedAt {
                             Text("最近保存：\(updatedAt.nativeDateLabel)")
@@ -1055,7 +1066,7 @@ struct ArticleEditorView: View {
                     }
                 } else {
                     Button {
-                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug, banner: true)
+                        model.chooseAndUpload(kind: .image, forArticle: model.editor.slug, banner: true)
                     } label: {
                         VStack(spacing: 6) {
                             Image(systemName: "photo.badge.plus")
@@ -1079,7 +1090,7 @@ struct ArticleEditorView: View {
 
                 if model.editor.banner != nil {
                     Button("更换封面") {
-                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug, banner: true)
+                        model.chooseAndUpload(kind: .image, forArticle: model.editor.slug, banner: true)
                     }
                     .font(.caption)
                     .buttonStyle(.bordered)
@@ -1107,13 +1118,13 @@ struct ArticleEditorView: View {
 
                 HStack(spacing: 8) {
                     Button("图片") {
-                        model.chooseAndUpload(kind: "image", forArticle: model.editor.slug)
+                        model.chooseAndUpload(kind: .image, forArticle: model.editor.slug)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
 
                     Button("视频") {
-                        model.chooseAndUpload(kind: "video", forArticle: model.editor.slug)
+                        model.chooseAndUpload(kind: .video, forArticle: model.editor.slug)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -1139,6 +1150,28 @@ struct ArticleEditorView: View {
         }
     }
 
+    @ViewBuilder
+    private var editorAutosaveStatusText: some View {
+        let status = model.editorAutosaveStatus
+        if status.hasPrefix("已自动保存：") {
+            let detail = localizedAutosaveDate(String(status.dropFirst("已自动保存：".count)))
+            Text("已自动保存：\(detail)")
+        } else if status.hasPrefix("已恢复自动保存：") {
+            let detail = localizedAutosaveDate(String(status.dropFirst("已恢复自动保存：".count)))
+            Text("已恢复自动保存：\(detail)")
+        } else {
+            Text(LocalizedStringKey(status))
+        }
+    }
+
+    private func localizedAutosaveDate(_ value: String) -> String {
+        let chineseFormatter = DateFormatter()
+        chineseFormatter.locale = Locale(identifier: "zh-Hans")
+        chineseFormatter.dateFormat = "yyyy年M月d日"
+        guard let date = chineseFormatter.date(from: value) else { return value }
+        return date.formatted(.dateTime.year().month(.wide).day().locale(locale))
+    }
+
     private var editorPropertiesSidebar: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Properties")
@@ -1149,7 +1182,7 @@ struct ArticleEditorView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if !model.articlePropertyStatus.isEmpty {
-                Text(model.articlePropertyStatus)
+                Text(LocalizedStringKey(model.articlePropertyStatus))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1170,7 +1203,7 @@ struct ArticleEditorView: View {
                             .textFieldStyle(.roundedBorder)
                         Picker("类型", selection: $row.kind) {
                             ForEach(NativeArticlePropertyKind.allCases) { kind in
-                                Label(kind.label, systemImage: kind.systemImage).tag(kind)
+                                Label(LocalizedStringKey(kind.label), systemImage: kind.systemImage).tag(kind)
                             }
                         }
                         .labelsHidden()
@@ -1545,7 +1578,7 @@ private struct EditorSlashCommandMenu: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Label(query.isEmpty ? "插入内容" : "匹配的插入命令", systemImage: "command")
+                Label(LocalizedStringKey(query.isEmpty ? "插入内容" : "匹配的插入命令"), systemImage: "command")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1567,8 +1600,8 @@ private struct EditorSlashCommandMenu: View {
                             .frame(width: 20)
                             .foregroundStyle(.tint)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(command.title).font(.callout.weight(.medium))
-                            Text(command.detail)
+                            Text(LocalizedStringKey(command.title)).font(.callout.weight(.medium))
+                            Text(LocalizedStringKey(command.detail))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -1598,7 +1631,7 @@ private struct ArticleLinkSuggestionMenu: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Label(
-                    query.isEmpty ? "关联到文章" : "匹配的文章",
+                    LocalizedStringKey(query.isEmpty ? "关联到文章" : "匹配的文章"),
                     systemImage: "link"
                 )
                 .font(.caption.weight(.medium))
@@ -1657,11 +1690,11 @@ private struct ArticleLinkSuggestionMenu: View {
 }
 
 private struct EditorCard<Content: View>: View {
-    let title: String
+    let title: LocalizedStringKey
     let systemImage: String
     let content: Content
 
-    init(title: String, systemImage: String, @ViewBuilder content: () -> Content) {
+    init(title: LocalizedStringKey, systemImage: String, @ViewBuilder content: () -> Content) {
         self.title = title
         self.systemImage = systemImage
         self.content = content()
@@ -1686,7 +1719,7 @@ private struct EditorCard<Content: View>: View {
 
 private struct EditorMetric: View {
     let value: String
-    let label: String
+    let label: LocalizedStringKey
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {

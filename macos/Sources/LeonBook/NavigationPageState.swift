@@ -29,6 +29,11 @@ final class NativeArticleGraphPageState: ObservableObject {
     @Published var nodeLimit = 100
     @Published var zoom: Double = 1
     @Published var nodePositions: [String: CGPoint] = [:]
+    @Published var pathStartText = ""
+    @Published var pathDestinationText = ""
+    @Published private(set) var pathStartSlug: String?
+    @Published private(set) var pathDestinationSlug: String?
+    @Published private(set) var pathFeedback: String?
 
     func zoomIn() {
         zoom = min(1.8, ((zoom + 0.1) * 10).rounded() / 10)
@@ -45,5 +50,26 @@ final class NativeArticleGraphPageState: ObservableObject {
         nodeLimit = 100
         zoom = 1
         nodePositions = [:]
+        pathStartText = ""
+        pathDestinationText = ""
+        clearPathResult()
+    }
+
+    func showPath(from sourceSlug: String, to destinationSlug: String, feedback: String) {
+        pathStartSlug = sourceSlug
+        pathDestinationSlug = destinationSlug
+        pathFeedback = feedback
+    }
+
+    func showPathError(_ feedback: String) {
+        pathStartSlug = nil
+        pathDestinationSlug = nil
+        pathFeedback = feedback
+    }
+
+    func clearPathResult() {
+        pathStartSlug = nil
+        pathDestinationSlug = nil
+        pathFeedback = nil
     }
 }

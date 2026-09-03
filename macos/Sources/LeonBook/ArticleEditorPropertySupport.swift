@@ -111,7 +111,7 @@ struct EditorPropertyValueField: View {
                 }
                 Picker("计算", selection: rollupCalculationBinding) {
                     ForEach(NativeArticleRollupCalculation.allCases, id: \.self) {
-                        Text($0.label).tag($0)
+                        Text(LocalizedStringKey($0.label)).tag($0)
                     }
                 }
             }

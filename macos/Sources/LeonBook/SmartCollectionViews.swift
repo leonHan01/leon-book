@@ -92,7 +92,11 @@ struct SmartArticleLibraryView: View {
     ) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(model.articleListTitle).font(.title2.weight(.semibold))
+                if model.selectedSmartCollection == nil, model.selectedArticleFolderPath == nil {
+                    Text("全部文章").font(.title2.weight(.semibold))
+                } else {
+                    Text(model.articleListTitle).font(.title2.weight(.semibold))
+                }
                 Text("\(articleCount) 篇 · 虚拟集合，不移动原文章")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -123,13 +127,13 @@ struct SmartArticleLibraryView: View {
                         }
                     } label: {
                         Label(
-                            option.label,
+                            LocalizedStringKey(option.label),
                             systemImage: currentLayout == option ? "checkmark" : option.systemImage
                         )
                     }
                 }
             } label: {
-                Label(currentLayout.label, systemImage: currentLayout.systemImage)
+                Label(LocalizedStringKey(currentLayout.label), systemImage: currentLayout.systemImage)
             }
             .help("切换列表、表格、卡片、看板或日历视图")
 
@@ -477,7 +481,7 @@ private struct SmartCollectionSummaryCell: View {
                 baseFunctions: declarativeExtensions.baseFunctions.map(\.function)
             )
             VStack(alignment: .leading, spacing: 2) {
-                Text(summary.label).font(.caption2).foregroundStyle(.secondary)
+                Text(LocalizedStringKey(summary.label)).font(.caption2).foregroundStyle(.secondary)
                 Text(value.displayText.isEmpty ? "—" : value.displayText)
                     .font(.caption.weight(.semibold))
             }
@@ -592,7 +596,15 @@ private struct SmartEditablePropertyCell: View {
                     Button("清空", role: .destructive) { setAndCommit("") }
                 }
             } label: {
-                Label(text.isEmpty ? "选择" : text, systemImage: kind.systemImage)
+                Label {
+                    if text.isEmpty {
+                        Text("选择")
+                    } else {
+                        Text(text)
+                    }
+                } icon: {
+                    Image(systemName: kind.systemImage)
+                }
                     .lineLimit(1)
             }
             .menuStyle(.borderlessButton)
@@ -613,10 +625,15 @@ private struct SmartEditablePropertyCell: View {
                     Button("清空关联", role: .destructive) { setAndCommit("") }
                 }
             } label: {
-                Label(
-                    relationValues.isEmpty ? "选择页面" : "\(relationValues.count) 个页面",
-                    systemImage: "arrow.triangle.branch"
-                )
+                Label {
+                    if relationValues.isEmpty {
+                        Text("选择页面")
+                    } else {
+                        Text("\(relationValues.count) 个页面")
+                    }
+                } icon: {
+                    Image(systemName: "arrow.triangle.branch")
+                }
             }
             .menuStyle(.borderlessButton)
         default:
@@ -754,7 +771,7 @@ private struct SmartArticleListRow: View {
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text(article.status.label).font(.caption.weight(.medium))
+                        Text(LocalizedStringKey(article.status.label)).font(.caption.weight(.medium))
                             .foregroundStyle(article.status == .published ? .green : .orange)
                         Text("\(article.pageViews) PV · \(article.updatedAt.nativeDateLabel)")
                             .font(.caption).foregroundStyle(.secondary)
@@ -767,7 +784,7 @@ private struct SmartArticleListRow: View {
         }
         .padding(12)
         .contextMenu {
-            Button(model.isBookmarked(.article(slug: article.slug)) ? "取消收藏" : "收藏文章") {
+            Button(LocalizedStringKey(model.isBookmarked(.article(slug: article.slug)) ? "取消收藏" : "收藏文章")) {
                 model.toggleArticleBookmark(article)
             }
             Button("移动或重命名 Markdown…") {
@@ -793,7 +810,13 @@ private struct SmartArticleCard: View {
             Button { model.selectSlug(article.slug) } label: {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(article.title).font(.headline).foregroundStyle(.primary).lineLimit(2)
-                    Text(article.excerpt.isEmpty ? "暂无摘要" : article.excerpt)
+                    Group {
+                        if article.excerpt.isEmpty {
+                            Text("暂无摘要")
+                        } else {
+                            Text(article.excerpt)
+                        }
+                    }
                         .font(.callout).foregroundStyle(.secondary).lineLimit(3)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -836,7 +859,7 @@ private struct SmartArticleBookmarkButton: View {
         }
         .buttonStyle(.borderless)
         .foregroundStyle(bookmarked ? Color.accentColor : .secondary)
-        .help(bookmarked ? "取消收藏文章" : "收藏文章")
+        .help(Text(LocalizedStringKey(bookmarked ? "取消收藏文章" : "收藏文章")))
     }
 }
 
@@ -883,7 +906,7 @@ struct SmartCollectionEditorSheet: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(originalCollection == nil ? "新建智能集合" : "编辑智能集合")
+                    Text(LocalizedStringKey(originalCollection == nil ? "新建智能集合" : "编辑智能集合"))
                         .font(.title2.weight(.semibold))
                     Text("保存筛选、最多三层排序、分组方式和默认布局")
                         .font(.caption).foregroundStyle(.secondary)
@@ -898,11 +921,11 @@ struct SmartCollectionEditorSheet: View {
                     TextField("集合名称", text: $draft.name)
                     Picker("默认布局", selection: $draft.layout) {
                         ForEach(NativeSmartCollectionLayout.allCases) {
-                            Label($0.label, systemImage: $0.systemImage).tag($0)
+                            Label(LocalizedStringKey($0.label), systemImage: $0.systemImage).tag($0)
                         }
                     }
                     Picker("分组", selection: $draft.groupBy) {
-                        ForEach(NativeArticleGroupField.allCases) { Text($0.label).tag($0) }
+                        ForEach(NativeArticleGroupField.allCases) { Text(LocalizedStringKey($0.label)).tag($0) }
                     }
                 }
 
@@ -967,7 +990,7 @@ struct SmartCollectionEditorSheet: View {
                             .foregroundStyle(.secondary)
                     }
                     Picker("组合逻辑", selection: $draft.matchMode) {
-                        ForEach(NativeSmartCollectionMatchMode.allCases) { Text($0.label).tag($0) }
+                        ForEach(NativeSmartCollectionMatchMode.allCases) { Text(LocalizedStringKey($0.label)).tag($0) }
                     }
                     ForEach($draft.rules) { $rule in
                         SmartCollectionRuleRow(rule: $rule) {
@@ -989,7 +1012,7 @@ struct SmartCollectionEditorSheet: View {
                     ForEach($draft.sorts) { $sort in
                         HStack {
                             Picker("字段", selection: $sort.field) {
-                                ForEach(NativeArticleSortField.allCases) { Text($0.label).tag($0) }
+                                ForEach(NativeArticleSortField.allCases) { Text(LocalizedStringKey($0.label)).tag($0) }
                             }
                             Picker("方向", selection: $sort.ascending) {
                                 Text("升序").tag(true)
@@ -1095,7 +1118,7 @@ private struct SmartCollectionColumnEditorRow: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 Picker("来源", selection: $column.source) {
-                    ForEach(NativeSmartCollectionColumnSource.allCases) { Text($0.label).tag($0) }
+                    ForEach(NativeSmartCollectionColumnSource.allCases) { Text(LocalizedStringKey($0.label)).tag($0) }
                 }
                 .frame(width: 125)
                 .onChange(of: column.source) { source in
@@ -1112,14 +1135,14 @@ private struct SmartCollectionColumnEditorRow: View {
                 case .system:
                     Picker("字段", selection: $column.key) {
                         ForEach(NativeSmartCollectionSystemField.allCases) {
-                            Text($0.label).tag($0.rawValue)
+                            Text(LocalizedStringKey($0.label)).tag($0.rawValue)
                         }
                     }
                     .frame(width: 150)
                 case .property:
                     TextField("Property 名", text: $column.key).frame(width: 150)
                     Picker("类型", selection: $column.propertyKind) {
-                        ForEach(NativeArticlePropertyKind.allCases) { Text($0.label).tag($0) }
+                        ForEach(NativeArticlePropertyKind.allCases) { Text(LocalizedStringKey($0.label)).tag($0) }
                     }
                     .frame(width: 110)
                 case .formula:
@@ -1142,7 +1165,7 @@ private struct SmartCollectionColumnEditorRow: View {
                 Picker("汇总", selection: $column.summary) {
                     Text("无汇总").tag(nil as NativeSmartCollectionSummary?)
                     ForEach(NativeSmartCollectionSummary.allCases) { summary in
-                        Text(summary.label).tag(summary as NativeSmartCollectionSummary?)
+                        Text(LocalizedStringKey(summary.label)).tag(summary as NativeSmartCollectionSummary?)
                     }
                 }
                 .frame(width: 150)
@@ -1160,7 +1183,7 @@ private struct SmartCollectionRuleRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Picker("字段", selection: $rule.field) {
-                ForEach(NativeSmartCollectionField.allCases) { Text($0.label).tag($0) }
+                ForEach(NativeSmartCollectionField.allCases) { Text(LocalizedStringKey($0.label)).tag($0) }
             }
             .frame(width: 125)
             .onChange(of: rule.field) { field in
@@ -1176,14 +1199,14 @@ private struct SmartCollectionRuleRow: View {
             }
 
             Picker("比较", selection: $rule.comparison) {
-                ForEach(rule.compatibleOperators) { Text($0.label).tag($0) }
+                ForEach(rule.compatibleOperators) { Text(LocalizedStringKey($0.label)).tag($0) }
             }
             .frame(width: 105)
 
             if rule.comparison.needsValue {
                 if rule.field == .status {
                     Picker("值", selection: $rule.value) {
-                        ForEach(NativeArticleStatus.allCases) { Text($0.label).tag($0.rawValue) }
+                        ForEach(NativeArticleStatus.allCases) { Text(LocalizedStringKey($0.label)).tag($0.rawValue) }
                     }
                     .frame(width: 110)
                 } else {

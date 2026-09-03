@@ -875,15 +875,10 @@ public enum NativeSmartCollectionEvaluator {
     }
 
     private static func folded(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        NativeSmartCollectionSemantics.normalizedText(value)
     }
 
     private static func parsedDate(_ value: String) -> Date? {
-        if let date = NativeTimestamp.date(from: value) { return date }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: value)
+        NativeSmartCollectionSemantics.date(from: value)
     }
 }

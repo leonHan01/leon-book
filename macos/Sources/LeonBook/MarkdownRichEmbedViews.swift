@@ -93,7 +93,15 @@ struct NativeAudioEmbedView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Label(title.isEmpty ? "音频" : title, systemImage: "waveform")
+                Label {
+                    if title.isEmpty {
+                        Text("音频")
+                    } else {
+                        Text(title)
+                    }
+                } icon: {
+                    Image(systemName: "waveform")
+                }
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 Spacer()
@@ -179,7 +187,7 @@ struct MarkdownMathView: View {
             onHeightChange: { contentHeight = $0 }
         )
         .frame(maxWidth: .infinity, minHeight: contentHeight, maxHeight: contentHeight)
-        .accessibilityLabel(display ? "LaTeX 公式" : "含行内公式的段落")
+        .accessibilityLabel(LocalizedStringKey(display ? "LaTeX 公式" : "含行内公式的段落"))
     }
 }
 

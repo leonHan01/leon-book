@@ -489,22 +489,13 @@ enum NativeSmartCollectionFile {
         guard !sorts.isEmpty else { return nil }
         return .sequence(sorts.prefix(3).map { sort in
             .mapping([
-                NativeBaseYAMLPair(key: "property", value: .scalar(sortProperty(sort.field))),
+                NativeBaseYAMLPair(
+                    key: "property",
+                    value: .scalar(NativeSmartCollectionSemantics.baseReference(for: sort.field))
+                ),
                 NativeBaseYAMLPair(key: "direction", value: .scalar(sort.ascending ? "ASC" : "DESC")),
             ])
         })
-    }
-
-    private static func sortProperty(_ field: NativeArticleSortField) -> String {
-        switch field {
-        case .updatedAt: return "file.mtime"
-        case .publishedAt: return "note.publishedAt"
-        case .title: return "file.name"
-        case .category: return "note.category"
-        case .status: return "note.status"
-        case .wordCount: return "note.wordCount"
-        case .pageViews: return "note.pageViews"
-        }
     }
 
     private static func filename(for id: String) throws -> String {
@@ -516,20 +507,8 @@ enum NativeSmartCollectionFile {
     }
 
     private static func filterExpression(for rule: NativeSmartCollectionRule) -> String {
-        let field: String
-        switch rule.field {
-        case .title: field = "file.name"
-        case .content: field = "note.excerpt"
-        case .status: field = "note.status"
-        case .category: field = "note.category"
-        case .tag: field = "note.tags"
-        case .property: field = propertyReference(rule.propertyKey)
-        case .updatedAt: field = "file.mtime"
-        case .publishedAt: field = "note.publishedAt"
-        case .wordCount: field = "note.wordCount"
-        case .pageViews: field = "note.pageViews"
-        case .sourcePath: field = "file.path"
-        }
+        let field = NativeSmartCollectionSemantics.baseReference(for: rule.field)
+            ?? propertyReference(rule.propertyKey)
         let value: String
         if rule.field.isNumber, Double(rule.value) != nil { value = rule.value }
         else if rule.field.isDate { value = "date(\(formulaString(rule.value)))" }
@@ -549,13 +528,7 @@ enum NativeSmartCollectionFile {
     }
 
     private static func groupProperty(_ field: NativeArticleGroupField) -> String {
-        switch field {
-        case .status: return "note.status"
-        case .category: return "note.category"
-        case .tag: return "note.tags"
-        case .updatedMonth: return "file.mtime"
-        case .none: return "file.name"
-        }
+        NativeSmartCollectionSemantics.baseReference(for: field)
     }
 
     private static func propertyReference(_ key: String) -> String {

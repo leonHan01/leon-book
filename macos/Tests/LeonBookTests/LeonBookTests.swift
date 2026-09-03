@@ -44,6 +44,72 @@ private func XCTFail(_ message: String) {
 
 final class NativeModelsTests {
     @MainActor
+    func testLanguagePreferencesPersistAndLocalizationsResolve() {
+        let suiteName = "NativeLanguagePreferencesTests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("expected isolated UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let defaultsKey = "test.language"
+        let preferences = NativeLanguagePreferences(
+            defaults: defaults,
+            defaultsKey: defaultsKey,
+            preferredLanguages: ["en-US"]
+        )
+        XCTAssertEqual(preferences.language, .english)
+
+        preferences.language = .simplifiedChinese
+        XCTAssertEqual(defaults.string(forKey: defaultsKey), NativeAppLanguage.simplifiedChinese.rawValue)
+        let restored = NativeLanguagePreferences(
+            defaults: defaults,
+            defaultsKey: defaultsKey,
+            preferredLanguages: ["en-US"]
+        )
+        XCTAssertEqual(restored.language, .simplifiedChinese)
+
+        defaults.set("unsupported", forKey: defaultsKey)
+        let fallback = NativeLanguagePreferences(
+            defaults: defaults,
+            defaultsKey: defaultsKey,
+            preferredLanguages: ["en-GB"]
+        )
+        XCTAssertEqual(fallback.language, .english)
+        XCTAssertEqual(NativeLocalization.string("设置", language: .english), "Settings")
+        XCTAssertEqual(NativeLocalization.string("设置", language: .simplifiedChinese), "设置")
+    }
+
+    func testEnglishCatalogCoversEditorSurface() {
+        let editorKeys = [
+            "正文",
+            "写作",
+            "隐藏右栏",
+            "显示右栏",
+            "发布状态",
+            "分类与标签",
+            "封面图",
+            "附件",
+            "文章概览",
+            "字",
+            "个附件",
+            "正文出链",
+            "反向链接",
+            "未链接提及",
+            "⌘点手柄/⇧连选 · 拖动搬运 · ⌥⌘↑↓ 键盘移动",
+            "已自动保存：%@",
+        ]
+
+        for key in editorKeys {
+            let localized = NativeLocalization.string(key, language: .english)
+            XCTAssertFalse(
+                localized.range(of: "\\p{Han}", options: .regularExpression) != nil,
+                "missing English editor localization for \(key): \(localized)"
+            )
+        }
+    }
+
+    @MainActor
     func testVideoPlaybackFormatsAndPersistsResumePositions() {
         XCTAssertEqual(NativeInlineVideoPlayerModel.timeLabel(7), "00:07")
         XCTAssertEqual(NativeInlineVideoPlayerModel.timeLabel(3_661), "1:01:01")
@@ -290,6 +356,69 @@ final class NativeModelsTests {
             wordCount: nil
         )
         XCTAssertEqual(article.tags, ["Swift", "随笔", "macOS"])
+    }
+
+    func testFrontmatterDocumentSharesScalarListAndBodySemantics() {
+        let document = NativeFrontmatterDocument(source: """
+        \u{feff}---
+        "title": "标题 # 保留"
+        tags:
+          - Swift
+          - 'C#'
+        summary: value # ignored
+        empty:
+        custom: >-
+          first # preserved
+          second
+        ---
+
+        正文
+        """)
+
+        XCTAssertEqual(document.scalar(for: ["TITLE"]), "标题 # 保留")
+        XCTAssertEqual(document.list(for: ["tags"]), ["Swift", "C#"])
+        XCTAssertEqual(document.scalar(for: ["summary"]), "value")
+        XCTAssertEqual(document.scalar(for: ["empty"]), "")
+        XCTAssertTrue(document.values["custom"]?.contains("first # preserved") == true)
+        XCTAssertEqual(document.body, "正文")
+    }
+
+    func testQuestionSessionKeepsSelectionAndAnswerDraftAligned() {
+        let timestamp = "2026-09-03T00:00:00Z"
+        let first = NativeQuestion(
+            id: "first",
+            title: "First",
+            body: "",
+            tags: [],
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+        let second = NativeQuestion(
+            id: "second",
+            title: "Second",
+            body: "",
+            tags: [],
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+        let draftImage = NativeMedia(kind: "image", name: "draft.png", size: 1, url: "/draft.png")
+        var session = NativeQuestionSessionState()
+
+        XCTAssertEqual(session.beginSelecting(first), [])
+        session.answerDraft = NativeQuestionAnswerDraft(body: "draft", images: [draftImage])
+        session.editingAnswerID = "answer"
+
+        XCTAssertEqual(session.beginSelecting(second), [draftImage])
+        XCTAssertEqual(session.selectedQuestion?.id, second.id)
+        XCTAssertTrue(session.answerDraft.isEmpty)
+        XCTAssertNil(session.editingAnswerID)
+        XCTAssertTrue(session.isLoadingAnswers)
+
+        session.searchText = "Swift"
+        XCTAssertTrue(session.isFiltering)
+        session.reset()
+        XCTAssertFalse(session.isFiltering)
+        XCTAssertNil(session.selectedQuestion)
     }
 
     func testArticleLinksExtractAndResolveTitlesOrSlugs() throws {
@@ -619,6 +748,33 @@ final class NativeModelsTests {
         let addressable = NativeBlockEditorDocument.ensuringBlockID(in: "一段内容")
         XCTAssertEqual(NativeBlockEditorDocument.blockID(in: addressable.markdown), addressable.id)
         XCTAssertEqual(NativeBlockEditorDocument.removingBlockID(from: addressable.markdown), "一段内容")
+    }
+
+    func testBlockSelectionOwnsRangeToggleAndReconciliationRules() {
+        let ids = (0..<4).map { _ in UUID() }
+        var selection = EditorBlockSelection()
+
+        selection.select(ids[1], orderedIDs: ids, mode: .replace)
+        selection.select(ids[3], orderedIDs: ids, mode: .extend(additive: false))
+        XCTAssertEqual(selection.selectedIDs, Set(ids[1...3]))
+        XCTAssertEqual(selection.focusedID, ids[3])
+
+        selection.select(ids[0], orderedIDs: ids, mode: .toggle)
+        XCTAssertEqual(selection.selectedIDs, Set(ids))
+        selection.select(ids[2], orderedIDs: ids, mode: .toggle)
+        XCTAssertEqual(selection.selectedIDs, Set([ids[0], ids[1], ids[3]]))
+
+        selection.reconcile(validIDs: [ids[0], ids[1]])
+        XCTAssertEqual(selection.selectedIDs, Set([ids[0], ids[1]]))
+        XCTAssertNil(selection.focusedID)
+
+        selection.anchorID = UUID()
+        selection.select(ids[1], orderedIDs: ids, mode: .extend(additive: true))
+        XCTAssertEqual(selection.selectedIDs, Set([ids[0]]))
+
+        selection.escape(to: ids[0])
+        XCTAssertEqual(selection.selectedIDs, Set([ids[0]]))
+        XCTAssertNil(selection.focusedID)
     }
 
     func testBlockTemplatesPersistAndBuiltInsParse() {
@@ -1546,6 +1702,41 @@ final class NativeModelsTests {
         )
     }
 
+    func testArticleGraphShortestPathUsesVisibleDirectedReferences() {
+        let articles = [
+            graphArticle(slug: "start", title: "Start", status: .published, updatedAt: "2026-09-01T00:00:00Z"),
+            graphArticle(slug: "long", title: "Long", status: .published, updatedAt: "2026-09-01T00:00:00Z"),
+            graphArticle(slug: "middle", title: "Middle", status: .published, updatedAt: "2026-09-01T00:00:00Z"),
+            graphArticle(slug: "finish", title: "Finish", status: .published, updatedAt: "2026-09-01T00:00:00Z"),
+        ]
+        let graph = NativeArticleGraph(
+            nodes: articles,
+            edges: [
+                .init(sourceSlug: "start", targetSlug: "long"),
+                .init(sourceSlug: "long", targetSlug: "middle"),
+                .init(sourceSlug: "middle", targetSlug: "finish"),
+                .init(sourceSlug: "start", targetSlug: "middle"),
+            ]
+        )
+
+        let path = NativeArticleGraphPathFinder.shortestPath(
+            in: graph,
+            from: "start",
+            to: "finish"
+        )
+
+        XCTAssertEqual(path?.nodes.map(\.slug), ["start", "middle", "finish"])
+        XCTAssertEqual(
+            path?.edges,
+            [
+                .init(sourceSlug: "start", targetSlug: "middle"),
+                .init(sourceSlug: "middle", targetSlug: "finish"),
+            ]
+        )
+        XCTAssertEqual(path?.hopCount, 2)
+        XCTAssertNil(NativeArticleGraphPathFinder.shortestPath(in: graph, from: "finish", to: "start"))
+    }
+
     @MainActor
     func testReloadPopulatesKnowledgeGraphWithIsolatedArticles() async throws {
         let root = try makeTemporaryDirectory()
@@ -1558,9 +1749,12 @@ final class NativeModelsTests {
         }
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        let model = NativeAppModel(
+            navigationScopeID: nil,
+            startsAutomatically: false,
+            store: LocalBlogStore(rootURL: root)
+        )
         model.firstPartyModuleRuntime = NativeFirstPartyModules.loadRuntime(defaults: defaults)
-        model.store = LocalBlogStore(rootURL: root)
         _ = try await model.store.saveArticle(article(
             slug: "isolated-note",
             status: .published,
@@ -2395,11 +2589,11 @@ final class PerformanceRegressionTests {
         let navigationScope = "performance-\(UUID().uuidString)"
         let model = NativeAppModel(
             navigationScopeID: navigationScope,
-            startsAutomatically: false
+            startsAutomatically: false,
+            store: LocalBlogStore(rootURL: root)
         )
         let defaultsKey = "leon-book.article-navigation.\(model.currentUser.id).window.\(navigationScope)"
         defer { UserDefaults.standard.removeObject(forKey: defaultsKey) }
-        model.store = LocalBlogStore(rootURL: root)
 
         var savedArticles: [NativeArticle] = []
         savedArticles.reserveCapacity(articleCount)
@@ -2714,6 +2908,30 @@ final class LocalBlogStoreTests {
             XCTFail("expected non-MP4 moment video to be rejected")
         } catch let error as NativeStoreError {
             XCTAssertTrue(error.localizedDescription.contains("仅支持 MP4"))
+        }
+    }
+
+    func testMediaUploadModuleCleansCompletedFilesWhenABatchFails() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let source = root.appendingPathComponent("first.png")
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: source)
+
+        do {
+            _ = try await NativeMediaUpload.files(
+                [source, root.appendingPathComponent("missing.png")],
+                kind: .image,
+                destination: .moments,
+                store: store
+            )
+            XCTFail("expected the missing source to fail the batch")
+        } catch {
+            let destination = root
+                .appendingPathComponent("media", isDirectory: true)
+                .appendingPathComponent("moments", isDirectory: true)
+            let remaining = (try? FileManager.default.contentsOfDirectory(atPath: destination.path)) ?? []
+            XCTAssertTrue(remaining.isEmpty)
         }
     }
 
@@ -4610,6 +4828,8 @@ private func makeTemporaryDirectory() throws -> URL {
 struct LeonBookUnitTests {
     static func main() async {
         var tests: [(String, () async throws -> Void)] = [
+            ("NativeModelsTests.testLanguagePreferencesPersistAndLocalizationsResolve", { await MainActor.run { NativeModelsTests().testLanguagePreferencesPersistAndLocalizationsResolve() } }),
+            ("NativeModelsTests.testEnglishCatalogCoversEditorSurface", { NativeModelsTests().testEnglishCatalogCoversEditorSurface() }),
             ("NativeModelsTests.testVideoPlaybackFormatsAndPersistsResumePositions", { NativeModelsTests().testVideoPlaybackFormatsAndPersistsResumePositions() }),
             ("NativeModelsTests.testWritingMetricsAndTimestampRoundTrip", { NativeModelsTests().testWritingMetricsAndTimestampRoundTrip() }),
             ("NativeModelsTests.testAutomationURLsParseActionsAndEncodedParameters", { try NativeModelsTests().testAutomationURLsParseActionsAndEncodedParameters() }),
@@ -4619,11 +4839,14 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testLegacyMediaJSONUsesSafeDefaults", { try NativeModelsTests().testLegacyMediaJSONUsesSafeDefaults() }),
             ("NativeModelsTests.testMomentTagsAreExtractedDeduplicatedAndRemovedFromDisplayContent", { NativeModelsTests().testMomentTagsAreExtractedDeduplicatedAndRemovedFromDisplayContent() }),
             ("NativeModelsTests.testArticleHashtagsNormalizeAndPreserveLegacyCommaTags", { NativeModelsTests().testArticleHashtagsNormalizeAndPreserveLegacyCommaTags() }),
+            ("NativeModelsTests.testFrontmatterDocumentSharesScalarListAndBodySemantics", { NativeModelsTests().testFrontmatterDocumentSharesScalarListAndBodySemantics() }),
+            ("NativeModelsTests.testQuestionSessionKeepsSelectionAndAnswerDraftAligned", { NativeModelsTests().testQuestionSessionKeepsSelectionAndAnswerDraftAligned() }),
             ("NativeModelsTests.testArticleLinksExtractAndResolveTitlesOrSlugs", { try NativeModelsTests().testArticleLinksExtractAndResolveTitlesOrSlugs() }),
             ("NativeModelsTests.testArticleEmbedsSelectWholeNotesHeadingsAndBlocks", { NativeModelsTests().testArticleEmbedsSelectWholeNotesHeadingsAndBlocks() }),
             ("NativeModelsTests.testRichMarkdownEmbedsAndBlockLinkAnchors", { NativeModelsTests().testRichMarkdownEmbedsAndBlockLinkAnchors() }),
             ("NativeModelsTests.testMarkdownTypographyCompressesCJKPunctuationWithoutChangingText", { try NativeModelsTests().testMarkdownTypographyCompressesCJKPunctuationWithoutChangingText() }),
             ("NativeModelsTests.testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes", { NativeModelsTests().testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes() }),
+            ("NativeModelsTests.testBlockSelectionOwnsRangeToggleAndReconciliationRules", { NativeModelsTests().testBlockSelectionOwnsRangeToggleAndReconciliationRules() }),
             ("NativeModelsTests.testBlockTemplatesPersistAndBuiltInsParse", { NativeModelsTests().testBlockTemplatesPersistAndBuiltInsParse() }),
             ("NativeModelsTests.testPageTemplatesApplyMetadataAndPersistPerWorkspace", { await MainActor.run { NativeModelsTests().testPageTemplatesApplyMetadataAndPersistPerWorkspace() } }),
             ("NativeModelsTests.testArticleTabMaintainsIndependentBackAndForwardHistory", { try NativeModelsTests().testArticleTabMaintainsIndependentBackAndForwardHistory() }),
@@ -4643,6 +4866,7 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testDeclarativeExtensionRejectsExecutableTemplates", { try NativeModelsTests().testDeclarativeExtensionRejectsExecutableTemplates() }),
             ("NativeModelsTests.testArticleGraphProjectionFiltersOrphansAndClipsByDegree", { NativeModelsTests().testArticleGraphProjectionFiltersOrphansAndClipsByDegree() }),
             ("NativeModelsTests.testArticleGraphLayoutAppliesAndClampsManualNodePositions", { NativeModelsTests().testArticleGraphLayoutAppliesAndClampsManualNodePositions() }),
+            ("NativeModelsTests.testArticleGraphShortestPathUsesVisibleDirectedReferences", { NativeModelsTests().testArticleGraphShortestPathUsesVisibleDirectedReferences() }),
             ("NativeModelsTests.testReloadPopulatesKnowledgeGraphWithIsolatedArticles", { try await NativeModelsTests().testReloadPopulatesKnowledgeGraphWithIsolatedArticles() }),
             ("PerformanceRegressionTests.testEditorSessionOwnsHighFrequencyDraftState", { PerformanceRegressionTests().testEditorSessionOwnsHighFrequencyDraftState() }),
             ("PerformanceRegressionTests.testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries", { PerformanceRegressionTests().testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries() }),
@@ -4658,6 +4882,7 @@ struct LeonBookUnitTests {
             ("PerformanceRegressionTests.testPairedPerformanceSamplingAlternatesOrder", { PerformanceRegressionTests().testPairedPerformanceSamplingAlternatesOrder() }),
             ("LocalBlogStoreTests.testMomentLifecycleNormalizesInputFiltersAndRecordsActivity", { try await LocalBlogStoreTests().testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() }),
             ("LocalBlogStoreTests.testMomentVideoUploadOnlyAcceptsMP4", { try await LocalBlogStoreTests().testMomentVideoUploadOnlyAcceptsMP4() }),
+            ("LocalBlogStoreTests.testMediaUploadModuleCleansCompletedFilesWhenABatchFails", { try await LocalBlogStoreTests().testMediaUploadModuleCleansCompletedFilesWhenABatchFails() }),
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),
             ("LocalBlogStoreTests.testQuestionAnswersAndTagSearchPersistInSQLite", { try await LocalBlogStoreTests().testQuestionAnswersAndTagSearchPersistInSQLite() }),
             ("LocalBlogStoreTests.testArticleLifecycleSupportsDraftPublishingAndConflictProtection", { try await LocalBlogStoreTests().testArticleLifecycleSupportsDraftPublishingAndConflictProtection() }),

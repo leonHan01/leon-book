@@ -35,7 +35,7 @@ private struct NativeSearchResultsView: View {
                     Image(systemName: articlesOnly ? "doc.text.magnifyingglass" : "magnifyingglass")
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                    TextField(prompt, text: $query)
+                    TextField(LocalizedStringKey(prompt), text: $query)
                         .textFieldStyle(.plain)
                         .font(.title3)
                         .focused($isSearchFocused)
@@ -72,9 +72,9 @@ private struct NativeSearchResultsView: View {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 32))
                         .foregroundStyle(.secondary)
-                    Text(query.isEmpty ? "没有可打开的内容" : "没有搜索结果")
+                    Text(LocalizedStringKey(query.isEmpty ? "没有可打开的内容" : "没有搜索结果"))
                         .font(.headline)
-                    Text(query.isEmpty ? "创建文章或微博后会显示在这里。" : "尝试减少关键词，或使用 tag:、status:、[属性名:值] 和日期过滤。")
+                    Text(LocalizedStringKey(query.isEmpty ? "创建文章或微博后会显示在这里。" : "尝试减少关键词，或使用 tag:、status:、[属性名:值] 和日期过滤。"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -95,7 +95,7 @@ private struct NativeSearchResultsView: View {
 
             Divider()
             HStack {
-                Text(title)
+                Text(LocalizedStringKey(title))
                     .fontWeight(.semibold)
                 Spacer()
                 if !articlesOnly, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -104,7 +104,7 @@ private struct NativeSearchResultsView: View {
                         model.bookmarkSearch(query)
                     } label: {
                         Label(
-                            model.isBookmarked(target) ? "取消收藏搜索" : "收藏搜索",
+                            LocalizedStringKey(model.isBookmarked(target) ? "取消收藏搜索" : "收藏搜索"),
                             systemImage: model.isBookmarked(target) ? "bookmark.fill" : "bookmark"
                         )
                     }
@@ -173,14 +173,14 @@ private struct NativeSearchResultRow: View {
                         .font(.headline)
                         .lineLimit(1)
                     if !hidesType {
-                        Text(result.documentType.label)
+                        Text(LocalizedStringKey(result.documentType.label))
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(.quaternary, in: Capsule())
                     }
                     if let status = result.status {
-                        Text(status.label)
+                        Text(LocalizedStringKey(status.label))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -282,7 +282,7 @@ private struct NativeCommandPaletteView: View {
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
-                                Text(command.definition.title).fontWeight(.medium)
+                                Text(LocalizedStringKey(command.definition.title)).fontWeight(.medium)
                                 if command.isPinned {
                                     Image(systemName: "pin.fill")
                                         .font(.caption2)
@@ -293,7 +293,7 @@ private struct NativeCommandPaletteView: View {
                                         .foregroundStyle(.tertiary)
                                 }
                             }
-                            Text(command.definition.detail)
+                            Text(LocalizedStringKey(command.definition.detail))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -305,7 +305,7 @@ private struct NativeCommandPaletteView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
-                        .help(command.isPinned ? "取消固定" : "固定到命令面板顶部")
+                        .help(Text(LocalizedStringKey(command.isPinned ? "取消固定" : "固定到命令面板顶部")))
                         if let shortcut = preferences.shortcut(for: command.definition) {
                             Text(shortcut.displayLabel)
                                 .font(.caption.monospaced())

@@ -88,11 +88,17 @@ private struct TrashRow: View {
                 HStack(spacing: 8) {
                     Text(item.title)
                         .font(.headline)
-                    Text(item.kind.label)
+                    Text(LocalizedStringKey(item.kind.label))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.orange)
                 }
-                Text(item.preview.isEmpty ? "无摘要" : item.preview)
+                Group {
+                    if item.preview.isEmpty {
+                        Text("无摘要")
+                    } else {
+                        Text(item.preview)
+                    }
+                }
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

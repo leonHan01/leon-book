@@ -643,11 +643,12 @@ struct NativeWorkspaceLayoutMenu: View {
                         guard let activated = workspaceLayout.activate(profile.id, for: model.currentUser.id) else { return }
                         apply(activated)
                     } label: {
-                        Label(
-                            profile.name,
-                            systemImage: workspaceLayout.activeLayoutID == profile.id
-                                ? "checkmark" : profile.systemImage
-                        )
+                        Label {
+                            localizedProfileName(profile)
+                        } icon: {
+                            Image(systemName: workspaceLayout.activeLayoutID == profile.id
+                                ? "checkmark" : profile.systemImage)
+                        }
                     }
                 }
             }
@@ -691,10 +692,21 @@ struct NativeWorkspaceLayoutMenu: View {
                 }
             }
         } label: {
-            Label(
-                isModified ? "\(workspaceLayout.activeName) · 未保存" : workspaceLayout.activeName,
-                systemImage: workspaceLayout.activeSystemImage
-            )
+            Label {
+                HStack(spacing: 0) {
+                    if let profile = workspaceLayout.activeProfile {
+                        localizedProfileName(profile)
+                    } else {
+                        Text(LocalizedStringKey(workspaceLayout.activeName))
+                    }
+                    if isModified {
+                        Text(" · ")
+                        Text("未保存")
+                    }
+                }
+            } icon: {
+                Image(systemName: workspaceLayout.activeSystemImage)
+            }
         }
         .help("切换或保存包含标签页、侧栏和分栏状态的工作区")
         .sheet(item: $editorRequest) { request in
@@ -739,6 +751,15 @@ struct NativeWorkspaceLayoutMenu: View {
         }
     }
 
+    @ViewBuilder
+    private func localizedProfileName(_ profile: NativeWorkspaceLayoutProfile) -> some View {
+        if profile.builtInKind == nil {
+            Text(profile.name)
+        } else {
+            Text(LocalizedStringKey(profile.name))
+        }
+    }
+
     private func apply(_ profile: NativeWorkspaceLayoutProfile) {
         if !profile.tabs.isEmpty {
             model.restoreWorkspaceTabs(profile.tabs, activeTabID: profile.activeTabID)
@@ -780,7 +801,7 @@ private struct NativeWorkspaceLayoutEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(mode == .create ? "新建工作区" : "编辑工作区")
+            Text(LocalizedStringKey(mode == .create ? "新建工作区" : "编辑工作区"))
                 .font(.title2.weight(.semibold))
             Text("工作区会保存文章标签、激活标签、面板、侧栏宽度和编辑分栏比例。")
                 .font(.callout)
@@ -798,7 +819,7 @@ private struct NativeWorkspaceLayoutEditorSheet: View {
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }
-                Button(mode == .create ? "创建" : "保存") {
+                Button(LocalizedStringKey(mode == .create ? "创建" : "保存")) {
                     onSave(name, navigationSidebarWidth, editorSidebarWidth, readerInspectorWidth, splitFraction)
                     dismiss()
                 }
@@ -811,7 +832,7 @@ private struct NativeWorkspaceLayoutEditorSheet: View {
     }
 
     private func geometrySlider(
-        _ title: String,
+        _ title: LocalizedStringKey,
         value: Binding<Double>,
         range: ClosedRange<Double>,
         suffix: String,

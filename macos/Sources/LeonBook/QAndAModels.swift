@@ -73,6 +73,82 @@ struct NativeQuestionAnswerDraft: Equatable {
     }
 }
 
+/// Cohesive value state for the question feature. Mutations that must keep the
+/// selection, answer draft, and editing identity aligned live at this seam.
+struct NativeQuestionSessionState: Equatable {
+    var questions: [NativeQuestion] = []
+    var totalCount = 0
+    var tagFacets: [NativeQuestionTagFacet] = []
+    var selectedQuestion: NativeQuestion?
+    var answers: [NativeQuestionAnswer] = []
+    var isLoadingAnswers = false
+    var answerDraft = NativeQuestionAnswerDraft()
+    var editingAnswerID: String?
+    var editingAnswerUpdatedAt: String?
+    var isPublishingQuestion = false
+    var isPublishingAnswer = false
+    var searchText = ""
+    var selectedTag: String?
+
+    var isFiltering: Bool {
+        selectedTag != nil
+            || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    mutating func applyReload(
+        questions: [NativeQuestion],
+        totalCount: Int,
+        tagFacets: [NativeQuestionTagFacet],
+        selectedQuestion: NativeQuestion?,
+        answers: [NativeQuestionAnswer]
+    ) -> [NativeMedia] {
+        let changesSelection = selectedQuestion?.id != self.selectedQuestion?.id
+        let discardedMedia = changesSelection ? discardAnswerDraft() : []
+        self.questions = questions
+        self.totalCount = totalCount
+        self.tagFacets = tagFacets
+        self.selectedQuestion = selectedQuestion
+        self.answers = answers
+        isLoadingAnswers = false
+        return discardedMedia
+    }
+
+    mutating func beginSelecting(_ question: NativeQuestion) -> [NativeMedia] {
+        let discardedMedia = discardAnswerDraft()
+        selectedQuestion = question
+        answers = []
+        isLoadingAnswers = true
+        return discardedMedia
+    }
+
+    mutating func beginEditing(_ answer: NativeQuestionAnswer) -> [NativeMedia] {
+        let discardedMedia = answerDraft.images
+        editingAnswerID = answer.id
+        editingAnswerUpdatedAt = answer.updatedAt
+        answerDraft = NativeQuestionAnswerDraft(
+            body: answer.body,
+            textRuns: answer.body.isEmpty ? [] : [
+                NativeMomentTextRun(text: answer.body, bold: false, color: nil),
+            ],
+            images: answer.images
+        )
+        return discardedMedia
+    }
+
+    @discardableResult
+    mutating func discardAnswerDraft() -> [NativeMedia] {
+        let discardedMedia = answerDraft.images
+        answerDraft = NativeQuestionAnswerDraft()
+        editingAnswerID = nil
+        editingAnswerUpdatedAt = nil
+        return discardedMedia
+    }
+
+    mutating func reset() {
+        self = NativeQuestionSessionState()
+    }
+}
+
 public struct NativeQuestionTagFacet: Hashable, Identifiable {
     public let tag: String
     public let count: Int

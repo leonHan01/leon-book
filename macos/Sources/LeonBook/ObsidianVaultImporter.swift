@@ -153,29 +153,6 @@ private extension NativeObsidianVaultImporter {
         let warnings: [String]
     }
 
-    struct Frontmatter {
-        let body: String
-        let values: [String: String]
-
-        func rawValue(for keys: [String]) -> String? {
-            for key in keys {
-                if let match = values.first(where: { $0.key.caseInsensitiveCompare(key) == .orderedSame }) {
-                    return match.value
-                }
-            }
-            return nil
-        }
-
-        func scalar(for keys: [String]) -> String? {
-            rawValue(for: keys).map(parseScalar)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        func list(for keys: [String]) -> [String] {
-            guard let raw = rawValue(for: keys) else { return [] }
-            return parseList(raw)
-        }
-    }
-
     struct AttachmentIndex {
         let byRelativePath: [String: URL]
         let byFilename: [String: [URL]]
@@ -254,7 +231,7 @@ private extension NativeObsidianVaultImporter {
     static func parseNote(at url: URL, root: URL, attachmentIndex: AttachmentIndex) throws -> ParsedNote {
         var source = try String(contentsOf: url, encoding: .utf8)
         if source.hasPrefix("\u{feff}") { source.removeFirst() }
-        let frontmatter = parseFrontmatter(source)
+        let frontmatter = NativeFrontmatterDocument(source: source)
         let relative = relativePath(of: url, root: root)
         let relativeWithoutExtension = String(relative.dropLast(url.pathExtension.count + 1))
         let fallbackTitle = url.deletingPathExtension().lastPathComponent
@@ -302,70 +279,7 @@ private extension NativeObsidianVaultImporter {
         )
     }
 
-    static func parseFrontmatter(_ source: String) -> Frontmatter {
-        let normalized = source.replacingOccurrences(of: "\r\n", with: "\n")
-        let lines = normalized.components(separatedBy: "\n")
-        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
-              let closingIndex = lines.indices.dropFirst().first(where: {
-                  let marker = lines[$0].trimmingCharacters(in: .whitespaces)
-                  return marker == "---" || marker == "..."
-              }) else {
-            return Frontmatter(body: normalized, values: [:])
-        }
-
-        var values: [String: String] = [:]
-        var index = 1
-        while index < closingIndex {
-            let line = lines[index]
-            guard !line.trimmingCharacters(in: .whitespaces).isEmpty,
-                  !line.trimmingCharacters(in: .whitespaces).hasPrefix("#"),
-                  let colon = line.firstIndex(of: ":") else {
-                index += 1
-                continue
-            }
-            let key = parseScalar(String(line[..<colon]).trimmingCharacters(in: .whitespaces))
-            guard NativeArticleProperties.isValidKey(key) else {
-                index += 1
-                continue
-            }
-            var raw = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
-            var childLines: [String] = []
-            var next = index + 1
-            while next < closingIndex {
-                let candidate = lines[next]
-                if candidate.first?.isWhitespace == true || candidate.trimmingCharacters(in: .whitespaces).hasPrefix("-") {
-                    childLines.append(candidate)
-                    next += 1
-                } else if candidate.trimmingCharacters(in: .whitespaces).isEmpty {
-                    childLines.append(candidate)
-                    next += 1
-                } else {
-                    break
-                }
-            }
-            if !childLines.isEmpty {
-                if raw.isEmpty, childLines.contains(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("-") }) {
-                    let items = childLines.compactMap { child -> String? in
-                        let trimmed = child.trimmingCharacters(in: .whitespaces)
-                        guard trimmed.hasPrefix("-") else { return nil }
-                        return parseScalar(String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces))
-                    }
-                    raw = yamlInlineList(items)
-                } else {
-                    raw += "\n" + childLines.joined(separator: "\n")
-                }
-            }
-            values[key] = raw.isEmpty ? "\"\"" : raw
-            index = next
-        }
-        let bodyStart = closingIndex + 1
-        let body = bodyStart < lines.count
-            ? lines[bodyStart...].joined(separator: "\n").trimmingCharacters(in: .newlines)
-            : ""
-        return Frontmatter(body: body, values: values)
-    }
-
-    static func articleStatus(from frontmatter: Frontmatter) -> NativeArticleStatus {
+    static func articleStatus(from frontmatter: NativeFrontmatterDocument) -> NativeArticleStatus {
         if let draft = frontmatter.scalar(for: ["draft"]), let value = parseBoolean(draft) {
             return value ? .draft : .published
         }
@@ -447,75 +361,6 @@ private extension NativeObsidianVaultImporter {
             result.replaceSubrange(wholeRange, with: "[[\(destination)|\(label)]]")
         }
         return result
-    }
-
-    static func parseScalar(_ raw: String) -> String {
-        let value = stripYAMLComment(raw).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard value.count >= 2 else { return value }
-        if value.hasPrefix("\"") && value.hasSuffix("\"") {
-            return (try? JSONDecoder().decode(String.self, from: Data(value.utf8))) ?? String(value.dropFirst().dropLast())
-        }
-        if value.hasPrefix("'") && value.hasSuffix("'") {
-            return String(value.dropFirst().dropLast()).replacingOccurrences(of: "''", with: "'")
-        }
-        return value
-    }
-
-    static func parseList(_ raw: String) -> [String] {
-        let value = stripYAMLComment(raw).trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("[") && value.hasSuffix("]") {
-            return splitYAMLList(String(value.dropFirst().dropLast())).map(parseScalar).filter { !$0.isEmpty }
-        }
-        if value.contains("\n") {
-            return value.components(separatedBy: .newlines).compactMap { line in
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                return trimmed.hasPrefix("-") ? parseScalar(String(trimmed.dropFirst())) : nil
-            }.filter { !$0.isEmpty }
-        }
-        let scalar = parseScalar(value)
-        return scalar.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-    }
-
-    static func splitYAMLList(_ value: String) -> [String] {
-        var results: [String] = []
-        var current = ""
-        var quote: Character?
-        for character in value {
-            if character == "\"" || character == "'" {
-                if quote == character { quote = nil } else if quote == nil { quote = character }
-                current.append(character)
-            } else if character == ",", quote == nil {
-                results.append(current.trimmingCharacters(in: .whitespaces))
-                current = ""
-            } else {
-                current.append(character)
-            }
-        }
-        results.append(current.trimmingCharacters(in: .whitespaces))
-        return results
-    }
-
-    static func stripYAMLComment(_ value: String) -> String {
-        var quote: Character?
-        var previous: Character?
-        for index in value.indices {
-            let character = value[index]
-            if character == "\"" || character == "'" {
-                if quote == character { quote = nil } else if quote == nil { quote = character }
-            } else if character == "#", quote == nil, previous?.isWhitespace == true {
-                return String(value[..<index])
-            }
-            previous = character
-        }
-        return value
-    }
-
-    static func yamlInlineList(_ values: [String]) -> String {
-        let encoder = JSONEncoder()
-        let encoded = values.map { value -> String in
-            (try? String(data: encoder.encode(value), encoding: .utf8)) ?? "\"\""
-        }
-        return "[\(encoded.joined(separator: ", "))]"
     }
 
     static func parseBoolean(_ value: String) -> Bool? {
