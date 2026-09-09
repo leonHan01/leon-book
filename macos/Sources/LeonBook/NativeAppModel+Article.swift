@@ -589,18 +589,16 @@ extension NativeAppModel {
 
     func promptToMoveArticleSource(_ summary: NativeArticleSummary) {
         guard !isSaving, !isBackingUp, !isRestoringBackup else { return }
-        if let resource = workspaceResourceItems.first(where: {
-            $0.kind == .article && $0.articleSlug == summary.slug
-        }) {
+        if let resourceID = workspaceResourceID(articleSlug: summary.slug),
+           let resource = workspaceResource(id: resourceID) {
             promptToMoveWorkspaceResources([resource])
             return
         }
         Task {
             do {
                 workspaceResources = try await store.listWorkspaceResources()
-                guard let resource = workspaceResourceItems.first(where: {
-                    $0.kind == .article && $0.articleSlug == summary.slug
-                }) else {
+                guard let resourceID = workspaceResourceID(articleSlug: summary.slug),
+                      let resource = workspaceResource(id: resourceID) else {
                     errorMessage = "无法在文件资源树中定位这篇文章。请刷新后重试。"
                     return
                 }

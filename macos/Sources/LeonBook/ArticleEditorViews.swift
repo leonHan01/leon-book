@@ -16,7 +16,7 @@ enum NativeBodyEditorAppearance {
 }
 
 @MainActor
-private final class EditorSlashCommandController: ObservableObject {
+final class EditorSlashCommandController: ObservableObject {
     private weak var textView: NSTextView?
     var onExecute: ((NativeCommandDefinition, NSRange) -> Void)?
     @Published private(set) var activeQuery: String?
@@ -27,6 +27,7 @@ private final class EditorSlashCommandController: ObservableObject {
 
     func completeSuggestion(_ definition: NativeCommandDefinition) {
         guard let textView,
+              !textView.hasMarkedText(),
               definition.textInsertion != nil,
               let context = slashContext(in: textView.string, selectedRange: textView.selectedRange()) else {
             return
@@ -37,18 +38,20 @@ private final class EditorSlashCommandController: ObservableObject {
     }
 
     func dismissSuggestions() {
-        activeQuery = nil
+        if activeQuery != nil { activeQuery = nil }
     }
 
-    fileprivate func updateQuery(from textView: NSTextView) {
-        activeQuery = slashContext(in: textView.string, selectedRange: textView.selectedRange())?.query
+    func updateQuery(from textView: NSTextView) {
+        let query = textView.hasMarkedText() ? nil
+            : slashContext(in: textView.string, selectedRange: textView.selectedRange())?.query
+        if activeQuery != query { activeQuery = query }
     }
 
     private func slashContext(
         in text: String,
         selectedRange: NSRange
     ) -> (range: NSRange, query: String)? {
-        guard selectedRange.length == 0 else { return nil }
+        guard selectedRange.length == 0, selectedRange.location >= 0 else { return nil }
         let source = text as NSString
         guard selectedRange.location <= source.length else { return nil }
         let lineRange = source.lineRange(for: NSRange(location: selectedRange.location, length: 0))
@@ -69,7 +72,7 @@ private final class EditorSlashCommandController: ObservableObject {
     }
 }
 
-private struct NativeBodyEditor: NSViewRepresentable {
+struct NativeBodyEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var selectedRange: NSRange
     let isEditable: Bool
@@ -131,8 +134,9 @@ private struct NativeBodyEditor: NSViewRepresentable {
         linkController.attach(to: textView)
         slashController.attach(to: textView)
         slashController.onExecute = onRunCommand
+        guard !textView.hasMarkedText() else { return }
         let textChanged = textView.string != text
-        if textView.string != text {
+        if textChanged {
             textView.string = text
         }
         let maximum = (textView.string as NSString).length
@@ -152,6 +156,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.cancelStyling()
+        (scrollView.documentView as? NSTextView)?.delegate = nil
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -167,10 +172,14 @@ private struct NativeBodyEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
-            parent.text = textView.string
-            parent.selectedRange = textView.selectedRange()
             parent.linkController.updateLinkQuery(from: textView)
             parent.slashController.updateQuery(from: textView)
+            guard !textView.hasMarkedText() else {
+                styleWorkItem?.cancel()
+                return
+            }
+            parent.text = textView.string
+            parent.selectedRange = textView.selectedRange()
             let fallbackRange = NSRange(location: textView.selectedRange().location, length: 0)
             applyStyling(
                 to: textView,
@@ -205,9 +214,10 @@ private struct NativeBodyEditor: NSViewRepresentable {
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
-            parent.selectedRange = textView.selectedRange()
             parent.linkController.updateLinkQuery(from: textView)
             parent.slashController.updateQuery(from: textView)
+            guard !textView.hasMarkedText(), parent.selectedRange != textView.selectedRange() else { return }
+            parent.selectedRange = textView.selectedRange()
         }
 
         func insertPastedImage(_ image: NSImage, at selectedRange: NSRange, into textView: NSTextView) {
@@ -230,7 +240,7 @@ private struct NativeBodyEditor: NSViewRepresentable {
             }
             let appearance = parent.appearance
             let workItem = DispatchWorkItem { [weak self, weak textView] in
-                guard let self, let textView else { return }
+                guard let self, let textView, !textView.hasMarkedText() else { return }
                 let range = immediately ? editedRange : self.pendingStylingRange
                 self.pendingStylingRange = nil
                 NativeMarkdownLiveStyler.apply(
@@ -430,6 +440,7 @@ struct ArticleEditorView: View {
     @State private var editorSidebarDragStart: Double?
     @State private var splitDragStart: Double?
     @State private var blockLinkSuggestions: [EditorArticleLinkSuggestion] = []
+    @State private var showsWritingReference = false
 
     init(
         model: NativeAppModel,
@@ -825,34 +836,37 @@ struct ArticleEditorView: View {
             if editorMode != .focus {
                 Divider()
 
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "info.circle")
-                        Text("支持标题、列表、引用、代码、表格、加粗、斜体、删除线、链接和图片。复制或拖入图片后可直接加入正文。")
-                    }
+                DisclosureGroup("写作语法参考", isExpanded: $showsWritingReference) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "info.circle")
+                            Text("支持标题、列表、引用、代码、表格、加粗、斜体、删除线、链接和图片。复制或拖入图片后可直接加入正文。")
+                        }
 
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: "safari")
-                        Text("网页嵌入：单独一行粘贴 <iframe src=\"…\"></iframe>，或使用 ```embed 代码块放入网页 URL。")
-                    }
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "safari")
+                            Text("网页嵌入：单独一行粘贴 <iframe src=\"…\"></iframe>，或使用 ```embed 代码块放入网页 URL。")
+                        }
 
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: "chevron.left.forwardslash.chevron.right")
-                        Text("HTML 组件：使用 ```html-render height=360 代码块；组件支持 CSS 和 JavaScript。")
-                    }
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            Text("HTML 组件：使用 ```html-render height=360 代码块；组件支持 CSS 和 JavaScript。")
+                        }
 
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: "link")
-                        Text("文章关联：支持 [[双链]]、![[文章#标题]]、![[文章#^块ID]]、Callout、脚注、==高亮== 和任务列表。")
-                    }
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "link")
+                            Text("文章关联：支持 [[双链]]、![[文章#标题]]、![[文章#^块ID]]、Callout、脚注、==高亮== 和任务列表。")
+                        }
 
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: "tablecells")
-                        Text("Base 嵌入：使用 ![[集合名称.base]]，或在 ```base 代码块中写 name: 集合名称。")
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "tablecells")
+                            Text("Base 嵌入：使用 ![[集合名称.base]]，或在 ```base 代码块中写 name: 集合名称。")
+                        }
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
                 .padding(.horizontal, ArticleEditorLayout.contentInset)
                 .padding(.vertical, 11)
             }
@@ -900,6 +914,7 @@ struct ArticleEditorView: View {
                     model.executeCommand(.editorInsertion(id: definition.id, replacing: range))
                 }
             )
+            .id(model.editor.recoveryID)
             .padding(10)
             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
             .overlay {

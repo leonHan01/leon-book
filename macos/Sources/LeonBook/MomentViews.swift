@@ -638,13 +638,15 @@ private struct MomentComposerView: View {
 
                 Spacer()
 
-                Text("拖入或粘贴图片可直接添加")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Text("\(model.momentDraft.text.count) / 500")
+                Text("\((model.momentDraft.text as NSString).length) / 500")
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(
+                        (model.momentDraft.text as NSString).length >= 450
+                            ? MomentVisualStyle.accent : Color.secondary
+                    )
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.primary.opacity(0.04), in: Capsule())
             }
 
             MomentRichTextEditor(
@@ -653,7 +655,19 @@ private struct MomentComposerView: View {
                 controller: richTextController,
                 onPasteImages: model.uploadMomentPastedImages
             )
-                .frame(height: 104)
+                .frame(height: 156)
+                .overlay(alignment: .topLeading) {
+                    if model.momentDraft.text.isEmpty {
+                        Text("这一刻，有什么想记录的？")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 14)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12))
                 .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12)
@@ -674,23 +688,34 @@ private struct MomentComposerView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                HStack(spacing: 8) {
-                    Label("标签", systemImage: "tag")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(tags, id: \.self) { tag in
-                        Text("#\(tag)")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.tint)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.tint.opacity(0.12), in: Capsule())
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        Label("标签", systemImage: "tag")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(tags, id: \.self) { tag in
+                            Text("#\(tag)")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.tint)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.tint.opacity(0.12), in: Capsule())
+                        }
                     }
-                    Spacer(minLength: 0)
                 }
+                .scrollIndicators(.hidden)
             }
 
             if !model.momentDraft.images.isEmpty {
+                HStack {
+                    Label("已添加媒体", systemImage: "photo.stack")
+                    Spacer()
+                    Text("\(model.momentDraft.images.count) / 9")
+                        .monospacedDigit()
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
                 ScrollView(.horizontal) {
                     HStack(spacing: 10) {
                         ForEach(model.momentDraft.images) { media in
@@ -706,7 +731,7 @@ private struct MomentComposerView: View {
                                         )
                                     }
                                 }
-                                    .frame(width: 96, height: 96)
+                                    .frame(width: 112, height: 112)
                                     .background(.black.opacity(media.isVideo ? 0.9 : 0.04))
                                     .clipShape(RoundedRectangle(cornerRadius: 9))
 
@@ -717,7 +742,7 @@ private struct MomentComposerView: View {
                                         .font(.system(size: 10, weight: .bold))
                                         .foregroundStyle(.white)
                                         .frame(width: 22, height: 22)
-                                        .background(.red, in: Circle())
+                                        .background(.black.opacity(0.7), in: Circle())
                                         .overlay {
                                             Circle().stroke(.white.opacity(0.8), lineWidth: 1)
                                         }
@@ -733,6 +758,8 @@ private struct MomentComposerView: View {
                 }
                 .scrollIndicators(.hidden)
             }
+
+            Divider()
 
             HStack(spacing: 12) {
                 Button {
@@ -750,10 +777,6 @@ private struct MomentComposerView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
-
-                Text("最多 9 个图片或视频 · 视频仅支持 MP4")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
                 if model.isUploadingMedia {
                     ProgressView()
@@ -783,8 +806,25 @@ private struct MomentComposerView: View {
                     )
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .keyboardShortcut(.return, modifiers: .command)
+                .help("⌘ Return 保存微博")
                 .disabled(model.momentDraft.isEmpty || model.isPublishingMoment || model.isUploadingMedia)
             }
+
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Text("拖入或粘贴图片可直接添加")
+                    Spacer(minLength: 16)
+                    Text("最多 9 个图片或视频 · 视频仅支持 MP4")
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("拖入或粘贴图片可直接添加")
+                    Text("最多 9 个图片或视频 · 视频仅支持 MP4")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .padding(18)
     }

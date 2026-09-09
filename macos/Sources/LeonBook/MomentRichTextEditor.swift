@@ -154,7 +154,8 @@ struct MomentRichTextEditor: NSViewRepresentable {
         textView.textColor = .labelColor
         textView.typingAttributes = MomentTextRuns.defaultAttributes
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainer?.lineFragmentPadding = 12
+        textView.textContainerInset = NSSize(width: 12, height: 14)
+        textView.textContainer?.lineFragmentPadding = 4
         textView.textContainer?.widthTracksTextView = true
         textView.registerForDraggedTypes([.fileURL, .png, .tiff])
         textView.textStorage?.setAttributedString(MomentTextRuns.attributedString(text: text, runs: textRuns))

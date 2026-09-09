@@ -327,21 +327,30 @@ extension NativeAppModel {
         Task { await performBackupRestore(snapshot) }
     }
 
-    private func performBackupRestore(_ snapshot: NativeBackupSnapshot) async {
+    func performBackupRestore(_ snapshot: NativeBackupSnapshot) async {
         let rootURL = URL(fileURLWithPath: dataRootDirectoryPath, isDirectory: true)
         let destinationURL = URL(fileURLWithPath: backupDirectoryPath, isDirectory: true)
         let policy = backupPolicy
-        backupTask?.cancel()
-        editorAutosaveTask?.cancel()
-        trashCleanupTask?.cancel()
-        isRestoringBackup = true
-        isLoading = true
-        isBackingUp = true
+        let affected: [NativeAppModel]
+        do {
+            affected = try NativeWorkspaceWindows.pauseForRestore(in: rootURL, initiatedBy: self)
+        } catch {
+            isRestoringBackup = false
+            errorMessage = error.localizedDescription
+            return
+        }
+        // Restore runs in its own task; cancel all previously scheduled backups.
+        for model in affected { model.backupTask?.cancel() }
+        var suspension: WorkspaceStorageLifecycle.Suspension?
+        var restoreError: Error?
+        var didRestore = false
         backupStatus = "恢复前正在创建当前数据的安全快照…"
 
         do {
-            try await store.prepareForBackup()
-            try await userWorkspaces.prepareForBackup()
+            for model in affected { try await model.preserveEditorBeforeRestore() }
+            let session = try WorkspaceStorageLifecycle.suspend(in: rootURL)
+            suspension = session
+            try await session.prepareAndClose()
             let safetySnapshot = try await Task.detached(priority: .utility) {
                 try LocalBackupManager.createManagedSnapshot(
                     source: rootURL,
@@ -351,12 +360,7 @@ extension NativeAppModel {
                 )
             }.value
             lastBackupPath = safetySnapshot.snapshot.url.path
-            isBackingUp = false
             backupStatus = "正在校验并恢复资料库…"
-            storageReady = false
-            await store.closeForRestore()
-            await userWorkspaces.closeForRestore()
-
             try await Task.detached(priority: .userInitiated) {
                 try LocalBackupManager.restoreSnapshot(
                     at: snapshot.url,
@@ -364,35 +368,47 @@ extension NativeAppModel {
                     minimumFreeSpaceBytes: policy.minimumFreeSpaceBytes
                 )
             }.value
-            try await connect(to: rootURL)
-            startTrashCleanupLoop()
-            await refreshBackupOverview()
-            backupStatus = "恢复完成：\(snapshot.url.lastPathComponent)；恢复前数据已保存为安全快照"
-            backupValidationStatus = "恢复时已通过快照校验"
-            errorMessage = nil
+            didRestore = true
+        } catch {
+            restoreError = error
+        }
+        suspension?.finish()
+
+        // Include windows created during the restore. They were prevented from
+        // opening a database by the shared storage gate.
+        for model in NativeWorkspaceWindows.matching(rootURL) {
+            do {
+                if !didRestore, affected.contains(where: { $0 === model }) {
+                    try await model.store.prepareForInteractiveUse()
+                    try await model.reload()
+                    model.startMarkdownSourceMonitor()
+                    model.storageReady = true
+                } else {
+                    try await model.connect(to: rootURL, preferredUserID: model.currentUser.id)
+                }
+                model.errorMessage = restoreError?.localizedDescription
+            } catch {
+                model.storageReady = false
+                model.errorMessage = "无法重新连接资料库：\(error.localizedDescription)"
+            }
+            model.isBackingUp = false
+            model.isRestoringBackup = false
+            model.isLoading = false
+            model.backupStatus = didRestore
+                ? "恢复完成：\(snapshot.url.lastPathComponent)；恢复前数据已保存为安全快照"
+                : "恢复失败：\(restoreError?.localizedDescription ?? "未知错误")"
+            if didRestore { model.backupValidationStatus = "恢复时已通过快照校验" }
+            model.startTrashCleanupLoop()
+            model.consumeAutomationInbox()
+        }
+        await refreshBackupOverview()
+        if didRestore {
             recordFirstPartyModuleEvent(
                 moduleID: BackupFirstPartyModule.id,
                 name: "backup.restored",
                 payload: ["snapshot": snapshot.url.lastPathComponent]
             )
-        } catch {
-            isBackingUp = false
-            if !storageReady {
-                do {
-                    try await connect(to: rootURL)
-                    startTrashCleanupLoop()
-                } catch {
-                    errorMessage = "恢复失败且无法重新连接原资料库：\(error.localizedDescription)"
-                }
-            }
-            backupStatus = "恢复失败，原数据已保留"
-            if errorMessage == nil { errorMessage = error.localizedDescription }
-            await refreshBackupOverview()
         }
-        isBackingUp = false
-        isRestoringBackup = false
-        isLoading = false
-        consumeAutomationInbox()
     }
 
 }

@@ -507,6 +507,7 @@ public struct NativeSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .disabled(model.isRestoringBackup)
         .frame(maxWidth: 720)
         .padding(24)
         .task { readingPreferences.prepare(for: model.currentUser.id) }

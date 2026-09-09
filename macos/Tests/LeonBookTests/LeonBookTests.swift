@@ -2,6 +2,7 @@ import Darwin
 import AppKit
 import Foundation
 import LeonBookExtensionKit
+import SwiftUI
 @testable import LeonBook
 
 private var failures: [String] = []
@@ -1803,7 +1804,503 @@ private final class NativeImageDecodeProbe: @unchecked Sendable {
     }
 }
 
+private final class WritingTextViewProbe: NSTextView {
+    var isComposing = false
+    override func hasMarkedText() -> Bool { isComposing }
+}
+
+private final class WritingStyleProbe: NSObject, NSTextStorageDelegate {
+    var attributePasses = 0
+    func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+                     range editedRange: NSRange, changeInLength delta: Int) {
+        if editedMask.contains(.editedAttributes) { attributePasses += 1 }
+    }
+}
+
 final class PerformanceRegressionTests {
+    @MainActor
+    func testWritingCompletionOnlyPublishesChangedQueries() {
+        let textView = WritingTextViewProbe()
+        let links = ArticleLinkAutocompleteController()
+        let slash = EditorSlashCommandController()
+        var linkUpdates = 0
+        var slashUpdates = 0
+        let linkObserver = links.$activeLinkQuery.dropFirst().sink { _ in linkUpdates += 1 }
+        let slashObserver = slash.$activeQuery.dropFirst().sink { _ in slashUpdates += 1 }
+        textView.string = "普通段落"
+        for index in 0..<4 {
+            textView.setSelectedRange(NSRange(location: index, length: 0))
+            links.updateLinkQuery(from: textView)
+            slash.updateQuery(from: textView)
+        }
+        XCTAssertEqual(linkUpdates, 0, "ordinary caret movement must not refresh link suggestions")
+        XCTAssertEqual(slashUpdates, 0, "ordinary caret movement must not refresh slash suggestions")
+        textView.string = "前文\n[[中文#^块"
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        links.updateLinkQuery(from: textView)
+        links.updateLinkQuery(from: textView)
+        XCTAssertEqual(links.activeLinkQuery, "中文#^块")
+        XCTAssertEqual(linkUpdates, 1)
+        textView.isComposing = true
+        links.updateLinkQuery(from: textView)
+        XCTAssertNil(links.activeLinkQuery, "completion menus must stay out of the IME candidate session")
+        textView.isComposing = false
+        textView.string = "  /标题"
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        slash.updateQuery(from: textView)
+        slash.updateQuery(from: textView)
+        XCTAssertEqual(slash.activeQuery, "标题")
+        XCTAssertEqual(slashUpdates, 1)
+        textView.isComposing = true
+        slash.updateQuery(from: textView)
+        XCTAssertNil(slash.activeQuery)
+        withExtendedLifetime((linkObserver, slashObserver)) {}
+
+        for text in ["[[旧链接]]\n正文", "[[未闭合\n下一行", "[[已完成]]", "纯文本", "[[有[嵌套"] {
+            XCTAssertNil(links.linkContext(in: text, selectedRange: NSRange(location: (text as NSString).length, length: 0)))
+        }
+        for text in ["😀 [[中文", "前文\r\n[[标题", "前文\n[[", "[[第一个]] 与 [[第二个"] {
+            let context = links.linkContext(in: text, selectedRange: NSRange(location: (text as NSString).length, length: 0))
+            XCTAssertNotNil(context)
+            if let context {
+                XCTAssertEqual((text as NSString).substring(with: context.range), "[[" + context.query)
+            }
+        }
+        for range in [NSRange(location: -1, length: 0), NSRange(location: NSNotFound, length: 0),
+                      NSRange(location: 99, length: 0), NSRange(location: 1, length: 1)] {
+            XCTAssertNil(links.linkContext(in: "[[测试", selectedRange: range))
+        }
+    }
+
+    @MainActor
+    func testWritingEditorsPreserveCompositionAndSkipUnchangedBlockStyling() {
+        var body = "已提交"
+        var selection = NSRange(location: 0, length: 0)
+        var splitCount = 0
+        var mergeCount = 0
+        let bodyEditor = NativeBodyEditor(
+            text: Binding(get: { body }, set: { body = $0 }),
+            selectedRange: Binding(get: { selection }, set: { selection = $0 }),
+            isEditable: true, linkController: ArticleLinkAutocompleteController(),
+            slashController: EditorSlashCommandController(), appearance: .livePreview,
+            typography: .default, onPasteImage: { _, _ in }, onRunCommand: { _, _ in }
+        )
+        let bodyCoordinator = bodyEditor.makeCoordinator()
+        func makeBlockEditor(typography: NativeReadingTypography = .default) -> NativeBlockTextEditor {
+            NativeBlockTextEditor(
+                text: Binding(get: { body }, set: { body = $0 }), height: .constant(40),
+                kind: .paragraph, typography: typography, isEditable: true, shouldFocus: false,
+                onFocus: {}, onSplit: { _ in splitCount += 1 }, onMergeBackward: { mergeCount += 1 },
+                onMoveBlocks: { _ in }, onChangeIndent: { _ in }, onBlockCommand: { _ in false }
+            )
+        }
+        let blockCoordinator = makeBlockEditor().makeCoordinator()
+        let textView = WritingTextViewProbe(frame: NSRect(x: 0, y: 0, width: 600, height: 120))
+        textView.string = "## **中文**写作"
+        let probe = WritingStyleProbe()
+        textView.textStorage?.delegate = probe
+        blockCoordinator.refreshPresentation(of: textView)
+        let initialPasses = probe.attributePasses
+        XCTAssertTrue(initialPasses > 0)
+        for _ in 0..<20 { blockCoordinator.refreshPresentation(of: textView) }
+        XCTAssertEqual(probe.attributePasses, initialPasses, "unrelated row updates must not restyle unchanged text")
+
+        textView.isComposing = true
+        textView.string = "正在组合的拼音"
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        let beforeComposition = probe.attributePasses
+        let change = Notification(name: NSText.didChangeNotification, object: textView)
+        bodyCoordinator.textDidChange(change)
+        blockCoordinator.textDidChange(change)
+        NativeMarkdownLiveStyler.apply(.livePreview, typography: .default, to: textView, editedRange: nil)
+        XCTAssertEqual(body, "已提交", "IME marked text must not leak into the bound draft")
+        XCTAssertEqual(probe.attributePasses, beforeComposition, "styling must preserve the IME's marked attributes")
+        XCTAssertFalse(blockCoordinator.textView(textView, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertFalse(blockCoordinator.textView(textView, doCommandBy: #selector(NSResponder.deleteBackward(_:))))
+        XCTAssertEqual(splitCount, 0, "confirming a Chinese candidate must not split the block")
+        XCTAssertEqual(mergeCount, 0, "editing a Chinese candidate must not merge blocks")
+
+        textView.isComposing = false
+        textView.string = "中文已确认"
+        blockCoordinator.textDidChange(change)
+        bodyCoordinator.textDidChange(change)
+        bodyCoordinator.cancelStyling()
+        XCTAssertEqual(body, "中文已确认")
+        XCTAssertTrue(probe.attributePasses > beforeComposition)
+        XCTAssertTrue(blockCoordinator.textView(textView, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        XCTAssertEqual(splitCount, 1)
+        var typography = NativeReadingTypography.default
+        typography.fontSize = 24
+        blockCoordinator.parent = makeBlockEditor(typography: typography)
+        let previousPasses = probe.attributePasses
+        blockCoordinator.refreshPresentation(of: textView)
+        XCTAssertTrue(probe.attributePasses > previousPasses, "font changes must invalidate the presentation cache")
+        let font = textView.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(font?.pointSize, 24)
+        let updatedPasses = probe.attributePasses
+        blockCoordinator.refreshPresentation(of: textView)
+        XCTAssertEqual(probe.attributePasses, updatedPasses)
+    }
+
+    @MainActor
+    func testWritingCompletionBenchmark() {
+        let controller = ArticleLinkAutocompleteController()
+        let source = String(repeating: "中文写作 paragraph with **Markdown** and punctuation。\n", count: 20_000) + "继续写作"
+        let selection = NSRange(location: (source as NSString).length, length: 0)
+        let iterations = 80
+        let pair = bestPairedElapsed(samples: 2, first: {
+            var checksum = 0
+            for _ in 0..<iterations {
+                let prefix = (source as NSString).substring(to: selection.location) as NSString
+                if prefix.range(of: "[[", options: .backwards).location == NSNotFound { checksum += 1 }
+            }
+            return checksum
+        }, second: {
+            var checksum = 0
+            for _ in 0..<iterations {
+                if controller.linkContext(in: source, selectedRange: selection) == nil { checksum += 1 }
+            }
+            return checksum
+        })
+        XCTAssertEqual(pair.first.result, iterations)
+        XCTAssertEqual(pair.second.result, iterations)
+        let currentMilliseconds = pair.second.elapsed * 1_000 / Double(iterations)
+        print(String(format: "PERF writing-link utf16=%d legacy=%.3fms current=%.6fms",
+                     selection.location, pair.first.elapsed * 1_000 / Double(iterations), currentMilliseconds))
+        XCTAssertTrue(currentMilliseconds < 0.5, "long-document completion lookup must stay under 0.5 ms")
+        XCTAssertTrue(pair.second.elapsed < pair.first.elapsed * 0.25,
+                      "line-local lookup must remove at least 75% of full-prefix scanning")
+    }
+
+    @MainActor
+    func testWorkspaceResourceIndexPreservesNavigationSemantics() {
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        let summaries = ["Project.md", "Project/Child.md", "Docs/index.md", "Docs/中文/Guide.md"].enumerated().map {
+            performanceArticle(index: $0.offset, status: .draft, tags: [], sourceRelativePath: $0.element)
+        }
+        let records = summaries.map {
+            NativeWorkspaceResourceRecord(
+                kind: .file, storage: .markdownSource, relativePath: $0.sourceRelativePath,
+                placementFolderPath: $0.sourceFolderPath, absolutePath: "/vault/\($0.sourceRelativePath)"
+            )
+        } + [
+            NativeWorkspaceResourceRecord(
+                kind: .file, storage: .managedMedia, relativePath: "article-0/cover.png",
+                placementFolderPath: "", absolutePath: "/vault/media/cover.png", ownerArticleSlug: "article-0"
+            ),
+            NativeWorkspaceResourceRecord(
+                kind: .folder, storage: .markdownSource, relativePath: "Empty",
+                placementFolderPath: "", absolutePath: "/vault/Empty"
+            ),
+        ]
+        model.workspaceResources = NativeWorkspaceResourceTree.build(articles: summaries, records: records)
+        let expected = NativeWorkspaceResourceTree.flattened(model.workspaceResources)
+        XCTAssertEqual(model.workspaceResourceItems, expected)
+        XCTAssertEqual(model.workspaceFolderPaths, NativeWorkspaceResourceTree.folderPaths(in: model.workspaceResources))
+        for node in expected {
+            XCTAssertEqual(model.workspaceResource(id: node.id), node)
+            XCTAssertEqual(model.workspaceResourceAncestorIDs(resourceID: node.id),
+                           NativeWorkspaceResourceTree.ancestors(of: node.id, in: model.workspaceResources))
+        }
+        for summary in summaries {
+            XCTAssertEqual(model.workspaceResourceID(articleSlug: summary.slug),
+                           expected.first { $0.kind == .article && $0.articleSlug == summary.slug }?.id)
+        }
+        XCTAssertEqual(model.workspaceResourceAncestorIDs(resourceID: "workspace-article:article-1"),
+                       ["workspace-article:article-0"], "a page with children must remain an expandable ancestor")
+        XCTAssertEqual(model.workspaceResourceAncestorIDs(resourceID: "workspace-article:article-3"),
+                       ["workspace-article:article-2", "workspace-folder:Docs/中文"])
+        let selected = Set([expected.last!.id, expected.first!.id, "missing"])
+        XCTAssertEqual(model.workspaceResources(ids: selected), expected.filter { selected.contains($0.id) })
+        XCTAssertEqual(model.workspaceResources(ids: Set(expected.map(\.id))), expected)
+        XCTAssertEqual(model.workspaceResources(ids: []), [])
+        XCTAssertNil(model.workspaceResource(id: "missing"))
+        XCTAssertNil(model.workspaceResourceID(articleSlug: "missing"))
+        XCTAssertEqual(model.workspaceResourceAncestorIDs(resourceID: "missing"), [])
+    }
+
+    @MainActor
+    func testWorkspaceResourceIndexInvalidatesAfterMutationAndWorkspaceReset() {
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        model.workspaceResources = performanceResourceTree(folderCount: 2, articlesPerFolder: 2)
+        XCTAssertNil(model.cachedWorkspaceResourceIndex, "replacing the tree must defer index work until it is read")
+        let initial = model.workspaceResourceIndex
+        for _ in 0..<20 {
+            XCTAssertEqual(model.workspaceResources(ids: ["resource-1-1"]).count, 1)
+            XCTAssertTrue(model.workspaceResourceIndex === initial, "ordinary interactions must reuse the same index")
+        }
+        let oldPaths = model.workspaceFolderPaths
+        let original = model.workspaceResources[0].children[0]
+        let renamed = NativeWorkspaceResourceNode(
+            id: original.id, kind: original.kind, storage: original.storage,
+            name: "Renamed", relativePath: "Folder 0/Renamed.md", sourceRelativePath: "Folder 0/Renamed.md",
+            absolutePath: "/vault/Folder 0/Renamed.md", articleSlug: original.articleSlug, articleTitle: "Updated title",
+            children: original.children, articleCount: original.articleCount
+        )
+        // Same ID and node count: metadata changes must still invalidate both
+        // navigation and the lazily computed destination paths.
+        model.workspaceResources[0].children[0] = renamed
+        XCTAssertNil(model.cachedWorkspaceResourceIndex)
+        XCTAssertFalse(model.workspaceResourceIndex === initial)
+        XCTAssertEqual(model.workspaceResource(id: original.id), renamed)
+        XCTAssertEqual(initial.resource(id: original.id), original, "old snapshots must remain immutable")
+        XCTAssertFalse(model.workspaceFolderPaths == oldPaths)
+        XCTAssertTrue(model.workspaceFolderPaths.contains("Folder 0/Renamed"))
+        XCTAssertFalse(model.workspaceFolderPaths.contains("Folder 0/Article 0"))
+
+        // Moving a node without changing its ID must replace its parent chain.
+        model.workspaceResources[0].children.removeFirst()
+        model.workspaceResources[1].children.insert(renamed, at: 0)
+        XCTAssertEqual(model.workspaceResourceAncestorIDs(resourceID: renamed.id), ["folder-1"])
+        model.workspaceResources.reverse()
+        XCTAssertEqual(model.workspaceResourceItems, NativeWorkspaceResourceTree.flattened(model.workspaceResources))
+        model.workspaceResources[0].children.removeFirst()
+        XCTAssertNil(model.workspaceResource(id: renamed.id))
+        XCTAssertNil(model.workspaceResourceID(articleSlug: renamed.articleSlug!))
+
+        let otherWindow = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        XCTAssertEqual(otherWindow.workspaceResourceItems, [])
+        let isPreviousIndexReleased = { [weak index = model.workspaceResourceIndex] in index == nil }
+        model.workspaceResources = []
+        XCTAssertTrue(isPreviousIndexReleased(), "discarding a tree must release its navigation cache")
+        XCTAssertNil(model.cachedWorkspaceResourceIndex)
+        XCTAssertEqual(model.workspaceResourceItems, [])
+        XCTAssertEqual(model.workspaceFolderPaths, [])
+        XCTAssertEqual(model.workspaceResourceAncestorIDs(resourceID: "resource-1-1"), [])
+        model.workspaceResources = [renamed]
+        XCTAssertEqual(model.workspaceResource(id: renamed.id), renamed)
+        XCTAssertEqual(model.workspaceResourceAncestorIDs(resourceID: renamed.id), [])
+        XCTAssertEqual(otherWindow.workspaceResourceItems, [], "window caches must remain independent")
+    }
+
+    @MainActor
+    func testWorkspaceResourceInteractionBenchmark() {
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        model.workspaceResources = performanceResourceTree(folderCount: 100, articlesPerFolder: 100)
+        let buildStart = ProcessInfo.processInfo.systemUptime
+        let initialCount = model.workspaceResourceItems.count
+        let buildMilliseconds = (ProcessInfo.processInfo.systemUptime - buildStart) * 1_000
+        XCTAssertEqual(initialCount, 10_100)
+        print(String(format: "PERF resources-10k index-build=%.3fms", buildMilliseconds))
+        XCTAssertTrue(buildMilliseconds < 50, "building a 10k resource index must stay under 50 ms")
+        let selectedIDs = Set((0..<100).map { "resource-\($0)-99" })
+        let expectedIDs = (0..<100).map { "resource-\($0)-99" }
+        let iterations = 3
+        let pair = bestPairedElapsed(samples: 2, first: {
+            var checksum = 0
+            for _ in 0..<iterations {
+                let items = NativeWorkspaceResourceTree.flattened(model.workspaceResources)
+                let order = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) })
+                let selected = selectedIDs.compactMap { id in
+                    NativeWorkspaceResourceTree.flattened(model.workspaceResources).first { $0.id == id }
+                }.sorted { order[$0.id, default: .max] < order[$1.id, default: .max] }
+                XCTAssertEqual(selected.map(\.id), expectedIDs)
+                checksum += selected.count
+            }
+            return checksum
+        }, second: {
+            var checksum = 0
+            for _ in 0..<iterations {
+                let selected = model.workspaceResources(ids: selectedIDs)
+                XCTAssertEqual(selected.map(\.id), expectedIDs)
+                checksum += selected.count
+            }
+            return checksum
+        })
+        XCTAssertEqual(pair.first.result, iterations * selectedIDs.count)
+        XCTAssertEqual(pair.second.result, pair.first.result)
+        let currentMilliseconds = pair.second.elapsed * 1_000 / Double(iterations)
+        print(String(format: "PERF resources-10k select-100 legacy=%.3fms current=%.3fms",
+                     pair.first.elapsed * 1_000 / Double(iterations), currentMilliseconds))
+        XCTAssertTrue(currentMilliseconds < 1, "selecting 100 resources in an unchanged 10k tree must stay under 1 ms")
+        XCTAssertTrue(pair.second.elapsed < pair.first.elapsed * 0.1,
+                      "resource selection must remove at least 90% of repeated tree traversal")
+
+        let navigationIterations = 100
+        let navigationPair = bestPairedElapsed(samples: 2, first: {
+            var checksum = 0
+            for index in 0..<navigationIterations {
+                let slug = "article-\(index)-99"
+                if let id = NativeWorkspaceResourceTree.flattened(model.workspaceResources)
+                    .first(where: { $0.articleSlug == slug && $0.kind == .article })?.id {
+                    checksum += NativeWorkspaceResourceTree.ancestors(of: id, in: model.workspaceResources).count
+                }
+            }
+            return checksum
+        }, second: {
+            var checksum = 0
+            for index in 0..<navigationIterations {
+                if let id = model.workspaceResourceID(articleSlug: "article-\(index)-99") {
+                    checksum += model.workspaceResourceAncestorIDs(resourceID: id).count
+                }
+            }
+            return checksum
+        })
+        XCTAssertEqual(navigationPair.first.result, navigationIterations)
+        XCTAssertEqual(navigationPair.second.result, navigationPair.first.result)
+        let navigationMilliseconds = navigationPair.second.elapsed * 1_000 / Double(navigationIterations)
+        print(String(format: "PERF resources-10k reveal legacy=%.3fms current=%.6fms",
+                     navigationPair.first.elapsed * 1_000 / Double(navigationIterations), navigationMilliseconds))
+        XCTAssertTrue(navigationMilliseconds < 0.1, "revealing an article in an unchanged 10k tree must stay under 0.1 ms")
+        XCTAssertTrue(navigationPair.second.elapsed < navigationPair.first.elapsed * 0.1,
+                      "revealing an article must remove at least 90% of tree traversal")
+    }
+
+    private func performanceResourceTree(folderCount: Int, articlesPerFolder: Int) -> [NativeWorkspaceResourceNode] {
+        (0..<folderCount).map { folder in
+            NativeWorkspaceResourceNode(
+                id: "folder-\(folder)", kind: .folder, storage: .markdownSource,
+                name: "Folder \(folder)", relativePath: "Folder \(folder)",
+                sourceRelativePath: "Folder \(folder)", absolutePath: "", articleSlug: nil, articleTitle: nil,
+                children: (0..<articlesPerFolder).map { article in
+                    NativeWorkspaceResourceNode(
+                        id: "resource-\(folder)-\(article)", kind: .article, storage: .markdownSource,
+                        name: "Article \(article)", relativePath: "Folder \(folder)/Article \(article).md",
+                        sourceRelativePath: "Folder \(folder)/Article \(article).md", absolutePath: "",
+                        articleSlug: "article-\(folder)-\(article)", articleTitle: "Article \(article)",
+                        children: [], articleCount: 1
+                    )
+                },
+                articleCount: articlesPerFolder
+            )
+        }
+    }
+
+    @MainActor
+    func testGraphPresentationReusesProjectionDuringInteraction() {
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        model.articleGraph = NativeArticleGraph(
+            nodes: (0..<12).map { index in
+                performanceArticle(index: index, status: index.isMultiple(of: 2) ? .draft : .published,
+                                   tags: ["Swift"], sourceRelativePath: "article-\(index).md")
+            },
+            edges: [.init(sourceSlug: "article-0", targetSlug: "article-1")]
+        )
+        let state = NativeArticleGraphPageState()
+        let query = NativeArticleGraphQuery()
+        let first = model.articleGraphPresentation(query: query)
+        XCTAssertEqual(first.shortestPath(from: "article-0", to: "article-1")?.nodes.map(\.slug),
+                       ["article-0", "article-1"])
+        XCTAssertNil(first.shortestPath(from: "article-1", to: "article-0"))
+        XCTAssertNil(first.shortestPath(from: "article-1", to: "article-0"))
+        XCTAssertEqual(first.shortestPath(from: "article-0", to: "article-1")?.hopCount, 1)
+        XCTAssertEqual(first.shortestPath(from: "article-0", to: "article-0")?.hopCount, 0)
+        for index in 0..<20 {
+            state.nodePositions["article-0"] = CGPoint(x: 100 + index, y: 200)
+            state.zoomIn()
+            state.pathStartText = "Article \(index)"
+            XCTAssertTrue(model.articleGraphPresentation(query: query) === first,
+                          "dragging, zooming, and typing path endpoints must reuse the graph projection")
+        }
+
+        var previous = first
+        for changedQuery in [
+            NativeArticleGraphQuery(searchText: "Swift"),
+            NativeArticleGraphQuery(status: .draft),
+            NativeArticleGraphQuery(includesOrphans: false),
+            NativeArticleGraphQuery(nodeLimit: 10),
+            query,
+        ] {
+            let changed = model.articleGraphPresentation(query: changedQuery)
+            XCTAssertFalse(changed === previous, "each filter change must replace the cached projection")
+            XCTAssertEqual(changed.projection, NativeArticleGraphProjector.project(model.articleGraph, query: changedQuery))
+            previous = changed
+        }
+
+        // Updating edges with the same nodes must invalidate the cached result.
+        model.articleGraph = NativeArticleGraph(nodes: model.articleGraph.nodes, edges: [])
+        let changed = model.articleGraphPresentation(query: query)
+        XCTAssertFalse(changed === previous)
+        XCTAssertTrue(changed.projection.graph.edges.isEmpty)
+        XCTAssertNil(changed.shortestPath(from: "article-0", to: "article-1"),
+                     "changing the graph must also invalidate its cached paths")
+        var updatedNodes = model.articleGraph.nodes
+        updatedNodes[0].pageViews += 1
+        model.articleGraph = NativeArticleGraph(nodes: updatedNodes, edges: [])
+        let updated = model.articleGraphPresentation(query: query)
+        XCTAssertFalse(updated === changed)
+        XCTAssertEqual(updated.projection, NativeArticleGraphProjector.project(model.articleGraph, query: query),
+                       "node metadata changes must be visible even when slugs and node count are unchanged")
+        let otherWindow = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        XCTAssertEqual(otherWindow.articleGraphPresentation(query: query).projection.graph, .empty,
+                       "a different window must not reuse this window's graph")
+        model.articleGraph = .empty
+        XCTAssertEqual(model.articleGraphPresentation(query: query).projection.graph, .empty,
+                       "workspace reset or disabling the graph must discard the previous workspace's nodes")
+    }
+
+    @MainActor
+    func testGraphInteractionProjectionBenchmark() {
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
+        let count = 10_000
+        model.articleGraph = NativeArticleGraph(
+            nodes: (0..<count).map { index in
+                performanceArticle(index: index, status: .published, tags: ["Swift", "性能"],
+                                   sourceRelativePath: "article-\(index).md")
+            },
+            edges: (1..<count).map { .init(sourceSlug: "article-\($0 - 1)", targetSlug: "article-\($0)") }
+        )
+        let query = NativeArticleGraphQuery(nodeLimit: 500)
+        let start = ProcessInfo.processInfo.systemUptime
+        let initial = model.articleGraphPresentation(query: query)
+        let buildElapsed = ProcessInfo.processInfo.systemUptime - start
+        let iterations = 8
+        let pair = bestPairedElapsed(samples: 2, first: {
+            var checksum = 0
+            for _ in 0..<iterations {
+                checksum += NativeArticleGraphProjector.project(model.articleGraph, query: query).graph.nodes.count
+            }
+            return checksum
+        }, second: {
+            var checksum = 0
+            for _ in 0..<iterations {
+                checksum += model.articleGraphPresentation(query: query).projection.graph.nodes.count
+            }
+            return checksum
+        })
+        XCTAssertEqual(initial.projection.graph.nodes.count, 500)
+        XCTAssertEqual(pair.first.result, pair.second.result)
+        let oldMilliseconds = pair.first.elapsed * 1_000 / Double(iterations)
+        let newMilliseconds = pair.second.elapsed * 1_000 / Double(iterations)
+        print(String(format: "PERF graph-10k build=%.3fms uncached=%.3fms reused=%.6fms", buildElapsed * 1_000, oldMilliseconds, newMilliseconds))
+        XCTAssertTrue(newMilliseconds < 1, "unchanged graph projection must cost less than 1 ms per interaction")
+        XCTAssertTrue(pair.second.elapsed < pair.first.elapsed * 0.1,
+                      "unchanged graph projection must remove at least 90% of projection work")
+
+        let pathGraph = NativeArticleGraph(
+            nodes: Array(model.articleGraph.nodes.prefix(500)),
+            edges: Array(model.articleGraph.edges.prefix(499))
+        )
+        let pathPresentation = NativeArticleGraphPresentation(projection: NativeArticleGraphProjection(
+            graph: pathGraph, matchingNodeCount: 500, clippedNodeCount: 0
+        ))
+        XCTAssertEqual(pathPresentation.shortestPath(from: "article-0", to: "article-499")?.hopCount, 499)
+        let pathIterations = 64
+        let pathPair = bestPairedElapsed(samples: 2, first: {
+            var checksum = 0
+            for _ in 0..<pathIterations {
+                checksum += NativeArticleGraphPathFinder.shortestPath(
+                    in: pathGraph, from: "article-0", to: "article-499"
+                )?.hopCount ?? 0
+            }
+            return checksum
+        }, second: {
+            var checksum = 0
+            for _ in 0..<pathIterations {
+                checksum += pathPresentation.shortestPath(from: "article-0", to: "article-499")?.hopCount ?? 0
+            }
+            return checksum
+        })
+        XCTAssertEqual(pathPair.first.result, 499 * pathIterations)
+        XCTAssertEqual(pathPair.second.result, pathPair.first.result)
+        let pathMilliseconds = pathPair.second.elapsed * 1_000 / Double(pathIterations)
+        print(String(format: "PERF graph-path-500 uncached=%.3fms reused=%.6fms",
+                     pathPair.first.elapsed * 1_000 / Double(pathIterations), pathMilliseconds))
+        XCTAssertTrue(pathMilliseconds < 0.1, "unchanged highlighted path must cost less than 0.1 ms per redraw")
+        XCTAssertTrue(pathPair.second.elapsed < pathPair.first.elapsed * 0.1,
+                      "unchanged highlighted path must remove at least 90% of traversal work")
+    }
+
     @MainActor
     func testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries() {
         let cache = NativeArticleSelectionCache(countLimit: 4, totalCostLimit: 1_024 * 1_024)
@@ -4817,6 +5314,198 @@ final class LocalBackupManagerTests {
     }
 }
 
+final class DataIntegrityTests {
+    func testRestoreClosesAllStoresAndBlocksNewConnections() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = root.appendingPathComponent("live")
+        let users = UserWorkspaceStore(rootURL: live)
+        let workspace = try await users.prepare().workspaceURL
+        let first = LocalBlogStore(rootURL: workspace)
+        let original = try await first.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: nil, body: "Original"))
+        let second = LocalBlogStore(rootURL: workspace)
+        _ = try await second.listArticles()
+        try await first.prepareForBackup()
+        try await users.prepareForBackup()
+        let snapshot = try LocalBackupManager.createManagedSnapshot(source: live, destination: root.appendingPathComponent("backups"), policy: NativeBackupPolicy(minimumFreeSpaceBytes: 0)).snapshot
+        _ = try await second.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: original.updatedAt, body: "Changed"))
+        let suspension = try WorkspaceStorageLifecycle.suspend(in: live)
+        defer { suspension.finish() }
+        try await suspension.prepareAndClose()
+        let duringRestore = LocalBlogStore(rootURL: workspace)
+        for store in [first, second, duringRestore] {
+            do { _ = try await store.listArticles(); XCTFail("storage must remain closed until restore finishes") }
+            catch { }
+        }
+        do { _ = try await users.prepare(); XCTFail("user registry must also stay closed") }
+        catch { }
+        try LocalBackupManager.restoreSnapshot(at: snapshot.url, to: live, minimumFreeSpaceBytes: 0)
+        suspension.finish()
+        for store in [first, second, duringRestore] {
+            XCTAssertEqual(try await store.getArticle(slug: "note").body, "Original")
+            await store.closeForRestore()
+        }
+        XCTAssertEqual(try await users.prepare().workspaceURL, workspace)
+        await users.closeForRestore()
+    }
+
+    func testRestoreWaitsForAsyncMediaWrites() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lease = try WorkspaceStorageLifecycle.beginAsyncWrite(in: root.appendingPathComponent("workspaces/user"))
+        do { _ = try WorkspaceStorageLifecycle.suspend(in: root); XCTFail("restore must reject an active media copy") }
+        catch { }
+        withExtendedLifetime(lease) { }
+    }
+
+    @MainActor
+    func testRestoreReconnectsEveryWindowAndPreservesDraftOnFailure() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = root.appendingPathComponent("live")
+        let backups = root.appendingPathComponent("backups")
+        let first = NativeAppModel(navigationScopeID: nil, startsAutomatically: false, store: LocalBlogStore(rootURL: live))
+        let second = NativeAppModel(navigationScopeID: nil, startsAutomatically: false, store: LocalBlogStore(rootURL: live))
+        for model in [first, second] {
+            try await model.connect(to: live)
+            model.isLoading = false
+            model.backupDirectoryPath = backups.path
+            model.backupPolicy = NativeBackupPolicy(minimumFreeSpaceBytes: 0)
+            model.stopMarkdownSourceMonitor()
+        }
+        let original = try await first.store.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: nil, body: "Original"))
+        try await first.store.prepareForBackup()
+        try await first.userWorkspaces.prepareForBackup()
+        let snapshot = try LocalBackupManager.createManagedSnapshot(source: live, destination: backups, policy: NativeBackupPolicy(minimumFreeSpaceBytes: 0)).snapshot
+        _ = try await second.store.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: original.updatedAt, body: "Changed"))
+        await first.performBackupRestore(snapshot)
+        for model in [first, second] {
+            XCTAssertTrue(model.storageReady)
+            XCTAssertFalse(model.isRestoringBackup)
+            XCTAssertEqual(try await model.store.getArticle(slug: "note").body, "Original")
+            model.stopMarkdownSourceMonitor()
+        }
+        second.editor.title = "Unsaved draft"
+        second.editor.body = "Keep this draft if validation fails"
+        let snapshotArticle = snapshot.url.appendingPathComponent("workspaces/leon/articles/note.md")
+        try Data("corrupt".utf8).write(to: snapshotArticle, options: .atomic)
+        await first.performBackupRestore(snapshot)
+        XCTAssertTrue(first.storageReady)
+        XCTAssertTrue(second.storageReady)
+        XCTAssertEqual(second.editor.body, "Keep this draft if validation fails")
+        XCTAssertNotNil(first.errorMessage)
+        for model in [first, second] {
+            model.pauseForWorkspaceRestore()
+            await model.store.closeForRestore()
+            await model.userWorkspaces.closeForRestore()
+        }
+    }
+
+    func testExternalEditBeforeWatcherIsNotOverwritten() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let original = try await store.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: nil, body: "Original"))
+        let file = root.appendingPathComponent("articles/note.md")
+        let external = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "Original", with: "External")
+        try Data(external.utf8).write(to: file, options: .atomic)
+        do {
+            _ = try await store.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: original.updatedAt, body: "Local"))
+            XCTFail("saving before the watcher runs must reject external changes")
+        } catch NativeStoreError.conflict { }
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), external)
+        XCTAssertEqual(try await store.getArticle(slug: "note").body, "External")
+        await store.closeForRestore()
+    }
+
+    func testFailedSaveRestoresExactMarkdownAndDoesNotCreateNewFile() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let original = try await store.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: nil, body: "Original"))
+        let file = root.appendingPathComponent("articles/note.md")
+        let before = try Data(contentsOf: file)
+        let fault = try SQLiteDatabase(url: root.appendingPathComponent("leon-book.sqlite"))
+        try fault.execute("CREATE TRIGGER reject_article BEFORE INSERT ON articles BEGIN SELECT RAISE(ABORT, 'injected failure'); END;")
+        for (slug, version) in [("note", Optional(original.updatedAt)), ("new-note", nil)] {
+            do {
+                _ = try await store.saveArticle(article(slug: slug, status: .draft, expectedUpdatedAt: version, body: "Rejected"))
+                XCTFail("injected database failure must fail the save")
+            } catch { }
+        }
+        XCTAssertEqual(try Data(contentsOf: file), before, "failed save must restore the original bytes")
+        XCTAssertEqual(try await store.getArticle(slug: "note").body, "Original")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("articles/new-note.md").path))
+        fault.close()
+        await store.closeForRestore()
+    }
+
+    func testFailedSaveReturnsAttachmentsToInbox() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        _ = try await store.listArticles()
+        let inbox = root.appendingPathComponent("media/inbox")
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+        let file = inbox.appendingPathComponent("attachment.png")
+        try Data("image".utf8).write(to: file)
+        let fault = try SQLiteDatabase(url: root.appendingPathComponent("leon-book.sqlite"))
+        try fault.execute("CREATE TRIGGER reject_article BEFORE INSERT ON articles BEGIN SELECT RAISE(ABORT, 'injected failure'); END;")
+        do {
+            _ = try await store.saveArticle(NativeSaveArticle(
+                banner: nil, body: "![image](/media/inbox/attachment.png)", category: "", excerpt: "",
+                media: [NativeMedia(kind: "image", name: "attachment.png", size: 5, url: "/media/inbox/attachment.png")],
+                slug: "note", status: .draft, tags: [], title: "Note", expectedUpdatedAt: nil
+            ))
+            XCTFail("injected database failure must fail the save")
+        } catch { }
+        XCTAssertEqual(try Data(contentsOf: file), Data("image".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("media/note/attachment.png").path))
+        fault.close()
+        await store.closeForRestore()
+    }
+
+    func testReadOnlySwitchAppliesToAlreadyOpenStores() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("workspace")
+        let vault = root.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let first = LocalBlogStore(rootURL: workspace)
+        _ = try await first.configureMarkdownWorkspaceSource(mode: .directEdit, directoryURL: vault)
+        let original = try await first.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: nil, body: "Original"))
+        let second = LocalBlogStore(rootURL: workspace)
+        _ = try await second.listArticles()
+        _ = try await first.configureMarkdownWorkspaceSource(mode: .readOnlyMount, directoryURL: vault)
+        do {
+            _ = try await second.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: original.updatedAt, body: "Forbidden"))
+            XCTFail("a previously opened store must honor the current read-only setting")
+        } catch NativeStoreError.readOnlyArticleSource { }
+        XCTAssertEqual(try await second.markdownWorkspaceSourceState().mode, .readOnlyMount)
+        XCTAssertEqual(try await first.getArticle(slug: "note").body, "Original")
+        await first.closeForRestore()
+        await second.closeForRestore()
+    }
+
+    func testBackupDetectsSameSizeContentWithPreservedTimestamp() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source")
+        let destination = root.appendingPathComponent("backups")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let file = source.appendingPathComponent("note.md")
+        try Data("BEFORE".utf8).write(to: file)
+        let date = try file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate!
+        let policy = NativeBackupPolicy(minimumFreeSpaceBytes: 0)
+        _ = try LocalBackupManager.createManagedSnapshot(source: source, destination: destination, policy: policy)
+        try Data("AFTER!".utf8).write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+        let snapshot = try LocalBackupManager.createManagedSnapshot(source: source, destination: destination, policy: policy).snapshot
+        XCTAssertEqual(try String(contentsOf: snapshot.url.appendingPathComponent("note.md"), encoding: .utf8), "AFTER!")
+        XCTAssertTrue(try LocalBackupManager.validateSnapshot(at: snapshot.url).verifiedChecksums)
+    }
+}
+
 private func makeTemporaryDirectory() throws -> URL {
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("leon-book-tests-\(UUID().uuidString)", isDirectory: true)
@@ -4828,6 +5517,14 @@ private func makeTemporaryDirectory() throws -> URL {
 struct LeonBookUnitTests {
     static func main() async {
         var tests: [(String, () async throws -> Void)] = [
+            ("DataIntegrityTests.testFailedSaveReturnsAttachmentsToInbox", { try await DataIntegrityTests().testFailedSaveReturnsAttachmentsToInbox() }),
+            ("DataIntegrityTests.testRestoreClosesAllStoresAndBlocksNewConnections", { try await DataIntegrityTests().testRestoreClosesAllStoresAndBlocksNewConnections() }),
+            ("DataIntegrityTests.testRestoreWaitsForAsyncMediaWrites", { try await DataIntegrityTests().testRestoreWaitsForAsyncMediaWrites() }),
+            ("DataIntegrityTests.testRestoreReconnectsEveryWindowAndPreservesDraftOnFailure", { try await DataIntegrityTests().testRestoreReconnectsEveryWindowAndPreservesDraftOnFailure() }),
+            ("DataIntegrityTests.testExternalEditBeforeWatcherIsNotOverwritten", { try await DataIntegrityTests().testExternalEditBeforeWatcherIsNotOverwritten() }),
+            ("DataIntegrityTests.testFailedSaveRestoresExactMarkdownAndDoesNotCreateNewFile", { try await DataIntegrityTests().testFailedSaveRestoresExactMarkdownAndDoesNotCreateNewFile() }),
+            ("DataIntegrityTests.testReadOnlySwitchAppliesToAlreadyOpenStores", { try await DataIntegrityTests().testReadOnlySwitchAppliesToAlreadyOpenStores() }),
+            ("DataIntegrityTests.testBackupDetectsSameSizeContentWithPreservedTimestamp", { try await DataIntegrityTests().testBackupDetectsSameSizeContentWithPreservedTimestamp() }),
             ("NativeModelsTests.testLanguagePreferencesPersistAndLocalizationsResolve", { await MainActor.run { NativeModelsTests().testLanguagePreferencesPersistAndLocalizationsResolve() } }),
             ("NativeModelsTests.testEnglishCatalogCoversEditorSurface", { NativeModelsTests().testEnglishCatalogCoversEditorSurface() }),
             ("NativeModelsTests.testVideoPlaybackFormatsAndPersistsResumePositions", { NativeModelsTests().testVideoPlaybackFormatsAndPersistsResumePositions() }),
@@ -4868,6 +5565,11 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testArticleGraphLayoutAppliesAndClampsManualNodePositions", { NativeModelsTests().testArticleGraphLayoutAppliesAndClampsManualNodePositions() }),
             ("NativeModelsTests.testArticleGraphShortestPathUsesVisibleDirectedReferences", { NativeModelsTests().testArticleGraphShortestPathUsesVisibleDirectedReferences() }),
             ("NativeModelsTests.testReloadPopulatesKnowledgeGraphWithIsolatedArticles", { try await NativeModelsTests().testReloadPopulatesKnowledgeGraphWithIsolatedArticles() }),
+            ("PerformanceRegressionTests.testWritingCompletionOnlyPublishesChangedQueries", { PerformanceRegressionTests().testWritingCompletionOnlyPublishesChangedQueries() }),
+            ("PerformanceRegressionTests.testWorkspaceResourceIndexPreservesNavigationSemantics", { PerformanceRegressionTests().testWorkspaceResourceIndexPreservesNavigationSemantics() }),
+            ("PerformanceRegressionTests.testWorkspaceResourceIndexInvalidatesAfterMutationAndWorkspaceReset", { PerformanceRegressionTests().testWorkspaceResourceIndexInvalidatesAfterMutationAndWorkspaceReset() }),
+            ("PerformanceRegressionTests.testWritingEditorsPreserveCompositionAndSkipUnchangedBlockStyling", { PerformanceRegressionTests().testWritingEditorsPreserveCompositionAndSkipUnchangedBlockStyling() }),
+            ("PerformanceRegressionTests.testGraphPresentationReusesProjectionDuringInteraction", { PerformanceRegressionTests().testGraphPresentationReusesProjectionDuringInteraction() }),
             ("PerformanceRegressionTests.testEditorSessionOwnsHighFrequencyDraftState", { PerformanceRegressionTests().testEditorSessionOwnsHighFrequencyDraftState() }),
             ("PerformanceRegressionTests.testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries", { PerformanceRegressionTests().testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries() }),
             ("PerformanceRegressionTests.testArticleNavigationPersistenceCoalescesToLatestSnapshot", { try await PerformanceRegressionTests().testArticleNavigationPersistenceCoalescesToLatestSnapshot() }),
@@ -4923,6 +5625,18 @@ struct LeonBookUnitTests {
         ]
 
         if ProcessInfo.processInfo.environment["LEON_BOOK_PERFORMANCE_BENCHMARKS"] == "1" {
+            tests.append((
+                "PerformanceRegressionTests.testWorkspaceResourceInteractionBenchmark",
+                { PerformanceRegressionTests().testWorkspaceResourceInteractionBenchmark() }
+            ))
+            tests.append((
+                "PerformanceRegressionTests.testWritingCompletionBenchmark",
+                { PerformanceRegressionTests().testWritingCompletionBenchmark() }
+            ))
+            tests.append((
+                "PerformanceRegressionTests.testGraphInteractionProjectionBenchmark",
+                { PerformanceRegressionTests().testGraphInteractionProjectionBenchmark() }
+            ))
             tests.append((
                 "PerformanceRegressionTests.testLargeArticleLibraryProjectionBenchmark",
                 { PerformanceRegressionTests().testLargeArticleLibraryProjectionBenchmark() }

@@ -4,9 +4,8 @@ struct ArticleGraphView: View {
     @ObservedObject var model: NativeAppModel
     @ObservedObject var pageState: NativeArticleGraphPageState
 
-    private var projection: NativeArticleGraphProjection {
-        NativeArticleGraphProjector.project(
-            model.articleGraph,
+    private var presentation: NativeArticleGraphPresentation {
+        model.articleGraphPresentation(
             query: NativeArticleGraphQuery(
                 searchText: pageState.searchText,
                 status: pageState.statusFilter,
@@ -16,21 +15,20 @@ struct ArticleGraphView: View {
         )
     }
 
-    private var graph: NativeArticleGraph { projection.graph }
-
-    private var highlightedPath: NativeArticleGraphPath? {
+    private func highlightedPath(in presentation: NativeArticleGraphPresentation) -> NativeArticleGraphPath? {
         guard let sourceSlug = pageState.pathStartSlug,
               let destinationSlug = pageState.pathDestinationSlug else {
             return nil
         }
-        return NativeArticleGraphPathFinder.shortestPath(
-            in: graph,
-            from: sourceSlug,
-            to: destinationSlug
-        )
+        return presentation.shortestPath(from: sourceSlug, to: destinationSlug)
     }
 
     var body: some View {
+        let presentation = presentation
+        let projection = presentation.projection
+        let graph = projection.graph
+        let highlightedPath = highlightedPath(in: presentation)
+
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .firstTextBaseline) {
@@ -42,7 +40,7 @@ struct ArticleGraphView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    graphSummary
+                    graphSummary(projection)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     Button {
@@ -197,7 +195,8 @@ struct ArticleGraphView: View {
         }
     }
 
-    private var graphSummary: Text {
+    private func graphSummary(_ projection: NativeArticleGraphProjection) -> Text {
+        let graph = projection.graph
         var value = Text("\(graph.nodes.count) / \(projection.matchingNodeCount) 篇 · \(graph.edges.count) 条引用")
         if projection.isClipped {
             value = value + Text(" · 已裁剪 \(projection.clippedNodeCount) 篇")
@@ -226,25 +225,23 @@ struct ArticleGraphView: View {
     }
 
     private func findShortestPath() {
-        let sourceMatches = matchingArticles(for: pageState.pathStartText)
+        let presentation = presentation
+        let graph = presentation.projection.graph
+        let sourceMatches = matchingArticles(for: pageState.pathStartText, in: graph)
         guard let source = uniqueArticle(
             from: sourceMatches,
             role: "起始",
             query: pageState.pathStartText
         ) else { return }
 
-        let destinationMatches = matchingArticles(for: pageState.pathDestinationText)
+        let destinationMatches = matchingArticles(for: pageState.pathDestinationText, in: graph)
         guard let destination = uniqueArticle(
             from: destinationMatches,
             role: "目的",
             query: pageState.pathDestinationText
         ) else { return }
 
-        guard let path = NativeArticleGraphPathFinder.shortestPath(
-            in: graph,
-            from: source.slug,
-            to: destination.slug
-        ) else {
+        guard let path = presentation.shortestPath(from: source.slug, to: destination.slug) else {
             pageState.showPathError("当前可见图谱中不存在从“\(source.title)”到“\(destination.title)”的有向路径。")
             return
         }
@@ -257,7 +254,7 @@ struct ArticleGraphView: View {
         )
     }
 
-    private func matchingArticles(for query: String) -> [NativeArticleSummary] {
+    private func matchingArticles(for query: String, in graph: NativeArticleGraph) -> [NativeArticleSummary] {
         let normalizedQuery = normalizedNodeQuery(query)
         guard !normalizedQuery.isEmpty else { return [] }
 
@@ -365,7 +362,7 @@ private struct ArticleGraphCanvas: View {
                     if let position = positions[article.slug] {
                         ArticleGraphNode(
                             article: article,
-                            pathRole: pathRole(for: article.slug),
+                            pathRole: pathRole(for: article.slug, highlightedNodeSlugs: highlightedNodeSlugs),
                             isDimmed: hasHighlightedPath && !highlightedNodeSlugs.contains(article.slug)
                         ) {
                             guard !suppressOpenSlugs.contains(article.slug) else { return }
@@ -479,11 +476,11 @@ private struct ArticleGraphCanvas: View {
         context.fill(arrow, with: .color(lineColor))
     }
 
-    private func pathRole(for slug: String) -> ArticleGraphPathNodeRole? {
+    private func pathRole(for slug: String, highlightedNodeSlugs: Set<String>) -> ArticleGraphPathNodeRole? {
         guard let path = highlightedPath,
               let first = path.nodes.first?.slug,
               let last = path.nodes.last?.slug,
-              path.nodes.contains(where: { $0.slug == slug }) else {
+              highlightedNodeSlugs.contains(slug) else {
             return nil
         }
         if slug == first && slug == last { return .startAndDestination }

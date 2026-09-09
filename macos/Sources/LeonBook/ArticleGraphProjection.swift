@@ -1,6 +1,46 @@
 import Foundation
 import LeonBookKnowledgeGraphModule
 
+@MainActor
+final class NativeArticleGraphPresentation {
+    let projection: NativeArticleGraphProjection
+    private var cachedPath: (source: String, destination: String, value: NativeArticleGraphPath?)?
+
+    init(projection: NativeArticleGraphProjection) {
+        self.projection = projection
+    }
+
+    func shortestPath(from source: String, to destination: String) -> NativeArticleGraphPath? {
+        if let cachedPath, cachedPath.source == source, cachedPath.destination == destination {
+            return cachedPath.value
+        }
+        let path = NativeArticleGraphPathFinder.shortestPath(
+            in: projection.graph, from: source, to: destination
+        )
+        // Keep failed lookups too, so an unreachable destination is not retried on every redraw.
+        cachedPath = (source, destination, path)
+        return path
+    }
+}
+
+extension NativeAppModel {
+    func articleGraphPresentation(query: NativeArticleGraphQuery) -> NativeArticleGraphPresentation {
+        let locale = Locale.current
+        if let cachedArticleGraphPresentation,
+           cachedArticleGraphPresentation.query == query,
+           cachedArticleGraphPresentation.locale == locale {
+            return cachedArticleGraphPresentation.value
+        }
+        let value = NativeArticleGraphPresentation(
+            projection: NativeArticleGraphProjector.project(articleGraph, query: query)
+        )
+        // One clipped projection per window; graph assignment invalidates it, including workspace resets.
+        // Cache hits never compare, normalize, or sort the source library.
+        cachedArticleGraphPresentation = (query, locale, value)
+        return value
+    }
+}
+
 public enum NativeArticleGraphStatusFilter: String, CaseIterable, Identifiable {
     case all
     case published

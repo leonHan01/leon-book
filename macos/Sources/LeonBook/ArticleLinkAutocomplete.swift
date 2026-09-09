@@ -43,6 +43,7 @@ final class ArticleLinkAutocompleteController: ObservableObject {
 
     func completeSuggestion(_ suggestion: EditorArticleLinkSuggestion) {
         guard let textView,
+              !textView.hasMarkedText(),
               let context = linkContext(in: textView.string, selectedRange: textView.selectedRange()) else {
             return
         }
@@ -58,19 +59,24 @@ final class ArticleLinkAutocompleteController: ObservableObject {
     }
 
     func dismissSuggestions() {
-        activeLinkQuery = nil
+        if activeLinkQuery != nil { activeLinkQuery = nil }
     }
 
     func updateLinkQuery(from textView: NSTextView) {
-        activeLinkQuery = linkContext(in: textView.string, selectedRange: textView.selectedRange())?.query
+        let query = textView.hasMarkedText() ? nil
+            : linkContext(in: textView.string, selectedRange: textView.selectedRange())?.query
+        if activeLinkQuery != query { activeLinkQuery = query }
     }
 
-    private func linkContext(in text: String, selectedRange: NSRange) -> (range: NSRange, query: String)? {
-        guard selectedRange.length == 0 else { return nil }
+    func linkContext(in text: String, selectedRange: NSRange) -> (range: NSRange, query: String)? {
+        guard selectedRange.length == 0, selectedRange.location >= 0 else { return nil }
         let source = text as NSString
         guard selectedRange.location <= source.length else { return nil }
-        let prefix = source.substring(to: selectedRange.location) as NSString
-        let opening = prefix.range(of: "[[", options: .backwards)
+        // Wiki-link queries cannot cross a newline. Search only this line and
+        // avoid copying or scanning the document prefix on every caret move.
+        let line = source.lineRange(for: NSRange(location: selectedRange.location, length: 0))
+        let prefixRange = NSRange(location: line.location, length: selectedRange.location - line.location)
+        let opening = source.range(of: "[[", options: .backwards, range: prefixRange)
         guard opening.location != NSNotFound else { return nil }
 
         let queryRange = NSRange(

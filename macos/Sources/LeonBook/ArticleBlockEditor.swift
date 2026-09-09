@@ -787,7 +787,7 @@ enum NativeBlockEditorDocument {
     }
 }
 
-private enum EditorBlockKeyboardCommand {
+enum EditorBlockKeyboardCommand {
     case duplicate
     case delete
     case copy
@@ -801,12 +801,16 @@ private extension NSPasteboard.PasteboardType {
     static let leonBookBlocks = Self("com.leonbook.markdown-blocks")
 }
 
-private final class NativeBlockNSTextView: NSTextView {
+final class NativeBlockNSTextView: NSTextView {
     var onMoveBlocks: ((Int) -> Void)?
     var onChangeIndent: ((Int) -> Void)?
     var onBlockCommand: ((EditorBlockKeyboardCommand) -> Bool)?
 
     override func keyDown(with event: NSEvent) {
+        guard !hasMarkedText() else {
+            super.keyDown(with: event)
+            return
+        }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if modifiers.contains([.command, .option]) {
             if event.keyCode == 126 {
@@ -845,7 +849,7 @@ private final class NativeBlockNSTextView: NSTextView {
     }
 }
 
-private struct NativeBlockTextEditor: NSViewRepresentable {
+struct NativeBlockTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     let kind: EditorMarkdownBlockKind
@@ -879,8 +883,7 @@ private struct NativeBlockTextEditor: NSViewRepresentable {
         textView.onMoveBlocks = onMoveBlocks
         textView.onChangeIndent = onChangeIndent
         textView.onBlockCommand = onBlockCommand
-        applyStyling(to: textView)
-        context.coordinator.updateHeight(of: textView)
+        context.coordinator.refreshPresentation(of: textView)
         return textView
     }
 
@@ -890,12 +893,13 @@ private struct NativeBlockTextEditor: NSViewRepresentable {
         textView.onMoveBlocks = onMoveBlocks
         textView.onChangeIndent = onChangeIndent
         textView.onBlockCommand = onBlockCommand
+        guard !textView.hasMarkedText() else { return }
         if textView.string != text { textView.string = text }
-        applyStyling(to: textView)
-        context.coordinator.updateHeight(of: textView)
+        context.coordinator.refreshPresentation(of: textView)
         if shouldFocus, textView.window?.firstResponder !== textView {
-            DispatchQueue.main.async {
-                guard shouldFocus, let window = textView.window else { return }
+            DispatchQueue.main.async { [weak textView, weak coordinator = context.coordinator] in
+                guard let textView, coordinator?.parent.shouldFocus == true,
+                      !textView.hasMarkedText(), let window = textView.window else { return }
                 window.makeFirstResponder(textView)
                 textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
             }
@@ -913,6 +917,9 @@ private struct NativeBlockTextEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: NativeBlockTextEditor
+        private var lastStyledText: String?
+        private var lastTypography: NativeReadingTypography?
+        private var lastLayoutWidth: CGFloat?
 
         init(parent: NativeBlockTextEditor) {
             self.parent = parent
@@ -923,13 +930,29 @@ private struct NativeBlockTextEditor: NSViewRepresentable {
         }
 
         func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
+            guard let textView = notification.object as? NSTextView, !textView.hasMarkedText() else { return }
             parent.text = textView.string
-            parent.applyStyling(to: textView)
-            updateHeight(of: textView)
+            refreshPresentation(of: textView)
+        }
+
+        func refreshPresentation(of textView: NSTextView) {
+            guard !textView.hasMarkedText() else { return }
+            let text = textView.string
+            let needsStyling = lastStyledText != text || lastTypography != parent.typography
+            if needsStyling {
+                parent.applyStyling(to: textView)
+                lastStyledText = text
+                lastTypography = parent.typography
+            }
+            let width = textView.textContainer?.containerSize.width ?? textView.bounds.width
+            if needsStyling || lastLayoutWidth != width {
+                updateHeight(of: textView)
+                lastLayoutWidth = width
+            }
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard !textView.hasMarkedText() else { return false }
             if commandSelector == #selector(NSResponder.insertNewline(_:)),
                !NSEvent.modifierFlags.contains(.shift),
                !parent.kind.keepsNewlinesInsideBlock {

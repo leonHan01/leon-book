@@ -47,7 +47,10 @@ public final class NativeAppModel: ObservableObject {
         }
     }
     @Published var articles: [NativeArticleSummary] = []
-    @Published var workspaceResources: [NativeWorkspaceResourceNode] = []
+    @Published var workspaceResources: [NativeWorkspaceResourceNode] = [] {
+        didSet { cachedWorkspaceResourceIndex = nil }
+    }
+    var cachedWorkspaceResourceIndex: NativeWorkspaceResourceIndex?
     @Published var activity: [NativeActivityDay] = []
     @Published var moments: [NativeMoment] = [] {
         didSet { rebuildMomentTimelineProjection() }
@@ -126,7 +129,14 @@ public final class NativeAppModel: ObservableObject {
     @Published var articleTabs: [NativeArticleTab] = []
     @Published var activeArticleTabID: UUID?
     @Published var recentArticleSlugs: [String] = []
-    @Published var articleGraph = NativeArticleGraph.empty
+    @Published var articleGraph = NativeArticleGraph.empty {
+        didSet { cachedArticleGraphPresentation = nil }
+    }
+    var cachedArticleGraphPresentation: (
+        query: NativeArticleGraphQuery,
+        locale: Locale,
+        value: NativeArticleGraphPresentation
+    )?
     @Published var articleRevisions: [NativeArticleRevision] = []
     @Published var articleSourceConflict: NativeArticleSourceConflict?
     @Published var selectedSlug: String?
@@ -240,7 +250,7 @@ public final class NativeAppModel: ObservableObject {
     private var momentTimelineReferenceDay = Calendar.current.startOfDay(for: Date())
     var nextMomentCursor: NativeMomentCursor?
     var momentFeedGeneration = 0
-    private var momentSearchTask: Task<Void, Never>?
+    var momentSearchTask: Task<Void, Never>?
     var questionSearchTask: Task<Void, Never>?
     var globalSearchTask: Task<Void, Never>?
     var globalSearchGeneration = 0
@@ -254,6 +264,7 @@ public final class NativeAppModel: ObservableObject {
     var articleListSearchGeneration = 0
     var articleNavigationGeneration = 0
     private var automationObserver: NSObjectProtocol?
+    private var markdownConfigurationObserver: NSObjectProtocol?
     private var calendarObservers: [NSObjectProtocol] = []
     var automationRetryTask: Task<Void, Never>?
     private let momentPageSize = 40
@@ -272,6 +283,16 @@ public final class NativeAppModel: ObservableObject {
         let store = injectedStore ?? LocalBlogStore()
         self.store = store
         userWorkspaces = injectedUserWorkspaces ?? UserWorkspaceStore(rootURL: store.rootURL)
+        NativeWorkspaceWindows.register(self)
+        markdownConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: .leonBookMarkdownConfigurationChanged, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let root = notification.object as? URL else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.store.rootURL == root else { return }
+                await self.refreshMarkdownWorkspaceConfiguration()
+            }
+        }
         automationObserver = NotificationCenter.default.addObserver(
             forName: NativeAutomationInbox.didEnqueueNotification,
             object: nil,
@@ -320,6 +341,7 @@ public final class NativeAppModel: ObservableObject {
         if let automationObserver {
             NotificationCenter.default.removeObserver(automationObserver)
         }
+        if let markdownConfigurationObserver { NotificationCenter.default.removeObserver(markdownConfigurationObserver) }
         for observer in calendarObservers {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -688,11 +710,19 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
-    func connect(to rootURL: URL) async throws {
+    func connect(to rootURL: URL, preferredUserID: String? = nil) async throws {
+        try WorkspaceStorageLifecycle.requireAvailable(rootURL)
         userWorkspaces = UserWorkspaceStore(rootURL: rootURL)
         store = LocalBlogStore(rootURL: rootURL)
         dataRootDirectoryPath = rootURL.standardizedFileURL.path
-        let workspace = try await userWorkspaces.prepare()
+        var workspace = try await userWorkspaces.prepare()
+        if let preferredUserID, let user = workspace.users.first(where: { $0.id == preferredUserID }) {
+            workspace = NativeWorkspaceState(
+                activeUser: user,
+                users: workspace.users,
+                workspaceURL: workspace.workspaceURL.deletingLastPathComponent().appendingPathComponent(user.id)
+            )
+        }
         try await loadWorkspace(workspace)
         needsWorkDirectorySelection = false
         storageReady = true

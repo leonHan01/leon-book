@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let leonBookMarkdownConfigurationChanged = Notification.Name("leonBook.markdownConfigurationChanged")
+}
+
 /// Controls where article Markdown is read from for one LeonBook user workspace.
 /// SQLite, drafts, comments, revisions, media, and backups always remain in the
 /// LeonBook workspace; only the authoritative Markdown root changes.
@@ -44,4 +48,3 @@ public struct NativeMarkdownWorkspaceSource: Codable, Equatable, Sendable {
 
     public static let managed = NativeMarkdownWorkspaceSource(mode: .copyImport)
 }
-

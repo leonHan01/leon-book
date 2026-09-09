@@ -16,6 +16,7 @@ public actor LocalBlogStore {
     private var jsonBackupVerified = false
     private var defersCompatibilityExportVerification = false
     private var activityExportDirty = false
+    private var isPreparingForRestore = false
     var portableSidecarLastError: String?
     private var directoryLock: ExclusiveDirectoryLock?
     var markdownWorkspaceSource: NativeMarkdownWorkspaceSource
@@ -53,6 +54,7 @@ public actor LocalBlogStore {
         let standardizedRoot = rootURL.standardizedFileURL
         self.rootURL = standardizedRoot
         markdownWorkspaceSource = Self.loadMarkdownWorkspaceSource(from: standardizedRoot)
+        WorkspaceStorageLifecycle.register(self, root: standardizedRoot)
     }
 
     // MARK: - Markdown workspace
@@ -97,6 +99,9 @@ public actor LocalBlogStore {
             try? persistMarkdownWorkspaceSource()
             throw error
         }
+        defer {
+            NotificationCenter.default.post(name: .leonBookMarkdownConfigurationChanged, object: rootURL)
+        }
         return try refreshMarkdownSources(restoringDeletedSources: true)
     }
 
@@ -124,6 +129,7 @@ public actor LocalBlogStore {
 
     /// Runs low-frequency retention work without putting it on every storage API.
     public func performMaintenance() throws {
+        try WorkspaceStorageLifecycle.requireAvailable(rootURL)
         guard isPrepared else {
             try prepare()
             return
@@ -141,7 +147,20 @@ public actor LocalBlogStore {
         activityExportDirty = false
     }
 
+    func prepareAndCloseForRestore() throws {
+        isPreparingForRestore = true
+        defer {
+            closeForRestore()
+            isPreparingForRestore = false
+        }
+        // Unused stores may point at the user registry rather than an article
+        // workspace. Only flush connections that have actually been opened.
+        if database != nil { try prepareForBackup() }
+    }
+
     func prepare() throws {
+        if !isPreparingForRestore { try WorkspaceStorageLifecycle.requireAvailable(rootURL) }
+        try reloadMarkdownWorkspaceSource()
         guard !isPrepared else { return }
         do {
             let fileManager = FileManager.default
@@ -203,6 +222,25 @@ public actor LocalBlogStore {
         return source
     }
 
+    private func reloadMarkdownWorkspaceSource() throws {
+        guard FileManager.default.fileExists(atPath: markdownWorkspaceSourceURL.path) else {
+            markdownWorkspaceSource = .managed
+            return
+        }
+        do {
+            let source = try JSONDecoder().decode(
+                NativeMarkdownWorkspaceSource.self,
+                from: Data(contentsOf: markdownWorkspaceSourceURL)
+            )
+            guard source.mode.isMounted == (source.directoryPath != nil) else {
+                throw NativeStoreError.fileSystem("Markdown 工作区配置无效")
+            }
+            markdownWorkspaceSource = source
+        } catch {
+            throw NativeStoreError.fileSystem("无法读取 Markdown 工作区配置：\(error.localizedDescription)")
+        }
+    }
+
     private func persistMarkdownWorkspaceSource() throws {
         do {
             let encoder = JSONEncoder()
@@ -232,6 +270,7 @@ public actor LocalBlogStore {
     }
 
     func requireWritableArticleSource() throws {
+        try reloadMarkdownWorkspaceSource()
         guard !markdownWorkspaceSource.mode.isReadOnly else {
             throw NativeStoreError.readOnlyArticleSource
         }
@@ -2238,6 +2277,8 @@ public actor LocalBlogStore {
         _ preview: NativeObsidianImportPreview
     ) async throws -> NativeObsidianImportResult {
         try prepare()
+        let writeLease = try WorkspaceStorageLifecycle.beginAsyncWrite(in: rootURL)
+        defer { withExtendedLifetime(writeLease) {} }
         guard markdownWorkspaceSource.mode == .copyImport else {
             throw NativeStoreError.fileSystem("复制导入前请先将 Markdown 源切换为“复制导入”")
         }
@@ -2416,6 +2457,13 @@ public actor LocalBlogStore {
             ) {
             throw NativeStoreError.fileSystem("目标 Markdown 文件已存在")
         }
+        let originalFile = try MarkdownArticleSource.snapshot(relativePath: sourceRelativePath, in: articlesURL)
+        if let previous,
+           originalFile.data == nil || originalFile.contentHash != previous.sourceContentHash {
+            _ = try refreshMarkdownSources(changedRelativePaths: [sourceRelativePath])
+            throw NativeStoreError.conflict
+        }
+        let sourceBeforeSave = markdownWorkspaceSource
         let relocated = try relocateInboxMedia(
             slug: slug,
             body: normalizeBody(article.body),
@@ -2441,12 +2489,8 @@ public actor LocalBlogStore {
             sourceContentHash: previous?.sourceContentHash,
             sourceImportedAt: previous?.sourceImportedAt
         )
-        let sourceRecord = try MarkdownArticleSource.write(
-            saved,
-            relativePath: saved.sourceRelativePath,
-            in: articlesURL
-        )
-        let sourcedSaved = applyingSourceRecord(sourceRecord, to: saved)
+        var sourcedSaved = saved
+        var writtenHash: String?
 
         let activityType = saved.status == .published && previous?.status != .published
             ? "article_published"
@@ -2454,23 +2498,51 @@ public actor LocalBlogStore {
                 ? nil
                 : "article_edited"
 
-        try db().transaction {
-            if let previous {
-                _ = try insertArticleRevision(
-                    draftKey: slug,
-                    articleSlug: slug,
-                    reason: .savedVersion,
-                    snapshot: NativeArticleRevisionSnapshot(article: previous),
-                    createdAt: updatedAt,
-                    updatedAt: updatedAt
+        do {
+            try db().transaction {
+                // Another window may have committed after our initial read.
+                guard try storedArticle(withSlug: slug)?.updatedAt == previous?.updatedAt else {
+                    throw NativeStoreError.conflict
+                }
+                try requireWritableArticleSource()
+                guard markdownWorkspaceSource == sourceBeforeSave else { throw NativeStoreError.conflict }
+                let sourceRecord = try MarkdownArticleSource.write(
+                    saved,
+                    relativePath: saved.sourceRelativePath,
+                    in: articlesURL,
+                    expectedContentHash: originalFile.contentHash,
+                    requiresMissingFile: previous == nil
                 )
+                writtenHash = sourceRecord.contentHash
+                sourcedSaved = applyingSourceRecord(sourceRecord, to: saved)
+                if let previous {
+                    _ = try insertArticleRevision(
+                        draftKey: slug,
+                        articleSlug: slug,
+                        reason: .savedVersion,
+                        snapshot: NativeArticleRevisionSnapshot(article: previous),
+                        createdAt: updatedAt,
+                        updatedAt: updatedAt
+                    )
+                }
+                try insertArticle(sourcedSaved, into: db())
+                if let activityType {
+                    try recordActivityEvent(type: activityType, at: activityDate(from: updatedAt) ?? Date())
+                }
+                try trimArticleRevisions(draftKey: slug)
             }
-            try insertArticle(sourcedSaved, into: db())
-            if let activityType {
-                try recordActivityEvent(type: activityType, at: activityDate(from: updatedAt) ?? Date())
+        } catch {
+            var rollbackError: Error?
+            do { try rollbackInboxMedia(relocated.moves) } catch { rollbackError = error }
+            if let writtenHash {
+                do { try originalFile.restore(replacingContentHash: writtenHash) }
+                catch { rollbackError = error }
+            } else if let storeError = error as? NativeStoreError, case .conflict = storeError {
+                _ = try refreshMarkdownSources(changedRelativePaths: [sourceRelativePath])
             }
+            if let rollbackError { throw rollbackError }
+            throw error
         }
-        try trimArticleRevisions(draftKey: slug)
 
         do {
             try writeArticleJSONSidecars(sourcedSaved)
@@ -3025,10 +3097,11 @@ public actor LocalBlogStore {
         body: String,
         banner: NativeBanner?,
         media: [NativeMedia]
-    ) throws -> (body: String, banner: NativeBanner?, media: [NativeMedia]) {
+    ) throws -> (body: String, banner: NativeBanner?, media: [NativeMedia], moves: [(source: URL, destination: URL)]) {
         var nextBody = body
         var nextBanner = banner
         var nextMedia: [NativeMedia] = []
+        var moves: [(source: URL, destination: URL)] = []
 
         func relocate(_ storedPath: String) throws -> String {
             let normalized = normalizeMediaURL(storedPath)
@@ -3040,34 +3113,48 @@ public actor LocalBlogStore {
             let destination = destinationDirectory.appendingPathComponent(filename)
             if FileManager.default.fileExists(atPath: source.path) {
                 if FileManager.default.fileExists(atPath: destination.path) {
-                    try FileManager.default.removeItem(at: destination)
+                    throw NativeStoreError.fileSystem("目标媒体文件已存在：\(filename)")
                 }
                 try FileManager.default.moveItem(at: source, to: destination)
+                moves.append((source, destination))
             }
             return "/media/\(slug)/\(filename)"
         }
 
-        for item in media {
-            let nextURL = try relocate(item.url)
-            if nextURL != item.url {
-                nextBody = nextBody.replacingOccurrences(of: item.url, with: nextURL)
+        do {
+            for item in media {
+                let nextURL = try relocate(item.url)
+                if nextURL != item.url {
+                    nextBody = nextBody.replacingOccurrences(of: item.url, with: nextURL)
+                }
+                nextMedia.append(NativeMedia(kind: item.kind, name: item.name, size: item.size, url: nextURL))
             }
-            nextMedia.append(NativeMedia(kind: item.kind, name: item.name, size: item.size, url: nextURL))
-        }
-        if let banner {
-            let nextURL = try relocate(banner.url)
-            if nextURL != banner.url {
-                nextBody = nextBody.replacingOccurrences(of: banner.url, with: nextURL)
+            if let banner {
+                let nextURL = try relocate(banner.url)
+                if nextURL != banner.url {
+                    nextBody = nextBody.replacingOccurrences(of: banner.url, with: nextURL)
+                }
+                nextBanner = NativeBanner(alt: banner.alt, name: banner.name, size: banner.size, url: nextURL)
             }
-            nextBanner = NativeBanner(alt: banner.alt, name: banner.name, size: banner.size, url: nextURL)
+        } catch {
+            try rollbackInboxMedia(moves)
+            throw error
         }
-        return (nextBody, nextBanner, nextMedia)
+        return (nextBody, nextBanner, nextMedia, moves)
+    }
+
+    private func rollbackInboxMedia(_ moves: [(source: URL, destination: URL)]) throws {
+        for move in moves.reversed() {
+            try FileManager.default.moveItem(at: move.destination, to: move.source)
+        }
     }
 
     // MARK: - Media
 
     func uploadMedia(fileURL: URL, kind: String, slug: String? = nil) async throws -> NativeUploadedMedia {
         try prepare()
+        let writeLease = try WorkspaceStorageLifecycle.beginAsyncWrite(in: rootURL)
+        defer { withExtendedLifetime(writeLease) {} }
         let targetSlug = try requireSafeSegment(slug?.isEmpty == false ? slug! : "inbox", label: "媒体目录")
         if kind == "video", targetSlug == "moments",
            fileURL.pathExtension.caseInsensitiveCompare("mp4") != .orderedSame {

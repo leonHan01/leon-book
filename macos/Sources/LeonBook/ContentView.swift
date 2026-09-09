@@ -32,6 +32,7 @@ public struct ContentView: View {
             )
         }
         .frame(minWidth: 1_080, minHeight: 680)
+        .disabled(model.isRestoringBackup)
         .environment(\.nativeDeclarativeExtensions, model.declarativeExtensions)
         .toolbar {
             ToolbarItemGroup {

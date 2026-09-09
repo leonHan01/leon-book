@@ -555,6 +555,7 @@
 "大纲" = "Outline";
 "链接" = "Links";
 "写作" = "Writing";
+"写作语法参考" = "Writing Syntax Reference";
 "阅读" = "Reading";
 "审稿" = "Reviewing";
 "系统字体" = "System Font";
@@ -931,3 +932,9 @@
 "由 %@ 声明式渲染" = "Rendered declaratively by %@";
 "%@ 扩展内容" = "%@ extension content";
 "撤销上次%@" = "Undo Last %@";
+
+"这一刻，有什么想记录的？" = "What would you like to remember about this moment?";
+
+"已添加媒体" = "Attached media";
+
+"⌘ Return 保存微博" = "⌘ Return to save post";

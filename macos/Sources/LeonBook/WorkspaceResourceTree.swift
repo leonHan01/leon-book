@@ -199,7 +199,11 @@ enum NativeWorkspaceResourceTree {
     }
 
     static func folderPaths(in roots: [NativeWorkspaceResourceNode]) -> [String] {
-        Array(Set(flattened(roots).compactMap { resource -> String? in
+        folderPaths(for: flattened(roots))
+    }
+
+    static func folderPaths(for items: [NativeWorkspaceResourceNode]) -> [String] {
+        Array(Set(items.compactMap { resource -> String? in
             switch resource.kind {
             case .folder:
                 return resource.sourceRelativePath

@@ -2,33 +2,36 @@ import AppKit
 import Foundation
 
 extension NativeAppModel {
+    var workspaceResourceIndex: NativeWorkspaceResourceIndex {
+        if let cachedWorkspaceResourceIndex { return cachedWorkspaceResourceIndex }
+        let index = NativeWorkspaceResourceIndex(roots: workspaceResources)
+        cachedWorkspaceResourceIndex = index
+        return index
+    }
+
     var workspaceResourceItems: [NativeWorkspaceResourceNode] {
-        NativeWorkspaceResourceTree.flattened(workspaceResources)
+        workspaceResourceIndex.items
     }
 
     var workspaceFolderPaths: [String] {
-        NativeWorkspaceResourceTree.folderPaths(in: workspaceResources)
+        workspaceResourceIndex.folderPaths
     }
 
     func workspaceResource(id: String) -> NativeWorkspaceResourceNode? {
-        workspaceResourceItems.first(where: { $0.id == id })
+        workspaceResourceIndex.resource(id: id)
     }
 
     func workspaceResources(ids: Set<String>) -> [NativeWorkspaceResourceNode] {
-        let order = Dictionary(uniqueKeysWithValues: workspaceResourceItems.enumerated().map {
-            ($0.element.id, $0.offset)
-        })
-        return ids.compactMap(workspaceResource(id:)).sorted {
-            order[$0.id, default: .max] < order[$1.id, default: .max]
-        }
+        guard !ids.isEmpty else { return [] }
+        return workspaceResourceIndex.resources(ids: ids)
     }
 
     func workspaceResourceID(articleSlug: String) -> String? {
-        workspaceResourceItems.first(where: { $0.articleSlug == articleSlug && $0.kind == .article })?.id
+        workspaceResourceIndex.resourceID(articleSlug: articleSlug)
     }
 
     func workspaceResourceAncestorIDs(resourceID: String) -> [String] {
-        NativeWorkspaceResourceTree.ancestors(of: resourceID, in: workspaceResources)
+        workspaceResourceIndex.ancestorIDs(resourceID: resourceID)
     }
 
     func promptToCreateWorkspaceFolder(parentPath: String) {

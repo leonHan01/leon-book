@@ -23,6 +23,33 @@ struct MarkdownArticleSourceRecord: Hashable {
 }
 
 enum MarkdownArticleSource {
+    struct FileSnapshot {
+        let url: URL
+        let data: Data?
+        var contentHash: String? { data.map(MarkdownArticleSource.hash) }
+
+        func restore(replacingContentHash expected: String) throws {
+            // Never overwrite an external edit made after our attempted save.
+            guard let current = try? Data(contentsOf: url),
+                  MarkdownArticleSource.hash(current) == expected else {
+                throw NativeStoreError.fileSystem("保存失败后 Markdown 又被修改，已保留磁盘上的版本。")
+            }
+            if let data { try data.write(to: url, options: .atomic) }
+            else { try FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    static func snapshot(relativePath: String, in articlesURL: URL) throws -> FileSnapshot {
+        let path = try validatedRelativePath(relativePath)
+        let root = articlesURL.standardizedFileURL.resolvingSymlinksInPath()
+        let url = root.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
+        guard isInside(url, root: root) else {
+            throw NativeStoreError.fileSystem("Markdown 文章路径超出资料库")
+        }
+        let data = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
+        return FileSnapshot(url: url, data: data)
+    }
+
     private static let reservedKeys = Set([
         "title", "category", "tags", "tag", "slug", "status", "updatedat", "updated_at",
         "publishedat", "published_at", "banner", "banneralt", "banner_alt", "excerpt", "description",
@@ -187,6 +214,8 @@ enum MarkdownArticleSource {
         _ article: NativeArticle,
         relativePath requestedPath: String,
         in articlesURL: URL,
+        expectedContentHash: String? = nil,
+        requiresMissingFile: Bool = false,
         fileManager: FileManager = .default
     ) throws -> MarkdownArticleSourceRecord {
         let relativePath = try validatedRelativePath(requestedPath)
@@ -200,9 +229,15 @@ enum MarkdownArticleSource {
             withIntermediateDirectories: true
         )
         let existingSource: String?
+        var previousData: Data?
         if fileManager.fileExists(atPath: url.path) {
+            guard !requiresMissingFile else { throw NativeStoreError.conflict }
             do {
                 let existingData = try Data(contentsOf: url)
+                previousData = existingData
+                if let expectedContentHash, hash(existingData) != expectedContentHash {
+                    throw NativeStoreError.conflict
+                }
                 guard let decoded = String(data: existingData, encoding: .utf8) else {
                     throw NativeStoreError.fileSystem("\(relativePath) 不是 UTF-8 Markdown 文件")
                 }
@@ -216,6 +251,7 @@ enum MarkdownArticleSource {
                 throw NativeStoreError.fileSystem("无法读取 \(relativePath)：\(error.localizedDescription)")
             }
         } else {
+            guard expectedContentHash == nil else { throw NativeStoreError.conflict }
             existingSource = nil
         }
         let data = Data(render(article, preserving: existingSource).utf8)
@@ -224,7 +260,12 @@ enum MarkdownArticleSource {
         } catch {
             throw NativeStoreError.fileSystem("无法写入 \(relativePath)：\(error.localizedDescription)")
         }
-        return try read(at: url, relativePath: relativePath, fileManager: fileManager)
+        do {
+            return try read(at: url, relativePath: relativePath, fileManager: fileManager)
+        } catch {
+            try FileSnapshot(url: url, data: previousData).restore(replacingContentHash: hash(data))
+            throw error
+        }
     }
 
     @discardableResult

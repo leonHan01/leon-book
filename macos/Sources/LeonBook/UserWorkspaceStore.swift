@@ -15,6 +15,7 @@ public actor UserWorkspaceStore {
     let rootURL: URL
     private var database: SQLiteDatabase?
     private var directoryLock: ExclusiveDirectoryLock?
+    private var isPreparingForRestore = false
 
     private var databaseURL: URL { rootURL.appendingPathComponent("leon-book.sqlite") }
     private var usersURL: URL { rootURL.appendingPathComponent("users.json") }
@@ -23,6 +24,7 @@ public actor UserWorkspaceStore {
 
     public init(rootURL: URL = LocalBlogStore.defaultRootURL) {
         self.rootURL = rootURL.standardizedFileURL
+        WorkspaceStorageLifecycle.register(self, root: self.rootURL)
     }
 
     public func prepareForBackup() throws {
@@ -36,7 +38,17 @@ public actor UserWorkspaceStore {
         directoryLock = nil
     }
 
+    func prepareAndCloseForRestore() throws {
+        isPreparingForRestore = true
+        defer {
+            closeForRestore()
+            isPreparingForRestore = false
+        }
+        if database != nil { try prepareForBackup() }
+    }
+
     public func prepare() throws -> NativeWorkspaceState {
+        if !isPreparingForRestore { try WorkspaceStorageLifecycle.requireAvailable(rootURL) }
         do {
             try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: workspacesURL, withIntermediateDirectories: true)

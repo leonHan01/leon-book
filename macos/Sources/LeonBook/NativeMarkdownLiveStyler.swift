@@ -22,7 +22,7 @@ enum NativeMarkdownLiveStyler {
         to textView: NSTextView,
         editedRange: NSRange?
     ) {
-        guard let storage = textView.textStorage else { return }
+        guard !textView.hasMarkedText(), let storage = textView.textStorage else { return }
         let targetRange = stylingRange(in: storage.string, editedRange: editedRange)
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = typography.lineSpacing

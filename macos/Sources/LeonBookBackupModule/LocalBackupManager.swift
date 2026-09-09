@@ -189,11 +189,16 @@ public enum LocalBackupManager {
 
                 let precedingRecord = precedingRecords[sourceFile.relativePath]
                 let precedingFileURL = precedingSnapshot?.url.appendingPathComponent(sourceFile.relativePath)
-                let canReuse = precedingRecord.map { recordMatchesSource($0, source: sourceFile) } == true
+                // Metadata is only a fast rejection. Synchronizers and external
+                // editors can preserve both size and mtime while changing bytes.
+                let sourceChecksum = try sha256(of: sourceFile.url)
+                let canReuse = precedingRecord.map {
+                    recordMatchesSource($0, source: sourceFile) && $0.sha256 == sourceChecksum
+                } == true
                     && precedingFileURL.map { fileManager.fileExists(atPath: $0.path) } == true
                 let checksum: String
 
-                if canReuse, let precedingRecord, let precedingFileURL {
+                if canReuse, let precedingFileURL {
                     if cloneFile(at: precedingFileURL, to: targetURL) {
                         clonedFileCount += 1
                     } else if (try? fileManager.linkItem(at: precedingFileURL, to: targetURL)) != nil {
@@ -206,9 +211,10 @@ public enum LocalBackupManager {
                         copiedFileCount += 1
                     }
                     reusedFileCount += 1
-                    checksum = precedingRecord.sha256.isEmpty
-                        ? try sha256(of: targetURL)
-                        : precedingRecord.sha256
+                    checksum = try sha256(of: targetURL)
+                    guard checksum == sourceChecksum else {
+                        throw NativeBackupError.fileSystem("备份复用文件校验失败：\(sourceFile.relativePath)")
+                    }
                 } else {
                     if cloneFile(at: sourceFile.url, to: targetURL) {
                         clonedFileCount += 1
@@ -219,6 +225,10 @@ public enum LocalBackupManager {
                     checksum = try sha256(of: targetURL)
                 }
 
+                guard checksum == sourceChecksum,
+                      Int64(try targetURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? -1) == sourceFile.sizeBytes else {
+                    throw NativeBackupError.fileSystem("备份期间源文件发生变化，请重试：\(sourceFile.relativePath)")
+                }
                 records.append(NativeBackupFileRecord(
                     relativePath: sourceFile.relativePath,
                     sizeBytes: sourceFile.sizeBytes,
