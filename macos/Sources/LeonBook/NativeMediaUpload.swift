@@ -4,6 +4,7 @@ import Foundation
 enum NativeMediaUploadKind: String {
     case image
     case video
+    case audio
     case file
 }
 

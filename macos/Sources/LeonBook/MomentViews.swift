@@ -321,12 +321,15 @@ struct MomentFeedView: View {
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                             .padding(.leading, 2)
-                                    } else if momentFeedLayout.columnCount == 1 {
-                                        LazyVStack(spacing: 16) {
-                                            momentCards(for: group.moments)
-                                        }
                                     } else {
-                                        momentWaterfallColumns(for: group.moments)
+                                        MomentCardsLayout(
+                                            moments: group.moments,
+                                            columnCount: momentFeedLayout.columnCount,
+                                            model: model,
+                                            store: model.store,
+                                            imageBrowser: $imageBrowser
+                                        )
+                                        .equatable()
                                     }
                                 }
                             }
@@ -435,10 +438,46 @@ struct MomentFeedView: View {
         return date.formatted(.dateTime.year().month(.wide).day().locale(locale))
     }
 
+}
+
+/// Draft edits and upload progress must not invalidate the history's media views.
+/// Actions use the live model; the browser binding stays attached to this feed.
+private struct MomentCardsLayout: View, Equatable {
+    let moments: [NativeMoment]
+    let columnCount: Int
+    let model: NativeAppModel
+    let store: LocalBlogStore
+    @Binding var imageBrowser: MomentImageBrowserState?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.columnCount == rhs.columnCount
+            && lhs.model === rhs.model
+            && lhs.store === rhs.store
+            && lhs.moments == rhs.moments
+    }
+
+    var body: some View {
+        if columnCount == 1 {
+            LazyVStack(spacing: 16) {
+                momentCards(for: moments)
+            }
+        } else {
+            let columns = NativeMomentColumns.distribute(moments, columnCount: columnCount)
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(columns.indices, id: \.self) { index in
+                    LazyVStack(spacing: 16) {
+                        momentCards(for: columns[index])
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func momentCards(for moments: [NativeMoment]) -> some View {
         ForEach(moments) { moment in
-            MomentCard(moment: moment, store: model.store) { imageIndex in
+            MomentCard(moment: moment, store: store) { imageIndex in
                 imageBrowser = MomentImageBrowserState(
                     images: moment.imageAttachments,
                     initialIndex: imageIndex
@@ -452,32 +491,10 @@ struct MomentFeedView: View {
             } onDelete: {
                 model.deleteMoment(moment)
             }
-            .frame(maxWidth: momentFeedLayout.columnCount == 1 ? 860 : .infinity)
+            .frame(maxWidth: columnCount == 1 ? 860 : .infinity)
         }
     }
 
-    @ViewBuilder
-    private func momentWaterfallColumns(for moments: [NativeMoment]) -> some View {
-        let columnCount = min(momentFeedLayout.columnCount, max(moments.count, 1))
-        HStack(alignment: .top, spacing: 16) {
-            ForEach(0..<columnCount, id: \.self) { columnIndex in
-                LazyVStack(spacing: 16) {
-                    momentCards(for: momentColumn(
-                        columnIndex,
-                        count: columnCount,
-                        moments: moments
-                    ))
-                }
-                .frame(maxWidth: .infinity, alignment: .top)
-            }
-        }
-    }
-
-    private func momentColumn(_ index: Int, count: Int, moments: [NativeMoment]) -> [NativeMoment] {
-        moments.enumerated().compactMap { offset, moment in
-            offset % count == index ? moment : nil
-        }
-    }
 }
 
 private enum MomentFeedLayout: String, CaseIterable, Identifiable {
@@ -539,7 +556,7 @@ private struct MomentComposerSection: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(LocalizedStringKey(isEditing ? "继续编辑" : "记录此刻"))
                             .font(.headline)
-                        Text(LocalizedStringKey(isEditing ? "修改内容后保存更新" : "写点什么，或分享照片与视频"))
+                        Text(LocalizedStringKey(isEditing ? "修改内容后保存更新" : "写点什么，或分享照片、视频与音频"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -721,7 +738,19 @@ private struct MomentComposerView: View {
                         ForEach(model.momentDraft.images) { media in
                             ZStack(alignment: .topTrailing) {
                                 Group {
-                                    if media.isVideo {
+                                    if media.isAudio {
+                                        VStack(spacing: 8) {
+                                            Image(systemName: "waveform")
+                                                .font(.title)
+                                                .foregroundStyle(MomentVisualStyle.accent)
+                                            Text(media.name)
+                                                .font(.caption2)
+                                                .lineLimit(2)
+                                                .multilineTextAlignment(.center)
+                                            Text("MP3").font(.caption2.weight(.semibold))
+                                        }
+                                        .padding(10)
+                                    } else if media.isVideo {
                                         MomentVideoThumbnail(media: media, store: model.store)
                                     } else {
                                         MomentImage(
@@ -750,8 +779,8 @@ private struct MomentComposerView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .padding(6)
-                                .help(Text(LocalizedStringKey(media.isVideo ? "移除视频" : "移除图片")))
-                                .accessibilityLabel(media.isVideo ? Text("移除视频 \(media.name)") : Text("移除图片 \(media.name)"))
+                                .help(Text(LocalizedStringKey(media.isAudio ? "移除音频" : media.isVideo ? "移除视频" : "移除图片")))
+                                .accessibilityLabel(media.isAudio ? Text("移除音频 \(media.name)") : media.isVideo ? Text("移除视频 \(media.name)") : Text("移除图片 \(media.name)"))
                             }
                         }
                     }
@@ -774,6 +803,14 @@ private struct MomentComposerView: View {
                     model.chooseMomentVideo()
                 } label: {
                     Label("添加视频", systemImage: "video.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
+
+                Button {
+                    model.chooseMomentAudio()
+                } label: {
+                    Label("添加音频", systemImage: "waveform")
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
@@ -816,11 +853,11 @@ private struct MomentComposerView: View {
                 HStack {
                     Text("拖入或粘贴图片可直接添加")
                     Spacer(minLength: 16)
-                    Text("最多 9 个图片或视频 · 视频仅支持 MP4")
+                    Text("最多 9 个附件 · 视频 MP4 · 音频 MP3")
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("拖入或粘贴图片可直接添加")
-                    Text("最多 9 个图片或视频 · 视频仅支持 MP4")
+                    Text("最多 9 个附件 · 视频 MP4 · 音频 MP3")
                 }
             }
             .font(.caption)
@@ -1007,6 +1044,10 @@ private struct MomentCard: View {
                 MomentImageGrid(images: images, store: store, onOpenImage: onOpenImage)
             }
 
+            ForEach(moment.audioAttachments) { audio in
+                MomentInlineAudioPlayer(media: audio, store: store)
+            }
+
             if !videos.isEmpty {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(videos) { video in
@@ -1065,6 +1106,9 @@ private struct MomentCard: View {
         }
         if !moment.imageAttachments.isEmpty {
             parts.append("\(moment.imageAttachments.count) 张图片")
+        }
+        if !moment.audioAttachments.isEmpty {
+            parts.append("\(moment.audioAttachments.count) 个音频")
         }
         if !moment.videoAttachments.isEmpty {
             parts.append("\(moment.videoAttachments.count) 个视频")
@@ -1440,14 +1484,84 @@ private struct MomentInlineVideoPlayer: View {
     }
 }
 
+private struct MomentInlineAudioPlayer: View {
+    let media: NativeMedia
+    let store: LocalBlogStore
+    @State private var player: AVPlayer?
+    @State private var failed = false
+    @State private var playbackRequested = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(media.name, systemImage: "waveform")
+                .font(.callout.weight(.medium))
+                .lineLimit(2)
+            if let player {
+                MomentAVPlayerView(player: player, audioOnly: true)
+                    .frame(height: 44)
+            } else if playbackRequested {
+                ProgressView().controlSize(.small)
+                    .frame(height: 44)
+            } else {
+                Button {
+                    playbackRequested = true
+                } label: {
+                    Label("播放音频", systemImage: "play.circle.fill")
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                if failed {
+                    Text("无法播放此音频，请检查文件是否损坏。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MomentVisualStyle.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .task(id: playbackRequested) {
+            guard playbackRequested else { return }
+            defer { playbackRequested = false }
+            failed = false
+            player?.pause()
+            player = nil
+            guard let url = await store.mediaURL(for: media.url) else {
+                failed = true
+                return
+            }
+            let asset = AVURLAsset(url: url)
+            do {
+                let playable = try await asset.load(.isPlayable)
+                guard !Task.isCancelled else { return }
+                if playable {
+                    player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+                    player?.play()
+                } else {
+                    failed = true
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                failed = true
+            }
+        }
+        .onDisappear {
+            playbackRequested = false
+            player?.pause()
+            player = nil
+        }
+    }
+}
+
 private struct MomentAVPlayerView: NSViewRepresentable {
     let player: AVPlayer
+    var audioOnly = false
 
     func makeNSView(context: Context) -> AVPlayerView {
         let playerView = AVPlayerView()
         playerView.controlsStyle = .inline
-        playerView.showsFullScreenToggleButton = true
-        playerView.allowsPictureInPicturePlayback = true
+        playerView.showsFullScreenToggleButton = !audioOnly
+        playerView.allowsPictureInPicturePlayback = !audioOnly
         playerView.allowsVideoFrameAnalysis = false
         playerView.updatesNowPlayingInfoCenter = false
         playerView.player = player
@@ -1742,6 +1856,10 @@ private struct MomentImmersiveSlide: View {
                         store: store,
                         onOpenImage: onOpenImage
                     )
+                }
+
+                ForEach(moment.audioAttachments) { audio in
+                    MomentInlineAudioPlayer(media: audio, store: store)
                 }
 
                 if !videos.isEmpty {

@@ -195,8 +195,9 @@ public struct NativeMedia: Codable, Hashable, Identifiable {
     public var id: String { url }
 
     public var isVideo: Bool { kind == "video" }
+    public var isAudio: Bool { kind == "audio" }
     public var isImage: Bool { kind == "image" }
-    public var isFile: Bool { !isVideo && !isImage }
+    public var isFile: Bool { !isVideo && !isImage && !isAudio }
 
     public init(kind: String, name: String, size: Int, url: String) {
         self.kind = kind
@@ -1462,6 +1463,10 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
 
     public var imageAttachments: [NativeMedia] {
         images.filter(\.isImage)
+    }
+
+    public var audioAttachments: [NativeMedia] {
+        images.filter(\.isAudio)
     }
 
     public var videoAttachments: [NativeMedia] {

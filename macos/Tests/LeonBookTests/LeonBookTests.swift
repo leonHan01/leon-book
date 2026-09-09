@@ -1818,6 +1818,32 @@ private final class WritingStyleProbe: NSObject, NSTextStorageDelegate {
 }
 
 final class PerformanceRegressionTests {
+    func testMomentColumnsPreserveOrderAndPagination() {
+        for size in [0, 1, 2, 9, 100, 20_000] {
+            let input = Array(0..<size)
+            for requested in 1...4 {
+                let columns = NativeMomentColumns.distribute(input, columnCount: requested)
+                let count = min(requested, max(1, size))
+                let expected = (0..<count).map { column in
+                    input.enumerated().compactMap { index, value in
+                        index % count == column ? value : nil
+                    }
+                }
+                XCTAssertEqual(columns, expected)
+                XCTAssertEqual(columns.flatMap { $0 }.sorted(), input)
+                if size >= requested {
+                    let nextPage = NativeMomentColumns.distribute(
+                        input + Array(size..<(size + 20)), columnCount: requested
+                    )
+                    for index in columns.indices {
+                        XCTAssertEqual(Array(nextPage[index].prefix(columns[index].count)), columns[index])
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(NativeMomentColumns.distribute([1, 2, 3], columnCount: 0), [[1, 2, 3]])
+    }
+
     @MainActor
     func testWritingCompletionOnlyPublishesChangedQueries() {
         let textView = WritingTextViewProbe()
@@ -3385,6 +3411,39 @@ final class LocalBlogStoreTests {
 
         let activity = try await store.listActivity(since: Date().addingTimeInterval(-60))
         XCTAssertEqual(activity.reduce(0) { $0 + $1.count }, 1)
+    }
+
+    func testMomentAudioUploadAndPersistence() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let source = root.appendingPathComponent("recording.MP3")
+        // Storage accepts the format; AVFoundation validates playback separately.
+        try Data([73, 68, 51]).write(to: source)
+        let uploaded = try await NativeMediaUpload.files(
+            [source], kind: .audio, destination: .moments, store: store
+        )
+        XCTAssertEqual(uploaded.count, 1)
+        XCTAssertTrue(uploaded[0].isAudio)
+        XCTAssertFalse(uploaded[0].isFile)
+        XCTAssertTrue(uploaded[0].url.hasSuffix(".mp3"))
+        let saved = try await store.saveMoment(text: "", textRuns: [], images: uploaded)
+        XCTAssertEqual(saved.audioAttachments, uploaded)
+        XCTAssertTrue(saved.imageAttachments.isEmpty)
+        XCTAssertTrue(saved.videoAttachments.isEmpty)
+        let reopened = LocalBlogStore(rootURL: root)
+        XCTAssertEqual(try await reopened.listMoments().first?.audioAttachments, uploaded)
+
+        let unsupported = root.appendingPathComponent("recording.wav")
+        try Data([0]).write(to: unsupported)
+        do {
+            _ = try await store.uploadMedia(fileURL: unsupported, kind: "audio", slug: "moments")
+            XCTFail("expected non-MP3 moment audio to be rejected")
+        } catch let error as NativeStoreError {
+            XCTAssertTrue(error.localizedDescription.contains("仅支持 MP3"))
+        }
+        let updated = try await store.updateMoment(id: saved.id, text: "audio removed", textRuns: [], images: [])
+        XCTAssertTrue(updated.audioAttachments.isEmpty)
     }
 
     func testMomentVideoUploadOnlyAcceptsMP4() async throws {
@@ -5565,6 +5624,7 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testArticleGraphLayoutAppliesAndClampsManualNodePositions", { NativeModelsTests().testArticleGraphLayoutAppliesAndClampsManualNodePositions() }),
             ("NativeModelsTests.testArticleGraphShortestPathUsesVisibleDirectedReferences", { NativeModelsTests().testArticleGraphShortestPathUsesVisibleDirectedReferences() }),
             ("NativeModelsTests.testReloadPopulatesKnowledgeGraphWithIsolatedArticles", { try await NativeModelsTests().testReloadPopulatesKnowledgeGraphWithIsolatedArticles() }),
+            ("PerformanceRegressionTests.testMomentColumnsPreserveOrderAndPagination", { PerformanceRegressionTests().testMomentColumnsPreserveOrderAndPagination() }),
             ("PerformanceRegressionTests.testWritingCompletionOnlyPublishesChangedQueries", { PerformanceRegressionTests().testWritingCompletionOnlyPublishesChangedQueries() }),
             ("PerformanceRegressionTests.testWorkspaceResourceIndexPreservesNavigationSemantics", { PerformanceRegressionTests().testWorkspaceResourceIndexPreservesNavigationSemantics() }),
             ("PerformanceRegressionTests.testWorkspaceResourceIndexInvalidatesAfterMutationAndWorkspaceReset", { PerformanceRegressionTests().testWorkspaceResourceIndexInvalidatesAfterMutationAndWorkspaceReset() }),
@@ -5583,6 +5643,7 @@ struct LeonBookUnitTests {
             ("PerformanceRegressionTests.testCalendarChangeRebuildsCachedMomentFacets", { await PerformanceRegressionTests().testCalendarChangeRebuildsCachedMomentFacets() }),
             ("PerformanceRegressionTests.testPairedPerformanceSamplingAlternatesOrder", { PerformanceRegressionTests().testPairedPerformanceSamplingAlternatesOrder() }),
             ("LocalBlogStoreTests.testMomentLifecycleNormalizesInputFiltersAndRecordsActivity", { try await LocalBlogStoreTests().testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() }),
+            ("LocalBlogStoreTests.testMomentAudioUploadAndPersistence", { try await LocalBlogStoreTests().testMomentAudioUploadAndPersistence() }),
             ("LocalBlogStoreTests.testMomentVideoUploadOnlyAcceptsMP4", { try await LocalBlogStoreTests().testMomentVideoUploadOnlyAcceptsMP4() }),
             ("LocalBlogStoreTests.testMediaUploadModuleCleansCompletedFilesWhenABatchFails", { try await LocalBlogStoreTests().testMediaUploadModuleCleansCompletedFilesWhenABatchFails() }),
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),

@@ -3160,6 +3160,10 @@ public actor LocalBlogStore {
            fileURL.pathExtension.caseInsensitiveCompare("mp4") != .orderedSame {
             throw NativeStoreError.fileSystem("微博视频仅支持 MP4 格式")
         }
+        if kind == "audio", targetSlug == "moments",
+           fileURL.pathExtension.caseInsensitiveCompare("mp3") != .orderedSame {
+            throw NativeStoreError.fileSystem("微博音频仅支持 MP3 格式")
+        }
         let targetDirectory = mediaURL.appendingPathComponent(targetSlug, isDirectory: true)
         try FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
 
@@ -3176,7 +3180,7 @@ public actor LocalBlogStore {
                 return (try FileManager.default.attributesOfItem(atPath: targetURL.path)[.size] as? NSNumber)?
                     .intValue ?? 0
             }.value
-            let mediaKind = ["image", "video", "file"].contains(kind) ? kind : "file"
+            let mediaKind = ["image", "video", "audio", "file"].contains(kind) ? kind : "file"
             if mediaKind == "image" { try recordActivity(type: "image_published", at: Date()) }
             return NativeUploadedMedia(
                 key: "\(targetSlug)/\(filename)",
@@ -4376,6 +4380,9 @@ public actor LocalBlogStore {
     private func isSupportedMomentMedia(_ media: NativeMedia) -> Bool {
         guard !media.url.isEmpty else { return false }
         if media.isImage { return true }
+        if media.isAudio {
+            return (media.url as NSString).pathExtension.caseInsensitiveCompare("mp3") == .orderedSame
+        }
         return media.isVideo
             && (media.url as NSString).pathExtension.caseInsensitiveCompare("mp4") == .orderedSame
     }

@@ -1345,7 +1345,7 @@ public final class NativeAppModel: ObservableObject {
         guard !isBackingUp, !isUploadingMedia else { return }
         let remaining = max(0, 9 - momentDraft.images.count)
         guard remaining > 0 else {
-            errorMessage = "每条微博最多添加 9 个图片或视频。"
+            errorMessage = "每条微博最多添加 9 个图片、视频或音频。"
             return
         }
 
@@ -1384,20 +1384,28 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func chooseMomentVideo() {
+        chooseMomentAVMedia(isAudio: false)
+    }
+
+    func chooseMomentAudio() {
+        chooseMomentAVMedia(isAudio: true)
+    }
+
+    private func chooseMomentAVMedia(isAudio: Bool) {
         guard !isBackingUp, !isUploadingMedia else { return }
         guard momentDraft.images.count < 9 else {
-            errorMessage = "每条微博最多添加 9 个图片或视频。"
+            errorMessage = "每条微博最多添加 9 个图片、视频或音频。"
             return
         }
 
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.mpeg4Movie]
-        panel.message = "选择一个 MP4 视频"
+        panel.allowedContentTypes = isAudio ? [.mp3] : [.mpeg4Movie]
+        panel.message = isAudio ? "选择一个 MP3 音频" : "选择一个 MP4 视频"
         guard panel.runModal() == .OK, let fileURL = panel.url else { return }
-        guard fileURL.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame else {
-            errorMessage = "微博视频仅支持 MP4 格式。"
+        guard fileURL.pathExtension.caseInsensitiveCompare(isAudio ? "mp3" : "mp4") == .orderedSame else {
+            errorMessage = isAudio ? "微博音频仅支持 MP3 格式。" : "微博视频仅支持 MP4 格式。"
             return
         }
 
@@ -1408,7 +1416,7 @@ public final class NativeAppModel: ObservableObject {
             do {
                 guard let uploaded = try await NativeMediaUpload.files(
                     [fileURL],
-                    kind: .video,
+                    kind: isAudio ? .audio : .video,
                     destination: .moments,
                     store: activeStore
                 ).first else { return }
@@ -1570,7 +1578,7 @@ public final class NativeAppModel: ObservableObject {
         guard !isBackingUp, !isUploadingMedia else { return }
         let remaining = max(0, 9 - momentDraft.images.count)
         guard remaining > 0 else {
-            errorMessage = "每条微博最多添加 9 个图片或视频。"
+            errorMessage = "每条微博最多添加 9 个图片、视频或音频。"
             return
         }
 

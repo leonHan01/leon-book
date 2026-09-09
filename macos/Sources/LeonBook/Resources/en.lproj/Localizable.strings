@@ -938,3 +938,25 @@
 "已添加媒体" = "Attached media";
 
 "⌘ Return 保存微博" = "⌘ Return to save post";
+
+"添加音频" = "Add audio";
+
+"移除音频" = "Remove audio";
+
+"移除音频 %@" = "Remove audio %@";
+
+"选择一个 MP3 音频" = "Choose an MP3 audio file";
+
+"微博音频仅支持 MP3 格式。" = "Audio posts only support MP3 files.";
+
+"微博音频仅支持 MP3 格式" = "Audio posts only support MP3 files";
+
+"每条微博最多添加 9 个图片、视频或音频。" = "Each post supports up to 9 images, videos, or audio files.";
+
+"最多 9 个附件 · 视频 MP4 · 音频 MP3" = "Up to 9 attachments · MP4 video · MP3 audio";
+
+"无法播放此音频，请检查文件是否损坏。" = "Unable to play this audio. Check whether the file is damaged.";
+
+"写点什么，或分享照片、视频与音频" = "Write something, or share photos, videos, and audio";
+
+"播放音频" = "Play audio";
