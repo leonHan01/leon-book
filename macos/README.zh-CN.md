@@ -192,7 +192,9 @@ https://example.com
 
 默认用户为 `leon`。每位用户都有独立的 `workspaces/<user-id>` 目录。升级到多用户结构时，根目录中已有的文章、草稿、媒体、动态和活动记录会自动迁移到 `leon` 工作空间。首次启动时，已有 JSON 数据会自动导入工作空间的 SQLite 数据库。
 
-如果安装了多个 macOS SDK，可以使用 `LEON_BOOK_SDK_PATH` 指定打包所用的 SDK：
+构建、检查、覆盖率和性能脚本使用同一套 SDK 选择规则：默认使用当前开发工具的 SDK；若当前为 Command Line Tools 27.0 且本机保留了 26.5 SDK，则自动使用 26.5，避开 27.0 SDK 的 `@State` 宏缺少 `SwiftUIMacros` 插件的问题。
+
+如果安装了多个 macOS SDK，可以使用 `LEON_BOOK_SDK_PATH` 显式指定 SDK；该设置优先于自动选择：
 
 ```bash
 LEON_BOOK_SDK_PATH=/path/to/MacOSX.sdk ./scripts/leonblog build

@@ -196,7 +196,9 @@ The default data directory is `/Volumes/T7Shield/myblog/`. If it is unavailable,
 
 The default user is `leon`. Each user has an isolated `workspaces/<user-id>` directory. When upgrading to the multi-user structure, existing articles, drafts, media, moments, and activity records in the root directory are automatically moved into the `leon` workspace. Existing JSON records are imported into the workspace SQLite database on first launch.
 
-If multiple macOS SDKs are installed, use `LEON_BOOK_SDK_PATH` to select the SDK for packaging:
+The build, check, coverage, and performance scripts share SDK selection. They use the selected developer tools' SDK by default. When Command Line Tools 27.0 is selected and the 26.5 SDK is still installed, they use 26.5 to avoid the missing `SwiftUIMacros` plugin required by the 27.0 SDK's `@State` macro.
+
+If multiple macOS SDKs are installed, use `LEON_BOOK_SDK_PATH` to explicitly select the SDK. This overrides automatic selection:
 
 ```bash
 LEON_BOOK_SDK_PATH=/path/to/MacOSX.sdk ./scripts/leonblog build

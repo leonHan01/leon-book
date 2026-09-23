@@ -48,6 +48,7 @@ native_app_needs_build() {
     "$PROJECT_DIR/macos/Resources"
     "$PROJECT_DIR/macos/Sources"
     "$PROJECT_DIR/macos/scripts/build-app.sh"
+    "$PROJECT_DIR/macos/scripts/swift-sdk.sh"
   )
   for input in "${build_inputs[@]}"; do
     [[ "$input" -nt "$MACOS_EXECUTABLE" ]] && return 0

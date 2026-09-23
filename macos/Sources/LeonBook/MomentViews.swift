@@ -947,31 +947,7 @@ private struct MomentCard: View {
 
         VStack(alignment: .leading, spacing: 15) {
             HStack(alignment: .center, spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [MomentVisualStyle.accent, .orange],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                    Image(systemName: "person.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 34, height: 34)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("leon-book")
-                        .font(.subheadline.weight(.semibold))
-                    Text(dateLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
+                Spacer(minLength: 0)
 
                 Button(action: onToggleFavorite) {
                     Image(systemName: moment.isFavorite ? "heart.fill" : "heart")

@@ -9,11 +9,7 @@ BUILD_ROOT="${TMPDIR%/}/leon-book-swiftpm-coverage"
 mkdir -p "${BUILD_ROOT}/cache" "${BUILD_ROOT}/config" "${BUILD_ROOT}/security" "${BUILD_ROOT}/scratch" "${BUILD_ROOT}/modules"
 export CLANG_MODULE_CACHE_PATH="${BUILD_ROOT}/modules"
 
-SDK_ARGUMENTS=()
-SDK_PATH="${LEON_BOOK_SDK_PATH:-}"
-if [[ -n "${SDK_PATH}" ]]; then
-    SDK_ARGUMENTS=(--sdk "${SDK_PATH}")
-fi
+source "${SCRIPT_DIR}/swift-sdk.sh"
 
 SWIFT_ARGUMENTS=(
     --package-path "${MACOS_DIR}" \
