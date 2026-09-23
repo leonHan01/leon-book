@@ -46,6 +46,9 @@ for LOCALIZATION_DIR in "${MACOS_DIR}/Sources/LeonBook/Resources/"*.lproj; do
 done
 if [[ -d "${BIN_PATH}/LeonBookMac_LeonBook.bundle" ]]; then
     COPYFILE_DISABLE=1 cp -R "${BIN_PATH}/LeonBookMac_LeonBook.bundle" "${CONTENTS_DIR}/Resources/"
+else
+    print -u2 -- "Missing SwiftPM resource bundle: ${BIN_PATH}/LeonBookMac_LeonBook.bundle"
+    exit 1
 fi
 codesign --force --sign - --timestamp=none "${STAGING_APP}"
 codesign --verify --deep --strict "${STAGING_APP}"

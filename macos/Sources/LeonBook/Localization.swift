@@ -55,6 +55,15 @@ public final class NativeLanguagePreferences: ObservableObject {
 }
 
 public enum NativeLocalization {
+    private static let resourceBundle: Bundle? = {
+        let bundleName = "LeonBookMac_LeonBook.bundle"
+        let candidates = [
+            Bundle.main.resourceURL?.appendingPathComponent(bundleName),
+            Bundle.main.bundleURL.appendingPathComponent(bundleName),
+        ]
+        return candidates.compactMap { $0 }.compactMap(Bundle.init(url:)).first
+    }()
+
     public static var currentLanguage: NativeAppLanguage {
         UserDefaults.standard.string(forKey: nativeLanguageDefaultsKey)
             .flatMap(NativeAppLanguage.init(rawValue:))
@@ -66,7 +75,7 @@ public enum NativeLocalization {
         language: NativeAppLanguage,
         table: String? = nil
     ) -> String {
-        for baseBundle in [Bundle.module, Bundle.main] {
+        for baseBundle in [resourceBundle, Bundle.main].compactMap({ $0 }) {
             guard let path = baseBundle.path(forResource: language.rawValue, ofType: "lproj"),
                   let languageBundle = Bundle(path: path) else { continue }
             let localized = languageBundle.localizedString(forKey: key, value: nil, table: table)
