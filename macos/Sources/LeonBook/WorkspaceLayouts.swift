@@ -823,7 +823,7 @@ private struct NativeWorkspaceLayoutEditorSheet: View {
                     onSave(name, navigationSidebarWidth, editorSidebarWidth, readerInspectorWidth, splitFraction)
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .nativePrimaryButton()
                 .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }

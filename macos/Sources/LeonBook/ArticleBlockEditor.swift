@@ -1198,7 +1198,7 @@ struct ArticleBlockEditor: View {
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary) }
         }
         .onAppear {
@@ -2230,7 +2230,7 @@ private struct EditorBlockTransferSheet: View {
                     } label: {
                         HStack(spacing: 10) {
                             Image(systemName: article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis")
-                                .foregroundStyle(article.status == .published ? .blue : .orange)
+                                .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(article.title)
                                     .foregroundStyle(.primary)

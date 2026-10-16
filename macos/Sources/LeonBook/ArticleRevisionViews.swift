@@ -151,7 +151,7 @@ private struct ArticleRevisionDiffView: View {
                 Button(action: onRestore) {
                     Label("恢复此版本", systemImage: "arrow.uturn.backward.circle.fill")
                 }
-                .buttonStyle(.borderedProminent)
+                .nativePrimaryButton()
             }
             .padding(16)
 
@@ -197,7 +197,7 @@ private struct ArticleRevisionCodeColumn: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(NativeTheme.surface)
 
             Divider()
 
@@ -225,7 +225,7 @@ private struct ArticleRevisionCodeColumn: View {
                 }
                 .padding(.vertical, 6)
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(NativeTheme.surface)
         }
     }
 }

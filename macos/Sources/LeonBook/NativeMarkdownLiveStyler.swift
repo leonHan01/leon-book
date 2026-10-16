@@ -50,7 +50,7 @@ enum NativeMarkdownLiveStyler {
 
         apply(inlineCode, group: 1, to: storage, source: source, range: targetRange, attributes: [
             .font: typography.codeFont.nsFont(size: max(11, typography.fontSize - 2)),
-            .backgroundColor: NSColor.controlBackgroundColor,
+            .backgroundColor: NSColor(NativeTheme.surfaceSecondary),
         ])
         apply(strongAsterisk, group: 1, to: storage, source: source, range: targetRange, attributes: [
             .font: typography.bodyFont.nsFont(size: typography.fontSize, weight: .bold),
@@ -69,7 +69,7 @@ enum NativeMarkdownLiveStyler {
             .underlineStyle: NSUnderlineStyle.single.rawValue,
         ])
         apply(markdownLink, group: 1, to: storage, source: source, range: targetRange, attributes: [
-            .foregroundColor: NSColor.linkColor,
+            .foregroundColor: NSColor(NativeTheme.accent),
             .underlineStyle: NSUnderlineStyle.single.rawValue,
         ])
         apply(blockQuote, group: 0, to: storage, source: source, range: targetRange, attributes: [
@@ -85,7 +85,7 @@ enum NativeMarkdownLiveStyler {
         ])
         apply(fencedCode, group: 0, to: storage, source: source, range: targetRange, attributes: [
             .font: typography.codeFont.nsFont(size: max(11, typography.fontSize - 3)),
-            .backgroundColor: NSColor.controlBackgroundColor,
+            .backgroundColor: NSColor(NativeTheme.surfaceSecondary),
         ])
 
         for match in heading.matches(in: source, range: targetRange) {

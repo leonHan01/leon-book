@@ -159,7 +159,7 @@ private struct BoardArticleCard: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.14)) }
         }
         .buttonStyle(.plain)
@@ -356,7 +356,7 @@ struct SmartCollectionCalendarView: View {
                         .padding(7)
                         .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
                         .background(
-                            day.isInDisplayedMonth ? Color(nsColor: .controlBackgroundColor) : Color.secondary.opacity(0.025),
+                            day.isInDisplayedMonth ? NativeTheme.surface : Color.secondary.opacity(0.025),
                             in: RoundedRectangle(cornerRadius: 9)
                         )
                         .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(Color.secondary.opacity(0.12)) }

@@ -23,7 +23,7 @@ struct QAndAView: View {
                 listContent
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(NativeTheme.canvas)
         .sheet(isPresented: $isPresentingQuestionComposer) {
             QuestionComposerSheet(model: model)
         }
@@ -47,7 +47,7 @@ struct QAndAView: View {
             } label: {
                 Label("发布问题", systemImage: "plus.bubble.fill")
             }
-            .buttonStyle(.borderedProminent)
+            .nativePrimaryButton()
             .disabled(model.isPublishingQuestion || model.isBackingUp)
         }
         .padding(.horizontal, 24)
@@ -173,7 +173,7 @@ struct QAndAView: View {
                     .foregroundStyle(.secondary)
                 if !model.isFilteringQuestions {
                     Button("发布问题") { isPresentingQuestionComposer = true }
-                        .buttonStyle(.borderedProminent)
+                        .nativePrimaryButton()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -211,7 +211,7 @@ struct QAndAView: View {
             .frame(maxWidth: 920, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.32))
+        .background(NativeTheme.surface.opacity(0.32))
     }
 }
 
@@ -266,7 +266,7 @@ private struct QuestionListRow: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            isHovered ? Color.accentColor.opacity(0.07) : Color(nsColor: .textBackgroundColor),
+            isHovered ? Color.accentColor.opacity(0.07) : NativeTheme.surface,
             in: RoundedRectangle(cornerRadius: 13, style: .continuous)
         )
         .overlay {
@@ -408,7 +408,7 @@ private struct QuestionDetailView: View {
                         }
                         .padding(16)
                         .background(
-                            Color(nsColor: .textBackgroundColor),
+                            NativeTheme.surface,
                             in: RoundedRectangle(cornerRadius: 12)
                         )
                         .overlay {
@@ -462,7 +462,7 @@ private struct QuestionDetailView: View {
                     )
                 }
                 .frame(minHeight: 170)
-                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12))
                 }
@@ -487,7 +487,7 @@ private struct QuestionDetailView: View {
                         .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
                     }
                 }
-                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12))
                 }
@@ -538,7 +538,7 @@ private struct QuestionDetailView: View {
                         )
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .nativePrimaryButton()
                 .disabled(
                     model.questionAnswerDraft.isEmpty
                         || model.questionAnswerDraft.body.count > 10_000
@@ -587,7 +587,7 @@ private struct QuestionComposerSheet: View {
                     .scrollContentBackground(.hidden)
                     .padding(7)
                     .frame(minHeight: 150)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+                    .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 9))
                     .overlay { RoundedRectangle(cornerRadius: 9).stroke(Color.primary.opacity(0.12)) }
             }
 
@@ -629,7 +629,7 @@ private struct QuestionComposerSheet: View {
                     }
                 }
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
+                .nativePrimaryButton()
                 .disabled(
                     title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         || title.count > 200
@@ -693,7 +693,7 @@ private struct QuestionAnswerImage: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(NativeTheme.surface)
             if let image {
                 Image(nsImage: image)
                     .resizable()
@@ -742,7 +742,7 @@ private struct QuestionTagButtonStyle: ButtonStyle {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
-                isSelected ? Color.accentColor : Color.accentColor.opacity(configuration.isPressed ? 0.18 : 0.1),
+                isSelected ? NativeTheme.brandBlue : (configuration.isPressed ? NativeTheme.selection : NativeTheme.lightBlue),
                 in: Capsule()
             )
             .opacity(configuration.isPressed ? 0.8 : 1)

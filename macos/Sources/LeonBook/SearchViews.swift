@@ -164,7 +164,7 @@ private struct NativeSearchResultRow: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: result.documentType.systemImage)
                 .font(.title3)
-                .foregroundStyle(result.documentType == .article ? Color.accentColor : .orange)
+                .foregroundStyle(result.documentType == .article ? NativeTheme.accent : NativeTheme.blue)
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 6) {

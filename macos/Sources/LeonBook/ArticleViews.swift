@@ -153,7 +153,7 @@ struct ArticleReaderView: View {
                         systemImage: article.status == .published
                             ? "checkmark.circle.fill" : "pencil.circle.fill"
                     )
-                    .foregroundStyle(article.status == .published ? .green : .orange)
+                    .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                     Spacer()
                     if let summary = model.articleSummary(for: article.slug) {
                         Button {
@@ -392,7 +392,7 @@ private struct ArticleTabBar: View {
         }
         .controlSize(.small)
         .padding(.horizontal, 12)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(NativeTheme.canvas)
     }
 }
 
@@ -513,7 +513,7 @@ private struct ArticleInspectorView: View {
                 contextNavigation
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(NativeTheme.surface)
         .onChange(of: model.articleCommentSelectionRevision) { _ in
             if model.pendingArticleCommentSelection != nil {
                 selectedPane = .comments
@@ -737,7 +737,7 @@ private struct ArticleCommentsSidebar: View {
                 .font(.callout)
                 .frame(minHeight: 62, maxHeight: 96)
                 .padding(5)
-                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(Color.secondary.opacity(0.2))
@@ -766,7 +766,7 @@ private struct ArticleCommentsSidebar: View {
                         }
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .nativePrimaryButton()
                 .controlSize(.small)
                 .disabled(
                     commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -852,7 +852,7 @@ private struct ArticleCommentRow: View {
         }
         .padding(11)
         .padding(.leading, comment.parentID == nil ? 0 : 14)
-        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .background(NativeTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Color.secondary.opacity(0.13))
@@ -1024,7 +1024,7 @@ private struct ArticleInspectorSection<Content: View>: View {
             }
         }
         .padding(11)
-        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .background(NativeTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Color.secondary.opacity(0.13))
@@ -1076,7 +1076,7 @@ struct ArticleInspectorLinkRow: View {
         Button(action: onOpen) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: article.status == .published ? "doc.text" : "doc.text.fill")
-                    .foregroundStyle(article.status == .published ? Color.accentColor : .orange)
+                    .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(article.title)
@@ -1108,7 +1108,7 @@ struct ArticleUnlinkedMentionRow: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 7) {
                         Image(systemName: "quote.bubble")
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(NativeTheme.blue)
                         Text(mention.article.title)
                             .font(.callout.weight(.medium))
                             .lineLimit(1)
@@ -1242,7 +1242,7 @@ private struct ArticleLocalGraphNode: View {
                 .multilineTextAlignment(.center)
                 .frame(width: isSelected ? 96 : 80, height: isSelected ? 42 : 36)
                 .background(
-                    isSelected ? Color.accentColor.opacity(0.2) : Color(nsColor: .windowBackgroundColor),
+                    isSelected ? Color.accentColor.opacity(0.2) : NativeTheme.canvas,
                     in: RoundedRectangle(cornerRadius: 8)
                 )
                 .overlay {
@@ -1318,7 +1318,7 @@ private struct ArticleHoverPreviewCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: article.status == .published ? "doc.text" : "doc.text.fill")
-                    .foregroundStyle(article.status == .published ? Color.accentColor : .orange)
+                    .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                 Text(LocalizedStringKey(article.status.label))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -1772,7 +1772,7 @@ struct MarkdownWebEmbedView: View {
             MarkdownEmbeddedWebView(url: embed.url)
                 .frame(maxWidth: .infinity, minHeight: embed.height, maxHeight: embed.height)
         }
-        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.secondary.opacity(0.24))
@@ -1787,7 +1787,7 @@ struct MarkdownHTMLComponentView: View {
     var body: some View {
         MarkdownHTMLWebView(html: component.html)
             .frame(maxWidth: .infinity, minHeight: component.height, maxHeight: component.height)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(Color.secondary.opacity(0.2))
@@ -2095,7 +2095,7 @@ private struct InlineVideoPlayer: View {
                         .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 420)
                         .clipped()
                 } else {
-                    Color(nsColor: .windowBackgroundColor)
+                    NativeTheme.canvas
                 }
                 Color.black.opacity(playback.poster == nil ? 0.05 : 0.24)
                 VStack(spacing: 10) {
@@ -2131,7 +2131,7 @@ private struct InlineVideoPlayer: View {
 
     private func videoPlaceholder<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         ZStack {
-            Color(nsColor: .windowBackgroundColor)
+            NativeTheme.canvas
             content()
         }
         .frame(maxWidth: .infinity, minHeight: 320)

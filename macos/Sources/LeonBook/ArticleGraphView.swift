@@ -118,7 +118,7 @@ struct ArticleGraphView: View {
                             .frame(minWidth: 180, idealWidth: 230, maxWidth: 280)
 
                         Button("查找路径", action: findShortestPath)
-                            .buttonStyle(.borderedProminent)
+                            .nativePrimaryButton()
                             .disabled(
                                 pageState.pathStartText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                                     || pageState.pathDestinationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -137,7 +137,7 @@ struct ArticleGraphView: View {
                     if let feedback = pageState.pathFeedback {
                         Text(feedback)
                             .font(.caption)
-                            .foregroundStyle(highlightedPath == nil ? Color.orange : Color.secondary)
+                            .foregroundStyle(highlightedPath == nil ? NativeTheme.accent : NativeTheme.textSecondary)
                             .lineLimit(2)
                             .accessibilityLabel(feedback)
                     } else {
@@ -187,7 +187,7 @@ struct ArticleGraphView: View {
                         )
                         .padding(36)
                 }
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(NativeTheme.canvas)
             }
         }
         .onChange(of: graph) { _ in
@@ -513,10 +513,10 @@ private enum ArticleGraphPathNodeRole {
 
     var color: Color {
         switch self {
-        case .start: return .green
-        case .waypoint: return .accentColor
-        case .destination: return .pink
-        case .startAndDestination: return .purple
+        case .start: return NativeTheme.accent
+        case .waypoint: return NativeTheme.textSecondary
+        case .destination: return NativeTheme.blue
+        case .startAndDestination: return NativeTheme.deepBlue
         }
     }
 }
@@ -555,12 +555,12 @@ private struct ArticleGraphNode: View {
 
     private var nodeBackground: Color {
         if let pathRole { return pathRole.color.opacity(0.18) }
-        return article.status == .published ? Color.accentColor.opacity(0.12) : Color.orange.opacity(0.12)
+        return article.status == .published ? NativeTheme.lightBlue : NativeTheme.surfaceSecondary
     }
 
     private var nodeBorder: Color {
         if let pathRole { return pathRole.color.opacity(0.9) }
-        return article.status == .published ? Color.accentColor.opacity(0.38) : Color.orange.opacity(0.48)
+        return article.status == .published ? NativeTheme.blue.opacity(0.5) : NativeTheme.border
     }
 }
 

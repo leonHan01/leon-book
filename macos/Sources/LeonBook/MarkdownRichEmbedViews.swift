@@ -47,7 +47,7 @@ struct NativePDFEmbedView: View {
                     .frame(maxWidth: .infinity, minHeight: 140)
             }
         }
-        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
         .overlay { RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.22)) }
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .task(id: "\(reference)|\(sourceRelativePath ?? "")") {

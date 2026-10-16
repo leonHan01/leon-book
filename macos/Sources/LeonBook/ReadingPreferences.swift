@@ -98,7 +98,7 @@ enum NativeReadingTheme: String, CaseIterable, Codable, Identifiable {
 
     func background(system: ColorScheme) -> Color {
         switch self {
-        case .system: return Color(nsColor: .windowBackgroundColor)
+        case .system: return NativeTheme.canvas
         case .paper: return Color(red: 0.975, green: 0.968, blue: 0.94)
         case .sepia: return Color(red: 0.93, green: 0.875, blue: 0.75)
         case .night: return Color(red: 0.075, green: 0.082, blue: 0.095)
@@ -107,7 +107,7 @@ enum NativeReadingTheme: String, CaseIterable, Codable, Identifiable {
 
     func codeBackground(system: ColorScheme) -> Color {
         switch self {
-        case .system: return Color(nsColor: .textBackgroundColor)
+        case .system: return NativeTheme.surface
         case .paper: return Color.black.opacity(0.045)
         case .sepia: return Color(red: 0.32, green: 0.24, blue: 0.13).opacity(0.09)
         case .night: return Color.white.opacity(0.065)

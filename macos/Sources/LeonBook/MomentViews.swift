@@ -5,8 +5,8 @@ import SwiftUI
 private let momentFeedMaximumWidth: CGFloat = 1_360
 
 private enum MomentVisualStyle {
-    static let accent = Color(red: 0.94, green: 0.30, blue: 0.22)
-    static let cardBackground = Color(nsColor: .controlBackgroundColor)
+    static let accent = NativeTheme.accent
+    static let cardBackground = NativeTheme.surface
 }
 
 struct MomentFeedView: View {
@@ -39,7 +39,7 @@ struct MomentFeedView: View {
                             RoundedRectangle(cornerRadius: 15, style: .continuous)
                                 .fill(
                                     LinearGradient(
-                                        colors: [MomentVisualStyle.accent, .orange],
+                                        colors: [NativeTheme.brandBlue, NativeTheme.blue],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     )
@@ -54,6 +54,7 @@ struct MomentFeedView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("微博")
                                 .font(.system(size: 31, weight: .bold, design: .rounded))
+                                .foregroundStyle(NativeTheme.deepBlue)
                             Text("记下灵感、日常和稍纵即逝的想法")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
@@ -66,7 +67,7 @@ struct MomentFeedView: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 11)
                             .padding(.vertical, 7)
-                            .background(Color.primary.opacity(0.05), in: Capsule())
+                            .background(NativeTheme.surfaceSecondary, in: Capsule())
                     }
 
                     MomentComposerSection(model: model)
@@ -94,7 +95,7 @@ struct MomentFeedView: View {
                         } label: {
                             Label("沉浸浏览", systemImage: "play.rectangle.fill")
                         }
-                        .buttonStyle(.borderedProminent)
+                        .nativePrimaryButton()
                         .disabled(model.filteredMoments.isEmpty)
                         .help("像幻灯片一样逐页浏览当前微博，使用方向键翻页")
                         .accessibilityLabel("进入微博沉浸浏览模式")
@@ -201,7 +202,7 @@ struct MomentFeedView: View {
                             )
                         }
                         .buttonStyle(.bordered)
-                        .tint(model.showsOnlyFavoriteMoments ? .pink : .gray)
+                        .tint(model.showsOnlyFavoriteMoments ? NativeTheme.accent : NativeTheme.textSecondary)
                         .help("仅显示已收藏的微博")
 
                         if model.isFilteringMoments {
@@ -235,11 +236,11 @@ struct MomentFeedView: View {
                                                     .foregroundStyle(isSelected ? Color.white.opacity(0.78) : Color.secondary)
                                             }
                                             .font(.caption.weight(.medium))
-                                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                                            .foregroundStyle(isSelected ? Color.white : NativeTheme.textPrimary)
                                             .padding(.horizontal, 11)
                                             .padding(.vertical, 7)
                                             .background(
-                                                isSelected ? MomentVisualStyle.accent : Color.primary.opacity(0.055),
+                                                isSelected ? NativeTheme.brandBlue : NativeTheme.surface,
                                                 in: Capsule()
                                             )
                                         }
@@ -260,7 +261,7 @@ struct MomentFeedView: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
-                        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background(NativeTheme.surfaceSecondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
 
                     if model.filteredMoments.isEmpty {
@@ -301,7 +302,7 @@ struct MomentFeedView: View {
                                                 .background(MomentVisualStyle.accent.opacity(0.1), in: Capsule())
 
                                             Rectangle()
-                                                .fill(Color.primary.opacity(0.08))
+                                                .fill(NativeTheme.border)
                                                 .frame(height: 1)
 
                                             Image(systemName: pageState.collapsedTimelineDays.contains(group.id) ? "chevron.right" : "chevron.down")
@@ -367,9 +368,9 @@ struct MomentFeedView: View {
         .background(
             LinearGradient(
                 colors: [
-                    MomentVisualStyle.accent.opacity(0.045),
-                    Color(nsColor: .windowBackgroundColor),
-                    Color(nsColor: .windowBackgroundColor),
+                    NativeTheme.lightBlue,
+                    NativeTheme.canvas,
+                    NativeTheme.canvas,
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -589,7 +590,7 @@ private struct MomentComposerSection: View {
         .background(MomentVisualStyle.cardBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.07))
+                .strokeBorder(NativeTheme.border)
         }
         .shadow(color: .black.opacity(0.055), radius: 16, y: 7)
         .onAppear {
@@ -685,7 +686,7 @@ private struct MomentComposerView: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(Color.primary.opacity(0.1))
@@ -842,7 +843,7 @@ private struct MomentComposerView: View {
                         systemImage: model.editingMomentID == nil ? "paperplane.fill" : "checkmark"
                     )
                 }
-                .buttonStyle(.borderedProminent)
+                .nativePrimaryButton()
                 .controlSize(.large)
                 .keyboardShortcut(.return, modifiers: .command)
                 .help("⌘ Return 保存微博")
@@ -952,7 +953,7 @@ private struct MomentCard: View {
                 Button(action: onToggleFavorite) {
                     Image(systemName: moment.isFavorite ? "heart.fill" : "heart")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(moment.isFavorite ? .pink : .secondary)
+                        .foregroundStyle(moment.isFavorite ? NativeTheme.accent : NativeTheme.textSecondary)
                         .frame(width: 30, height: 30)
                         .background(Color.primary.opacity(0.045), in: Circle())
                         .contentShape(Circle())
@@ -1036,10 +1037,10 @@ private struct MomentCard: View {
         .background(MomentVisualStyle.cardBackground, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .strokeBorder(Color.primary.opacity(isHovered ? 0.12 : 0.07))
+                .strokeBorder(isHovered ? NativeTheme.blue.opacity(0.5) : NativeTheme.border)
                 .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(isHovered ? 0.085 : 0.045), radius: isHovered ? 14 : 9, y: 4)
+        .shadow(color: NativeTheme.shadow.opacity(isHovered ? 0.10 : 0.05), radius: isHovered ? 14 : 9, y: 4)
         .scaleEffect(isHovered ? 1.002 : 1)
         .animation(.easeOut(duration: 0.16), value: isHovered)
         .onHover { isHovered = $0 }
@@ -1613,9 +1614,9 @@ private struct MomentImmersiveBrowserView: View {
             ZStack {
                 LinearGradient(
                     colors: [
-                        Color.accentColor.opacity(0.12),
-                        Color(nsColor: .windowBackgroundColor),
-                        Color.purple.opacity(0.08),
+                        NativeTheme.lightBlue,
+                        NativeTheme.canvas,
+                        NativeTheme.surfaceSecondary,
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -1680,7 +1681,7 @@ private struct MomentImmersiveBrowserView: View {
                         .labelStyle(.titleAndIcon)
                         .frame(minWidth: 88)
                 }
-                .buttonStyle(.borderedProminent)
+                .nativePrimaryButton()
                 .controlSize(.large)
                 .disabled(moments.isEmpty || (!model.hasMoreMoments && selectedIndex == moments.count - 1))
                 .keyboardShortcut(.rightArrow, modifiers: [])
@@ -1689,7 +1690,7 @@ private struct MomentImmersiveBrowserView: View {
             .padding(.vertical, 14)
         }
         .frame(width: browserSize.width, height: browserSize.height)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(NativeTheme.canvas)
         .onAppear {
             selectedIndex = min(selectedIndex, max(0, moments.count - 1))
             installKeyboardMonitor()
@@ -1797,10 +1798,10 @@ private struct MomentImmersiveSlide: View {
                     if moment.isFavorite {
                         Label("已收藏", systemImage: "heart.fill")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.pink)
+                            .foregroundStyle(NativeTheme.accent)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(.pink.opacity(0.12), in: Capsule())
+                            .background(NativeTheme.lightBlue, in: Capsule())
                     }
                 }
 

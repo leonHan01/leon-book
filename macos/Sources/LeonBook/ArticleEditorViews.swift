@@ -99,7 +99,7 @@ struct NativeBodyEditor: NSViewRepresentable {
         textView.isEditable = isEditable
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.autoresizingMask = [.width]
-        textView.backgroundColor = .textBackgroundColor
+        textView.backgroundColor = NSColor(NativeTheme.surface)
         textView.delegate = context.coordinator
         textView.font = typography.bodyFont.nsFont(size: typography.fontSize)
         textView.isHorizontallyResizable = false
@@ -417,7 +417,7 @@ private struct MarkdownPreview: View {
                 }
             }
             .padding(16)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
         }
         .padding(ArticleEditorLayout.contentInset)
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -511,12 +511,12 @@ struct ArticleEditorView: View {
                         editorInspectorSidebar
                         .disabled(model.isMarkdownSourceReadOnly)
                         .frame(width: settingsWidth)
-                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.34))
+                        .background(NativeTheme.surface.opacity(0.34))
                     }
                 }
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(NativeTheme.canvas)
         .environment(\.nativeReadingTypography, readingPreferences.typography)
         .onChange(of: model.editor) { _ in
             model.scheduleEditorAutosave()
@@ -555,11 +555,11 @@ struct ArticleEditorView: View {
 
             Text(LocalizedStringKey(model.editor.status.label))
                 .font(.caption.weight(.medium))
-                .foregroundStyle(model.editor.status == .published ? .green : .orange)
+                .foregroundStyle(model.editor.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(
-                    (model.editor.status == .published ? Color.green : Color.orange).opacity(0.12),
+                    model.editor.status == .published ? NativeTheme.lightBlue : NativeTheme.surfaceSecondary,
                     in: Capsule()
                 )
 
@@ -668,7 +668,7 @@ struct ArticleEditorView: View {
             } label: {
                 Label("发布", systemImage: "paperplane.fill")
             }
-            .buttonStyle(.borderedProminent)
+            .nativePrimaryButton()
             .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
         }
         .controlSize(.regular)
@@ -871,7 +871,7 @@ struct ArticleEditorView: View {
                 .padding(.vertical, 11)
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.48), in: RoundedRectangle(cornerRadius: 16))
+        .background(NativeTheme.surface.opacity(0.48), in: RoundedRectangle(cornerRadius: 16))
         .overlay {
             RoundedRectangle(cornerRadius: 16)
                 .strokeBorder(.quaternary)
@@ -916,7 +916,7 @@ struct ArticleEditorView: View {
             )
             .id(model.editor.recoveryID)
             .padding(10)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(.quaternary)
@@ -1011,7 +1011,7 @@ struct ArticleEditorView: View {
                 HStack(spacing: 10) {
                     Image(systemName: model.editor.status == .published ? "checkmark.circle.fill" : "pencil.circle.fill")
                         .font(.title3)
-                        .foregroundStyle(model.editor.status == .published ? .green : .orange)
+                        .foregroundStyle(model.editor.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(LocalizedStringKey(model.editor.status == .published ? "已发布" : "草稿"))
                             .font(.subheadline.weight(.semibold))
@@ -1065,7 +1065,7 @@ struct ArticleEditorView: View {
                     HStack(spacing: 10) {
                         NativeImageView(url: banner.url, alt: banner.alt, store: model.store)
                             .frame(width: 64, height: 52)
-                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 8))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
 
                         VStack(alignment: .leading, spacing: 3) {
@@ -1094,7 +1094,7 @@ struct ArticleEditorView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
                         .overlay {
                             RoundedRectangle(cornerRadius: 10)
                                 .strokeBorder(.quaternary, style: StrokeStyle(lineWidth: 1, dash: [5]))
@@ -1208,7 +1208,7 @@ struct ArticleEditorView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 18)
-                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                    .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
             }
 
             ForEach($propertyRows) { $row in
@@ -1256,7 +1256,7 @@ struct ArticleEditorView: View {
                     }
                 }
                 .padding(10)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary)
                 }

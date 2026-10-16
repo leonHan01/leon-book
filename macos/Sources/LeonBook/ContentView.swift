@@ -30,8 +30,12 @@ public struct ContentView: View {
                 readingPreferences: readingPreferences,
                 pageStateCache: pageStateCache
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(NativeTheme.canvas)
         }
         .frame(minWidth: 1_080, minHeight: 680)
+        .toolbarBackground(NativeTheme.surface, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
         .disabled(model.isRestoringBackup)
         .environment(\.nativeDeclarativeExtensions, model.declarativeExtensions)
         .toolbar {
@@ -104,6 +108,7 @@ public struct ContentView: View {
             persistPortableUIState(for: model.currentUser.id)
         }
         .onOpenURL(perform: model.handleAutomationURL)
+        .nativeAppTheme()
     }
 
     private func loadPortableUIState(for userID: String) {
@@ -184,7 +189,7 @@ private struct ArticleSourceConflictSheet: View {
                 Spacer()
                 Button("使用外部版本") { model.resolveArticleSourceConflictUsingExternal() }
                 Button("用编辑器版本覆盖") { model.resolveArticleSourceConflictByOverwriting() }
-                    .buttonStyle(.borderedProminent)
+                    .nativePrimaryButton()
             }
             .padding(16)
         }
@@ -202,7 +207,7 @@ private struct ArticleSourceConflictSheet: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(12)
             }
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 8))
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -324,7 +329,7 @@ private struct NativeSidebar: View {
                     Text(LocalizedStringKey(model.storageReady ? "本地文件已连接" : "正在读取本地文件"))
                 } icon: {
                     Image(systemName: model.storageReady ? "checkmark.circle.fill" : "circle.dotted")
-                        .foregroundStyle(model.storageReady ? .green : .secondary)
+                        .foregroundStyle(model.storageReady ? NativeTheme.accent : NativeTheme.textSecondary)
                 }
                 Text("\(model.publishedArticleCount) 篇已发布 · \(model.draftArticleCount) 篇草稿 · \(model.totalMomentCount) 条微博 · \(model.totalQuestionCount) 个问题")
                     .font(.caption)
@@ -336,6 +341,14 @@ private struct NativeSidebar: View {
             }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(NativeTheme.sidebar)
+            .overlay(alignment: .trailing) {
+                Rectangle()
+                    .fill(NativeTheme.border)
+                    .frame(width: 1)
+                    .allowsHitTesting(false)
+            }
             .frame(minWidth: 210)
             .onChange(of: model.selectedSlug) { slug in
                 revealSelectedArticle(slug, proxy: proxy)
@@ -375,7 +388,7 @@ private struct NativeSidebar: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(SidebarNavigationButtonStyle(isSelected: navigation.section == section))
-        .foregroundStyle(navigation.section == section ? Color.accentColor : .primary)
+        .foregroundStyle(navigation.section == section ? NativeTheme.deepBlue : NativeTheme.textPrimary)
     }
 }
 
@@ -394,6 +407,7 @@ private struct SidebarNavigationButtonBody: View {
 
     var body: some View {
         configuration.label
+            .foregroundStyle(isSelected ? NativeTheme.deepBlue : NativeTheme.textPrimary)
             .padding(.horizontal, 7)
             .padding(.vertical, 5)
             .background(backgroundColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -405,12 +419,12 @@ private struct SidebarNavigationButtonBody: View {
 
     private var backgroundColor: Color {
         if configuration.isPressed {
-            return Color.accentColor.opacity(isSelected ? 0.22 : 0.12)
+            return NativeTheme.selection
         }
         if isSelected {
-            return Color.accentColor.opacity(isHovered ? 0.18 : 0.12)
+            return isHovered ? NativeTheme.selection : NativeTheme.lightBlue
         }
-        return isHovered ? Color.primary.opacity(0.07) : .clear
+        return isHovered ? NativeTheme.surfaceSecondary : .clear
     }
 }
 
@@ -502,16 +516,17 @@ private struct DashboardView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("leon-book")
                         .font(.system(size: 38, weight: .bold, design: .rounded))
+                        .foregroundStyle(NativeTheme.deepBlue)
                     Text("你的本地写作空间")
                         .font(.title3)
                         .foregroundStyle(.secondary)
                 }
 
                 HStack(spacing: 14) {
-                    StatCard(title: "已发布", value: "\(model.publishedArticleCount)", color: .blue)
-                    StatCard(title: "草稿", value: "\(model.draftArticleCount)", color: .orange)
-                    StatCard(title: "全部文章", value: "\(model.articles.count)", color: .purple)
-                    StatCard(title: "微博", value: "\(model.totalMomentCount)", color: .pink)
+                    StatCard(title: "已发布", value: "\(model.publishedArticleCount)", color: NativeTheme.accent)
+                    StatCard(title: "草稿", value: "\(model.draftArticleCount)", color: NativeTheme.textSecondary)
+                    StatCard(title: "全部文章", value: "\(model.articles.count)", color: NativeTheme.deepBlue)
+                    StatCard(title: "微博", value: "\(model.totalMomentCount)", color: NativeTheme.blue)
                 }
 
                 ActivityHeatmapView(activity: model.activity)
@@ -621,7 +636,7 @@ private struct ActivityHeatmapView: View {
             .foregroundStyle(.secondary)
         }
         .padding(18)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 14))
     }
 
     private var weekdayLabels: some View {
@@ -679,12 +694,15 @@ private struct StatCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(LocalizedStringKey(title)).font(.callout).foregroundStyle(.secondary)
+            Text(LocalizedStringKey(title)).font(.callout).foregroundStyle(NativeTheme.textSecondary)
             Text(value).font(.system(size: 30, weight: .bold, design: .rounded)).foregroundStyle(color)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
-        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14).strokeBorder(NativeTheme.border)
+        }
     }
 }
 
@@ -746,11 +764,11 @@ private struct ArticleRow: View {
         Button(action: action) {
             HStack(spacing: 14) {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(article.status == .published ? Color.blue.opacity(0.12) : Color.orange.opacity(0.12))
+                    .fill(article.status == .published ? NativeTheme.lightBlue : NativeTheme.surfaceSecondary)
                     .frame(width: 42, height: 42)
                     .overlay {
                         Image(systemName: article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis")
-                            .foregroundStyle(article.status == .published ? .blue : .orange)
+                            .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                     }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(article.title).font(.headline).foregroundStyle(.primary)
@@ -768,7 +786,7 @@ private struct ArticleRow: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(LocalizedStringKey(article.status.label)).font(.caption.weight(.medium))
-                        .foregroundStyle(article.status == .published ? .green : .orange)
+                        .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                     Label("\(article.pageViews) PV", systemImage: "eye")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -796,7 +814,7 @@ struct EmptyState: View {
             Button(action: action) {
                 Text(LocalizedStringKey(actionTitle))
             }
-            .buttonStyle(.borderedProminent)
+            .nativePrimaryButton()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(40)

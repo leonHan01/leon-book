@@ -182,6 +182,7 @@ struct SmartArticleLibraryView: View {
             }
         }
         .listStyle(.plain)
+        .scrollContentBackground(.hidden)
     }
 
     private func tableLayout(groups: [SmartArticleDisplayGroup]) -> some View {
@@ -327,7 +328,7 @@ struct SmartCollectionEmbedView: View {
                     }
                     .frame(maxWidth: .infinity, minHeight: 64, alignment: .topLeading)
                     .padding(10)
-                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                    .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
             }
@@ -460,7 +461,7 @@ private struct SmartCollectionTableGroup: View {
             }
             .padding(.horizontal, 14)
             .fixedSize(horizontal: true, vertical: false)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
         }
     }
 }
@@ -754,11 +755,11 @@ private struct SmartArticleListRow: View {
             Button { model.selectSlug(article.slug) } label: {
                 HStack(spacing: 14) {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(article.status == .published ? Color.blue.opacity(0.12) : Color.orange.opacity(0.12))
+                        .fill(article.status == .published ? NativeTheme.lightBlue : NativeTheme.surfaceSecondary)
                         .frame(width: 42, height: 42)
                         .overlay {
                             Image(systemName: article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis")
-                                .foregroundStyle(article.status == .published ? .blue : .orange)
+                                .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                         }
                     VStack(alignment: .leading, spacing: 4) {
                         Text(article.title).font(.headline).foregroundStyle(.primary)
@@ -772,7 +773,7 @@ private struct SmartArticleListRow: View {
                     Spacer()
                     VStack(alignment: .trailing, spacing: 4) {
                         Text(LocalizedStringKey(article.status.label)).font(.caption.weight(.medium))
-                            .foregroundStyle(article.status == .published ? .green : .orange)
+                            .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                         Text("\(article.pageViews) PV · \(article.updatedAt.nativeDateLabel)")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -803,7 +804,7 @@ private struct SmartArticleCard: View {
             HStack {
                 Image(systemName: article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis")
                     .font(.title2)
-                    .foregroundStyle(article.status == .published ? .blue : .orange)
+                    .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
                 Spacer()
                 SmartArticleBookmarkButton(model: model, article: article)
             }
@@ -836,7 +837,7 @@ private struct SmartArticleCard: View {
         }
         .padding(16)
         .frame(minHeight: 180, alignment: .topLeading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.16))
         }
@@ -1056,7 +1057,7 @@ struct SmartCollectionEditorSheet: View {
                         isSaving = false
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .nativePrimaryButton()
                 .disabled(
                     isSaving
                         || draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

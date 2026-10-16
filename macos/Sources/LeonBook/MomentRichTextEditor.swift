@@ -144,7 +144,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
         let textView = MomentTextView()
         textView.allowsUndo = true
         textView.autoresizingMask = [.width]
-        textView.backgroundColor = .textBackgroundColor
+        textView.backgroundColor = NSColor(NativeTheme.surface)
         textView.delegate = context.coordinator
         textView.font = .systemFont(ofSize: 16, weight: .regular)
         textView.isHorizontallyResizable = false

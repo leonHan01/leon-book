@@ -326,10 +326,10 @@ private struct NativeWorkspaceResourceBranch: View {
 
     private func rowBackground(_ resource: NativeWorkspaceResourceNode) -> Color {
         if selectedResourceIDs.contains(resource.id) {
-            return Color.accentColor.opacity(0.16)
+            return NativeTheme.selection
         }
         if resource.articleSlug == model.selectedSlug {
-            return Color.accentColor.opacity(0.08)
+            return NativeTheme.lightBlue
         }
         return .clear
     }
@@ -337,9 +337,9 @@ private struct NativeWorkspaceResourceBranch: View {
     private func iconColor(_ resource: NativeWorkspaceResourceNode) -> Color {
         switch resource.kind {
         case .folder:
-            return .accentColor
+            return NativeTheme.accent
         case .article:
-            return resource.articleSlug == model.selectedSlug ? .accentColor : .primary
+            return resource.articleSlug == model.selectedSlug ? NativeTheme.deepBlue : NativeTheme.textPrimary
         case .attachment:
             return .secondary
         }

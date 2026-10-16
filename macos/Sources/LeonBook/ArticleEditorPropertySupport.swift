@@ -251,7 +251,7 @@ struct EditorPropertyRenameSheet: View {
                     onRename(newKey.trimmingCharacters(in: .whitespacesAndNewlines))
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .nativePrimaryButton()
                 .disabled(
                     isRenaming
                         || !NativeArticleProperties.isValidKey(newKey)

@@ -56,7 +56,7 @@ public struct NativeSettingsView: View {
             Section("本地文件") {
                 LabeledContent("状态") {
                     Label(LocalizedStringKey(model.storageReady ? "已连接" : "未连接"), systemImage: model.storageReady ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(model.storageReady ? .green : .red)
+                        .foregroundStyle(model.storageReady ? NativeTheme.accent : Color.red)
                 }
                 LabeledContent("存储方式") { Text("SQLite + 本地文件") }
                 LabeledContent("数据目录") { Text(model.dataDirectoryPath).textSelection(.enabled) }
@@ -328,7 +328,7 @@ public struct NativeSettingsView: View {
                         } label: {
                             markdownSourceConfirmationTitle(preview)
                         }
-                        .buttonStyle(.borderedProminent)
+                        .nativePrimaryButton()
                         .disabled(
                             (model.selectedMarkdownWorkspaceMode == .copyImport && preview.importableCount == 0)
                                 || model.isImportingObsidianVault
@@ -507,9 +507,11 @@ public struct NativeSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .disabled(model.isRestoringBackup)
         .frame(maxWidth: 720)
         .padding(24)
+        .nativeAppTheme()
         .task { readingPreferences.prepare(for: model.currentUser.id) }
         .onChange(of: model.currentUser.id) { readingPreferences.prepare(for: $0) }
     }

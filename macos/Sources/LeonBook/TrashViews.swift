@@ -40,6 +40,7 @@ struct TrashView: View {
                     .listRowInsets(EdgeInsets(top: 7, leading: 18, bottom: 7, trailing: 18))
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
     }
@@ -77,11 +78,11 @@ private struct TrashRow: View {
     var body: some View {
         HStack(spacing: 14) {
             RoundedRectangle(cornerRadius: 9)
-                .fill(Color.orange.opacity(0.12))
+                .fill(NativeTheme.surfaceSecondary)
                 .frame(width: 44, height: 44)
                 .overlay {
                     Image(systemName: item.kind.systemImage)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(NativeTheme.textSecondary)
                 }
 
             VStack(alignment: .leading, spacing: 5) {
@@ -90,7 +91,7 @@ private struct TrashRow: View {
                         .font(.headline)
                     Text(LocalizedStringKey(item.kind.label))
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(NativeTheme.textSecondary)
                 }
                 Group {
                     if item.preview.isEmpty {
