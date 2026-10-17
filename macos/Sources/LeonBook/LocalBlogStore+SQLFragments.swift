@@ -28,7 +28,12 @@ extension LocalBlogStore {
     }
 
     var momentSelect: String {
-        "SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at FROM moments"
+        """
+        SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json,
+               is_favorite, deleted_at, delete_expires_at,
+               (SELECT COUNT(*) FROM moment_comments WHERE moment_id = moments.id)
+        FROM moments
+        """
     }
 
     var questionSelect: String {

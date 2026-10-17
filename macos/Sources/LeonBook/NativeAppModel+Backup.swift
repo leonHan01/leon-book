@@ -144,7 +144,8 @@ extension NativeAppModel {
         ) else { return false }
         guard storageReady, !backupDirectoryPath.isEmpty else { return false }
         guard !isBackingUp, !isRestoringBackup else { return false }
-        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isUploadingMedia else {
+        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment,
+              !isSavingMomentComment, !isUploadingMedia else {
             backupStatus = "等待当前操作完成后备份…"
             scheduleBackup()
             return false

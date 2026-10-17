@@ -24,6 +24,8 @@ The screenshots below use an isolated `Product Demo` workspace populated with En
 
 ### Posts
 
+Posts support local comments and replies, with comment counts on each card. Deleting a comment also removes its replies; comments are preserved when a post is restored from Trash.
+
 ![LeonBook posts timeline with tags and mock product updates](docs/screenshots/leonbook-posts-en.jpg)
 
 ### Q&A

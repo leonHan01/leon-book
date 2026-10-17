@@ -132,6 +132,19 @@ extension LocalBlogStore {
         CREATE INDEX IF NOT EXISTS moments_created_at_idx ON moments(created_at DESC);
         CREATE INDEX IF NOT EXISTS moments_feed_active_idx ON moments(created_at DESC, id DESC)
             WHERE deleted_at IS NULL;
+        CREATE TABLE IF NOT EXISTS moment_comments (
+            id TEXT PRIMARY KEY NOT NULL,
+            moment_id TEXT NOT NULL,
+            parent_id TEXT,
+            author_name TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(moment_id) REFERENCES moments(id) ON DELETE CASCADE,
+            FOREIGN KEY(parent_id) REFERENCES moment_comments(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS moment_comments_moment_idx
+            ON moment_comments(moment_id, created_at, id);
+        CREATE INDEX IF NOT EXISTS moment_comments_parent_idx ON moment_comments(parent_id);
         CREATE TABLE IF NOT EXISTS moment_tags (
             moment_id TEXT NOT NULL,
             tag TEXT NOT NULL,

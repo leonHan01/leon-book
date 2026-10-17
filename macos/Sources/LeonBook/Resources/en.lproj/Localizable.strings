@@ -1,4 +1,10 @@
 /* App language */
+"微博评论" = "Post Comments";
+"正在加载评论…" = "Loading comments…";
+"写下想法，开始这条微博的讨论。" = "Share your thoughts to start the discussion.";
+"评论内容" = "Comment text";
+"删除评论" = "Delete comment";
+"查看和发表微博评论" = "View and add post comments";
 "通用" = "General";
 "语言" = "Language";
 "语言更改会立即应用，并在下次启动时保留。" = "Language changes apply immediately and are kept for the next launch.";

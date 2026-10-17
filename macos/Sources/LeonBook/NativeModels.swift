@@ -1415,6 +1415,7 @@ public enum NativeMomentTag {
 }
 
 public struct NativeMoment: Codable, Hashable, Identifiable {
+    public var commentCount: Int
     public let createdAt: String
     public let id: String
     public let images: [NativeMedia]
@@ -1425,6 +1426,7 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
     public let updatedAt: String
 
     public init(
+        commentCount: Int = 0,
         createdAt: String,
         id: String,
         images: [NativeMedia],
@@ -1434,6 +1436,7 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         textRuns: [NativeMomentTextRun],
         updatedAt: String
     ) {
+        self.commentCount = commentCount
         self.createdAt = createdAt
         self.id = id
         self.images = images
@@ -1446,6 +1449,7 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        commentCount = try container.decodeIfPresent(Int.self, forKey: .commentCount) ?? 0
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString.lowercased()
         images = try container.decodeIfPresent([NativeMedia].self, forKey: .images) ?? []

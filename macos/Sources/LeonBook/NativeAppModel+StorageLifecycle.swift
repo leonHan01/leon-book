@@ -18,6 +18,7 @@ enum NativeWorkspaceWindows {
         let affected = matching(root)
         guard affected.allSatisfy({ model in
             !model.isSaving && !model.isEditorAutosaving && !model.isSavingArticleComment
+                && !model.isSavingMomentComment
                 && !model.isPublishingMoment && !model.isPublishingQuestion
                 && !model.isPublishingQuestionAnswer && !model.isUploadingMedia
                 && !model.isImportingObsidianVault && !model.isSwitchingWorkspace

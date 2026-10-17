@@ -55,6 +55,7 @@ public final class NativeAppModel: ObservableObject {
     @Published var moments: [NativeMoment] = [] {
         didSet { rebuildMomentTimelineProjection() }
     }
+    @Published var isSavingMomentComment = false
     @Published var totalMomentCount = 0
     @Published var filteredMomentCount = 0
     @Published var questionSession = NativeQuestionSessionState()
@@ -561,6 +562,7 @@ public final class NativeAppModel: ObservableObject {
                 || isRestoringBackup
                 || isSaving
                 || isSavingArticleComment
+                || isSavingMomentComment
                 || isPublishingMoment
                 || isPublishingQuestion
                 || isPublishingQuestionAnswer
@@ -688,7 +690,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func chooseWorkDirectory() {
-        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment,
+        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isSavingMomentComment,
               !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia, !isBackingUp,
               !isScanningObsidianVault, !isImportingObsidianVault,
               let rootURL = presentWorkDirectoryPicker() else { return }
@@ -755,7 +757,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func selectUser(_ user: NativeUser) {
-        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment,
+        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isSavingMomentComment,
               !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia,
               !isBackingUp, !isScanningObsidianVault, !isImportingObsidianVault else { return }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return }
@@ -782,7 +784,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func createUser(named name: String) async -> Bool {
-        guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment,
+        guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isSavingMomentComment,
               !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia, !isBackingUp,
               !isScanningObsidianVault, !isImportingObsidianVault else { return false }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return false }

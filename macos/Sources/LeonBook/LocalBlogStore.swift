@@ -1243,6 +1243,7 @@ public actor LocalBlogStore {
         }
 
         let updated = NativeMoment(
+            commentCount: previous.commentCount,
             createdAt: previous.createdAt,
             id: previous.id,
             images: normalizedImages,
@@ -1277,6 +1278,7 @@ public actor LocalBlogStore {
             values: [.integer(isFavorite ? 1 : 0), .text(safeID)]
         )
         let updated = NativeMoment(
+            commentCount: previous.commentCount,
             createdAt: previous.createdAt,
             id: previous.id,
             images: previous.images,
@@ -4077,8 +4079,18 @@ public actor LocalBlogStore {
         into database: SQLiteDatabase
     ) throws {
         try database.execute("""
-        INSERT OR REPLACE INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at)
+        INSERT INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            text = excluded.text,
+            text_runs_json = excluded.text_runs_json,
+            images_json = excluded.images_json,
+            tags_json = excluded.tags_json,
+            is_favorite = excluded.is_favorite,
+            deleted_at = excluded.deleted_at,
+            delete_expires_at = excluded.delete_expires_at
         """, values: [
             .text(moment.id),
             .text(moment.createdAt),
@@ -4124,6 +4136,7 @@ public actor LocalBlogStore {
         }
         let isFavorite = row.integer(at: 7) == 1
         return NativeMoment(
+            commentCount: row.integer(at: 10) ?? 0,
             createdAt: createdAt,
             id: id,
             images: try decode(imagesJSON),

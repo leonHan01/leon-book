@@ -14,6 +14,7 @@ struct MomentFeedView: View {
     @ObservedObject var pageState: NativeMomentFeedPageState
     @Environment(\.locale) private var locale
     @State private var imageBrowser: MomentImageBrowserState?
+    @State private var commentingMoment: NativeMoment?
     @State private var isPresentingImmersiveBrowser = false
     @AppStorage("momentFeedLayout") private var momentFeedLayoutRawValue = MomentFeedLayout.singleColumn.rawValue
 
@@ -328,7 +329,8 @@ struct MomentFeedView: View {
                                             columnCount: momentFeedLayout.columnCount,
                                             model: model,
                                             store: model.store,
-                                            imageBrowser: $imageBrowser
+                                            imageBrowser: $imageBrowser,
+                                            commentingMoment: $commentingMoment
                                         )
                                         .equatable()
                                     }
@@ -386,6 +388,9 @@ struct MomentFeedView: View {
         }
         .sheet(isPresented: $isPresentingImmersiveBrowser) {
             MomentImmersiveBrowserView(model: model)
+        }
+        .sheet(item: $commentingMoment) { moment in
+            MomentCommentsView(model: model, moment: moment, store: model.store)
         }
     }
 
@@ -449,6 +454,7 @@ private struct MomentCardsLayout: View, Equatable {
     let model: NativeAppModel
     let store: LocalBlogStore
     @Binding var imageBrowser: MomentImageBrowserState?
+    @Binding var commentingMoment: NativeMoment?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.columnCount == rhs.columnCount
@@ -489,6 +495,8 @@ private struct MomentCardsLayout: View, Equatable {
                 model.toggleMomentFavorite(moment)
             } onSelectTag: { tag in
                 model.toggleMomentTagFilter(tag)
+            } onComment: {
+                commentingMoment = moment
             } onDelete: {
                 model.deleteMoment(moment)
             }
@@ -937,6 +945,7 @@ private struct MomentCard: View {
     let onEdit: () -> Void
     let onToggleFavorite: () -> Void
     let onSelectTag: (String) -> Void
+    let onComment: () -> Void
     let onDelete: () -> Void
     @State private var isHovered = false
 
@@ -1032,6 +1041,20 @@ private struct MomentCard: View {
                     }
                 }
             }
+
+            HStack {
+                Text(dateLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onComment) {
+                    Label("评论 \(moment.commentCount)", systemImage: "text.bubble")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(MomentVisualStyle.accent)
+                .help("查看和发表微博评论")
+            }
         }
         .padding(18)
         .background(MomentVisualStyle.cardBackground, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
@@ -1045,7 +1068,7 @@ private struct MomentCard: View {
         .animation(.easeOut(duration: 0.16), value: isHovered)
         .onHover { isHovered = $0 }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: videos.isEmpty ? .ignore : .contain)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilitySummary(text: displayContent.text, dateLabel: dateLabel))
         .accessibilityHint("可执行收藏、编辑、删除、筛选标签和查看媒体操作")
         .accessibilityAction(named: Text(LocalizedStringKey(moment.isFavorite ? "取消收藏" : "收藏"))) {
@@ -1053,6 +1076,9 @@ private struct MomentCard: View {
         }
         .accessibilityAction(named: Text("编辑")) {
             onEdit()
+        }
+        .accessibilityAction(named: Text("评论")) {
+            onComment()
         }
         .accessibilityAction(named: Text("删除")) {
             confirmDeletion()
@@ -1563,6 +1589,7 @@ private struct MomentImmersiveBrowserView: View {
     @State private var imageBrowser: MomentImageBrowserState?
     @State private var keyboardMonitor: Any?
     @State private var advancesWhenMoreMomentsLoad = false
+    @State private var commentingMoment: NativeMoment?
 
     private var moments: [NativeMoment] {
         model.filteredMoments
@@ -1593,6 +1620,15 @@ private struct MomentImmersiveBrowserView: View {
                     .foregroundStyle(.secondary)
 
                 Spacer()
+
+                if let selectedMoment {
+                    Button {
+                        removeKeyboardMonitor()
+                        commentingMoment = selectedMoment
+                    } label: {
+                        Label("评论 \(selectedMoment.commentCount)", systemImage: "text.bubble")
+                    }
+                }
 
                 Text(moments.isEmpty ? "0 / 0" : "\(selectedIndex + 1) / \(totalMomentCount)")
                     .font(.callout.monospacedDigit().weight(.semibold))
@@ -1713,6 +1749,9 @@ private struct MomentImmersiveBrowserView: View {
                 initialIndex: browser.initialIndex,
                 store: model.store
             )
+        }
+        .sheet(item: $commentingMoment, onDismiss: installKeyboardMonitor) { moment in
+            MomentCommentsView(model: model, moment: moment, store: model.store)
         }
     }
 

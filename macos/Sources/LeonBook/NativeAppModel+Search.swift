@@ -45,6 +45,7 @@ extension NativeAppModel {
             && !isRestoringBackup
             && !isSaving
             && !isSavingArticleComment
+            && !isSavingMomentComment
             && !isPublishingMoment
             && !isUploadingMedia
             && !isBackingUp

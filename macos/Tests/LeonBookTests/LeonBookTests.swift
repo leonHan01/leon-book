@@ -3491,6 +3491,133 @@ final class LocalBlogStoreTests {
         }
     }
 
+    func testMomentCommentsPersistRepliesCountsAndCascadeDeletion() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let moment = try await store.saveMoment(text: "Discuss this", textRuns: [], images: [])
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let parent = try await store.createMomentComment(
+            momentID: moment.id, authorName: " leon ", text: " First comment \n", at: start
+        )
+        let reply = try await store.createMomentComment(
+            momentID: moment.id, authorName: "leon", text: "Reply", parentID: parent.id,
+            at: start
+        )
+        let nested = try await store.createMomentComment(
+            momentID: moment.id, authorName: "leon", text: "Nested reply", parentID: reply.id,
+            at: start
+        )
+        let separate = try await store.createMomentComment(
+            momentID: moment.id, authorName: "leon", text: "Separate thread",
+            at: start
+        )
+        XCTAssertEqual(parent.authorName, "leon")
+        XCTAssertEqual(parent.text, "First comment")
+        XCTAssertTrue(parent.createdAt < reply.createdAt && reply.createdAt < nested.createdAt)
+        let reopened = LocalBlogStore(rootURL: root)
+        XCTAssertEqual(
+            try await reopened.listMomentComments(momentID: moment.id),
+            [parent, reply, nested, separate]
+        )
+        XCTAssertEqual(try await reopened.listMomentPage().moments.first?.commentCount, 4)
+        XCTAssertEqual(try await store.setMomentFavorite(id: moment.id, isFavorite: true).commentCount, 4)
+        XCTAssertEqual(try await store.updateMoment(id: moment.id, text: "Edited", textRuns: [], images: []).commentCount, 4)
+        XCTAssertEqual(try await reopened.listMomentComments(momentID: moment.id), [parent, reply, nested, separate])
+
+        try await reopened.deleteMomentComment(id: parent.id, momentID: moment.id)
+        XCTAssertEqual(try await store.listMomentComments(momentID: moment.id), [separate])
+        XCTAssertEqual(try await store.listMomentPage().moments.first?.commentCount, 1)
+    }
+
+    func testMomentCommentsRejectInvalidInputAndCrossPostReplies() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let first = try await store.saveMoment(text: "First", textRuns: [], images: [])
+        let second = try await store.saveMoment(text: "Second", textRuns: [], images: [])
+        let parent = try await store.createMomentComment(momentID: first.id, authorName: "leon", text: "Parent")
+        for (author, text) in [("leon", " \n "), (" ", "Comment"), ("leon", String(repeating: "字", count: 2_001))] {
+            do {
+                _ = try await store.createMomentComment(momentID: first.id, authorName: author, text: text)
+                XCTFail("invalid comment must be rejected")
+            } catch NativeStoreError.invalidComment { }
+        }
+        do {
+            _ = try await store.createMomentComment(momentID: "missing", authorName: "leon", text: "Comment")
+            XCTFail("comments require an existing post")
+        } catch NativeStoreError.notFound { }
+        for parentID in [parent.id, "missing"] {
+            do {
+                _ = try await store.createMomentComment(
+                    momentID: second.id, authorName: "leon", text: "Reply", parentID: parentID
+                )
+                XCTFail("reply must reference a comment on the same post")
+            } catch NativeStoreError.notFound { }
+        }
+        do {
+            try await store.deleteMomentComment(id: parent.id, momentID: second.id)
+            XCTFail("deletion must reference the same post")
+        } catch NativeStoreError.notFound { }
+        XCTAssertEqual(try await store.listMomentComments(momentID: first.id), [parent])
+        XCTAssertTrue(try await store.listMomentComments(momentID: second.id).isEmpty)
+    }
+
+    func testMomentCommentsFollowTrashRestoreAndPermanentDeletion() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let moment = try await store.saveMoment(text: "Trash lifecycle", textRuns: [], images: [])
+        let parent = try await store.createMomentComment(momentID: moment.id, authorName: "leon", text: "Keep me")
+        let reply = try await store.createMomentComment(
+            momentID: moment.id, authorName: "leon", text: "And me", parentID: parent.id
+        )
+        try await store.deleteMoment(id: moment.id)
+        do {
+            _ = try await store.listMomentComments(momentID: moment.id)
+            XCTFail("trashed posts must hide their comments")
+        } catch NativeStoreError.notFound { }
+        do {
+            _ = try await store.createMomentComment(momentID: moment.id, authorName: "leon", text: "Too late")
+            XCTFail("trashed posts must reject new comments")
+        } catch NativeStoreError.notFound { }
+        do {
+            try await store.deleteMomentComment(id: parent.id, momentID: moment.id)
+            XCTFail("trashed comments must be preserved until the post is restored")
+        } catch NativeStoreError.notFound { }
+        guard let item = try await store.listTrash().first else {
+            XCTFail("post should be in trash")
+            return
+        }
+        try await store.restoreTrash(item)
+        XCTAssertEqual(try await store.listMomentComments(momentID: moment.id), [parent, reply])
+        XCTAssertEqual(try await store.listMomentPage().moments.first?.commentCount, 2)
+        try await store.deleteMoment(id: moment.id)
+        try await store.permanentlyDeleteTrash(item)
+        let database = try SQLiteDatabase(url: root.appendingPathComponent("leon-book.sqlite"))
+        defer { database.close() }
+        XCTAssertEqual(try database.integer("SELECT COUNT(*) FROM moment_comments"), 0)
+    }
+
+    func testMomentCommentsSurviveBackupSnapshots() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source", isDirectory: true)
+        let store = LocalBlogStore(rootURL: source)
+        let moment = try await store.saveMoment(text: "Back me up", textRuns: [], images: [])
+        let comment = try await store.createMomentComment(momentID: moment.id, authorName: "leon", text: "Keep this comment")
+        try await store.prepareForBackup()
+        let snapshot = try LocalBackupManager.createManagedSnapshot(
+            source: source, destination: root.appendingPathComponent("backups"),
+            policy: NativeBackupPolicy(minimumFreeSpaceBytes: 0)
+        ).snapshot
+        let restoredRoot = root.appendingPathComponent("restored", isDirectory: true)
+        try FileManager.default.copyItem(at: snapshot.url, to: restoredRoot)
+        let restored = LocalBlogStore(rootURL: restoredRoot)
+        XCTAssertEqual(try await restored.listMomentComments(momentID: moment.id), [comment])
+        XCTAssertEqual(try await restored.listMomentPage().moments.first?.commentCount, 1)
+    }
+
     func testMomentUpdatePreservesIdentityAndDeleteHidesIt() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -5647,6 +5774,10 @@ struct LeonBookUnitTests {
             ("LocalBlogStoreTests.testMomentVideoUploadOnlyAcceptsMP4", { try await LocalBlogStoreTests().testMomentVideoUploadOnlyAcceptsMP4() }),
             ("LocalBlogStoreTests.testMediaUploadModuleCleansCompletedFilesWhenABatchFails", { try await LocalBlogStoreTests().testMediaUploadModuleCleansCompletedFilesWhenABatchFails() }),
             ("LocalBlogStoreTests.testMomentUpdatePreservesIdentityAndDeleteHidesIt", { try await LocalBlogStoreTests().testMomentUpdatePreservesIdentityAndDeleteHidesIt() }),
+            ("LocalBlogStoreTests.testMomentCommentsPersistRepliesCountsAndCascadeDeletion", { try await LocalBlogStoreTests().testMomentCommentsPersistRepliesCountsAndCascadeDeletion() }),
+            ("LocalBlogStoreTests.testMomentCommentsRejectInvalidInputAndCrossPostReplies", { try await LocalBlogStoreTests().testMomentCommentsRejectInvalidInputAndCrossPostReplies() }),
+            ("LocalBlogStoreTests.testMomentCommentsFollowTrashRestoreAndPermanentDeletion", { try await LocalBlogStoreTests().testMomentCommentsFollowTrashRestoreAndPermanentDeletion() }),
+            ("LocalBlogStoreTests.testMomentCommentsSurviveBackupSnapshots", { try await LocalBlogStoreTests().testMomentCommentsSurviveBackupSnapshots() }),
             ("LocalBlogStoreTests.testQuestionAnswersAndTagSearchPersistInSQLite", { try await LocalBlogStoreTests().testQuestionAnswersAndTagSearchPersistInSQLite() }),
             ("LocalBlogStoreTests.testArticleLifecycleSupportsDraftPublishingAndConflictProtection", { try await LocalBlogStoreTests().testArticleLifecycleSupportsDraftPublishingAndConflictProtection() }),
             ("LocalBlogStoreTests.testAtomicArticleBodyUpdatesCommitAndUndoBothNotes", { try await LocalBlogStoreTests().testAtomicArticleBodyUpdatesCommitAndUndoBothNotes() }),
