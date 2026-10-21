@@ -95,6 +95,16 @@ struct NativeQuestionSessionState: Equatable {
             || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    mutating func applyList(
+        questions: [NativeQuestion],
+        totalCount: Int,
+        tagFacets: [NativeQuestionTagFacet]
+    ) {
+        self.questions = questions
+        self.totalCount = totalCount
+        self.tagFacets = tagFacets
+    }
+
     mutating func applyReload(
         questions: [NativeQuestion],
         totalCount: Int,
@@ -104,9 +114,7 @@ struct NativeQuestionSessionState: Equatable {
     ) -> [NativeMedia] {
         let changesSelection = selectedQuestion?.id != self.selectedQuestion?.id
         let discardedMedia = changesSelection ? discardAnswerDraft() : []
-        self.questions = questions
-        self.totalCount = totalCount
-        self.tagFacets = tagFacets
+        applyList(questions: questions, totalCount: totalCount, tagFacets: tagFacets)
         self.selectedQuestion = selectedQuestion
         self.answers = answers
         isLoadingAnswers = false

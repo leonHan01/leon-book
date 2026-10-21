@@ -125,8 +125,7 @@ final class MarkdownSourceEventMonitor: @unchecked Sendable {
             if eventFlags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsDir) != 0 {
                 changes.directoryPrefixes.insert(relativePath)
                 changes.reloadsResources = true
-            } else if URL(fileURLWithPath: relativePath).pathExtension
-                .caseInsensitiveCompare("md") == .orderedSame {
+            } else if ["md", "html"].contains(URL(fileURLWithPath: relativePath).pathExtension.lowercased()) {
                 changes.relativePaths.insert(relativePath)
                 changes.reloadsResources = true
             } else {

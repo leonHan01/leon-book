@@ -242,6 +242,7 @@ extension NativeAppModel {
         stopMarkdownSourceMonitor()
         articleAncillaryLoadTask?.cancel()
         articlePostSaveTask?.cancel()
+        editorRecoveryTask?.cancel()
         backupOverviewTask?.cancel()
         compatibilityExportTask?.cancel()
         workspaceAncillaryLoadTask?.cancel()

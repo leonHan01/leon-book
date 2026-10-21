@@ -44,8 +44,8 @@ struct NativeArticleLinkIdentityIndex {
         let normalized = source
             .replacingOccurrences(of: "\\", with: "/")
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let withoutExtension = normalized.lowercased().hasSuffix(".md")
-            ? String(normalized.dropLast(3))
+        let withoutExtension = ["md", "html"].contains((normalized as NSString).pathExtension.lowercased())
+            ? (normalized as NSString).deletingPathExtension
             : normalized
         return folded(withoutExtension)
     }

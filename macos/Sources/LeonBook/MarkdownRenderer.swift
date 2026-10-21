@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import LeonBookExtensionKit
 import SwiftUI
 
 struct MarkdownOutlineItem: Hashable, Identifiable {

@@ -5,7 +5,7 @@ import LeonBookSearchModule
 
 public enum NativeWritingMetrics {
     public static func characterCount(of body: String) -> Int {
-        NativeBlockHierarchyMetadata.removingMarkers(from: body)
+        NativeBlockHierarchyMetadata.removingMarkers(from: RichArticleDocument.plainText(body))
             .trimmingCharacters(in: .whitespacesAndNewlines).count
     }
 }
@@ -403,6 +403,11 @@ public enum NativeArticleCommentAnchor {
     public static let articleTopID = "article-comment-top"
 
     public static func selection(for rawQuote: String, in markdown: String) -> NativeArticleCommentSelection? {
+        if RichArticleDocument.isHTML(markdown) {
+            let quote = rawQuote.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !quote.isEmpty, RichArticleDocument.plainText(markdown).contains(quote) else { return nil }
+            return NativeArticleCommentSelection(quote: String(quote.prefix(800)), anchorID: articleTopID)
+        }
         let quote = rawQuote
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
@@ -635,6 +640,9 @@ public enum NativeArticleLink {
     }
 
     public static func parsedReferences(in text: String) -> [Reference] {
+        if RichArticleDocument.isHTML(text) {
+            return RichArticleDocument.linkReferences(in: text).map { Reference(rawValue: $0) }
+        }
         let expression = try! NSRegularExpression(pattern: #"(?<!!)\[\[([^\[\]\r\n]+)\]\]"#)
         let searchRange = NSRange(text.startIndex..., in: text)
         return expression.matches(in: text, range: searchRange).compactMap { match in
@@ -661,14 +669,14 @@ public enum NativeArticleLink {
         let normalizedPath = normalized
             .replacingOccurrences(of: "\\", with: "/")
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let normalizedPathWithoutExtension = normalizedPath.lowercased().hasSuffix(".md")
-            ? String(normalizedPath.dropLast(3)) : normalizedPath
+        let normalizedPathWithoutExtension = ["md", "html"].contains((normalizedPath as NSString).pathExtension.lowercased())
+            ? (normalizedPath as NSString).deletingPathExtension : normalizedPath
         let pathMatches = articles.filter { article in
             let sourcePath = article.sourceRelativePath
                 .replacingOccurrences(of: "\\", with: "/")
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            let sourceWithoutExtension = sourcePath.lowercased().hasSuffix(".md")
-                ? String(sourcePath.dropLast(3)) : sourcePath
+            let sourceWithoutExtension = ["md", "html"].contains((sourcePath as NSString).pathExtension.lowercased())
+                ? (sourcePath as NSString).deletingPathExtension : sourcePath
             return sourcePath.caseInsensitiveCompare(normalizedPath) == .orderedSame
                 || sourceWithoutExtension.caseInsensitiveCompare(normalizedPathWithoutExtension) == .orderedSame
         }
@@ -988,7 +996,8 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
         self.slug = slug
         self.sourceContentHash = sourceContentHash
         self.sourceImportedAt = sourceImportedAt
-        self.sourceRelativePath = sourceRelativePath.isEmpty ? "\(slug).md" : sourceRelativePath
+        self.sourceRelativePath = sourceRelativePath.isEmpty
+            ? MarkdownArticleSource.defaultRelativePath(for: slug, body: body) : sourceRelativePath
         self.status = status
         self.tags = NativeArticleTag.normalized(tags)
         self.title = title

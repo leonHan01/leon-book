@@ -56,8 +56,8 @@ enum MarkdownArticleSource {
         "leonmedia", "leon_media",
     ])
 
-    static func defaultRelativePath(for slug: String) -> String {
-        "\(slug).md"
+    static func defaultRelativePath(for slug: String, body: String = "") -> String {
+        "\(slug).\(RichArticleDocument.isHTML(body) ? "html" : "md")"
     }
 
     static func scan(in articlesURL: URL) throws -> [MarkdownArticleSourceRecord] {
@@ -131,7 +131,7 @@ enum MarkdownArticleSource {
             let values = try? url.resourceValues(forKeys: keys)
             guard values?.isRegularFile == true,
                   values?.isSymbolicLink != true,
-                  url.pathExtension.caseInsensitiveCompare("md") == .orderedSame else { continue }
+                  ["md", "html"].contains(url.pathExtension.lowercased()) else { continue }
             let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
             guard isInside(resolved, root: root) else { continue }
             let relativePath = String(resolved.path.dropFirst(root.path.count + 1))
@@ -158,6 +158,11 @@ enum MarkdownArticleSource {
             throw NativeStoreError.fileSystem("\(safePath) 不是 UTF-8 Markdown 文件")
         }
         if source.hasPrefix("\u{feff}") { source.removeFirst() }
+
+        if url.pathExtension.lowercased() == "html" || source.hasPrefix("<!doctype html>") {
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
+            return try RichArticleFile.read(source, relativePath: safePath, modifiedAt: NativeTimestamp.string(from: date))
+        }
 
         let frontmatter = NativeFrontmatterDocument(source: source)
         let fileTitle = url.deletingPathExtension().lastPathComponent
@@ -254,7 +259,9 @@ enum MarkdownArticleSource {
             guard expectedContentHash == nil else { throw NativeStoreError.conflict }
             existingSource = nil
         }
-        let data = Data(render(article, preserving: existingSource).utf8)
+        let rendered = RichArticleDocument.isHTML(article.body)
+            ? try RichArticleFile.render(article) : render(article, preserving: existingSource)
+        let data = Data(rendered.utf8)
         do {
             try data.write(to: url, options: .atomic)
         } catch {
@@ -347,8 +354,8 @@ enum MarkdownArticleSource {
         let segments = value.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard !segments.isEmpty,
               segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.hasPrefix(".") }),
-              segments.last?.lowercased().hasSuffix(".md") == true else {
-            throw NativeStoreError.fileSystem("Markdown 相对路径无效")
+              ["md", "html"].contains((segments.last! as NSString).pathExtension.lowercased()) else {
+            throw NativeStoreError.fileSystem("文章相对路径无效")
         }
         return segments.joined(separator: "/").precomposedStringWithCanonicalMapping
     }
@@ -926,7 +933,7 @@ enum MarkdownArticleSource {
         ).prefix(180))
     }
 
-    private static func hash(_ data: Data) -> String {
+    static func hash(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 

@@ -232,6 +232,7 @@ public final class NativeAppModel: ObservableObject {
     var editorOriginalArticle: NativeArticle?
     var backupTask: Task<Void, Never>?
     var editorAutosaveTask: Task<Void, Never>?
+    var editorRecoveryTask: Task<Void, Never>?
     var articleAncillaryLoadTask: Task<Void, Never>?
     var articlePostSaveTask: Task<Void, Never>?
     var articleNavigationPersistenceTask: Task<Void, Never>?
@@ -253,6 +254,7 @@ public final class NativeAppModel: ObservableObject {
     var momentFeedGeneration = 0
     var momentSearchTask: Task<Void, Never>?
     var questionSearchTask: Task<Void, Never>?
+    var questionListGeneration = 0
     var globalSearchTask: Task<Void, Never>?
     var globalSearchGeneration = 0
     var articleListSearchTask: Task<Void, Never>?
@@ -324,6 +326,7 @@ public final class NativeAppModel: ObservableObject {
         trashCleanupTask?.cancel()
         backupTask?.cancel()
         editorAutosaveTask?.cancel()
+        editorRecoveryTask?.cancel()
         articleAncillaryLoadTask?.cancel()
         articlePostSaveTask?.cancel()
         backupOverviewTask?.cancel()
@@ -894,6 +897,7 @@ public final class NativeAppModel: ObservableObject {
         guard confirmDiscardUnsavedWork() else { return }
         articleNavigationGeneration += 1
         editorAutosaveTask?.cancel()
+        editorRecoveryTask?.cancel()
         if discardsDirtyEditor {
             discardArticleAutosaves(
                 draftKey: editor.recoveryID,
@@ -940,6 +944,7 @@ public final class NativeAppModel: ObservableObject {
             )
             discardUnreferencedMedia(editorDraftMedia() + pendingEditorMediaCleanup)
         }
+        editorRecoveryTask?.cancel()
         editor = NativeEditorDraft(
             recoveryID: article.slug,
             slug: article.slug,
@@ -965,6 +970,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func acceptArticleRefactor(_ article: NativeArticle) {
+        editorRecoveryTask?.cancel()
         editor.body = article.body
         editor.updatedAt = article.updatedAt
         editorOriginalArticle = article
@@ -1053,7 +1059,7 @@ public final class NativeAppModel: ObservableObject {
         }
         let title = editor.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = editor.body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty, !body.isEmpty else {
+        guard !title.isEmpty, !RichArticleDocument.plainText(body).isEmpty || !editor.media.isEmpty || body.contains("<img ") else {
             errorMessage = NativeStoreError.invalidArticle.localizedDescription
             return
         }
@@ -1081,6 +1087,7 @@ public final class NativeAppModel: ObservableObject {
             }
         }
 
+        editorRecoveryTask?.cancel()
         isSaving = true
         defer { isSaving = false }
         let slug: String
@@ -1094,7 +1101,7 @@ public final class NativeAppModel: ObservableObject {
         let tags = NativeArticleTag.parse(editor.tags)
         let payload = NativeSaveArticle(
             banner: editor.banner,
-            body: editor.body,
+            body: RichArticleDocument.convertingLegacyBody(editor.body),
             category: editor.category.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Notes" : editor.category.trimmingCharacters(in: .whitespacesAndNewlines),
             excerpt: editor.excerpt,
             media: editor.media,
@@ -1105,7 +1112,7 @@ public final class NativeAppModel: ObservableObject {
             expectedUpdatedAt: editor.updatedAt,
             properties: editor.properties,
             sourceRelativePath: editor.isNew ? pendingNewArticleFolderPath.map {
-                "\($0)/\(slug).md"
+                "\($0)/\(slug).html"
             } : nil
         )
 
@@ -1739,6 +1746,11 @@ public final class NativeAppModel: ObservableObject {
             return
         }
         let insertion = "视频《\(media.name)》@ \(timestamp)"
+        if RichArticleDocument.isHTML(editor.body) {
+            editor.body = RichArticleDocument.appending(insertion, to: editor.body)
+            scheduleEditorAutosave()
+            return
+        }
         let source = editor.body as NSString
         let location = min(max(0, editorBodySelection.location), source.length)
         let length = min(max(0, editorBodySelection.length), source.length - location)
@@ -1764,9 +1776,12 @@ public final class NativeAppModel: ObservableObject {
 
     private var hasRecoverableEditorContent: Bool {
         !editor.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !editor.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || RichArticleDocument.hasContent(editor.body)
             || !editor.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !editor.tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || editor.category != "Notes"
+            || !editor.properties.isEmpty
+            || editor.status != .draft
             || editor.banner != nil
             || !editor.media.isEmpty
     }
@@ -1797,37 +1812,50 @@ public final class NativeAppModel: ObservableObject {
         let slug = editor.slug.isEmpty ? nil : editor.slug
         let snapshot = editorRevisionSnapshot
         let generation = workspaceGeneration
+        let activeStore = store
         isEditorAutosaving = true
         defer { isEditorAutosaving = false }
 
         do {
-            let revision = try await store.saveArticleAutosave(
+            let revision = try await activeStore.saveArticleAutosave(
                 draftKey: recoveryID,
                 articleSlug: slug,
                 snapshot: snapshot
             )
-            guard generation == workspaceGeneration, editor.recoveryID == recoveryID else { return }
-            editorAutosaveStatus = "已自动保存：\(revision.updatedAt.nativeDateLabel)"
-            articleRevisions = try await store.listArticleRevisions(
+            guard !Task.isCancelled, generation == workspaceGeneration,
+                  editor.recoveryID == recoveryID, editorRevisionSnapshot == snapshot else { return }
+            let revisions = try await activeStore.listArticleRevisions(
                 articleSlug: slug,
                 draftKey: recoveryID
             )
-            scheduleCompatibilityExportVerification(for: store)
+            guard !Task.isCancelled, generation == workspaceGeneration,
+                  editor.recoveryID == recoveryID, editorRevisionSnapshot == snapshot else { return }
+            editorAutosaveStatus = "已自动保存：\(revision.updatedAt.nativeDateLabel)"
+            articleRevisions = revisions
+            scheduleCompatibilityExportVerification(for: activeStore)
             errorMessage = nil
         } catch {
-            guard generation == workspaceGeneration else { return }
+            guard !Task.isCancelled, generation == workspaceGeneration,
+                  editor.recoveryID == recoveryID, editorRevisionSnapshot == snapshot else { return }
             editorAutosaveStatus = "自动保存失败"
             errorMessage = "自动保存失败：\(error.localizedDescription)"
         }
     }
 
     private func restoreLatestAutosaveIfNeeded(for article: NativeArticle) {
+        editorRecoveryTask?.cancel()
         let generation = workspaceGeneration
-        Task {
+        let navigationGeneration = articleNavigationGeneration
+        let initialDraft = editor
+        let activeStore = store
+        editorRecoveryTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                guard let revision = try await store.latestArticleAutosave(articleSlug: article.slug),
+                guard let revision = try await activeStore.latestArticleAutosave(articleSlug: article.slug),
+                      !Task.isCancelled, !isSaving,
                       generation == workspaceGeneration,
-                      editor.slug == article.slug,
+                      navigationGeneration == articleNavigationGeneration,
+                      editor == initialDraft,
                       revision.snapshot != NativeArticleRevisionSnapshot(article: article),
                       let autosavedAt = NativeTimestamp.date(from: revision.updatedAt),
                       let articleUpdatedAt = NativeTimestamp.date(from: article.updatedAt),
@@ -1842,14 +1870,27 @@ public final class NativeAppModel: ObservableObject {
                 editorAutosaveStatus = "已恢复自动保存：\(revision.updatedAt.nativeDateLabel)"
                 refreshArticleHistory()
             } catch {
-                guard generation == workspaceGeneration else { return }
+                guard !Task.isCancelled, generation == workspaceGeneration,
+                      navigationGeneration == articleNavigationGeneration,
+                      editor == initialDraft else { return }
                 errorMessage = error.localizedDescription
             }
         }
     }
 
     func restoreLatestUnsavedArticleDraftIfNeeded() async throws {
-        guard let revision = try await store.latestUnsavedArticleAutosave() else { return }
+        guard !Task.isCancelled, !isSaving, !isEditorDirty else { return }
+        let generation = workspaceGeneration
+        let navigationGeneration = articleNavigationGeneration
+        let initialDraft = editor
+        let activeStore = store
+        func canRestore() -> Bool {
+            !Task.isCancelled && !isSaving && generation == workspaceGeneration
+                && navigationGeneration == articleNavigationGeneration && editor == initialDraft
+        }
+        guard let revision = try await activeStore.latestUnsavedArticleAutosave(), canRestore() else { return }
+        let revisions = try await activeStore.listArticleRevisions(articleSlug: nil, draftKey: revision.draftKey)
+        guard canRestore() else { return }
         editorOriginalArticle = nil
         pendingEditorMediaCleanup = []
         selectedSlug = nil
@@ -1863,10 +1904,7 @@ public final class NativeAppModel: ObservableObject {
             slug: "",
             expectedUpdatedAt: nil
         )
-        articleRevisions = try await store.listArticleRevisions(
-            articleSlug: nil,
-            draftKey: revision.draftKey
-        )
+        articleRevisions = revisions
         editorAutosaveStatus = "已恢复自动保存：\(revision.updatedAt.nativeDateLabel)"
         section = .editor
     }
@@ -1902,13 +1940,7 @@ public final class NativeAppModel: ObservableObject {
 
     var isEditorDirty: Bool {
         if editor.isNew {
-            return !editor.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !editor.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !editor.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !editor.tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || editor.category != "Notes"
-                || editor.banner != nil
-                || !editor.media.isEmpty
+            return hasRecoverableEditorContent
         }
         guard let original = editorOriginalArticle else { return false }
         return editor.title != original.title
@@ -2033,6 +2065,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     private func discardCurrentEditorDraft() async {
+        editorRecoveryTask?.cancel()
         let discardsDirtyEditor = isEditorDirty
         let recoveryID = editor.recoveryID
         let discardedMedia = editorDraftMedia() + pendingEditorMediaCleanup

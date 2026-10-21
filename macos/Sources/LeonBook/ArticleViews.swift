@@ -25,7 +25,7 @@ struct ArticleReaderView: View {
             Group {
                 if let article = model.selectedArticle {
                     let document = NativeMarkdownArticleDocumentCache.shared.document(for: article.body)
-                    let outline = document.outline
+                    let outline = RichArticleDocument.outline(in: article.body)
                     GeometryReader { proxy in
                         let usesCompactInspector = proxy.size.width < 980
                         ScrollViewReader { scrollProxy in
@@ -252,6 +252,23 @@ struct ArticleReaderView: View {
                 }
 
                 Divider()
+                if RichArticleDocument.isHTML(article.body) {
+                    RichArticleReader(
+                        bodyHTML: article.body, store: model.store,
+                        sourceRelativePath: article.sourceRelativePath,
+                        fontSize: readingPreferences.typography.fontSize,
+                        onOpenLink: { url in
+                            if url.scheme == "leonbook" { model.handleAutomationURL(url) }
+                            else { NSWorkspace.shared.open(url) }
+                        },
+                        onSelectText: { selectedText in
+                            model.prepareArticleComment(from: selectedText, in: article.body)
+                            if usesCompactInspector { isPresentingCompactInspector = true }
+                            else { workspaceLayout.isReaderInspectorVisible = true }
+                            workspaceLayout.readerInspectorPane = .comments
+                        }
+                    )
+                } else {
                 MarkdownArticleBody(
                     document: document,
                     store: model.store,
@@ -278,6 +295,7 @@ struct ArticleReaderView: View {
                         }
                         workspaceLayout.readerInspectorPane = .comments
                     }
+                }
                 }
 
                 let embeddedAttachmentURLs = document.embeddedAttachmentURLs
@@ -1389,6 +1407,13 @@ final class NativeMarkdownArticleDocument {
     )
 
     init(markdown: String) {
+        if RichArticleDocument.isHTML(markdown) {
+            blocks = []
+            outline = RichArticleDocument.outline(in: markdown)
+            imageURLs = Set(RichArticleDocument.imageURLs(in: markdown))
+            embeddedAttachmentURLs = imageURLs
+            return
+        }
         var parsedBlocks: [MarkdownArticleBlock] = []
         var parsedOutline: [MarkdownOutlineItem] = []
         var parsedImageURLs = Set<String>()

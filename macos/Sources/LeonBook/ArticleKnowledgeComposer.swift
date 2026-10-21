@@ -156,6 +156,13 @@ enum ArticleKnowledgeComposer {
         destination: NativeArticle,
         position: NativeArticleMergePosition
     ) -> String {
+        if RichArticleDocument.isHTML(source.body) || RichArticleDocument.isHTML(destination.body) {
+            let heading = RichArticleDocument.opening + "<h2>\(RichArticleDocument.escape(source.title))</h2></article>"
+            let section = RichArticleDocument.appending(source.body, to: heading)
+            return position == .beginning
+                ? RichArticleDocument.appending(destination.body, to: section)
+                : RichArticleDocument.appending(section, to: destination.body)
+        }
         let sourceSection = "## \(source.title)\n\n\(source.body)"
         switch position {
         case .beginning:

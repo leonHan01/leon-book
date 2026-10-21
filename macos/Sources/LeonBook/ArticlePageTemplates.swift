@@ -74,7 +74,7 @@ struct NativeArticlePageTemplate: Codable, Hashable, Identifiable {
         !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !draft.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !draft.tags.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !draft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || RichArticleDocument.hasContent(draft.body)
             || draft.category != "Notes"
             || !draft.properties.isEmpty
     }

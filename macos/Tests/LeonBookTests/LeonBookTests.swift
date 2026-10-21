@@ -1,8 +1,10 @@
 import Darwin
 import AppKit
+import Combine
 import Foundation
 import LeonBookExtensionKit
 import SwiftUI
+import WebKit
 @testable import LeonBook
 
 private var failures: [String] = []
@@ -749,6 +751,59 @@ final class NativeModelsTests {
         let addressable = NativeBlockEditorDocument.ensuringBlockID(in: "一段内容")
         XCTAssertEqual(NativeBlockEditorDocument.blockID(in: addressable.markdown), addressable.id)
         XCTAssertEqual(NativeBlockEditorDocument.removingBlockID(from: addressable.markdown), "一段内容")
+    }
+
+    func testBlockParagraphBoundariesFollowPlainReturns() {
+        let source = "第一段\r\n第二段\r\n\r\n第三段\r第四段\u{2029}第五段"
+        let blocks = NativeBlockEditorDocument.parse(source)
+        XCTAssertEqual(blocks.map(\.markdown), ["第一段", "第二段", "第三段", "第四段", "第五段"])
+        XCTAssertEqual(NativeBlockEditorDocument.render(blocks), "第一段\n\n第二段\n\n第三段\n\n第四段\n\n第五段")
+        XCTAssertEqual(NativeBlockEditorDocument.parse(NativeBlockEditorDocument.render(blocks)).map(\.markdown), blocks.map(\.markdown))
+
+        let inlineBreaks = "第一行\\\n第二行  \n第三行\n下一段"
+        XCTAssertEqual(NativeBlockEditorDocument.parse(inlineBreaks).map(\.markdown), [
+            "第一行\\\n第二行  \n第三行", "下一段",
+        ])
+        XCTAssertEqual(NativeBlockEditorDocument.parse("末尾转义\\\\\n下一段").count, 2)
+    }
+
+    func testBlockParagraphSplittingPreservesStructuredContent() {
+        let source = """
+        开头
+        | 项目 | 进度 |
+        | --- | --- |
+        | 编辑器 | 完成 |
+        表格后的段落
+        ```swift
+        let value = 1
+
+        print(value)
+        ```
+        $$
+        x^2
+
+        + y^2
+        $$
+        - 项目
+          缩进的续行
+        > 第一段引用
+        > 第二段引用
+        > [!NOTE]
+        > 提示的第一行
+        > 提示的第二行
+        结尾 ^ending
+        """
+        let blocks = NativeBlockEditorDocument.parse(source)
+        XCTAssertEqual(blocks.map(\.kind), [
+            .paragraph, .table, .paragraph, .code, .math,
+            .bulletedList, .quote, .quote, .callout, .paragraph,
+        ])
+        XCTAssertEqual(blocks[1].markdown, "| 项目 | 进度 |\n| --- | --- |\n| 编辑器 | 完成 |")
+        XCTAssertEqual(blocks[5].markdown, "- 项目\n  缩进的续行")
+        XCTAssertEqual(blocks[8].markdown, "> [!NOTE]\n> 提示的第一行\n> 提示的第二行")
+        XCTAssertEqual(NativeBlockEditorDocument.blockID(in: blocks.last!.markdown), "ending")
+        let reopened = NativeBlockEditorDocument.parse(NativeBlockEditorDocument.render(blocks))
+        XCTAssertEqual(reopened.map(\.markdown), blocks.map(\.markdown))
     }
 
     func testBlockSelectionOwnsRangeToggleAndReconciliationRules() {
@@ -1814,6 +1869,594 @@ private final class WritingStyleProbe: NSObject, NSTextStorageDelegate {
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
         if editedMask.contains(.editedAttributes) { attributePasses += 1 }
+    }
+}
+
+private extension LocalBlogStore {
+    func holdInteractionTestQueue(entered: @Sendable () -> Void, release: DispatchSemaphore) -> Bool {
+        entered()
+        return release.wait(timeout: .now() + 10) == .success
+    }
+}
+
+@MainActor
+final class AppInteractionTests {
+    private func makeModel(root: URL) -> NativeAppModel {
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false, store: LocalBlogStore(rootURL: root))
+        let suite = "AppInteractionTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        model.firstPartyModuleRuntime = NativeFirstPartyModules.loadRuntime(defaults: defaults)
+        defaults.removePersistentDomain(forName: suite)
+        return model
+    }
+
+    private func holdStore(_ store: LocalBlogStore) async -> () async -> Void {
+        let release = DispatchSemaphore(value: 0)
+        var blocker: Task<Bool, Never>!
+        await withCheckedContinuation { continuation in
+            blocker = Task {
+                await store.holdInteractionTestQueue(entered: { continuation.resume() }, release: release)
+            }
+        }
+        return {
+            release.signal()
+            XCTAssertTrue(await blocker.value, "the test must release the store before its timeout")
+        }
+    }
+
+    /// The queued main-thread continuation runs after the real request has
+    /// suspended on the held store, so user actions can race it deterministically.
+    private func beginBlockedRequest(
+        _ model: NativeAppModel,
+        operation: @escaping @MainActor () async throws -> Void
+    ) async -> (Task<Void, Error>, () async -> Void) {
+        let unblock = await holdStore(model.store)
+        var reload: Task<Void, Error>!
+        await withCheckedContinuation { continuation in
+            reload = Task { @MainActor in
+                DispatchQueue.main.async { continuation.resume() }
+                try await operation()
+            }
+        }
+        return (reload, unblock)
+    }
+
+    private func beginBlockedQuestionReload(_ model: NativeAppModel) async -> (Task<Void, Error>, () async -> Void) {
+        await beginBlockedRequest(model) { try await model.reloadQuestionList() }
+    }
+
+    private func recoverySnapshot(body: String) -> NativeArticleRevisionSnapshot {
+        NativeArticleRevisionSnapshot(
+            banner: nil, body: body, category: "Notes", excerpt: "", media: [],
+            status: .draft, tags: [], title: "恢复草稿", articleUpdatedAt: nil,
+            properties: ["项目": .text("测试项目")]
+        )
+    }
+
+    func testEditorRecoveryStartupRespectsNewerWork() async throws {
+        for action in ["input", "navigation", "workspace", "cancel"] {
+            let root = try makeTemporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let model = makeModel(root: root)
+            _ = try await model.store.saveArticleAutosave(
+                draftKey: "unfinished", articleSlug: nil, snapshot: recoverySnapshot(body: "上次的未保存内容")
+            )
+            let (recovery, unblock) = await beginBlockedRequest(model) {
+                try await model.restoreLatestUnsavedArticleDraftIfNeeded()
+            }
+            switch action {
+            case "input": model.editor.body = "这次刚输入的内容"
+            case "navigation": model.section = .settings
+            case "workspace": model.workspaceGeneration += 1
+            default: recovery.cancel()
+            }
+            let expectedDraft = model.editor
+            let expectedSection = model.section
+            await unblock()
+            try await recovery.value
+            XCTAssertEqual(model.editor, expectedDraft, "\(action): startup recovery must not overwrite newer editor state")
+            XCTAssertEqual(model.section, expectedSection, "\(action): recovery must not pull the user back into the editor")
+            XCTAssertTrue(model.articleRevisions.isEmpty, "\(action): obsolete recovery history must not replace the current history")
+        }
+    }
+
+    func testEditorRecoveryOnOpenPreservesNewerTyping() async throws {
+        for typesWhileLoading in [false, true] {
+            let root = try makeTemporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let model = makeModel(root: root)
+            let saved = try await model.store.saveArticle(article(
+                slug: "recovery-note", status: .draft, expectedUpdatedAt: nil, body: "正式正文"
+            ))
+            _ = try await model.store.saveArticleAutosave(
+                draftKey: saved.slug, articleSlug: saved.slug,
+                snapshot: recoverySnapshot(body: "待恢复的正文"), at: Date().addingTimeInterval(2)
+            )
+            model.selectedArticle = saved
+            model.selectedSlug = saved.slug
+            let unblock = await holdStore(model.store)
+            model.editSelected()
+            if typesWhileLoading { model.editor.body = "我刚输入的正文" }
+            await unblock()
+            await model.editorRecoveryTask?.value
+            XCTAssertEqual(model.editor.body, typesWhileLoading ? "我刚输入的正文" : "待恢复的正文",
+                           "opening an article may restore a draft only before the user starts editing")
+        }
+    }
+
+    func testEditorRecoveryRestoresAnUntouchedStartupDraft() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        let snapshot = recoverySnapshot(body: "尚未正式保存")
+        let revision = try await model.store.saveArticleAutosave(draftKey: "unfinished", articleSlug: nil, snapshot: snapshot)
+        try await model.restoreLatestUnsavedArticleDraftIfNeeded()
+        XCTAssertEqual(model.editor.recoveryID, "unfinished")
+        XCTAssertEqual(model.editor.body, snapshot.body)
+        XCTAssertEqual(model.editor.properties, snapshot.properties)
+        XCTAssertEqual(model.articleRevisions.map(\.id), [revision.id])
+        XCTAssertEqual(model.section, .editor)
+    }
+
+    func testEditorRecoveryIncludesMetadataOnlyDrafts() async throws {
+        for field in ["property", "category"] {
+            let root = try makeTemporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let model = makeModel(root: root)
+            model.storageReady = true
+            model.isLoading = false
+            XCTAssertFalse(model.hasUnsavedEditorChanges)
+            if field == "property" {
+                model.editor.properties["项目"] = .text("重要资料")
+            } else {
+                model.editor.category = "工作"
+            }
+            XCTAssertTrue(model.hasUnsavedEditorChanges, "\(field): metadata changes must count as unsaved work")
+            model.scheduleEditorAutosave()
+            XCTAssertNotNil(model.editorAutosaveTask, "\(field): metadata-only drafts must be scheduled for recovery")
+            await model.editorAutosaveTask?.value
+            let revision = try await model.store.latestUnsavedArticleAutosave()
+            XCTAssertNotNil(revision, "\(field): automatic saving must persist the metadata-only draft")
+            if let revision {
+                XCTAssertEqual(revision.snapshot.properties, model.editor.properties)
+                XCTAssertEqual(revision.snapshot.category, model.editor.category)
+            }
+            await model.compatibilityExportTask?.value
+        }
+    }
+
+    func testEditorRecoveryPendingAutosaveKeepsNewerSaveStatus() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        model.storageReady = true
+        model.isLoading = false
+        model.editor.body = "上一轮内容"
+        let unblock = await holdStore(model.store)
+        model.scheduleEditorAutosave()
+        let previousSave = model.editorAutosaveTask
+        var saveStarted: AnyCancellable?
+        await withCheckedContinuation { continuation in
+            saveStarted = model.editorSession.$isAutosaving.filter { $0 }.prefix(1).sink { _ in
+                continuation.resume()
+            }
+        }
+        defer {
+            saveStarted?.cancel()
+            model.editorAutosaveTask?.cancel()
+            model.compatibilityExportTask?.cancel()
+        }
+        model.editor.body = "这一轮还在输入"
+        model.scheduleEditorAutosave()
+        await unblock()
+        await previousSave?.value
+        XCTAssertEqual(model.editor.body, "这一轮还在输入")
+        XCTAssertEqual(model.editorAutosaveStatus, "等待自动保存…",
+                       "finishing an older save must not claim that the newer text has been saved")
+    }
+
+    func testSearchChangesHideOldResultsAndIgnorePendingOpen() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        for title in ["alpha", "beta"] {
+            _ = try await model.store.saveArticle(article(slug: title, status: .draft, expectedUpdatedAt: nil, body: title, title: title))
+        }
+        model.searchPresentation = .globalSearch
+        model.updateGlobalSearch("alpha", articlesOnly: false, debounce: false)
+        await model.globalSearchTask?.value
+        guard let oldResult = model.globalSearchResults.first else {
+            XCTFail("expected the first query to return an article")
+            return
+        }
+        model.updateGlobalSearch("beta", articlesOnly: false)
+        XCTAssertTrue(model.isSearchingGlobally)
+        XCTAssertTrue(model.globalSearchResults.isEmpty, "changing the query must hide results for the previous query immediately")
+        model.openSearchResult(oldResult)
+        XCTAssertEqual(model.searchPresentation, .globalSearch, "Return during a pending search must not open a stale result")
+        await model.globalSearchTask?.value
+        XCTAssertEqual(model.globalSearchResults.map(\.documentID), ["beta"])
+        XCTAssertFalse(model.isSearchingGlobally)
+    }
+
+    func testQuestionReloadPreservesNewerSelectionAndDraft() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        let first = try await model.store.saveQuestion(title: "Swift", body: "first", tags: ["Swift"])
+        let second = try await model.store.saveQuestion(title: "SQLite", body: "second", tags: ["SQLite"])
+        try await model.reloadQuestionList(selecting: first.id)
+        let (reload, unblock) = await beginBlockedQuestionReload(model)
+        XCTAssertTrue(model.selectQuestion(second))
+        model.questionAnswerDraft.body = "正在给第二个问题写回答"
+        await unblock()
+        try await reload.value
+        XCTAssertEqual(model.selectedQuestion?.id, second.id, "a background refresh must not restore the older selection")
+        XCTAssertEqual(model.questionAnswerDraft.body, "正在给第二个问题写回答", "a stale reload must not discard a newer draft")
+    }
+
+    func testObsoleteQuestionReloadDoesNotPublishItsResults() async throws {
+        for invalidation in ["cancel", "query", "tag"] {
+            let root = try makeTemporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let model = makeModel(root: root)
+            _ = try await model.store.saveQuestion(title: "Swift", body: "first", tags: ["Swift"])
+            _ = try await model.store.saveQuestion(title: "SQLite", body: "second", tags: ["SQLite"])
+            try await model.reloadQuestionList()
+            let previous = model.questions
+            model.questionSearchText = "Swift"
+            let (reload, unblock) = await beginBlockedQuestionReload(model)
+            switch invalidation {
+            case "cancel": reload.cancel()
+            case "query": model.questionSearchText = "SQLite"
+            default: model.selectedQuestionTag = "SQLite"
+            }
+            await unblock()
+            try await reload.value
+            XCTAssertEqual(model.questions, previous, "\(invalidation) must invalidate the older question results")
+        }
+    }
+
+    func testQuestionFilteringKeepsAnUnpublishedAnswer() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = makeModel(root: root)
+        let first = try await model.store.saveQuestion(title: "Swift", body: "first", tags: ["Swift"])
+        let second = try await model.store.saveQuestion(title: "SQLite", body: "second", tags: ["SQLite"])
+        try await model.reloadQuestionList(selecting: first.id)
+        model.questionAnswerDraft.body = "还没发布的回答"
+        model.questionSearchText = "SQLite"
+        try await model.reloadQuestionList()
+        XCTAssertEqual(model.questions.map(\.id), [second.id], "the list must still apply the current search filter")
+        XCTAssertEqual(model.selectedQuestion?.id, first.id)
+        XCTAssertEqual(model.questionAnswerDraft.body, "还没发布的回答", "filtering the list must not silently discard an answer")
+    }
+}
+
+@MainActor
+final class EditorFocusTests {
+    private func makeWindow<Editor: View>(editor: Editor, editorHeight: CGFloat = 260) -> (NSWindow, NSTextField, NSHostingView<Editor>) {
+        _ = NSApplication.shared
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: editorHeight + 100),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: editorHeight + 100))
+        let title = NSTextField(frame: NSRect(x: 20, y: editorHeight + 40, width: 600, height: 32))
+        title.placeholderString = "给这篇文章起个标题"
+        let host = NSHostingView(rootView: editor)
+        host.frame = NSRect(x: 20, y: 20, width: 600, height: editorHeight)
+        container.addSubview(title)
+        container.addSubview(host)
+        window.contentView = container
+        host.layoutSubtreeIfNeeded()
+        return (window, title, host)
+    }
+
+    private func drainFocusEvents() async {
+        for _ in 0..<3 {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+        }
+    }
+
+    private func textView(in root: NSView) -> NSTextView? {
+        if let textView = root as? NSTextView { return textView }
+        return root.subviews.lazy.compactMap { self.textView(in: $0) }.first
+    }
+
+    private func blockEditor(_ text: String = "正文", shouldFocus: Bool = true) -> NativeBlockTextEditor {
+        NativeBlockTextEditor(
+            text: .constant(text), height: .constant(40), kind: .paragraph,
+            typography: .default, isEditable: true, shouldFocus: shouldFocus,
+            onFocus: {}, onSplit: { _ in }, onMergeBackward: {},
+            onMoveBlocks: { _ in }, onChangeIndent: { _ in }, onBlockCommand: { _ in false }
+        )
+    }
+
+    private func blockViews(in root: NSView) -> [NativeBlockNSTextView] {
+        if let block = root as? NativeBlockNSTextView { return [block] }
+        return root.subviews.flatMap { blockViews(in: $0) }
+    }
+
+    private func documentEditor(source: Binding<String>) -> ArticleBlockEditor {
+        ArticleBlockEditor(
+            source: source, documentID: "editing-experience", sourceSlug: nil,
+            articleReference: "New article", isEditable: true, typography: .default,
+            articleDestinations: [], onTransferBlocks: { _, _, _, _ in nil },
+            onUndoTransfer: { _ in false }
+        )
+    }
+
+    func testBlockEditingUsesIndependentFullWidthRows() async {
+        let (window, _, host) = makeWindow(
+            editor: documentEditor(source: .constant("第一块\n第二块\n\n第三块")),
+            editorHeight: 480
+        )
+        defer { window.close() }
+        await drainFocusEvents()
+        host.layoutSubtreeIfNeeded()
+        await drainFocusEvents()
+        let views = blockViews(in: host)
+        XCTAssertEqual(views.count, 3)
+        let rows = views.map { $0.convert($0.bounds, to: host) }
+        for row in rows {
+            XCTAssertTrue(row.minX < 40, "block controls must not consume the text row's leading space")
+            XCTAssertTrue(row.width > host.bounds.width - 100, "each block must have its own full-width text row")
+        }
+        for index in rows.indices.dropFirst() {
+            XCTAssertFalse(rows[index - 1].intersects(rows[index]), "neighboring blocks must occupy separate rows")
+        }
+    }
+
+    func testBlockParagraphPasteReplacesSelectionAndSupportsUndo() async {
+        var source = "前缀选中后缀🌙"
+        let (window, _, host) = makeWindow(
+            editor: documentEditor(source: Binding(get: { source }, set: { source = $0 })),
+            editorHeight: 480
+        )
+        defer { window.close() }
+        await drainFocusEvents()
+        host.layoutSubtreeIfNeeded()
+        guard let body = blockViews(in: host).first else {
+            XCTFail("expected a paragraph editor")
+            return
+        }
+        XCTAssertTrue(window.makeFirstResponder(body))
+        body.setSelectedRange((body.string as NSString).range(of: "选中"))
+        body.insertText("第一段\r\n第二段\n\n第三段", replacementRange: body.selectedRange())
+        await drainFocusEvents()
+        host.layoutSubtreeIfNeeded()
+        await drainFocusEvents()
+
+        XCTAssertEqual(source, "前缀第一段\n\n第二段\n\n第三段后缀🌙")
+        let paragraphs = blockViews(in: host)
+        XCTAssertEqual(paragraphs.map(\.string), ["前缀第一段", "第二段", "第三段后缀🌙"])
+        guard let last = paragraphs.last else { return }
+        XCTAssertTrue(window.firstResponder === last)
+        XCTAssertEqual(last.selectedRange(), NSRange(location: 3, length: 0))
+
+        window.undoManager?.undo()
+        await drainFocusEvents()
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(source, "前缀选中后缀🌙", "one undo must restore the paragraph before the paste")
+        window.undoManager?.redo()
+        await drainFocusEvents()
+        XCTAssertEqual(source, "前缀第一段\n\n第二段\n\n第三段后缀🌙")
+    }
+
+    func testBlockParagraphSoftReturnSurvivesReopening() async {
+        for prefix in ["", "# ", "- ", "12. ", "- [ ] ", "> "] {
+            var source = prefix + "前半段后半段"
+            let (window, _, host) = makeWindow(
+                editor: documentEditor(source: Binding(get: { source }, set: { source = $0 })),
+                editorHeight: 480
+            )
+            defer { window.close() }
+            await drainFocusEvents()
+            host.layoutSubtreeIfNeeded()
+            guard let body = blockViews(in: host).first,
+                  let coordinator = body.delegate as? NativeBlockTextEditor.Coordinator else {
+                XCTFail("expected a paragraph editing delegate")
+                return
+            }
+            XCTAssertTrue(window.makeFirstResponder(body))
+            body.setSelectedRange(NSRange(location: (prefix as NSString).length + 3, length: 0))
+            XCTAssertTrue(coordinator.textView(body, doCommandBy: #selector(NSResponder.insertLineBreak(_:))))
+            await drainFocusEvents()
+            XCTAssertEqual(source, prefix + "前半段\\\n后半段")
+            XCTAssertEqual(blockViews(in: host).count, 1)
+            XCTAssertEqual(NativeBlockEditorDocument.parse(source).map(\.markdown), [prefix + "前半段\\\n后半段"])
+        }
+    }
+
+    func testBlockEditingEnterKeepsCaretBeforeTheSplitRemainder() async {
+        let cases: [(prefix: String, remainderPrefix: String, separator: String)] = [
+            ("", "", "\n\n"),
+            ("# ", "", "\n\n"),
+            ("- ", "- ", "\n"),
+            ("12. ", "12. ", "\n"),
+            ("- [ ] ", "- [ ] ", "\n"),
+        ]
+        for item in cases {
+            var source = item.prefix + "前半段后半段"
+            let (window, _, host) = makeWindow(
+                editor: documentEditor(source: Binding(get: { source }, set: { source = $0 })),
+                editorHeight: 480
+            )
+            defer { window.close() }
+            await drainFocusEvents()
+            host.layoutSubtreeIfNeeded()
+            guard let body = blockViews(in: host).first,
+                  let coordinator = body.delegate as? NativeBlockTextEditor.Coordinator else {
+                XCTFail("expected the live block's editing delegate")
+                return
+            }
+            XCTAssertTrue(window.makeFirstResponder(body))
+            body.setSelectedRange(NSRange(location: (item.prefix as NSString).length + 3, length: 0))
+            XCTAssertTrue(coordinator.textView(body, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+            await drainFocusEvents()
+            host.layoutSubtreeIfNeeded()
+            await drainFocusEvents()
+            XCTAssertEqual(source, item.prefix + "前半段" + item.separator + item.remainderPrefix + "后半段")
+            guard let remainder = blockViews(in: host).first(where: { $0.string == item.remainderPrefix + "后半段" }) else {
+                XCTFail("Enter must create an independent block for the remainder")
+                return
+            }
+            XCTAssertTrue(window.firstResponder === remainder)
+            XCTAssertEqual(remainder.selectedRange(), NSRange(location: (item.remainderPrefix as NSString).length, length: 0),
+                           "typing after Enter must start after the list marker and before the moved text")
+        }
+    }
+
+    func testBlockEditingMergeKeepsCaretAtTheJoin() async {
+        var source = "第一块\n\n第二块"
+        let (window, _, host) = makeWindow(
+            editor: documentEditor(source: Binding(get: { source }, set: { source = $0 })),
+            editorHeight: 480
+        )
+        defer { window.close() }
+        await drainFocusEvents()
+        host.layoutSubtreeIfNeeded()
+        guard let second = blockViews(in: host).first(where: { $0.string == "第二块" }),
+              let coordinator = second.delegate as? NativeBlockTextEditor.Coordinator else {
+            XCTFail("expected the second paragraph's live editing delegate")
+            return
+        }
+        XCTAssertTrue(window.makeFirstResponder(second))
+        second.setSelectedRange(NSRange(location: 0, length: 0))
+        XCTAssertTrue(coordinator.textView(second, doCommandBy: #selector(NSResponder.deleteBackward(_:))))
+        await drainFocusEvents()
+        host.layoutSubtreeIfNeeded()
+        await drainFocusEvents()
+        XCTAssertEqual(source, "第一块 第二块")
+        guard let merged = blockViews(in: host).first(where: { $0.string == source }) else {
+            XCTFail("Backspace must merge the adjacent paragraphs")
+            return
+        }
+        XCTAssertTrue(window.firstResponder === merged)
+        XCTAssertEqual(merged.selectedRange(), NSRange(location: 4, length: 0), "typing after a merge must stay at the join")
+    }
+
+    func testBlockEditingHeightTracksWidthAndTheEmptyLastLine() async {
+        var height: CGFloat = 40
+        let editor = NativeBlockTextEditor(
+            text: .constant(String(repeating: "中文正文自动折行。", count: 24) + "\n"),
+            height: Binding(get: { height }, set: { height = $0 }), kind: .paragraph,
+            typography: .default, isEditable: true, shouldFocus: false,
+            onFocus: {}, onSplit: { _ in }, onMergeBackward: {},
+            onMoveBlocks: { _ in }, onChangeIndent: { _ in }, onBlockCommand: { _ in false }
+        )
+        let (window, _, host) = makeWindow(editor: editor)
+        defer { window.close() }
+        await drainFocusEvents()
+        guard let body = textView(in: host),
+              let coordinator = body.delegate as? NativeBlockTextEditor.Coordinator else {
+            XCTFail("expected a block text view and its real layout coordinator")
+            return
+        }
+        coordinator.refreshPresentation(of: body)
+        await drainFocusEvents()
+        let wideHeight = height
+        body.setFrameSize(NSSize(width: 220, height: body.frame.height))
+        await drainFocusEvents()
+        guard let manager = body.layoutManager, let container = body.textContainer else { return }
+        manager.ensureLayout(for: container)
+        XCTAssertTrue(height > wideHeight, "narrowing a block must grow its height to keep wrapped text visible")
+        XCTAssertTrue(height >= manager.extraLineFragmentRect.maxY + body.textContainerInset.height * 2,
+                      "the final empty line and its caret must fit inside the block")
+    }
+
+    func testBodyEditorInitialFocusPreservesTitleSelection() async {
+        let editor = NativeBodyEditor(
+            text: .constant(""), selectedRange: .constant(NSRange(location: 0, length: 0)),
+            isEditable: true, linkController: ArticleLinkAutocompleteController(),
+            slashController: EditorSlashCommandController(), appearance: .source,
+            typography: .default, onPasteImage: { _, _ in }, onRunCommand: { _, _ in }
+        )
+        let (window, title, host) = makeWindow(editor: editor)
+        defer { window.close() }
+        XCTAssertTrue(window.makeFirstResponder(title), "the article title must accept focus")
+        guard let titleEditor = title.currentEditor() else {
+            XCTFail("expected the title's field editor to be active")
+            return
+        }
+        await drainFocusEvents()
+        XCTAssertTrue(window.firstResponder === titleEditor, "the body editor stole focus after clicking the article title")
+        withExtendedLifetime(host) {}
+    }
+
+    func testBlockEditorRefreshPreservesTitleSelection() async {
+        let (window, title, host) = makeWindow(editor: blockEditor())
+        defer { window.close() }
+        await drainFocusEvents()
+        textView(in: host)?.setSelectedRange(NSRange(location: 1, length: 1))
+        XCTAssertTrue(window.makeFirstResponder(title), "the article title must accept focus")
+        guard let titleEditor = title.currentEditor() else {
+            XCTFail("expected the title's field editor to be active")
+            return
+        }
+        host.rootView = blockEditor("刷新后的正文")
+        host.layoutSubtreeIfNeeded()
+        await drainFocusEvents()
+        XCTAssertEqual(textView(in: host)?.string, "刷新后的正文", "the test must exercise a real editor refresh")
+        XCTAssertEqual(textView(in: host)?.selectedRange(), NSRange(location: 1, length: 1),
+                       "an external text refresh must preserve the block's selection")
+        XCTAssertTrue(window.firstResponder === titleEditor, "refreshing a previously focused block stole focus from the article title")
+    }
+
+    func testBodyEditorInitialFocusOnlyClaimsAnUnfocusedEditableWindow() async {
+        for isEditable in [true, false] {
+            let editor = NativeBodyEditor(
+                text: .constant(""), selectedRange: .constant(NSRange(location: 0, length: 0)),
+                isEditable: isEditable, linkController: ArticleLinkAutocompleteController(),
+                slashController: EditorSlashCommandController(), appearance: .livePreview,
+                typography: .default, onPasteImage: { _, _ in }, onRunCommand: { _, _ in }
+            )
+            let (window, _, host) = makeWindow(editor: editor)
+            defer { window.close() }
+            XCTAssertTrue(window.makeFirstResponder(window))
+            await drainFocusEvents()
+            guard let body = textView(in: host) else {
+                XCTFail("expected a real body text view")
+                return
+            }
+            XCTAssertEqual(window.firstResponder === body, isEditable, "only an editable body may take initial focus")
+        }
+    }
+
+    func testBlockEditorPendingFocusPreservesNewerTitleSelection() async {
+        let (window, title, host) = makeWindow(editor: blockEditor())
+        defer { window.close() }
+        XCTAssertTrue(window.makeFirstResponder(title))
+        let titleEditor = title.currentEditor()
+        XCTAssertNotNil(titleEditor)
+        await drainFocusEvents()
+        XCTAssertTrue(window.firstResponder === titleEditor, "a queued block focus request must respect a newer title click")
+        withExtendedLifetime(host) {}
+    }
+
+    func testBlockEditorExplicitFocusCanBeRequestedAgain() async {
+        let (window, title, host) = makeWindow(editor: blockEditor(shouldFocus: false))
+        defer { window.close() }
+        await drainFocusEvents()
+        guard let body = textView(in: host) else {
+            XCTFail("expected a real block text view")
+            return
+        }
+        for _ in 0..<2 {
+            XCTAssertTrue(window.makeFirstResponder(title))
+            host.rootView = blockEditor(shouldFocus: true)
+            host.layoutSubtreeIfNeeded()
+            await drainFocusEvents()
+            XCTAssertTrue(window.firstResponder === body, "an explicit block selection must still receive focus")
+            XCTAssertEqual(body.selectedRange().location, (body.string as NSString).length)
+            host.rootView = blockEditor(shouldFocus: false)
+            host.layoutSubtreeIfNeeded()
+            await drainFocusEvents()
+        }
     }
 }
 
@@ -5692,6 +6335,532 @@ final class DataIntegrityTests {
     }
 }
 
+final class RichArticleTests {
+    func testRichArticleConversionPreservesContentAndFormatting() throws {
+        let html = RichArticleDocument.convertingLegacyBody("# 标题\n第一段 **加粗**\n第二段\n\n```swift\nif x < 2 { print(x) }\n```\n\n> [!NOTE]\n> 重要提示\n\n![图片](/media/note/image.png)\n[[other|其他文章]]")
+        XCTAssertTrue(RichArticleDocument.isHTML(html))
+        XCTAssertTrue(html.contains("<h1"))
+        XCTAssertTrue(html.contains("<strong>加粗</strong>"))
+        XCTAssertTrue(html.contains("<pre"))
+        XCTAssertTrue(html.contains("<aside"))
+        XCTAssertFalse(html.contains("```"))
+        XCTAssertEqual(RichArticleDocument.imageURLs(in: html), ["/media/note/image.png"])
+        XCTAssertEqual(NativeArticleLink.references(in: html), ["other"])
+        XCTAssertTrue(RichArticleDocument.plainText(html).contains("if x < 2 { print(x) }"))
+        XCTAssertEqual(RichArticleDocument.outline(in: html).map(\.title), ["标题"])
+        XCTAssertEqual(RichArticleDocument.convertingLegacyBody(html), html)
+        XCTAssertEqual(NativeWritingMetrics.characterCount(of: RichArticleDocument.opening + "<p><strong>中文</strong>&amp;🌙</p></article>"), 4)
+        XCTAssertEqual(RichArticleDocument.plainText(RichArticleDocument.empty), "")
+    }
+
+    func testRichArticleHTMLSaveAndReopen() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let html = RichArticleDocument.opening + "<p><strong>第一段</strong></p><aside data-type=\"callout\">高亮提示</aside><pre data-language=\"swift\"><code>let x = &lt;value&gt;</code></pre></article>"
+        let saved = try await store.saveArticle(article(slug: "rich", status: .draft, expectedUpdatedAt: nil, body: html, title: "富文本 & <文章>"))
+        XCTAssertEqual(saved.sourceRelativePath, "rich.html")
+        let directory = try await store.markdownSourceDirectoryURL()
+        let source = try String(contentsOf: directory.appendingPathComponent("rich.html"), encoding: .utf8)
+        XCTAssertTrue(source.hasPrefix("<!doctype html>"))
+        XCTAssertFalse(source.hasPrefix("---"))
+        let record = try RichArticleFile.read(source, relativePath: "rich.html", modifiedAt: saved.updatedAt)
+        XCTAssertEqual(record.body, html)
+        XCTAssertEqual(record.title, "富文本 & <文章>")
+        XCTAssertEqual(try await store.search("高亮提示").map(\.documentID), ["rich"])
+        XCTAssertTrue(try await store.search("data-language").isEmpty, "HTML attributes must not enter full-text search")
+        await store.closeForRestore()
+        let reopened = LocalBlogStore(rootURL: root)
+        XCTAssertEqual(try await reopened.listArticles().count, 1)
+        XCTAssertEqual(try await reopened.getArticle(slug: "rich").body, html)
+        await reopened.closeForRestore()
+    }
+
+    func testRichArticleMigrationArchivesLegacyAndRejectsCollisions() async throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalBlogStore(rootURL: root)
+        let legacy = try await store.saveArticle(article(slug: "legacy", status: .draft, expectedUpdatedAt: nil, body: "第一段\n第二段"))
+        let directory = try await store.markdownSourceDirectoryURL()
+        let original = try Data(contentsOf: directory.appendingPathComponent("legacy.md"))
+        let target = directory.appendingPathComponent("legacy.html")
+        try Data("occupied".utf8).write(to: target)
+        do {
+            _ = try await store.saveArticle(article(slug: "legacy", status: .draft, expectedUpdatedAt: legacy.updatedAt, body: RichArticleDocument.convertingLegacyBody(legacy.body)))
+            XCTFail("an existing HTML file must not be overwritten by migration")
+        } catch NativeStoreError.fileSystem { }
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("legacy.md")), original)
+        try FileManager.default.removeItem(at: target)
+        let migrated = try await store.saveArticle(article(slug: "legacy", status: .draft, expectedUpdatedAt: legacy.updatedAt, body: RichArticleDocument.convertingLegacyBody(legacy.body)))
+        XCTAssertEqual(migrated.sourceRelativePath, "legacy.html")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("legacy.md").path))
+        let archive = directory.appendingPathComponent(".legacy-markdown")
+        let files = FileManager.default.enumerator(at: archive, includingPropertiesForKeys: nil)!.allObjects.compactMap { $0 as? URL }.filter { $0.pathExtension == "md" }
+        XCTAssertEqual(files.count, 1)
+        if let file = files.first { XCTAssertEqual(try Data(contentsOf: file), original) }
+        _ = try await store.refreshMarkdownSources()
+        XCTAssertEqual(try await store.listArticles().count, 1)
+        XCTAssertEqual(try await store.getArticle(slug: "legacy").body, migrated.body)
+        await store.closeForRestore()
+    }
+
+    @MainActor
+    func testRichArticleSlashCommandsAndComposition() async throws {
+        try await withWebEditor { view in
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document');
+              const focus = block => { const range = document.createRange(); range.selectNodeContents(block); range.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(range); root.focus(); };
+              LeonArticle.load('<article data-leon-format="html-v1"><p><br></p></article>', 'test', true, 18);
+              focus(root.firstElementChild);
+              document.execCommand('insertText', false, '/code');
+              const menuVisible = !document.getElementById('commands').hidden;
+              root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+              const codeCreated = root.firstElementChild.tagName === 'PRE' && root.firstElementChild.textContent === '';
+              document.execCommand('insertText', false, 'if x < 2 {}');
+              const codeEscaped = LeonArticle.serialize().includes('if x &lt; 2 {}');
+              root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
+              document.execCommand('insertText', false, '/callout');
+              root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+              document.execCommand('insertText', false, '重要提示');
+              const callout = root.lastElementChild.tagName === 'ASIDE' && root.lastElementChild.textContent === '重要提示';
+              const saved = LeonArticle.serialize();
+              LeonArticle.load(saved, 'reopened', true, 18);
+              const reopened = root.querySelectorAll('pre,aside').length === 2;
+              LeonArticle.load('<article data-leon-format="html-v1"><p>/code</p></article>', 'ime', true, 18);
+              focus(root.firstElementChild);
+              root.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+              root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }));
+              const compositionSafe = root.firstElementChild.tagName === 'P' && root.firstElementChild.textContent === '/code';
+              root.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+              const sanitized = LeonArticle.cleanHTML('<p onclick="evil()">安全<script>evil()</script><a href="javascript:evil()">链接</a></p>');
+              return JSON.stringify({menuVisible, codeCreated, codeEscaped, callout, reopened, compositionSafe, sanitized});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Any]
+            for key in ["menuVisible", "codeCreated", "codeEscaped", "callout", "reopened", "compositionSafe"] {
+                XCTAssertEqual(json[key] as? Bool, true, "rich editor interaction failed: \(key)")
+            }
+            let sanitized = json["sanitized"] as! String
+            XCTAssertFalse(sanitized.contains("script"))
+            XCTAssertFalse(sanitized.contains("onclick"))
+            XCTAssertTrue(sanitized.contains("安全"))
+        }
+    }
+
+    @MainActor
+    func testRichArticleParagraphPasteAndUndo() async throws {
+        try await withWebEditor { view in
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document');
+              LeonArticle.load('<article data-leon-format="html-v1"><p>前缀后缀🌙</p></article>', 'paste', true, 18);
+              root.focus(); const range = document.createRange(); range.setStart(root.firstElementChild.firstChild, 2); range.collapse(true);
+              getSelection().removeAllRanges(); getSelection().addRange(range);
+              const data = new DataTransfer(); data.setData('text/plain', '第一段\n第二段\n\n第三段');
+              root.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+              const paragraphs = [...root.children].map(p => p.textContent);
+              const pasted = LeonArticle.serialize(); LeonArticle.undo(-1);
+              const undo = root.textContent === '前缀后缀🌙' && root.children.length === 1;
+              LeonArticle.undo(1); const redo = LeonArticle.serialize() === pasted;
+              return JSON.stringify({ paragraphs, undo, redo });
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Any]
+            XCTAssertEqual(json["paragraphs"] as? [String], ["前缀第一段", "第二段", "第三段后缀🌙"])
+            XCTAssertEqual(json["undo"] as? Bool, true)
+            XCTAssertEqual(json["redo"] as? Bool, true)
+        }
+    }
+
+    @MainActor
+    func testRichArticleTableCellsSupportBlocksAndFormatting() async throws {
+        try await withWebEditor { view in
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document'), toolbar = document.getElementById('selection-toolbar');
+              LeonArticle.load('<article data-leon-format="html-v1"><p>表格前</p><table><thead><tr><th>名称</th><th>说明</th></tr></thead><tbody><tr><td>前缀选中后缀</td><td>相邻单元格</td></tr></tbody></table><p>表格后</p></article>', 'table-format', true, 18);
+              const table = root.querySelector('table'), cell = table.querySelector('td'), neighbor = table.querySelectorAll('td')[1];
+              const focus = (element, start = null, end = start) => {
+                root.focus(); const range = document.createRange();
+                if (start === null) { range.selectNodeContents(element); range.collapse(false); }
+                else { range.setStart(element.firstChild, start); range.setEnd(element.firstChild, end); }
+                getSelection().removeAllRanges(); getSelection().addRange(range); document.dispatchEvent(new Event('selectionchange'));
+              };
+              const normalizedCells = [...table.querySelectorAll('td,th')].every(item => item.firstElementChild?.tagName === 'P');
+              focus(cell.firstElementChild, 2, 4);
+              for (const format of ['bold', 'italic', 'underline', 'strikeThrough']) toolbar.querySelector(`[data-format="${format}"]`).click();
+              toolbar.querySelector('[data-format=foreColor]').click(); document.querySelector('#selection-colors [data-color-value="#4b7dce"]').click();
+              toolbar.querySelector('[data-format=hiliteColor]').click(); document.querySelector('#selection-colors [data-color-value="#fff0bb"]').click();
+              const inlineStyles = !toolbar.hidden && getSelection().toString() === '选中' && [...toolbar.querySelectorAll('[aria-pressed]')].every(button => button.getAttribute('aria-pressed') === 'true');
+              const coloredText = [...cell.querySelectorAll('[style]')].some(element => element.style.color === 'rgb(75, 125, 206)') && [...cell.querySelectorAll('[style]')].some(element => element.style.backgroundColor === 'rgb(255, 240, 187)');
+              const add = (command, text) => {
+                const paragraph = document.createElement('p'); paragraph.textContent = '/' + command; cell.append(paragraph); focus(paragraph);
+                root.dispatchEvent(new Event('input', { bubbles: true }));
+                const menuOpened = !document.getElementById('commands').hidden;
+                root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+                if (text) document.execCommand('insertText', false, text);
+                return menuOpened && cell.lastElementChild.dataset.blockId;
+              };
+              const shortcuts = [add('code', 'let value = <item>'), add('callout', '重要提示'), add('h2', '表格内标题'), add('quote', '引用内容'), add('bullet', '列表内容'), add('task', '待办内容')].every(Boolean);
+              const nestedBlocks = !!cell.querySelector('pre code') && !!cell.querySelector('aside') && !!cell.querySelector('h2') && !!cell.querySelector('blockquote') && !!cell.querySelector('[data-type=bullet]') && !!cell.querySelector('[data-type=task]');
+              focus(cell.querySelector('code')); root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+              const codeIndent = cell.querySelector('code').textContent.endsWith('    ');
+              root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
+              const codeExitStaysInCell = getSelection().anchorNode.parentElement.closest('td') === cell && cell.querySelector('pre').nextElementSibling?.tagName === 'P';
+              const paragraph = cell.lastElementChild; paragraph.textContent = '前缀后缀'; focus(paragraph, 2);
+              const paste = new DataTransfer(); paste.setData('text/plain', '第一段\n第二段');
+              root.dispatchEvent(new ClipboardEvent('paste', { clipboardData: paste, bubbles: true, cancelable: true }));
+              const multilineStaysInCell = [...cell.children].slice(-2).map(item => item.textContent).join('|') === '前缀第一段|第二段后缀';
+              root.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertParagraph', bubbles: true, cancelable: true }));
+              const enterStaysInCell = getSelection().anchorNode.parentElement.closest('td') === cell;
+              root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+              const tabNextCell = getSelection().anchorNode.parentElement.closest('td') === neighbor && !table.dataset.depth;
+              root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+              const tabPreviousCell = getSelection().anchorNode.parentElement.closest('td') === cell;
+              focus(table.querySelector('th').firstElementChild, 0, 2); toolbar.querySelector('[data-format=bold]').click();
+              const headerNormalWeight = LeonArticle.serialize().includes('font-weight: normal');
+              const saved = LeonArticle.serialize(); LeonArticle.load(saved, 'table-reopened', true, 18);
+              const reopened = root.querySelector('td pre code')?.textContent.startsWith('let value = <item>') && root.querySelector('td aside')?.textContent === '重要提示' && [...root.querySelector('td').querySelectorAll('[style]')].some(element => element.style.color === 'rgb(75, 125, 206)') && root.querySelector('th span')?.style.fontWeight === 'normal';
+              const structurePreserved = root.children.length === 3 && root.children[1].tagName === 'TABLE' && root.querySelectorAll('th,td').length === 4 && root.querySelectorAll('td')[1].textContent === '相邻单元格' && root.firstElementChild.textContent === '表格前' && root.lastElementChild.textContent === '表格后';
+              const ids = [...root.querySelectorAll('[data-block-id]')].map(element => element.dataset.blockId);
+              const uniqueBlocks = ids.length === new Set(ids).size;
+              LeonArticle.load('<article data-leon-format="html-v1"><table><tr><td>表格结尾</td></tr></table></article>', 'table-exit', true, 18);
+              focus(root.querySelector('td p')); root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }));
+              const canExitTable = root.children.length === 2 && root.lastElementChild.tagName === 'P' && !getSelection().anchorNode.parentElement.closest('table');
+              return JSON.stringify({normalizedCells, inlineStyles, coloredText, shortcuts, nestedBlocks, codeIndent, codeExitStaysInCell, multilineStaysInCell, enterStaysInCell, tabNextCell, tabPreviousCell, headerNormalWeight, reopened, structurePreserved, uniqueBlocks, canExitTable});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
+            for (key, value) in json { XCTAssertTrue(value, "table formatting failed: \(key)") }
+        }
+    }
+
+    @MainActor
+    func testRichArticleTableImagePasteAndNativeClipboard() async throws {
+        let pasteboard = NSPasteboard(name: .init("leon-rich-image-test-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 3, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        for x in 0..<4 { for y in 0..<3 { bitmap.setColor(.systemBlue, atX: x, y: y) } }
+        pasteboard.setData(bitmap.tiffRepresentation!, forType: .tiff)
+        guard let imageURL = RichArticleClipboard.imageDataURL(from: pasteboard),
+              let png = Data(base64Encoded: String(imageURL.dropFirst("data:image/png;base64,".count))) else {
+            XCTFail("expected native TIFF clipboard image to convert to PNG")
+            return
+        }
+        XCTAssertEqual(NSBitmapImageRep(data: png)?.pixelsWide, 4)
+        XCTAssertEqual(NSBitmapImageRep(data: png)?.pixelsHigh, 3)
+        pasteboard.clearContents(); pasteboard.setString("只有文字", forType: .string)
+        XCTAssertNil(RichArticleClipboard.imageDataURL(from: pasteboard))
+
+        let messages = RichImagePasteTestHandler()
+        var savedBody = ""
+        try await withWebEditor(messageHandler: messages) { view in
+            let result = try await view.callAsyncJavaScript(#"""
+              const root = document.getElementById('document');
+              const load = id => LeonArticle.load('<article data-leon-format="html-v1"><p>表格前</p><table><tr><td>前缀替换后缀</td><td>保持原样</td></tr></table><p>表格后</p></article>', id, true, 18);
+              const select = () => { root.focus(); const range = document.createRange(), text = root.querySelector('td p').firstChild; range.setStart(text, 2); range.setEnd(text, 4); getSelection().removeAllRanges(); getSelection().addRange(range); };
+              const pasteImages = () => {
+                const data = new DataTransfer(), bytes = Uint8Array.from(atob(imageURL.split(',')[1]), character => character.charCodeAt(0));
+                data.items.add(new File([bytes], 'first.png', { type: 'image/png' }));
+                data.items.add(new File([bytes], 'second.png', { type: 'image/png' }));
+                root.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+              };
+              load('table-image'); select(); pasteImages();
+              for (let attempt = 0; attempt < 50 && root.querySelectorAll('td img').length !== 2; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+              const imagesInCell = root.querySelector('td').querySelectorAll('img').length === 2 && root.querySelector('td').textContent === '前缀后缀' && root.querySelectorAll('td')[1].textContent === '保持原样' && root.children.length === 3;
+              const caretAfterImages = getSelection().isCollapsed && getSelection().anchorNode.parentElement.closest('td') === root.querySelector('td');
+              const pasted = LeonArticle.serialize(); LeonArticle.undo(-1);
+              const undoBatch = !root.querySelector('img') && root.querySelector('td').textContent === '前缀替换后缀';
+              LeonArticle.undo(1); const redoBatch = LeonArticle.serialize() === pasted;
+              LeonArticle.load(pasted, 'table-image-reopened', true, 18);
+              const reopenedImages = [...root.querySelectorAll('td img')].length === 2 && [...root.querySelectorAll('td img')].every(image => image.src === imageURL);
+              const saved = LeonArticle.serialize();
+              load('pending-image'); select(); pasteImages();
+              LeonArticle.load('<article data-leon-format="html-v1"><p>新的文章</p></article>', 'different-article', true, 18);
+              await new Promise(resolve => setTimeout(resolve, 80));
+              const stalePasteRejected = !root.querySelector('img') && root.textContent === '新的文章';
+              load('native-image'); select();
+              root.dispatchEvent(new ClipboardEvent('paste', { clipboardData: new DataTransfer(), bubbles: true, cancelable: true }));
+              const neighbor = root.querySelectorAll('td p')[1], range = document.createRange(); range.selectNodeContents(neighbor); range.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(range);
+              return JSON.stringify({imagesInCell, caretAfterImages, undoBatch, redoBatch, reopenedImages, stalePasteRejected, saved});
+            """#, arguments: ["imageURL": imageURL], in: nil, contentWorld: .page)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Any]
+            for key in ["imagesInCell", "caretAfterImages", "undoBatch", "redoBatch", "reopenedImages", "stalePasteRejected"] {
+                XCTAssertEqual(json[key] as? Bool, true, "table image paste failed: \(key)")
+            }
+            savedBody = json["saved"] as! String
+            for _ in 0..<40 where messages.requests.isEmpty { try await Task.sleep(nanoseconds: 25_000_000) }
+            guard let request = messages.requests.first else { XCTFail("expected native clipboard image request"); return }
+            let nativeResult = try await view.callAsyncJavaScript(#"""
+              const root = document.getElementById('document');
+              const inserted = LeonArticle.insertPastedImages(requestID, [imageURL]);
+              const staysInOriginalCell = root.querySelector('td img')?.src === imageURL && !root.querySelectorAll('td')[1].querySelector('img') && root.querySelector('td').textContent === '前缀后缀';
+              const preservesNewCaret = getSelection().anchorNode.parentElement.closest('td') === root.querySelectorAll('td')[1];
+              return JSON.stringify({inserted, staysInOriginalCell, preservesNewCaret});
+            """#, arguments: ["requestID": request, "imageURL": imageURL], in: nil, contentWorld: .page)
+            let nativeJSON = try JSONSerialization.jsonObject(with: Data((nativeResult as! String).utf8)) as! [String: Bool]
+            for (key, value) in nativeJSON { XCTAssertTrue(value, "native clipboard paste failed: \(key)") }
+        }
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalBlogStore(rootURL: directory)
+        _ = try await store.saveArticle(article(slug: "table-images", status: .draft, expectedUpdatedAt: nil, body: savedBody))
+        await store.closeForRestore()
+        let reopened = LocalBlogStore(rootURL: directory)
+        let body = try await reopened.getArticle(slug: "table-images").body
+        XCTAssertEqual(body, savedBody)
+        XCTAssertEqual(RichArticleDocument.imageURLs(in: body), [imageURL, imageURL])
+        await reopened.closeForRestore()
+    }
+
+    @MainActor
+    func testRichArticleSelectionToolbarFormatsAndPersistsColors() async throws {
+        try await withWebEditor { view in
+            view.setFrameSize(NSSize(width: 360, height: 540))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document'), toolbar = document.getElementById('selection-toolbar'), palette = document.getElementById('selection-colors');
+              const text = '保留前缀 选中片段 后缀', selectedText = '选中片段';
+              LeonArticle.load('<article data-leon-format="html-v1"><p>' + text + '</p></article>', 'selection-format', true, 18);
+              root.style.paddingTop = '140px'; root.focus();
+              const range = document.createRange(); range.setStart(root.firstElementChild.firstChild, 5); range.setEnd(root.firstElementChild.firstChild, 9);
+              getSelection().removeAllRanges(); getSelection().addRange(range); document.dispatchEvent(new Event('selectionchange'));
+              const toolbarVisible = !toolbar.hidden;
+              const box = toolbar.getBoundingClientRect(), selected = range.getBoundingClientRect();
+              const positionedAbove = box.bottom < selected.top && box.left >= 7 && box.right <= innerWidth - 7;
+              const bold = toolbar.querySelector('[data-format=bold]');
+              const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true }); bold.dispatchEvent(down); bold.click();
+              const retainsSelection = down.defaultPrevented && getSelection().toString() === selectedText;
+              const boldOnlySelected = (root.querySelector('b,strong')?.textContent === selectedText) && root.textContent === text;
+              toolbar.querySelector('[data-format=italic]').click();
+              toolbar.querySelector('[data-format=underline]').click();
+              toolbar.querySelector('[data-format=strikeThrough]').click();
+              const activeStyles = [...toolbar.querySelectorAll('[aria-pressed]')].every(button => button.getAttribute('aria-pressed') === 'true');
+              toolbar.querySelector('[data-format=foreColor]').click();
+              const paletteVisible = !palette.hidden && palette.querySelectorAll('.color-swatch').length === 10;
+              palette.querySelector('[data-color-value="#4b7dce"]').click();
+              const blueText = [...root.querySelectorAll('[style]')].some(span => span.style.color === 'rgb(75, 125, 206)' && span.textContent === selectedText);
+              toolbar.querySelector('[data-format=hiliteColor]').click();
+              palette.querySelector('[data-color-value="#fff0bb"]').click();
+              const yellowBackground = [...root.querySelectorAll('[style]')].some(span => span.style.backgroundColor === 'rgb(255, 240, 187)' && span.textContent === selectedText);
+              const beforeUndo = LeonArticle.serialize(); LeonArticle.undo(-1);
+              const undoColorOnly = ![...root.querySelectorAll('[style]')].some(span => span.style.backgroundColor === 'rgb(255, 240, 187)') && [...root.querySelectorAll('[style]')].some(span => span.style.color === 'rgb(75, 125, 206)');
+              LeonArticle.undo(1); const redoColor = LeonArticle.serialize() === beforeUndo;
+              const saved = LeonArticle.serialize(); LeonArticle.load(saved, 'selection-reopened', true, 18);
+              const reopenedColors = [...root.querySelectorAll('[style]')].some(span => span.style.color === 'rgb(75, 125, 206)') && [...root.querySelectorAll('[style]')].some(span => span.style.backgroundColor === 'rgb(255, 240, 187)');
+              const noUIInContent = !saved.includes('selection-toolbar') && !saved.includes('selection-colors') && root.textContent === text;
+              const reopenedRange = document.createRange(); reopenedRange.selectNodeContents(root.firstElementChild);
+              getSelection().removeAllRanges(); getSelection().addRange(reopenedRange); document.dispatchEvent(new Event('selectionchange'));
+              toolbar.querySelector('[data-format=hiliteColor]').click(); palette.querySelector('.reset-color').click();
+              const resetsBackground = ![...root.querySelectorAll('[style]')].some(element => element.style.backgroundColor === 'rgb(255, 240, 187)');
+              toolbar.querySelector('[data-format=foreColor]').click(); palette.querySelector('.reset-color').click();
+              const resetsForeground = ![...root.querySelectorAll('[style]')].some(element => element.style.color === 'rgb(75, 125, 206)');
+              toolbar.querySelector('[data-format=removeFormat]').click();
+              const clearsStyles = !root.querySelector('b,strong,i,em,u,s,strike,font,span') && root.textContent === text;
+              const clean = LeonArticle.cleanHTML('<span style="color:#4b7dce;background-color:#fff0bb;background-image:url(https://example.com/tracker);position:fixed" onclick="evil()">保留颜色</span>');
+              const safeColorsOnly = clean.includes('color:') && clean.includes('background-color:') && !clean.includes('url(') && !clean.includes('position:') && !clean.includes('onclick');
+              return JSON.stringify({toolbarVisible, positionedAbove, retainsSelection, boldOnlySelected, activeStyles, paletteVisible, blueText, yellowBackground, undoColorOnly, redoColor, reopenedColors, noUIInContent, resetsBackground, resetsForeground, clearsStyles, safeColorsOnly});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
+            for (key, value) in json { XCTAssertTrue(value, "selection formatting failed: \(key)") }
+
+            if let preview = ProcessInfo.processInfo.environment["LEON_RICH_SELECTION_PREVIEW_PATH"] {
+                _ = try await view.evaluateJavaScript(#"""
+                (() => {
+                  const root = document.getElementById('document'); root.style.paddingTop = '140px';
+                  LeonArticle.load('<article data-leon-format="html-v1"><p>选中文字，让表达更清晰。</p><p>加粗、斜体与颜色，随选随改。</p></article>', 'selection-preview', true, 18);
+                  root.focus(); const range = document.createRange(); range.setStart(root.firstElementChild.firstChild, 5); range.setEnd(root.firstElementChild.firstChild, 11);
+                  getSelection().removeAllRanges(); getSelection().addRange(range); document.dispatchEvent(new Event('selectionchange'));
+                  document.querySelector('#selection-toolbar [data-format=bold]').click();
+                  document.querySelector('#selection-toolbar [data-format=foreColor]').click();
+                  document.querySelector('#selection-colors [data-color-value="#4b7dce"]').click();
+                  return true;
+                })()
+                """#)
+                try await Task.sleep(nanoseconds: 150_000_000)
+                let configuration = WKSnapshotConfiguration()
+                configuration.rect = CGRect(x: 0, y: 110, width: 360, height: 230)
+                let image = try await view.takeSnapshot(configuration: configuration)
+                if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+                   let png = bitmap.representation(using: .png, properties: [:]) {
+                    try png.write(to: URL(fileURLWithPath: preview))
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testRichArticleSelectionToolbarHidesAndRejectsStaleRanges() async throws {
+        try await withWebEditor { view in
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document'), toolbar = document.getElementById('selection-toolbar'), palette = document.getElementById('selection-colors');
+              const select = element => { root.focus(); const range = document.createRange(); range.selectNodeContents(element); getSelection().removeAllRanges(); getSelection().addRange(range); document.dispatchEvent(new Event('selectionchange')); };
+              const load = (body, id, editable = true) => LeonArticle.load('<article data-leon-format="html-v1">' + body + '</article>', id, editable, 18);
+              load('<p>选择这段文字</p>', 'selection-lifecycle'); select(root.firstElementChild);
+              toolbar.querySelector('[data-format=foreColor]').click();
+              getSelection().collapseToEnd(); document.dispatchEvent(new Event('selectionchange'));
+              const hidesWhenCollapsed = toolbar.hidden && palette.hidden;
+              select(root.firstElementChild); root.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+              toolbar.querySelector('[data-format=bold]').click();
+              const compositionSafe = toolbar.hidden && !root.querySelector('b,strong');
+              root.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+              load('<p>只读文字</p>', 'readonly-selection', false); select(root.firstElementChild);
+              const readonlySafe = toolbar.hidden;
+              load('<pre><code>const value = 1;</code></pre>', 'code-selection'); select(root.querySelector('code'));
+              const codeStaysPlain = toolbar.hidden;
+              load('<p>原来的文章</p>', 'old-selection'); select(root.firstElementChild);
+              toolbar.querySelector('[data-format=foreColor]').click(); const oldSwatch = palette.querySelector('[data-color-value="#4b7dce"]');
+              load('<p>另一篇文章</p>', 'new-selection'); oldSwatch.click(); toolbar.querySelector('[data-format=bold]').click();
+              const staleRangeRejected = toolbar.hidden && palette.hidden && root.textContent === '另一篇文章' && !root.querySelector('span,b,strong');
+              select(root.firstElementChild); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+              const dismissesWithEscape = toolbar.hidden;
+              return JSON.stringify({hidesWhenCollapsed, compositionSafe, readonlySafe, codeStaysPlain, staleRangeRejected, dismissesWithEscape});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
+            for (key, value) in json { XCTAssertTrue(value, "selection toolbar lifecycle failed: \(key)") }
+        }
+    }
+
+    @MainActor
+    func testRichArticleCommandMenuSupportsPointerKeyboardAndSmallViewports() async throws {
+        try await withWebEditor { view in
+            view.setFrameSize(NSSize(width: 360, height: 540))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document'), menu = document.getElementById('commands');
+              const style = document.createElement('style'); style.textContent = '#commands { animation: none; }'; document.head.append(style);
+              const open = (query, id) => {
+                LeonArticle.load('<article data-leon-format="html-v1"><p>' + query + '</p></article>', id, true, 18);
+                root.focus(); const range = document.createRange(); range.selectNodeContents(root.firstElementChild); range.collapse(false);
+                getSelection().removeAllRanges(); getSelection().addRange(range);
+                root.dispatchEvent(new Event('input', { bubbles: true }));
+              };
+              const key = value => root.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }));
+              open('/', 'menu-navigation'); key('ArrowDown'); key('ArrowDown');
+              const keyboardSelection = menu.querySelector('[aria-selected=true]').dataset.commandId === 'callout';
+              menu.querySelector('[data-command-id=h2]').dispatchEvent(new PointerEvent('pointerenter'));
+              const pointerSelection = menu.querySelector('[aria-selected=true]').dataset.commandId === 'h2';
+              const keepsEditorSelection = root.contains(getSelection().anchorNode);
+              key('Enter'); const insertedHeading = root.firstElementChild.tagName === 'H2';
+              open('/not-a-command', 'menu-empty'); key('ArrowDown');
+              const emptyState = !menu.hidden && menu.querySelectorAll('button').length === 0 && !!menu.querySelector('.command-empty');
+              key('Escape'); const dismisses = menu.hidden;
+              root.style.paddingTop = '380px'; open('/', 'menu-placement');
+              const bounds = menu.getBoundingClientRect();
+              const caretRange = getSelection().getRangeAt(0).cloneRange(); caretRange.selectNodeContents(root.firstElementChild);
+              const caret = caretRange.getBoundingClientRect();
+              const fitsViewport = bounds.left >= 10 && bounds.right <= innerWidth - 10 && bounds.top >= 10 && bounds.bottom <= innerHeight - 10;
+              const avoidsCaret = menu.dataset.placement === 'above' && bounds.bottom <= caret.top - 6;
+              for (let i = 0; i < 11; i++) key('ArrowDown');
+              const row = menu.querySelector('[aria-selected=true]').getBoundingClientRect(), list = menu.querySelector('.command-list').getBoundingClientRect();
+              const revealsSelection = row.top >= list.top && row.bottom <= list.bottom;
+              return JSON.stringify({keyboardSelection, pointerSelection, keepsEditorSelection, insertedHeading, emptyState, dismisses, fitsViewport, avoidsCaret, revealsSelection,
+                placement: menu.dataset.placement, menuTop: bounds.top, menuBottom: bounds.bottom, caretTop: caret.top, caretBottom: caret.bottom, viewportHeight: innerHeight, scrollY});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Any]
+            for key in ["keyboardSelection", "pointerSelection", "keepsEditorSelection", "insertedHeading", "emptyState", "dismisses", "fitsViewport", "avoidsCaret", "revealsSelection"] {
+                XCTAssertTrue(json[key] as? Bool == true, "command menu interaction failed: \(key) \(json)")
+            }
+
+            if let preview = ProcessInfo.processInfo.environment["LEON_RICH_MENU_PREVIEW_PATH"] {
+                _ = try await view.evaluateJavaScript(#"""
+                (() => {
+                  const root = document.getElementById('document'); root.style.paddingTop = '22px';
+                  LeonArticle.load('<article data-leon-format="html-v1"><p>/</p></article>', 'menu-preview', true, 18);
+                  root.focus(); const range = document.createRange(); range.selectNodeContents(root.firstElementChild); range.collapse(false);
+                  getSelection().removeAllRanges(); getSelection().addRange(range); root.dispatchEvent(new Event('input', { bubbles: true }));
+                  return true;
+                })()
+                """#)
+                try await Task.sleep(nanoseconds: 180_000_000)
+                let image = try await view.takeSnapshot(configuration: nil)
+                if let tiff = image.tiffRepresentation,
+                   let bitmap = NSBitmapImageRep(data: tiff),
+                   let png = bitmap.representation(using: .png, properties: [:]) {
+                    try png.write(to: URL(fileURLWithPath: preview))
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testRichArticleNativeBridgePublishesRichText() async throws {
+        _ = NSApplication.shared
+        var html = RichArticleDocument.empty
+        let binding = Binding(get: { html }, set: { html = $0 })
+        let host = NSHostingView(rootView: RichArticleEditor(html: binding, documentID: "native-bridge"))
+        host.frame = NSRect(x: 0, y: 0, width: 700, height: 600)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        func findWebView(_ view: NSView) -> WKWebView? {
+            if let web = view as? WKWebView { return web }
+            return view.subviews.lazy.compactMap(findWebView).first
+        }
+        guard let view = findWebView(host) else { XCTFail("native rich editor has no WebKit view"); return }
+        var ready = false
+        for _ in 0..<200 {
+            try await Task.sleep(nanoseconds: 25_000_000)
+            if (try? await view.evaluateJavaScript("document.getElementById('document')?.contentEditable === 'true'")) as? Bool == true { ready = true; break }
+        }
+        guard ready else { XCTFail("native rich editor bridge did not load"); return }
+        _ = try await view.evaluateJavaScript(#"""
+        (() => {
+          const root = document.getElementById('document'); root.focus();
+          const range = document.createRange(); range.selectNodeContents(root.firstElementChild); range.collapse(true);
+          getSelection().removeAllRanges(); getSelection().addRange(range);
+          document.execCommand('insertText', false, '/callout');
+          root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          document.execCommand('insertText', false, '高亮框正文'); return true;
+        })()
+        """#)
+        for _ in 0..<10 { try await Task.sleep(nanoseconds: 25_000_000); if html.contains("高亮框正文") { break } }
+        XCTAssertTrue(RichArticleDocument.isHTML(html))
+        XCTAssertTrue(html.contains("<aside"))
+        XCTAssertEqual(RichArticleDocument.plainText(html), "高亮框正文")
+    }
+
+    @MainActor
+    private func withWebEditor(messageHandler: WKScriptMessageHandler? = nil, _ run: (WKWebView) async throws -> Void) async throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        if let messageHandler { configuration.userContentController.add(messageHandler, name: "richArticle") }
+        let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 700, height: 600), configuration: configuration)
+        window.contentView = view
+        defer { view.stopLoading(); window.close() }
+        view.loadHTMLString(RichArticleEditor.pageHTML, baseURL: nil)
+        var ready = false
+        for _ in 0..<200 {
+            try await Task.sleep(nanoseconds: 25_000_000)
+            if (try? await view.evaluateJavaScript("typeof window.LeonArticle === 'object'")) as? Bool == true { ready = true; break }
+        }
+        guard ready else { XCTFail("rich editor did not initialize"); return }
+        try await run(view)
+    }
+}
+
+private final class RichImagePasteTestHandler: NSObject, WKScriptMessageHandler {
+    var requests: [String] = []
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let payload = message.body as? [String: Any], payload["type"] as? String == "pasteImage",
+              let requestID = payload["requestID"] as? String else { return }
+        requests.append(requestID)
+    }
+}
+
 private func makeTemporaryDirectory() throws -> URL {
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("leon-book-tests-\(UUID().uuidString)", isDirectory: true)
@@ -5703,14 +6872,45 @@ private func makeTemporaryDirectory() throws -> URL {
 struct LeonBookUnitTests {
     static func main() async {
         var tests: [(String, () async throws -> Void)] = [
+            ("RichArticleTests.testRichArticleConversionPreservesContentAndFormatting", { try RichArticleTests().testRichArticleConversionPreservesContentAndFormatting() }),
+            ("RichArticleTests.testRichArticleHTMLSaveAndReopen", { try await RichArticleTests().testRichArticleHTMLSaveAndReopen() }),
+            ("RichArticleTests.testRichArticleMigrationArchivesLegacyAndRejectsCollisions", { try await RichArticleTests().testRichArticleMigrationArchivesLegacyAndRejectsCollisions() }),
+            ("RichArticleTests.testRichArticleSlashCommandsAndComposition", { try await RichArticleTests().testRichArticleSlashCommandsAndComposition() }),
+            ("RichArticleTests.testRichArticleParagraphPasteAndUndo", { try await RichArticleTests().testRichArticleParagraphPasteAndUndo() }),
+            ("RichArticleTests.testRichArticleTableCellsSupportBlocksAndFormatting", { try await RichArticleTests().testRichArticleTableCellsSupportBlocksAndFormatting() }),
+            ("RichArticleTests.testRichArticleTableImagePasteAndNativeClipboard", { try await RichArticleTests().testRichArticleTableImagePasteAndNativeClipboard() }),
+            ("RichArticleTests.testRichArticleSelectionToolbarFormatsAndPersistsColors", { try await RichArticleTests().testRichArticleSelectionToolbarFormatsAndPersistsColors() }),
+            ("RichArticleTests.testRichArticleSelectionToolbarHidesAndRejectsStaleRanges", { try await RichArticleTests().testRichArticleSelectionToolbarHidesAndRejectsStaleRanges() }),
+            ("RichArticleTests.testRichArticleCommandMenuSupportsPointerKeyboardAndSmallViewports", { try await RichArticleTests().testRichArticleCommandMenuSupportsPointerKeyboardAndSmallViewports() }),
+            ("RichArticleTests.testRichArticleNativeBridgePublishesRichText", { try await RichArticleTests().testRichArticleNativeBridgePublishesRichText() }),
+            ("AppInteractionTests.testEditorRecoveryStartupRespectsNewerWork", { try await AppInteractionTests().testEditorRecoveryStartupRespectsNewerWork() }),
+            ("AppInteractionTests.testEditorRecoveryOnOpenPreservesNewerTyping", { try await AppInteractionTests().testEditorRecoveryOnOpenPreservesNewerTyping() }),
+            ("AppInteractionTests.testEditorRecoveryRestoresAnUntouchedStartupDraft", { try await AppInteractionTests().testEditorRecoveryRestoresAnUntouchedStartupDraft() }),
+            ("AppInteractionTests.testEditorRecoveryIncludesMetadataOnlyDrafts", { try await AppInteractionTests().testEditorRecoveryIncludesMetadataOnlyDrafts() }),
+            ("AppInteractionTests.testEditorRecoveryPendingAutosaveKeepsNewerSaveStatus", { try await AppInteractionTests().testEditorRecoveryPendingAutosaveKeepsNewerSaveStatus() }),
+            ("AppInteractionTests.testSearchChangesHideOldResultsAndIgnorePendingOpen", { try await AppInteractionTests().testSearchChangesHideOldResultsAndIgnorePendingOpen() }),
+            ("AppInteractionTests.testQuestionReloadPreservesNewerSelectionAndDraft", { try await AppInteractionTests().testQuestionReloadPreservesNewerSelectionAndDraft() }),
+            ("AppInteractionTests.testObsoleteQuestionReloadDoesNotPublishItsResults", { try await AppInteractionTests().testObsoleteQuestionReloadDoesNotPublishItsResults() }),
+            ("AppInteractionTests.testQuestionFilteringKeepsAnUnpublishedAnswer", { try await AppInteractionTests().testQuestionFilteringKeepsAnUnpublishedAnswer() }),
+            ("EditorFocusTests.testBlockEditingUsesIndependentFullWidthRows", { await EditorFocusTests().testBlockEditingUsesIndependentFullWidthRows() }),
+            ("EditorFocusTests.testBlockParagraphPasteReplacesSelectionAndSupportsUndo", { await EditorFocusTests().testBlockParagraphPasteReplacesSelectionAndSupportsUndo() }),
+            ("EditorFocusTests.testBlockParagraphSoftReturnSurvivesReopening", { await EditorFocusTests().testBlockParagraphSoftReturnSurvivesReopening() }),
+            ("EditorFocusTests.testBlockEditingEnterKeepsCaretBeforeTheSplitRemainder", { await EditorFocusTests().testBlockEditingEnterKeepsCaretBeforeTheSplitRemainder() }),
+            ("EditorFocusTests.testBlockEditingMergeKeepsCaretAtTheJoin", { await EditorFocusTests().testBlockEditingMergeKeepsCaretAtTheJoin() }),
+            ("EditorFocusTests.testBlockEditingHeightTracksWidthAndTheEmptyLastLine", { await EditorFocusTests().testBlockEditingHeightTracksWidthAndTheEmptyLastLine() }),
+            ("EditorFocusTests.testBodyEditorInitialFocusPreservesTitleSelection", { await EditorFocusTests().testBodyEditorInitialFocusPreservesTitleSelection() }),
+            ("EditorFocusTests.testBlockEditorRefreshPreservesTitleSelection", { await EditorFocusTests().testBlockEditorRefreshPreservesTitleSelection() }),
+            ("EditorFocusTests.testBodyEditorInitialFocusOnlyClaimsAnUnfocusedEditableWindow", { await EditorFocusTests().testBodyEditorInitialFocusOnlyClaimsAnUnfocusedEditableWindow() }),
+            ("EditorFocusTests.testBlockEditorPendingFocusPreservesNewerTitleSelection", { await EditorFocusTests().testBlockEditorPendingFocusPreservesNewerTitleSelection() }),
+            ("EditorFocusTests.testBlockEditorExplicitFocusCanBeRequestedAgain", { await EditorFocusTests().testBlockEditorExplicitFocusCanBeRequestedAgain() }),
             ("DataIntegrityTests.testFailedSaveReturnsAttachmentsToInbox", { try await DataIntegrityTests().testFailedSaveReturnsAttachmentsToInbox() }),
             ("DataIntegrityTests.testRestoreClosesAllStoresAndBlocksNewConnections", { try await DataIntegrityTests().testRestoreClosesAllStoresAndBlocksNewConnections() }),
-            ("DataIntegrityTests.testRestoreWaitsForAsyncMediaWrites", { try await DataIntegrityTests().testRestoreWaitsForAsyncMediaWrites() }),
+            ("DataIntegrityTests.testRestoreWaitsForAsyncMediaWrites", { try DataIntegrityTests().testRestoreWaitsForAsyncMediaWrites() }),
             ("DataIntegrityTests.testRestoreReconnectsEveryWindowAndPreservesDraftOnFailure", { try await DataIntegrityTests().testRestoreReconnectsEveryWindowAndPreservesDraftOnFailure() }),
             ("DataIntegrityTests.testExternalEditBeforeWatcherIsNotOverwritten", { try await DataIntegrityTests().testExternalEditBeforeWatcherIsNotOverwritten() }),
             ("DataIntegrityTests.testFailedSaveRestoresExactMarkdownAndDoesNotCreateNewFile", { try await DataIntegrityTests().testFailedSaveRestoresExactMarkdownAndDoesNotCreateNewFile() }),
             ("DataIntegrityTests.testReadOnlySwitchAppliesToAlreadyOpenStores", { try await DataIntegrityTests().testReadOnlySwitchAppliesToAlreadyOpenStores() }),
-            ("DataIntegrityTests.testBackupDetectsSameSizeContentWithPreservedTimestamp", { try await DataIntegrityTests().testBackupDetectsSameSizeContentWithPreservedTimestamp() }),
+            ("DataIntegrityTests.testBackupDetectsSameSizeContentWithPreservedTimestamp", { try DataIntegrityTests().testBackupDetectsSameSizeContentWithPreservedTimestamp() }),
             ("NativeModelsTests.testLanguagePreferencesPersistAndLocalizationsResolve", { await MainActor.run { NativeModelsTests().testLanguagePreferencesPersistAndLocalizationsResolve() } }),
             ("NativeModelsTests.testEnglishCatalogCoversEditorSurface", { NativeModelsTests().testEnglishCatalogCoversEditorSurface() }),
             ("NativeModelsTests.testVideoPlaybackFormatsAndPersistsResumePositions", { NativeModelsTests().testVideoPlaybackFormatsAndPersistsResumePositions() }),
@@ -5729,6 +6929,8 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testRichMarkdownEmbedsAndBlockLinkAnchors", { NativeModelsTests().testRichMarkdownEmbedsAndBlockLinkAnchors() }),
             ("NativeModelsTests.testMarkdownTypographyCompressesCJKPunctuationWithoutChangingText", { try NativeModelsTests().testMarkdownTypographyCompressesCJKPunctuationWithoutChangingText() }),
             ("NativeModelsTests.testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes", { NativeModelsTests().testBlockEditorRoundTripsMarkdownAndTransformsBlockTypes() }),
+            ("NativeModelsTests.testBlockParagraphBoundariesFollowPlainReturns", { NativeModelsTests().testBlockParagraphBoundariesFollowPlainReturns() }),
+            ("NativeModelsTests.testBlockParagraphSplittingPreservesStructuredContent", { NativeModelsTests().testBlockParagraphSplittingPreservesStructuredContent() }),
             ("NativeModelsTests.testBlockSelectionOwnsRangeToggleAndReconciliationRules", { NativeModelsTests().testBlockSelectionOwnsRangeToggleAndReconciliationRules() }),
             ("NativeModelsTests.testBlockTemplatesPersistAndBuiltInsParse", { NativeModelsTests().testBlockTemplatesPersistAndBuiltInsParse() }),
             ("NativeModelsTests.testPageTemplatesApplyMetadataAndPersistPerWorkspace", { await MainActor.run { NativeModelsTests().testPageTemplatesApplyMetadataAndPersistPerWorkspace() } }),

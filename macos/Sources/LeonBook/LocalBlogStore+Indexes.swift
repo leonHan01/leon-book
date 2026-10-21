@@ -328,7 +328,7 @@ extension LocalBlogStore {
         [
             article.title,
             NativeArticleAlias.values(from: article.properties).joined(separator: " "),
-            article.body,
+            RichArticleDocument.plainText(article.body),
             article.excerpt,
             article.tags.joined(separator: " "),
             article.category,

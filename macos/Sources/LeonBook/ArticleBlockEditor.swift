@@ -128,7 +128,7 @@ enum EditorMarkdownBlockKind: String, CaseIterable, Identifiable {
         return compact.allSatisfy { $0 == marker }
     }
 
-    private static func isTable(_ markdown: String) -> Bool {
+    fileprivate static func isTable(_ markdown: String) -> Bool {
         let lines = markdown.components(separatedBy: .newlines)
         guard lines.count >= 2, lines[0].contains("|") else { return false }
         let delimiter = lines[1].trimmingCharacters(in: .whitespaces)
@@ -288,6 +288,7 @@ enum NativeBlockEditorDocument {
         let normalized = source
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{2029}", with: "\n")
         guard !normalized.isEmpty else { return [EditorMarkdownBlock(markdown: "")] }
 
         let lines = normalized.components(separatedBy: "\n")
@@ -304,7 +305,7 @@ enum NativeBlockEditorDocument {
             currentKind = nil
         }
 
-        for line in lines {
+        for (index, line) in lines.enumerated() {
             if activeMath {
                 current.append(line)
                 let semantic = NativeBlockHierarchyMetadata.removingMarkers(from: line)
@@ -365,28 +366,41 @@ enum NativeBlockEditorDocument {
             let kind = EditorMarkdownBlockKind.detect(in: line)
             let isIndentedContinuation = line.first?.isWhitespace == true
 
-            if kind == .divider || kind == .heading1 || kind == .heading2 || kind == .heading3 {
+            if currentKind == .table, line.contains("|") {
+                current.append(line)
+            } else if index + 1 < lines.count,
+                      EditorMarkdownBlockKind.isTable(line + "\n" + lines[index + 1]) {
+                appendCurrent()
+                current = [line]
+                currentKind = .table
+            } else if kind == .divider {
                 appendCurrent()
                 result.append(EditorMarkdownBlock(markdown: line))
+            } else if kind == .heading1 || kind == .heading2 || kind == .heading3 {
+                appendCurrent()
+                current = [line]
+                currentKind = kind
             } else if kind.isListItem {
                 appendCurrent()
                 current = [line]
                 currentKind = kind
             } else if kind == .quote || kind == .callout {
-                if currentKind == kind {
+                if currentKind == .callout, kind == .quote {
+                    current.append(line)
+                } else if currentKind == kind, current.last.map(hasInlineLineBreak) == true {
                     current.append(line)
                 } else {
                     appendCurrent()
                     current = [line]
                     currentKind = kind
                 }
+            } else if current.last.map(hasInlineLineBreak) == true, currentKind != .table {
+                current.append(line)
             } else if isIndentedContinuation, currentKind?.isListItem == true {
                 current.append(line)
             } else {
-                if currentKind?.isListItem == true || currentKind == .quote || currentKind == .callout {
-                    appendCurrent()
-                }
-                current.append(line)
+                appendCurrent()
+                current = [line]
                 currentKind = .paragraph
             }
         }
@@ -403,6 +417,13 @@ enum NativeBlockEditorDocument {
             )
         }
         return normalizedBlocks.isEmpty ? [EditorMarkdownBlock(markdown: "")] : normalizedBlocks
+    }
+
+    /// An explicit Markdown line break stays inside a paragraph. A plain newline
+    /// starts another editable block, just like pressing Enter in the editor.
+    private static func hasInlineLineBreak(_ line: String) -> Bool {
+        if line.hasSuffix("  ") { return true }
+        return line.reversed().prefix { $0 == "\\" }.count % 2 == 1
     }
 
     static func render(_ blocks: [EditorMarkdownBlock]) -> String {
@@ -557,6 +578,24 @@ enum NativeBlockEditorDocument {
             left.trimmingCharacters(in: .newlines),
             right.trimmingCharacters(in: .newlines)
         )
+    }
+
+    static func contentStartLocation(in markdown: String) -> Int {
+        let kind = EditorMarkdownBlockKind.detect(in: markdown)
+        if kind.isListItem {
+            return (firstLinePrefix(in: markdown, kind: kind) as NSString).length
+        }
+        if kind == .code || kind == .math {
+            let firstLine = (markdown as NSString).range(of: "\n")
+            return firstLine.location == NSNotFound ? 0 : NSMaxRange(firstLine)
+        }
+        switch kind {
+        case .heading1: return 2
+        case .heading2: return 3
+        case .heading3: return 4
+        case .quote: return 2
+        default: return 0
+        }
     }
 
     static func blockID(in markdown: String) -> String? {
@@ -805,6 +844,38 @@ final class NativeBlockNSTextView: NSTextView {
     var onMoveBlocks: ((Int) -> Void)?
     var onChangeIndent: ((Int) -> Void)?
     var onBlockCommand: ((EditorBlockKeyboardCommand) -> Bool)?
+    var onWidthChange: ((NativeBlockNSTextView) -> Void)?
+    var onAttachToWindow: ((NativeBlockNSTextView) -> Void)?
+    var placeholder = "" {
+        didSet { if placeholder != oldValue { needsDisplay = true } }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { onAttachToWindow?(self) }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = abs(newSize.width - frame.width) > 0.5
+        super.setFrameSize(newSize)
+        if widthChanged { onWidthChange?(self) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !hasMarkedText(), !placeholder.isEmpty else { return }
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        let origin = textContainerOrigin
+        (placeholder as NSString).draw(
+            in: NSRect(x: origin.x, y: origin.y, width: max(0, bounds.width - origin.x * 2), height: bounds.height),
+            withAttributes: [
+                .font: typingAttributes[.font] as? NSFont ?? .systemFont(ofSize: 18),
+                .foregroundColor: NSColor.placeholderTextColor,
+                .paragraphStyle: style,
+            ]
+        )
+    }
 
     override func keyDown(with event: NSEvent) {
         guard !hasMarkedText() else {
@@ -856,12 +927,14 @@ struct NativeBlockTextEditor: NSViewRepresentable {
     let typography: NativeReadingTypography
     let isEditable: Bool
     let shouldFocus: Bool
+    var selectionOnFocus: NSRange? = nil
     let onFocus: () -> Void
     let onSplit: (NSRange) -> Void
     let onMergeBackward: () -> Void
     let onMoveBlocks: (Int) -> Void
     let onChangeIndent: (Int) -> Void
     let onBlockCommand: (EditorBlockKeyboardCommand) -> Bool
+    var onPasteParagraphs: ((String, NSRange) -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -872,17 +945,27 @@ struct NativeBlockTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
         textView.isEditable = isEditable
         textView.isHorizontallyResizable = false
         textView.isRichText = false
         textView.isVerticallyResizable = true
+        textView.textContainerInset = NSSize(width: 0, height: 3)
         textView.string = text
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.lineBreakMode = .byWordWrapping
         textView.onMoveBlocks = onMoveBlocks
         textView.onChangeIndent = onChangeIndent
         textView.onBlockCommand = onBlockCommand
+        textView.onWidthChange = { [weak coordinator = context.coordinator] view in
+            coordinator?.updateHeight(of: view)
+        }
+        textView.onAttachToWindow = { [weak coordinator = context.coordinator] view in
+            coordinator?.updateFocus(of: view)
+        }
         context.coordinator.refreshPresentation(of: textView)
         return textView
     }
@@ -893,17 +976,23 @@ struct NativeBlockTextEditor: NSViewRepresentable {
         textView.onMoveBlocks = onMoveBlocks
         textView.onChangeIndent = onChangeIndent
         textView.onBlockCommand = onBlockCommand
+        textView.placeholder = isEditable
+            ? NativeLocalization.string("输入文字，或输入 / 添加内容块", language: NativeLocalization.currentLanguage)
+            : ""
         guard !textView.hasMarkedText() else { return }
-        if textView.string != text { textView.string = text }
-        context.coordinator.refreshPresentation(of: textView)
-        if shouldFocus, textView.window?.firstResponder !== textView {
-            DispatchQueue.main.async { [weak textView, weak coordinator = context.coordinator] in
-                guard let textView, coordinator?.parent.shouldFocus == true,
-                      !textView.hasMarkedText(), let window = textView.window else { return }
-                window.makeFirstResponder(textView)
-                textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
-            }
+        if textView.string != text {
+            let selection = textView.selectedRange()
+            textView.string = text
+            textView.setSelectedRange(Self.clampedSelection(selection, in: text))
         }
+        context.coordinator.refreshPresentation(of: textView)
+        context.coordinator.updateFocus(of: textView)
+    }
+
+    private static func clampedSelection(_ selection: NSRange, in text: String) -> NSRange {
+        let length = (text as NSString).length
+        let location = min(max(0, selection.location), length)
+        return NSRange(location: location, length: min(max(0, selection.length), length - location))
     }
 
     private func applyStyling(to textView: NSTextView) {
@@ -920,9 +1009,46 @@ struct NativeBlockTextEditor: NSViewRepresentable {
         private var lastStyledText: String?
         private var lastTypography: NativeReadingTypography?
         private var lastLayoutWidth: CGFloat?
+        private var previousShouldFocus = false
+        private var focusRequestGeneration = 0
+        private var heightUpdateGeneration = 0
 
         init(parent: NativeBlockTextEditor) {
             self.parent = parent
+        }
+
+        func updateFocus(of textView: NSTextView) {
+            if !parent.shouldFocus {
+                previousShouldFocus = false
+                focusRequestGeneration += 1
+                return
+            }
+            // New blocks are created before being attached to the window.
+            // Consume their request only once attachment can capture the
+            // actual responder that the user may subsequently move away from.
+            guard let window = textView.window else { return }
+            let isNewRequest = !previousShouldFocus
+            previousShouldFocus = true
+            // A selected block can stay selected while the title is being
+            // edited. Refreshing that block must not request focus again.
+            guard isNewRequest, parent.isEditable,
+                  textView.window?.firstResponder !== textView else { return }
+            focusRequestGeneration += 1
+            let generation = focusRequestGeneration
+            let previousResponder = window.firstResponder
+            let requestedSelection = parent.selectionOnFocus
+            DispatchQueue.main.async { [weak self, weak textView, weak previousResponder] in
+                guard let self, let textView,
+                      self.focusRequestGeneration == generation,
+                      self.parent.shouldFocus, self.parent.isEditable,
+                      !textView.hasMarkedText(), let window = textView.window,
+                      window.firstResponder === previousResponder || window.firstResponder === window else { return }
+                guard window.makeFirstResponder(textView) else { return }
+                let selection = requestedSelection
+                    ?? NSRange(location: (textView.string as NSString).length, length: 0)
+                textView.setSelectedRange(NativeBlockTextEditor.clampedSelection(selection, in: textView.string))
+                textView.scrollRangeToVisible(textView.selectedRange())
+            }
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -933,6 +1059,18 @@ struct NativeBlockTextEditor: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView, !textView.hasMarkedText() else { return }
             parent.text = textView.string
             refreshPresentation(of: textView)
+        }
+
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            guard parent.isEditable, !textView.hasMarkedText(),
+                  !parent.kind.keepsNewlinesInsideBlock,
+                  let replacementString,
+                  replacementString.contains(where: { $0.isNewline }) else { return true }
+            return parent.onPasteParagraphs?(replacementString, affectedCharRange) != true
         }
 
         func refreshPresentation(of textView: NSTextView) {
@@ -952,7 +1090,16 @@ struct NativeBlockTextEditor: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard !textView.hasMarkedText() else { return false }
+            guard parent.isEditable, !textView.hasMarkedText() else { return false }
+            if !parent.kind.keepsNewlinesInsideBlock,
+               commandSelector == #selector(NSResponder.insertLineBreak(_:))
+                || (commandSelector == #selector(NSResponder.insertNewline(_:))
+                    && NSEvent.modifierFlags.contains(.shift)) {
+                // Persist a soft return explicitly so reopening the article does
+                // not turn it into a paragraph boundary.
+                textView.insertText("\\\n", replacementRange: textView.selectedRange())
+                return true
+            }
             if commandSelector == #selector(NSResponder.insertNewline(_:)),
                !NSEvent.modifierFlags.contains(.shift),
                !parent.kind.keepsNewlinesInsideBlock {
@@ -970,12 +1117,23 @@ struct NativeBlockTextEditor: NSViewRepresentable {
 
         func updateHeight(of textView: NSTextView) {
             guard let layoutManager = textView.layoutManager,
-                  let textContainer = textView.textContainer else { return }
+                  let textContainer = textView.textContainer,
+                  textContainer.containerSize.width > 0 else { return }
             layoutManager.ensureLayout(for: textContainer)
-            let measured = ceil(layoutManager.usedRect(for: textContainer).height + 4)
+            let contentBottom = max(
+                layoutManager.usedRect(for: textContainer).maxY,
+                layoutManager.extraLineFragmentRect.maxY
+            )
+            let measured = ceil(contentBottom + textView.textContainerInset.height * 2 + 4)
             let nextHeight = max(measured, parent.typography.fontSize + 10)
+            heightUpdateGeneration += 1
+            let generation = heightUpdateGeneration
             if abs(parent.height - nextHeight) > 0.5 {
-                DispatchQueue.main.async { self.parent.height = nextHeight }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.heightUpdateGeneration == generation,
+                          abs(self.parent.height - nextHeight) > 0.5 else { return }
+                    self.parent.height = nextHeight
+                }
             }
         }
     }
@@ -1048,6 +1206,7 @@ struct ArticleBlockEditor: View {
     @State private var dropTargetBlockID: UUID?
     @State private var dropTargetIsAfter = false
     @State private var editorHeights: [UUID: CGFloat] = [:]
+    @State private var focusSelections: [UUID: NSRange] = [:]
     @State private var transferRequest: EditorBlockTransferRequest?
     @State private var lastTransferReceipt: EditorBlockTransferReceipt?
     @State private var isUndoingTransfer = false
@@ -1082,7 +1241,7 @@ struct ArticleBlockEditor: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 } else {
-                    Text("⌘点手柄/⇧连选 · 拖动搬运 · ⌥⌘↑↓ 键盘移动")
+                    Text("回车新建块 · ⇧回车块内换行")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -1165,7 +1324,7 @@ struct ArticleBlockEditor: View {
             }
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
+                LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(visibleBlocks) { block in
                         blockRow(block)
                             .onDrop(
@@ -1193,6 +1352,16 @@ struct ArticleBlockEditor: View {
                                 )
                             )
                     }
+                    Button { insertBlock(after: blocks.last?.id) } label: {
+                        Label("在末尾添加块", systemImage: "plus")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isEditable)
+                    .padding(.horizontal, 8)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 10)
@@ -1212,6 +1381,8 @@ struct ArticleBlockEditor: View {
         .onChange(of: documentID) { _ in
             undoManager?.removeAllActions(withTarget: undoCoordinator)
             blockSelection.reset()
+            focusSelections.removeAll()
+            editorHeights.removeAll()
             reloadBlocks(from: source)
             synchronizeUndoCoordinator()
         }
@@ -1246,187 +1417,212 @@ struct ArticleBlockEditor: View {
     @ViewBuilder
     private func blockRow(_ block: EditorMarkdownBlock) -> some View {
         let index = blocks.firstIndex(where: { $0.id == block.id }) ?? 0
-        HStack(alignment: .top, spacing: 7) {
-            HStack(spacing: 1) {
-                if NativeBlockEditorDocument.hasDescendants(block.id, in: blocks) {
-                    Button { toggleCollapsed(block.id) } label: {
-                        Image(systemName: block.isCollapsed ? "chevron.right" : "chevron.down")
-                            .frame(width: 16, height: 24)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                HStack(spacing: 1) {
+                    if NativeBlockEditorDocument.hasDescendants(block.id, in: blocks) {
+                        Button { toggleCollapsed(block.id) } label: {
+                            Image(systemName: block.isCollapsed ? "chevron.right" : "chevron.down")
+                                .frame(width: 16, height: 24)
+                        }
+                        .buttonStyle(.plain)
+                        .help(Text(LocalizedStringKey(block.isCollapsed ? "展开子块" : "折叠子块")))
+                    } else {
+                        Color.clear.frame(width: 16, height: 24)
+                    }
+
+                    Button { insertBlock(after: block.id) } label: {
+                        Image(systemName: "plus")
+                            .frame(width: 19, height: 24)
                     }
                     .buttonStyle(.plain)
-                    .help(Text(LocalizedStringKey(block.isCollapsed ? "展开子块" : "折叠子块")))
-                } else {
-                    Color.clear.frame(width: 16, height: 24)
+                    .help("在下方添加块")
+
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 21, height: 24)
+                        .contentShape(Rectangle())
+                        .help("按住并拖动，搬运整个内容块")
+                        .accessibilityLabel("拖动内容块")
+                        .onTapGesture {
+                            select(block.id, modifiers: NSEvent.modifierFlags)
+                        }
+                        .onDrag {
+                            let selectedIDs = selectedBlockIDs.contains(block.id)
+                                ? selectedBlockIDs : Set([block.id])
+                            let movingIDs = NativeBlockEditorDocument.descendantIDs(
+                                of: selectedIDs,
+                                in: blocks
+                            )
+                            selectedBlockIDs = movingIDs
+                            selectionAnchorID = block.id
+                            draggedBlockIDs = movingIDs
+                            dragDidRegisterUndo = false
+                            dropTargetBlockID = nil
+                            dropTargetIsAfter = false
+                            let payload = movingIDs.map(\.uuidString).sorted().joined(separator: ",")
+                            return NSItemProvider(object: payload as NSString)
+                        }
+
+                    Menu {
+                        blockTypeMenu(for: block.id)
+                        Divider()
+                        Button("复制块链接", systemImage: "link") { copyBlockLink(block.id) }
+                        Button("复制所选块", systemImage: "doc.on.doc") {
+                            copyBlocks(anchoredAt: block.id, cutsSource: false)
+                        }
+                        Button("剪切所选块", systemImage: "scissors") {
+                            copyBlocks(anchoredAt: block.id, cutsSource: true)
+                        }
+                        Button("粘贴块", systemImage: "doc.on.clipboard") { _ = pasteBlocks(after: block.id) }
+                            .disabled(NSPasteboard.general.string(forType: .leonBookBlocks) == nil)
+                        Button("创建副本", systemImage: "plus.square.on.square") { duplicate(block.id) }
+                        Button("整块上移", systemImage: "arrow.up") { move(block.id, offset: -1) }
+                            .disabled(index == 0)
+                        Button("整块下移", systemImage: "arrow.down") { move(block.id, offset: 1) }
+                            .disabled(index == blocks.count - 1)
+                        Button("增加缩进", systemImage: "increase.indent") { changeIndent(block.id, delta: 1) }
+                        Button("减少缩进", systemImage: "decrease.indent") { changeIndent(block.id, delta: -1) }
+                            .disabled(block.depth == 0)
+                        if NativeBlockEditorDocument.hasDescendants(block.id, in: blocks) {
+                            Button(LocalizedStringKey(block.isCollapsed ? "展开子块" : "折叠子块"), systemImage: "rectangle.compress.vertical") {
+                                toggleCollapsed(block.id)
+                            }
+                        }
+                        Divider()
+                        Button("删除", systemImage: "trash", role: .destructive) { remove(block.id) }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 19, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("打开块菜单")
+                }
+                .foregroundStyle(selectedBlockIDs.contains(block.id) ? Color.accentColor : Color.secondary.opacity(0.7))
+                .opacity(isEditable ? 1 : 0.45)
+                .disabled(!isEditable)
+
+                Spacer(minLength: 0)
+                Text(LocalizedStringKey(block.kind.title))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                if block.kind == .task {
+                    Button { toggleTask(block.id) } label: {
+                        Image(systemName: NativeBlockEditorDocument.isCompletedTask(block.markdown)
+                            ? "checkmark.square.fill" : "square")
+                            .font(.system(size: typography.fontSize))
+                            .foregroundStyle(NativeBlockEditorDocument.isCompletedTask(block.markdown) ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 7)
+                    .disabled(!isEditable)
                 }
 
-                Button { insertBlock(after: block.id) } label: {
-                    Image(systemName: "plus")
-                        .frame(width: 19, height: 24)
-                }
-                .buttonStyle(.plain)
-                .help("在下方添加块")
-
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 21, height: 24)
-                    .contentShape(Rectangle())
-                    .help("按住并拖动，搬运整个内容块")
-                    .accessibilityLabel("拖动内容块")
-                    .onTapGesture {
-                        select(block.id, modifiers: NSEvent.modifierFlags)
-                    }
-                    .onDrag {
-                        let selectedIDs = selectedBlockIDs.contains(block.id)
-                            ? selectedBlockIDs : Set([block.id])
-                        let movingIDs = NativeBlockEditorDocument.descendantIDs(
-                            of: selectedIDs,
-                            in: blocks
-                        )
-                        selectedBlockIDs = movingIDs
-                        selectionAnchorID = block.id
-                        draggedBlockIDs = movingIDs
-                        dragDidRegisterUndo = false
-                        dropTargetBlockID = nil
-                        dropTargetIsAfter = false
-                        let payload = movingIDs.map(\.uuidString).sorted().joined(separator: ",")
-                        return NSItemProvider(object: payload as NSString)
-                    }
-
-                Menu {
-                    blockTypeMenu(for: block.id)
-                    Divider()
-                    Button("复制块链接", systemImage: "link") { copyBlockLink(block.id) }
-                    Button("复制所选块", systemImage: "doc.on.doc") {
-                        copyBlocks(anchoredAt: block.id, cutsSource: false)
-                    }
-                    Button("剪切所选块", systemImage: "scissors") {
-                        copyBlocks(anchoredAt: block.id, cutsSource: true)
-                    }
-                    Button("粘贴块", systemImage: "doc.on.clipboard") { _ = pasteBlocks(after: block.id) }
-                        .disabled(NSPasteboard.general.string(forType: .leonBookBlocks) == nil)
-                    Button("创建副本", systemImage: "plus.square.on.square") { duplicate(block.id) }
-                    Button("整块上移", systemImage: "arrow.up") { move(block.id, offset: -1) }
-                        .disabled(index == 0)
-                    Button("整块下移", systemImage: "arrow.down") { move(block.id, offset: 1) }
-                        .disabled(index == blocks.count - 1)
-                    Button("增加缩进", systemImage: "increase.indent") { changeIndent(block.id, delta: 1) }
-                    Button("减少缩进", systemImage: "decrease.indent") { changeIndent(block.id, delta: -1) }
-                        .disabled(block.depth == 0)
-                    if NativeBlockEditorDocument.hasDescendants(block.id, in: blocks) {
-                        Button(LocalizedStringKey(block.isCollapsed ? "展开子块" : "折叠子块"), systemImage: "rectangle.compress.vertical") {
-                            toggleCollapsed(block.id)
+                VStack(alignment: .leading, spacing: 4) {
+                    NativeBlockTextEditor(
+                        text: binding(for: block.id),
+                        height: heightBinding(for: block.id),
+                        kind: block.kind,
+                        typography: typography,
+                        isEditable: isEditable && block.kind != .divider,
+                        shouldFocus: focusedBlockID == block.id,
+                        selectionOnFocus: focusSelections[block.id],
+                        onFocus: { focus(block.id) },
+                        onSplit: { split(block.id, selection: $0) },
+                        onMergeBackward: { mergeBackward(block.id) },
+                        onMoveBlocks: { if isEditable { move(block.id, offset: $0) } },
+                        onChangeIndent: { if isEditable { changeIndent(block.id, delta: $0) } },
+                        onBlockCommand: { handleKeyboardCommand($0, for: block.id) },
+                        onPasteParagraphs: { pasteParagraphs($0, replacing: $1, in: block.id) }
+                    )
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                    .frame(height: editorHeights[block.id] ?? typography.fontSize + 10)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        selectedBlockIDs.contains(block.id)
+                            ? Color.accentColor.opacity(focusedBlockID == block.id ? 0.11 : 0.065)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 7)
+                    )
+                    .overlay(alignment: .leading) {
+                        if block.kind == .divider {
+                            Rectangle()
+                                .fill(Color.secondary.opacity(0.32))
+                                .frame(height: 1)
+                                .padding(.horizontal, 8)
+                                .allowsHitTesting(false)
                         }
                     }
-                    Divider()
-                    Button("删除", systemImage: "trash", role: .destructive) { remove(block.id) }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 19, height: 24)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("打开块菜单")
-            }
-            .foregroundStyle(selectedBlockIDs.contains(block.id) ? Color.accentColor : Color.secondary.opacity(0.7))
-            .opacity(isEditable ? 1 : 0.45)
-            .disabled(!isEditable)
+                    .contextMenu {
+                        blockTypeMenu(for: block.id)
+                            .disabled(!isEditable)
+                        Divider()
+                        Button("复制块链接", systemImage: "link") { copyBlockLink(block.id) }
+                            .disabled(!isEditable)
+                        Button("复制所选块", systemImage: "doc.on.doc") {
+                            copyBlocks(anchoredAt: block.id, cutsSource: false)
+                        }
+                        Button("剪切所选块", systemImage: "scissors") {
+                            copyBlocks(anchoredAt: block.id, cutsSource: true)
+                        }
+                        .disabled(!isEditable)
+                        Button("粘贴块", systemImage: "doc.on.clipboard") { _ = pasteBlocks(after: block.id) }
+                            .disabled(!isEditable || NSPasteboard.general.string(forType: .leonBookBlocks) == nil)
+                        Button("创建副本", systemImage: "plus.square.on.square") { duplicate(block.id) }
+                            .disabled(!isEditable)
+                        Button("整块上移", systemImage: "arrow.up") { move(block.id, offset: -1) }
+                            .disabled(!isEditable || index == 0)
+                        Button("整块下移", systemImage: "arrow.down") { move(block.id, offset: 1) }
+                            .disabled(!isEditable || index == blocks.count - 1)
+                        Button("增加缩进", systemImage: "increase.indent") { changeIndent(block.id, delta: 1) }
+                            .disabled(!isEditable || index == 0)
+                        Button("减少缩进", systemImage: "decrease.indent") { changeIndent(block.id, delta: -1) }
+                            .disabled(!isEditable || block.depth == 0)
+                        Divider()
+                        Button("删除", systemImage: "trash", role: .destructive) { remove(block.id) }
+                            .disabled(!isEditable)
+                    }
 
-            if block.kind == .task {
-                Button { toggleTask(block.id) } label: {
-                    Image(systemName: NativeBlockEditorDocument.isCompletedTask(block.markdown)
-                        ? "checkmark.square.fill" : "square")
-                        .font(.system(size: typography.fontSize))
-                        .foregroundStyle(NativeBlockEditorDocument.isCompletedTask(block.markdown) ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 7)
-                .disabled(!isEditable)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                NativeBlockTextEditor(
-                    text: binding(for: block.id),
-                    height: heightBinding(for: block.id),
-                    kind: block.kind,
-                    typography: typography,
-                    isEditable: isEditable && block.kind != .divider,
-                    shouldFocus: focusedBlockID == block.id,
-                    onFocus: { focus(block.id) },
-                    onSplit: { split(block.id, selection: $0) },
-                    onMergeBackward: { mergeBackward(block.id) },
-                    onMoveBlocks: { if isEditable { move(block.id, offset: $0) } },
-                    onChangeIndent: { if isEditable { changeIndent(block.id, delta: $0) } },
-                    onBlockCommand: { handleKeyboardCommand($0, for: block.id) }
-                )
-                .frame(height: editorHeights[block.id] ?? typography.fontSize + 10)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(
-                    selectedBlockIDs.contains(block.id)
-                        ? Color.accentColor.opacity(focusedBlockID == block.id ? 0.11 : 0.065)
-                        : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 7)
-                )
-                .overlay(alignment: .leading) {
-                    if block.kind == .divider {
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.32))
-                            .frame(height: 1)
+                    if let reference = NativeBlockEditorDocument.syncedBlockReference(in: block.markdown) {
+                        Label("同步块 · \(reference)", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tint)
                             .padding(.horizontal, 8)
-                            .allowsHitTesting(false)
                     }
-                }
-                .contextMenu {
-                    blockTypeMenu(for: block.id)
-                        .disabled(!isEditable)
-                    Divider()
-                    Button("复制块链接", systemImage: "link") { copyBlockLink(block.id) }
-                        .disabled(!isEditable)
-                    Button("复制所选块", systemImage: "doc.on.doc") {
-                        copyBlocks(anchoredAt: block.id, cutsSource: false)
-                    }
-                    Button("剪切所选块", systemImage: "scissors") {
-                        copyBlocks(anchoredAt: block.id, cutsSource: true)
-                    }
-                    .disabled(!isEditable)
-                    Button("粘贴块", systemImage: "doc.on.clipboard") { _ = pasteBlocks(after: block.id) }
-                        .disabled(!isEditable || NSPasteboard.general.string(forType: .leonBookBlocks) == nil)
-                    Button("创建副本", systemImage: "plus.square.on.square") { duplicate(block.id) }
-                        .disabled(!isEditable)
-                    Button("整块上移", systemImage: "arrow.up") { move(block.id, offset: -1) }
-                        .disabled(!isEditable || index == 0)
-                    Button("整块下移", systemImage: "arrow.down") { move(block.id, offset: 1) }
-                        .disabled(!isEditable || index == blocks.count - 1)
-                    Button("增加缩进", systemImage: "increase.indent") { changeIndent(block.id, delta: 1) }
-                        .disabled(!isEditable || index == 0)
-                    Button("减少缩进", systemImage: "decrease.indent") { changeIndent(block.id, delta: -1) }
-                        .disabled(!isEditable || block.depth == 0)
-                    Divider()
-                    Button("删除", systemImage: "trash", role: .destructive) { remove(block.id) }
-                        .disabled(!isEditable)
-                }
 
-                if let reference = NativeBlockEditorDocument.syncedBlockReference(in: block.markdown) {
-                    Label("同步块 · \(reference)", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.tint)
-                        .padding(.horizontal, 8)
+                    if let query = slashQuery(for: block), focusedBlockID == block.id {
+                        EditorBlockSlashMenu(
+                            query: query,
+                            kinds: slashKinds(matching: query),
+                            templates: templates(matching: query),
+                            onSelect: { applySlashKind($0, to: block.id) },
+                            onSelectTemplate: { applyTemplate($0, replacing: block.id) }
+                        )
+                    }
                 }
-
-                if let query = slashQuery(for: block), focusedBlockID == block.id {
-                    EditorBlockSlashMenu(
-                        query: query,
-                        kinds: slashKinds(matching: query),
-                        templates: templates(matching: query),
-                        onSelect: { applySlashKind($0, to: block.id) },
-                        onSelectTemplate: { applyTemplate($0, replacing: block.id) }
-                    )
-                }
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(
+                    selectedBlockIDs.contains(block.id)
+                        ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.16)
+                )
+                .allowsHitTesting(false)
         }
         .padding(.leading, CGFloat(block.depth) * 22)
         .contentShape(Rectangle())
@@ -1534,6 +1730,7 @@ struct ArticleBlockEditor: View {
     }
 
     private func focus(_ id: UUID) {
+        if focusSelections[id] != nil { focusSelections.removeValue(forKey: id) }
         let modifiers = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
         blockSelection.focus(
             id,
@@ -1654,6 +1851,47 @@ struct ArticleBlockEditor: View {
         return true
     }
 
+    private func pasteParagraphs(_ text: String, replacing range: NSRange, in id: UUID) -> Bool {
+        guard isEditable, let index = blocks.firstIndex(where: { $0.id == id }),
+              !blocks[index].kind.keepsNewlinesInsideBlock else { return false }
+        let original = blocks[index]
+        let source = original.markdown as NSString
+        guard range.location >= 0, range.length >= 0, NSMaxRange(range) <= source.length else { return false }
+        let updated = source.replacingCharacters(in: range, with: text)
+        let paragraphs = NativeBlockEditorDocument.parse(updated)
+        guard paragraphs.count > 1 else { return false }
+
+        let before = blocks
+        let previousFocus = focusedBlockID
+        let previousSelection = selectedBlockIDs
+        let inserted = paragraphs.enumerated().map { offset, paragraph in
+            EditorMarkdownBlock(
+                id: offset == 0 ? original.id : paragraph.id,
+                markdown: paragraph.markdown,
+                depth: min(original.depth + paragraph.depth, 12),
+                isCollapsed: offset == 0 ? original.isCollapsed : paragraph.isCollapsed
+            )
+        }
+        blocks.replaceSubrange(index...index, with: inserted)
+        let last = inserted[inserted.count - 1]
+        let suffixLength = source.length - NSMaxRange(range)
+        let caret = max(
+            NativeBlockEditorDocument.contentStartLocation(in: last.markdown),
+            (last.markdown as NSString).length - suffixLength
+        )
+        focusSelections[last.id] = NSRange(location: caret, length: 0)
+        focusedBlockID = last.id
+        selectedBlockIDs = [last.id]
+        selectionAnchorID = last.id
+        finishStructuralChange(
+            from: before,
+            previousFocusedID: previousFocus,
+            previousSelectedIDs: previousSelection,
+            actionName: "粘贴多个块"
+        )
+        return true
+    }
+
     private func insertBlock(after id: UUID?, kind: EditorMarkdownBlockKind = .paragraph) {
         let before = blocks
         let previousFocus = focusedBlockID
@@ -1672,6 +1910,9 @@ struct ArticleBlockEditor: View {
             }
         }
         blocks.insert(newBlock, at: min(insertionIndex, blocks.count))
+        focusSelections[newBlock.id] = NSRange(
+            location: NativeBlockEditorDocument.contentStartLocation(in: markdown), length: 0
+        )
         focusedBlockID = newBlock.id
         selectedBlockIDs = [newBlock.id]
         selectionAnchorID = newBlock.id
@@ -1711,6 +1952,9 @@ struct ArticleBlockEditor: View {
         blocks[index].markdown = parts.0
         let next = EditorMarkdownBlock(markdown: parts.1, depth: blocks[index].depth)
         blocks.insert(next, at: index + 1)
+        focusSelections[next.id] = NSRange(
+            location: NativeBlockEditorDocument.contentStartLocation(in: parts.1), length: 0
+        )
         focusedBlockID = next.id
         selectedBlockIDs = [next.id]
         selectionAnchorID = next.id
@@ -1729,11 +1973,14 @@ struct ArticleBlockEditor: View {
         guard let index = blocks.firstIndex(where: { $0.id == id }), index > 0 else { return }
         let current = blocks[index]
         let previous = blocks[index - 1]
+        var caretLocation = (previous.markdown as NSString).length
         if current.markdown.isEmpty {
             blocks.remove(at: index)
         } else if previous.kind == .divider {
             blocks.remove(at: index - 1)
+            caretLocation = 0
         } else if previous.kind == .code {
+            focusSelections[previous.id] = NSRange(location: caretLocation, length: 0)
             focusedBlockID = previous.id
             selectedBlockIDs = [previous.id]
             selectionAnchorID = previous.id
@@ -1742,10 +1989,14 @@ struct ArticleBlockEditor: View {
         } else {
             let currentBody = NativeBlockEditorDocument.converting(current.markdown, to: .paragraph)
             let separator = previous.markdown.isEmpty || currentBody.isEmpty ? "" : " "
+            caretLocation += (separator as NSString).length
             blocks[index - 1].markdown += separator + currentBody
             blocks.remove(at: index)
         }
         focusedBlockID = blocks.indices.contains(index - 1) ? blocks[index - 1].id : blocks.first?.id
+        if let focusedBlockID {
+            focusSelections[focusedBlockID] = NSRange(location: caretLocation, length: 0)
+        }
         selectedBlockIDs = Set([focusedBlockID].compactMap { $0 })
         selectionAnchorID = focusedBlockID
         finishStructuralChange(

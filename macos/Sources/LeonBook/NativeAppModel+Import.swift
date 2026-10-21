@@ -4,6 +4,19 @@ import LeonBookCaptureModule
 import LeonBookModuleKit
 
 extension NativeAppModel {
+    func useNativeArticleLibrary() {
+        Task {
+            do {
+                stopMarkdownSourceMonitor()
+                workspaceGeneration += 1
+                _ = try await store.configureMarkdownWorkspaceSource(mode: .copyImport)
+                await refreshMarkdownWorkspaceConfiguration()
+                try await reload()
+                startMarkdownSourceMonitor()
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     func chooseObsidianVault() {
         guard authorizeFirstPartyModule(
                 CaptureFirstPartyModule.id,

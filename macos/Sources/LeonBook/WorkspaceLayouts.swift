@@ -8,15 +8,15 @@ enum ArticleEditorMode: String, CaseIterable, Identifiable, Codable {
     case source
     case split
 
+    static var allCases: [Self] { [.blocks, .focus] }
+
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .focus: return "专注写作"
-        case .livePreview: return "实时预览"
-        case .blocks: return "块编辑"
-        case .source: return "源码"
-        case .split: return "左右分栏"
+        case .livePreview, .source, .split: return "富文本"
+        case .blocks: return "富文本块编辑"
         }
     }
 
@@ -33,10 +33,7 @@ enum ArticleEditorMode: String, CaseIterable, Identifiable, Codable {
     var detail: String {
         switch self {
         case .focus: return "隐藏右侧面板，以行内格式专注正文"
-        case .livePreview: return "在可编辑正文中即时显示 Markdown 格式"
-        case .blocks: return "像 Notion 一样逐块编辑、转换、复制和拖动正文"
-        case .source: return "只显示未经渲染的 Markdown 源码"
-        case .split: return "左侧编辑源码，右侧查看完整渲染效果"
+        case .livePreview, .blocks, .source, .split: return "逐段编辑富文本，输入 / 添加代码框、高亮框等内容块"
         }
     }
 }

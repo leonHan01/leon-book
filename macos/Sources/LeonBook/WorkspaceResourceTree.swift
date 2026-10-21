@@ -160,7 +160,7 @@ enum NativeWorkspaceResourceTree {
             let displayName = record.displayName ?? filename
             let normalizedPath = normalized(record.relativePath)
             if record.storage == .markdownSource,
-               filename.lowercased().hasSuffix(".md"),
+               ["md", "html"].contains(URL(fileURLWithPath: filename).pathExtension.lowercased()),
                let article = articleByPath[normalizedPath] {
                 includedArticleSlugs.insert(article.slug)
                 targetFolder.leaves.append(articleNode(article, absolutePath: record.absolutePath))

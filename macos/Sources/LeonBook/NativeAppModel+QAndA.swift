@@ -8,26 +8,49 @@ extension NativeAppModel {
     }
 
     func reloadQuestionList(selecting questionID: String? = nil) async throws {
+        guard !Task.isCancelled else { return }
+        questionListGeneration += 1
+        let request = questionListGeneration
         let generation = workspaceGeneration
+        let activeStore = store
+        let requestedSearch = questionSearchText
+        let requestedTag = selectedQuestionTag
         let currentQuestionID = selectedQuestion?.id
         let preferredQuestionID = questionID ?? currentQuestionID
-        let loadedQuestions = try await store.listQuestions(
-            searchText: questionSearchText,
-            tag: selectedQuestionTag
+        func requestIsCurrent() -> Bool {
+            !Task.isCancelled && request == questionListGeneration
+                && generation == workspaceGeneration
+                && requestedSearch == questionSearchText && requestedTag == selectedQuestionTag
+        }
+        let loadedQuestions = try await activeStore.listQuestions(
+            searchText: requestedSearch,
+            tag: requestedTag
         )
-        let loadedFacets = try await store.listQuestionTagFacets()
-        let loadedTotal = try await store.countQuestions()
+        guard requestIsCurrent() else { return }
+        let loadedFacets = try await activeStore.listQuestionTagFacets()
+        let loadedTotal = try await activeStore.countQuestions()
+        guard requestIsCurrent() else { return }
         let nextSelection = preferredQuestionID.flatMap { preferredID in
             loadedQuestions.first(where: { $0.id == preferredID })
         }
         let loadedAnswers: [NativeQuestionAnswer]
         if let nextSelection {
-            loadedAnswers = try await store.listQuestionAnswers(questionID: nextSelection.id)
+            loadedAnswers = try await activeStore.listQuestionAnswers(questionID: nextSelection.id)
         } else {
             loadedAnswers = []
         }
 
-        guard generation == workspaceGeneration else { return }
+        guard requestIsCurrent() else { return }
+
+        let selectionChangedWhileLoading = selectedQuestion?.id != currentQuestionID
+        let hasAnswerDraft = !questionAnswerDraft.isEmpty || editingQuestionAnswerID != nil
+        let wouldDiscardAnswer = hasAnswerDraft && nextSelection?.id != selectedQuestion?.id
+        if selectionChangedWhileLoading || wouldDiscardAnswer {
+            questionSession.applyList(
+                questions: loadedQuestions, totalCount: loadedTotal, tagFacets: loadedFacets
+            )
+            return
+        }
 
         let discardedMedia = questionSession.applyReload(
             questions: loadedQuestions,

@@ -84,14 +84,13 @@ extension NativeAppModel {
         articlesOnly: Bool,
         debounce: Bool = true
     ) {
-        guard isSearchModuleEnabled else {
-            globalSearchResults = []
-            isSearchingGlobally = false
-            return
-        }
-        globalSearchText = query
         globalSearchTask?.cancel()
+        globalSearchTask = nil
         globalSearchGeneration += 1
+        globalSearchText = query
+        globalSearchResults = []
+        isSearchingGlobally = false
+        guard isSearchModuleEnabled else { return }
         let generation = globalSearchGeneration
         let workspace = workspaceGeneration
         let activeStore = store
@@ -199,6 +198,8 @@ extension NativeAppModel {
     }
 
     func openSearchResult(_ result: NativeGlobalSearchResult) {
+        guard !isSearchingGlobally,
+              globalSearchResults.contains(where: { $0.id == result.id }) else { return }
         searchPresentation = nil
         globalSearchTask?.cancel()
         switch result.documentType {
@@ -334,6 +335,10 @@ extension NativeAppModel {
         _ insertion: NativeCommandTextInsertion,
         invocation: NativeCommandInvocation
     ) {
+        if RichArticleDocument.isHTML(editor.body) {
+            editor.body = RichArticleDocument.appending(insertion.text, to: editor.body)
+            return
+        }
         let source = editor.body as NSString
         let requestedLocation = invocation.arguments["selectionLocation"].flatMap(Int.init)
         let requestedLength = invocation.arguments["selectionLength"].flatMap(Int.init)

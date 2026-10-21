@@ -42,6 +42,7 @@ extension NativeAppModel {
         articleNavigationGeneration += 1
         stopMarkdownSourceMonitor()
         editorAutosaveTask?.cancel()
+        editorRecoveryTask?.cancel()
         trashCleanupTask?.cancel()
         trashCleanupTask = nil
         articleAncillaryLoadTask?.cancel()

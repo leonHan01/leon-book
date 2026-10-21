@@ -1,3 +1,4 @@
+import LeonBookExtensionKit
 import SwiftUI
 
 struct SmartCollectionEditorRequest: Identifiable {

@@ -4,7 +4,7 @@
 
 This directory contains the native macOS implementation of `leon-book`. It uses SwiftUI for its windows, menus, navigation, reading, writing, and settings interfaces. Article web embeds use the system WebKit view; the app does not launch Safari or Chrome.
 
-Articles, drafts, settings, images, and videos are stored locally. SQLite is the source of truth for structured records; Markdown/JSON exports and media files remain on the local filesystem. The app does not start Node.js, an external browser, or a local HTTP service.
+Articles, drafts, settings, images, and videos are stored locally. SQLite is the source of truth for structured records; HTML articles, JSON backups, and media files remain on the local filesystem. The app does not start Node.js, an external browser, or a local HTTP service.
 
 Article edits are written to a recovery snapshot after 3 seconds of inactivity. Continuous editing creates a history point every 5 minutes, retained for 30 days by default. Version history is available from both the reader and writing workspace, with side-by-side body diffs and restore-to-editor. Autosave never overwrites published content directly; the explicit Save Draft and Publish actions remain the formal save boundary.
 
@@ -42,22 +42,13 @@ The right side of the reader opens on the Comments pane. Drag across body text, 
 
 An anchored comment stores both its source quote and nearest Markdown heading. Clicking the quote returns to that section, and the anchor is recalculated from the quote after article edits. Comments live in the current user's SQLite workspace and are included in local backups; the optional `.leonbook/` sidecar also makes them portable with the Markdown directory.
 
-## Writing modes
+## Rich text block editing
 
-The writing workspace offers five modes; the selection is saved with the active task layout:
+Articles are authored and stored as semantic HTML (`.html`), with metadata in the document head. Enter creates a paragraph block, Shift+Enter inserts an inline break, and pasted paragraphs become separate blocks. The toolbar provides bold, italic, underline, strike, highlight, links, undo, and redo.
 
-- **Focus** uses the full-width inline preview editor and hides article settings and formatting hints.
-- **Live Preview** styles headings, emphasis, code, quotes, lists, links, and wiki links directly inside the editable body while de-emphasizing Markdown markers.
-- **Blocks** presents Markdown as independently insertable, convertible, duplicable, removable, and draggable content blocks, including tables and block math. Command-click the left handles or Shift-click to select multiple blocks for grouped moves, `⌥⌘↑/↓` moves them from the keyboard, and `Tab`/`Shift+Tab` changes hierarchy. `⌘D`, block-aware copy/cut/paste, two-stage `⌘A`, and Escape speed up keyboard editing. Parent operations include descendants, nested blocks can be collapsed, and structural edits participate in undo/redo. A selected group can be transactionally moved or copied to another note, the latest transfer can be undone, and synchronized blocks use live `![[note#^block-id]]` embeds. Built-in and custom block templates can be inserted from the toolbar or with `/template-name`. It also includes Enter-to-split, Shift+Enter line breaks, interactive tasks, and copyable `^block-id` links.
-- **Source** shows unrendered Markdown for precise syntax control.
-- **Split** keeps source editing on the left and the complete rendered result, including images and embeds, on the right.
+Type `/` at the beginning of a paragraph to open the searchable command menu. `/code` creates a code box with a language selector; `/callout` creates a highlighted box. Headings (`/h1`–`/h3`), lists (`/bullet`, `/number`, `/task`), `/quote`, `/table`, `/divider`, and `/text` are also available. Use arrows to choose, Enter or Tab to confirm, and Escape to dismiss. In code blocks, Enter inserts a newline and Command+Enter creates a paragraph below.
 
-All five modes share the same Markdown body, autosave, and version history, so changing layout does not discard editing state.
-Use `⌘⌥1` through `⌘⌥5` to switch through the five modes in order.
-
-New pages can apply a whole-page template directly from the title area, filling the title, excerpt, body, category, tags, and typed properties together. The built-in Meeting Notes, Project Plan, and Weekly Review templates support `{{date}}` and `{{time}}` variables. **Page Actions → Page Templates** can save the current page as a custom template. Custom page templates are stored locally per user workspace and omit attachments and publication state; Markdown remains authoritative for article content.
-
-The editor's right sidebar switches among Settings, Properties, Outline, and Links. Properties provides typed editors for text, lists, numbers, dates, checkboxes, and tags, preserves those types in SQLite/JSON, emits valid YAML, and can rename a key across every article without overwriting conflicting values. Outline follows body headings live, and Links combines live wiki links with saved backlinks and unlinked mentions. The selected pane and sidebar visibility are part of the saved layout.
+Legacy Markdown is converted once on editing. Saving writes HTML and archives the original bytes under `.legacy-markdown/`; collisions abort migration and failed saves roll back. Markdown/Obsidian round-trip compatibility is retired. Existing autosaves and revisions remain local.
 
 ## Task layouts and multiple windows
 

@@ -1,4 +1,7 @@
 /* App language */
+"输入文字，或输入 / 添加内容块" = "Type here, or type / to add a block";
+"回车新建块 · ⇧回车块内换行" = "Return: new block · Shift-Return: line break";
+"在末尾添加块" = "Add a block at the end";
 "微博评论" = "Post Comments";
 "正在加载评论…" = "Loading comments…";
 "写下想法，开始这条微博的讨论。" = "Share your thoughts to start the discussion.";

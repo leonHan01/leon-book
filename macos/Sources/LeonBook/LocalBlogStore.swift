@@ -2445,24 +2445,31 @@ public actor LocalBlogStore {
             publishedAt = previous?.publishedAt
         }
 
-        let sourceRelativePath: String
+        var sourceRelativePath: String
         if let previous {
             sourceRelativePath = previous.sourceRelativePath
         } else if let requestedPath = article.sourceRelativePath {
             sourceRelativePath = try MarkdownArticleSource.validatedRelativePath(requestedPath)
         } else {
-            sourceRelativePath = MarkdownArticleSource.defaultRelativePath(for: slug)
+            sourceRelativePath = MarkdownArticleSource.defaultRelativePath(for: slug, body: article.body)
         }
-        if previous == nil,
+        if RichArticleDocument.isHTML(article.body) {
+            sourceRelativePath = (sourceRelativePath as NSString).deletingPathExtension + ".html"
+        }
+        let migratesLegacyFile = previous.map { $0.sourceRelativePath != sourceRelativePath } ?? false
+        if previous == nil || migratesLegacyFile,
            FileManager.default.fileExists(
                atPath: articlesURL.appendingPathComponent(sourceRelativePath).path
             ) {
-            throw NativeStoreError.fileSystem("目标 Markdown 文件已存在")
+            throw NativeStoreError.fileSystem("目标文章文件已存在")
         }
         let originalFile = try MarkdownArticleSource.snapshot(relativePath: sourceRelativePath, in: articlesURL)
+        let previousFile = try previous.map {
+            try MarkdownArticleSource.snapshot(relativePath: $0.sourceRelativePath, in: articlesURL)
+        }
         if let previous,
-           originalFile.data == nil || originalFile.contentHash != previous.sourceContentHash {
-            _ = try refreshMarkdownSources(changedRelativePaths: [sourceRelativePath])
+           previousFile?.data == nil || previousFile?.contentHash != previous.sourceContentHash {
+            _ = try refreshMarkdownSources(changedRelativePaths: [previous.sourceRelativePath])
             throw NativeStoreError.conflict
         }
         let sourceBeforeSave = markdownWorkspaceSource
@@ -2493,6 +2500,7 @@ public actor LocalBlogStore {
         )
         var sourcedSaved = saved
         var writtenHash: String?
+        var archivedLegacyURL: URL?
 
         let activityType = saved.status == .published && previous?.status != .published
             ? "article_published"
@@ -2513,10 +2521,18 @@ public actor LocalBlogStore {
                     relativePath: saved.sourceRelativePath,
                     in: articlesURL,
                     expectedContentHash: originalFile.contentHash,
-                    requiresMissingFile: previous == nil
+                    requiresMissingFile: previous == nil || migratesLegacyFile
                 )
                 writtenHash = sourceRecord.contentHash
                 sourcedSaved = applyingSourceRecord(sourceRecord, to: saved)
+                if migratesLegacyFile, let previous, let previousFile {
+                    let current = try MarkdownArticleSource.snapshot(relativePath: previous.sourceRelativePath, in: articlesURL)
+                    guard current.contentHash == previousFile.contentHash else { throw NativeStoreError.conflict }
+                    let archive = articlesURL.appendingPathComponent(".legacy-markdown/\(UUID().uuidString)/\(previous.sourceRelativePath)")
+                    try FileManager.default.createDirectory(at: archive.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try FileManager.default.moveItem(at: previousFile.url, to: archive)
+                    archivedLegacyURL = archive
+                }
                 if let previous {
                     _ = try insertArticleRevision(
                         draftKey: slug,
@@ -2535,6 +2551,10 @@ public actor LocalBlogStore {
             }
         } catch {
             var rollbackError: Error?
+            if let archivedLegacyURL, let previousFile {
+                do { try FileManager.default.moveItem(at: archivedLegacyURL, to: previousFile.url) }
+                catch { rollbackError = error }
+            }
             do { try rollbackInboxMedia(relocated.moves) } catch { rollbackError = error }
             if let writtenHash {
                 do { try originalFile.restore(replacingContentHash: writtenHash) }
@@ -3734,6 +3754,17 @@ public actor LocalBlogStore {
             isActive: isActive,
             in: database
         )
+        if RichArticleDocument.isHTML(article.body) {
+            let visibleText = RichArticleDocument.plainText(article.body)
+            try database.execute(
+                "UPDATE content_search SET body = ? WHERE document_type = 'article' AND document_id = ?",
+                values: [.text(visibleText), .text(article.slug)]
+            )
+            try database.execute(
+                "UPDATE article_mention_search SET body = ? WHERE source_slug = ?",
+                values: [.text(visibleText), .text(article.slug)]
+            )
+        }
         try replaceMediaReferences(
             ownerType: "article",
             ownerID: article.slug,
@@ -4467,7 +4498,7 @@ public actor LocalBlogStore {
     }
 
     func compactSearchSnippet(_ source: String) -> String {
-        let compact = source
+        let compact = RichArticleDocument.plainText(source)
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
         guard compact.count > 240 else { return compact }

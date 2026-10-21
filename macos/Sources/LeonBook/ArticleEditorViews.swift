@@ -8,6 +8,9 @@ import WebKit
 private enum ArticleEditorLayout {
     static let contentInset: CGFloat = 20
     static let titleVerticalInset: CGFloat = 24
+    static let canvas = Color(red: 0.953, green: 0.953, blue: 0.949)
+    static let surface = Color(red: 0.980, green: 0.980, blue: 0.976)
+    static let sidebar = Color(red: 0.941, green: 0.941, blue: 0.937)
 }
 
 enum NativeBodyEditorAppearance {
@@ -98,6 +101,8 @@ struct NativeBodyEditor: NSViewRepresentable {
         textView.allowsUndo = true
         textView.isEditable = isEditable
         textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
         textView.autoresizingMask = [.width]
         textView.backgroundColor = NSColor(NativeTheme.surface)
         textView.delegate = context.coordinator
@@ -279,10 +284,11 @@ private final class PastingTextView: NSTextView {
         requestedInitialFocus = true
 
         // NSViewRepresentable creates the editor before it has a window. Wait
-        // until it is attached, then focus it once so a new writing view accepts
-        // keyboard input without requiring an extra click.
+        // until it is attached, then focus it only if the user has not already
+        // chosen another control, such as the article title or excerpt.
         DispatchQueue.main.async { [weak self] in
-            guard let self, let window = self.window else { return }
+            guard let self, self.isEditable, let window = self.window,
+                  window.firstResponder == nil || window.firstResponder === window else { return }
             window.makeFirstResponder(self)
         }
     }
@@ -511,17 +517,19 @@ struct ArticleEditorView: View {
                         editorInspectorSidebar
                         .disabled(model.isMarkdownSourceReadOnly)
                         .frame(width: settingsWidth)
-                        .background(NativeTheme.surface.opacity(0.34))
+                        .background(ArticleEditorLayout.sidebar)
                     }
                 }
             }
         }
-        .background(NativeTheme.canvas)
+        .background(ArticleEditorLayout.canvas)
+        .environment(\.colorScheme, .light)
         .environment(\.nativeReadingTypography, readingPreferences.typography)
         .onChange(of: model.editor) { _ in
             model.scheduleEditorAutosave()
         }
         .onAppear {
+            model.editor.body = RichArticleDocument.convertingLegacyBody(model.editor.body)
             pageTemplateLibrary.prepare(for: model.currentUser.id)
             synchronizePropertyRows()
             documentAnalysis.update(source: model.editor.body, debounce: false)
@@ -533,7 +541,10 @@ struct ArticleEditorView: View {
         .task(id: articleBlockSuggestionTaskID) {
             await reloadBlockLinkSuggestions()
         }
-        .onChange(of: model.editor.recoveryID) { _ in synchronizePropertyRows() }
+        .onChange(of: model.editor.recoveryID) { _ in
+            model.editor.body = RichArticleDocument.convertingLegacyBody(model.editor.body)
+            synchronizePropertyRows()
+        }
         .onChange(of: model.editor.properties) { _ in synchronizePropertyRowsIfNeeded() }
         .onChange(of: propertyRows) { _ in commitPropertyRows() }
         .sheet(isPresented: $isPresentingHistory) {
@@ -604,9 +615,6 @@ struct ArticleEditorView: View {
                 Section("编辑视图") {
                     modeMenuButton(.blocks, shortcut: "1")
                     modeMenuButton(.focus, shortcut: "2")
-                    modeMenuButton(.livePreview, shortcut: "3")
-                    modeMenuButton(.source, shortcut: "4")
-                    modeMenuButton(.split, shortcut: "5")
                 }
 
                 Button {
@@ -749,129 +757,23 @@ struct ArticleEditorView: View {
 
             Divider()
 
-            Group {
-                switch editorMode {
-                case .focus, .livePreview:
-                    editorPane(appearance: .livePreview)
-                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                case .blocks:
-                    ArticleBlockEditor(
-                        source: $editorSession.draft.body,
-                        documentID: model.editor.recoveryID,
-                        sourceSlug: model.editor.slug.isEmpty ? nil : model.editor.slug,
-                        articleReference: model.editor.slug.isEmpty ? model.editor.title : model.editor.slug,
-                        isEditable: !model.isMarkdownSourceReadOnly,
-                        typography: readingPreferences.typography,
-                        articleDestinations: model.articles.filter {
-                            $0.slug != model.editor.slug
-                        },
-                        onTransferBlocks: { blocks, sourceAfter, targetSlug, operation in
-                            await model.transferEditorBlocks(
-                                blocks,
-                                sourceBodyAfter: sourceAfter,
-                                toArticleSlug: targetSlug,
-                                operation: operation
-                            )
-                        },
-                        onUndoTransfer: { receipt in
-                            await model.undoEditorBlockTransfer(receipt)
-                        }
-                    )
-                    .padding(ArticleEditorLayout.contentInset)
-                    .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                case .source:
-                    editorPane(appearance: .source)
-                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                case .split:
-                    GeometryReader { proxy in
-                        let dividerWidth: CGFloat = 8
-                        let usableWidth = max(460, proxy.size.width - dividerWidth)
-                        let leftWidth = min(
-                            max(230, usableWidth * CGFloat(workspaceLayout.splitFraction)),
-                            usableWidth - 230
-                        )
-                        HStack(spacing: 0) {
-                            editorPane(appearance: .source)
-                                .frame(width: leftWidth, alignment: .topLeading)
-                                .frame(maxHeight: .infinity, alignment: .topLeading)
-
-                            Rectangle()
-                                .fill(Color.secondary.opacity(0.18))
-                                .frame(width: dividerWidth)
-                                .contentShape(Rectangle())
-                                .onHover { hovering in
-                                    if hovering { NSCursor.resizeLeftRight.push() }
-                                    else { NSCursor.pop() }
-                                }
-                                .gesture(
-                                    DragGesture()
-                                        .onChanged { value in
-                                            if splitDragStart == nil { splitDragStart = workspaceLayout.splitFraction }
-                                            let start = splitDragStart ?? workspaceLayout.splitFraction
-                                            workspaceLayout.splitFraction = min(
-                                                max(start + Double(value.translation.width / usableWidth), 0.25),
-                                                0.75
-                                            )
-                                        }
-                                        .onEnded { _ in splitDragStart = nil }
-                                )
-
-                            MarkdownPreview(
-                                analysis: documentAnalysis.value,
-                                store: model.store,
-                                articleLinks: model.articles,
-                                onOpenArticle: model.openArticleLink
-                            )
-                            .frame(
-                                width: usableWidth - leftWidth,
-                                alignment: .topLeading
-                            )
-                            .frame(maxHeight: .infinity, alignment: .topLeading)
-                        }
-                    }
+            RichArticleEditor(
+                html: $editorSession.draft.body,
+                documentID: model.editor.recoveryID,
+                isEditable: !model.isMarkdownSourceReadOnly,
+                fontSize: readingPreferences.typography.fontSize,
+                store: model.store,
+                sourceRelativePath: model.editor.isNew ? nil : model.selectedArticle?.sourceRelativePath,
+                onOpenLink: { url in
+                    if url.scheme == "leonbook" { model.handleAutomationURL(url) }
+                    else { NSWorkspace.shared.open(url) }
                 }
-            }
+            )
             .frame(minHeight: 440)
 
-            if editorMode != .focus {
-                Divider()
 
-                DisclosureGroup("写作语法参考", isExpanded: $showsWritingReference) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "info.circle")
-                            Text("支持标题、列表、引用、代码、表格、加粗、斜体、删除线、链接和图片。复制或拖入图片后可直接加入正文。")
-                        }
-
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: "safari")
-                            Text("网页嵌入：单独一行粘贴 <iframe src=\"…\"></iframe>，或使用 ```embed 代码块放入网页 URL。")
-                        }
-
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: "chevron.left.forwardslash.chevron.right")
-                            Text("HTML 组件：使用 ```html-render height=360 代码块；组件支持 CSS 和 JavaScript。")
-                        }
-
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: "link")
-                            Text("文章关联：支持 [[双链]]、![[文章#标题]]、![[文章#^块ID]]、Callout、脚注、==高亮== 和任务列表。")
-                        }
-
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: "tablecells")
-                            Text("Base 嵌入：使用 ![[集合名称.base]]，或在 ```base 代码块中写 name: 集合名称。")
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-                .font(.caption)
-                .padding(.horizontal, ArticleEditorLayout.contentInset)
-                .padding(.vertical, 11)
-            }
         }
-        .background(NativeTheme.surface.opacity(0.48), in: RoundedRectangle(cornerRadius: 16))
+        .background(ArticleEditorLayout.surface, in: RoundedRectangle(cornerRadius: 16))
         .overlay {
             RoundedRectangle(cornerRadius: 16)
                 .strokeBorder(.quaternary)
@@ -1311,7 +1213,7 @@ struct ArticleEditorView: View {
             }
 
             if editorOutline.isEmpty {
-                ArticleInspectorEmpty(message: "输入 Markdown 标题后会在这里生成大纲")
+                ArticleInspectorEmpty(message: "使用 /h1、/h2 或 /h3 添加标题后会在这里生成大纲")
             } else {
                 ForEach(editorOutline) { item in
                     HStack(spacing: 8) {
@@ -1394,7 +1296,7 @@ struct ArticleEditorView: View {
     }
 
     private var editorOutline: [MarkdownOutlineItem] {
-        documentAnalysis.value.document.outline
+        RichArticleDocument.outline(in: model.editor.body)
     }
 
     private var editorWikiLinks: [EditorWikiLink] {

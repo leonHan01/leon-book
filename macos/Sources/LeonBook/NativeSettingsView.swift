@@ -190,162 +190,18 @@ public struct NativeSettingsView: View {
                 NativeDeclarativeExtensionSettingsPanel(model: model)
             }
 
-            Section("Markdown 工作区 / Obsidian Vault") {
-                Picker("使用方式", selection: $model.selectedMarkdownWorkspaceMode) {
-                    ForEach(NativeMarkdownWorkspaceMode.allCases) { mode in
-                        Text(LocalizedStringKey(mode.title)).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .disabled(model.isScanningObsidianVault || model.isImportingObsidianVault)
-
-                Text(LocalizedStringKey(model.selectedMarkdownWorkspaceMode.detail))
+            Section("文章格式") {
+                Label("HTML 富文本", systemImage: "textformat")
+                Text("正文按段落保存为富文本块，可直接编辑文字样式、代码框、高亮框、列表和表格。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-
-                LabeledContent("当前模式") {
-                    Text(LocalizedStringKey(model.activeMarkdownWorkspaceMode.title))
-                        .foregroundStyle(model.isMarkdownSourceReadOnly ? .orange : .secondary)
-                }
-                LabeledContent("Markdown 目录") {
-                    Text(model.markdownSourceDirectoryPath)
-                        .lineLimit(2)
-                        .textSelection(.enabled)
-                }
-                LabeledContent("状态") {
-                    HStack(spacing: 8) {
-                        if model.isScanningObsidianVault || model.isImportingObsidianVault {
-                            ProgressView().controlSize(.small)
-                        }
-                        Text(LocalizedStringKey(model.obsidianImportStatus))
-                    }
-                }
-
-                Divider()
-
-                Toggle(
-                    "使用 .leonbook 同步评论、历史、收藏和布局",
-                    isOn: Binding(
-                        get: { model.isPortableSidecarEnabled },
-                        set: { model.setPortableSidecarEnabled($0) }
-                    )
-                )
-                .disabled(model.isSynchronizingPortableSidecar || !model.storageReady)
-
-                if model.isPortableSidecarEnabled {
-                    LabeledContent("Sidecar") {
-                        Text(model.portableSidecarDirectoryPath)
-                            .lineLimit(2)
-                            .textSelection(.enabled)
-                    }
-                    LabeledContent("Sidecar 状态") {
-                        HStack(spacing: 8) {
-                            if model.isSynchronizingPortableSidecar {
-                                ProgressView().controlSize(.small)
-                            }
-                            Text(LocalizedStringKey(model.portableSidecarStatus))
-                        }
-                    }
-                    Button(LocalizedStringKey(model.isPortableSidecarWritable ? "立即合并并写入" : "重新导入只读 Sidecar")) {
-                        model.synchronizePortableSidecarNow()
-                    }
-                    .disabled(model.isSynchronizingPortableSidecar)
-                }
-
-                Text("启用后，LeonBook 会在当前 Markdown 根目录创建版本化的隐藏目录 `.leonbook/`。iCloud Drive、Dropbox、Syncthing 等只需同步整个目录；SQLite 仍是本机索引。删除通过墓碑传播，历史记录使用跨设备同步 ID。Sidecar 当前是普通 JSON，不提供端到端加密；只读挂载仅导入、不写回。停用不会删除已有 sidecar。")
+                Text("在段落开头输入 / 呼出快捷操作，例如 /code、/callout、/h1、/task 和 /table。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-
-                if let preview = model.obsidianImportPreview {
-                    LabeledContent("Vault") {
-                        Text(preview.vaultURL.path)
-                            .lineLimit(2)
-                            .textSelection(.enabled)
-                    }
-                    HStack(spacing: 18) {
-                        Label {
-                            if model.selectedMarkdownWorkspaceMode == .copyImport {
-                                Text("\(preview.importableCount) 篇可复制")
-                            } else {
-                                Text("\(preview.notes.count) 篇 Markdown")
-                            }
-                        } icon: {
-                            Image(systemName: model.selectedMarkdownWorkspaceMode == .copyImport
-                                ? "doc.badge.plus"
-                                : "folder")
-                        }
-                        if model.selectedMarkdownWorkspaceMode == .copyImport {
-                            Label("\(preview.attachmentCount) 个附件", systemImage: "paperclip")
-                        }
-                        if model.selectedMarkdownWorkspaceMode == .copyImport, preview.conflictCount > 0 {
-                            Label("\(preview.conflictCount) 篇冲突跳过", systemImage: "shield.lefthalf.filled")
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                    .font(.caption)
-
-                    if !preview.notes.isEmpty {
-                        VStack(alignment: .leading, spacing: 7) {
-                            ForEach(Array(preview.notes.prefix(8))) { note in
-                                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    Image(systemName: note.canImport ? "checkmark.circle" : "exclamationmark.shield")
-                                        .foregroundStyle(note.canImport ? .green : .orange)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(note.title).lineLimit(1)
-                                        Text(
-                                            model.selectedMarkdownWorkspaceMode == .copyImport
-                                                ? note.conflictReason ?? "\(note.relativePath) → \(note.slug)"
-                                                : note.relativePath
-                                        )
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                    }
-                                }
-                            }
-                            if preview.notes.count > 8 {
-                                Text("另有 \(preview.notes.count - 8) 篇…")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-
-                    if !preview.warnings.isEmpty {
-                        DisclosureGroup("扫描提示（\(preview.warnings.count)）") {
-                            ForEach(Array(preview.warnings.prefix(8).enumerated()), id: \.offset) { _, warning in
-                                Text(warning)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-
-                    HStack {
-                        Button {
-                            model.confirmObsidianImport()
-                        } label: {
-                            markdownSourceConfirmationTitle(preview)
-                        }
-                        .nativePrimaryButton()
-                        .disabled(
-                            (model.selectedMarkdownWorkspaceMode == .copyImport && preview.importableCount == 0)
-                                || model.isImportingObsidianVault
-                        )
-                        Button("取消") { model.cancelObsidianImport() }
-                            .disabled(model.isImportingObsidianVault)
-                    }
-                } else {
-                    Button("选择并扫描 Markdown 文件夹…") {
-                        model.chooseObsidianVault()
-                    }
-                    .disabled(model.isScanningObsidianVault || model.isImportingObsidianVault || !model.storageReady)
+                if model.activeMarkdownWorkspaceMode.isMounted {
+                    LabeledContent("原目录", value: model.markdownSourceDirectoryPath)
+                    Button("切回应用内资料库") { model.useNativeArticleLibrary() }
                 }
-
-                Text("挂载模式会持续监听普通文件夹或 Obsidian Vault。SQLite 和应用媒体仍保存在 LeonBook 工作区；启用 sidecar 后，评论、版本、收藏和布局会额外写入 Markdown 根目录。只读挂载不会改写原目录；直接编辑会原子写回。工作区备份不复制外部挂载目录。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section("备份") {
