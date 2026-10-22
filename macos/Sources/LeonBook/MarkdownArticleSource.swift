@@ -57,7 +57,7 @@ enum MarkdownArticleSource {
     ])
 
     static func defaultRelativePath(for slug: String, body: String = "") -> String {
-        "\(slug).\(RichArticleDocument.isHTML(body) ? "html" : "md")"
+        "\(NativeArticleDirectoryPolicy.defaultFolderPath)/\(slug).\(RichArticleDocument.isHTML(body) ? "html" : "md")"
     }
 
     static func scan(in articlesURL: URL) throws -> [MarkdownArticleSourceRecord] {

@@ -1141,7 +1141,7 @@ final class NativeModelsTests {
     }
 
     func testP0PageHierarchyDatabaseLayoutsRelationsAndRollups() throws {
-        XCTAssertEqual(NativeArticlePageHierarchy.containerPath(for: "Projects/Alpha.md"), "Projects/Alpha")
+        XCTAssertEqual(NativeArticlePageHierarchy.containerPath(for: "Projects/Alpha.md"), "Projects")
         XCTAssertEqual(NativeArticlePageHierarchy.containerPath(for: "Projects/index.md"), "Projects")
         XCTAssertEqual(
             NativeArticlePageHierarchy.breadcrumbs(folderPath: "Projects/Alpha").map(\.title),
@@ -1182,10 +1182,10 @@ final class NativeModelsTests {
             )
         }
         let roots = NativeWorkspaceResourceTree.build(articles: pageArticles, records: records)
-        let project = roots.first(where: { $0.articleSlug == "project" })
-        let docs = roots.first(where: { $0.articleSlug == "docs" })
+        let project = roots.first(where: { $0.kind == .folder && $0.relativePath == "Project" })
+        let docs = roots.first(where: { $0.kind == .folder && $0.relativePath == "Docs" })
         XCTAssertEqual(project?.children.map(\.articleSlug), ["child"])
-        XCTAssertEqual(docs?.children.map(\.articleSlug), ["docs-child"])
+        XCTAssertEqual(Set(docs?.children.compactMap(\.articleSlug) ?? []), Set(["docs", "docs-child"]))
         XCTAssertTrue(NativeWorkspaceResourceTree.folderPaths(in: roots).contains("Project"))
 
         let layouts: [NativeSmartCollectionLayout] = [.board, .calendar]
@@ -2676,9 +2676,9 @@ final class PerformanceRegressionTests {
                            expected.first { $0.kind == .article && $0.articleSlug == summary.slug }?.id)
         }
         XCTAssertEqual(model.workspaceResourceAncestorIDs(resourceID: "workspace-article:article-1"),
-                       ["workspace-article:article-0"], "a page with children must remain an expandable ancestor")
+                       ["workspace-folder:Project"], "only directories may be expandable ancestors")
         XCTAssertEqual(model.workspaceResourceAncestorIDs(resourceID: "workspace-article:article-3"),
-                       ["workspace-article:article-2", "workspace-folder:Docs/中文"])
+                       ["workspace-folder:Docs", "workspace-folder:Docs/中文"])
         let selected = Set([expected.last!.id, expected.first!.id, "missing"])
         XCTAssertEqual(model.workspaceResources(ids: selected), expected.filter { selected.contains($0.id) })
         XCTAssertEqual(model.workspaceResources(ids: Set(expected.map(\.id))), expected)
@@ -2706,15 +2706,15 @@ final class PerformanceRegressionTests {
             absolutePath: "/vault/Folder 0/Renamed.md", articleSlug: original.articleSlug, articleTitle: "Updated title",
             children: original.children, articleCount: original.articleCount
         )
-        // Same ID and node count: metadata changes must still invalidate both
-        // navigation and the lazily computed destination paths.
+        // Same ID and node count: metadata changes must invalidate navigation,
+        // while renaming an article leaves the directory destinations unchanged.
         model.workspaceResources[0].children[0] = renamed
         XCTAssertNil(model.cachedWorkspaceResourceIndex)
         XCTAssertFalse(model.workspaceResourceIndex === initial)
         XCTAssertEqual(model.workspaceResource(id: original.id), renamed)
         XCTAssertEqual(initial.resource(id: original.id), original, "old snapshots must remain immutable")
-        XCTAssertFalse(model.workspaceFolderPaths == oldPaths)
-        XCTAssertTrue(model.workspaceFolderPaths.contains("Folder 0/Renamed"))
+        XCTAssertEqual(model.workspaceFolderPaths, oldPaths)
+        XCTAssertFalse(model.workspaceFolderPaths.contains("Folder 0/Renamed"))
         XCTAssertFalse(model.workspaceFolderPaths.contains("Folder 0/Article 0"))
 
         // Moving a node without changing its ID must replace its parent chain.
@@ -3127,6 +3127,54 @@ final class PerformanceRegressionTests {
         XCTAssertTrue(first === second)
         XCTAssertEqual(first.outline.map(\.title), ["Overview", "Details"])
         XCTAssertEqual(first.imageURLs, ["/media/cover.png", "assets/diagram.jpg"])
+    }
+
+    func testRichArticleMetadataPreservesUnicodeAndCacheIdentity() {
+        let html = RichArticleDocument.opening + """
+        <p>开头👩🏽‍💻é</p><h1>章 &amp; <strong>节😀</strong></h1>
+        <H4 data-block-id="last">é &lt;末尾&gt;</H4><h2></h2>
+        <img src="media/中文😀.png?x=1&amp;y=2"><img src="data:image/png;base64,YQ==">
+        <a href="leonbook://open?slug=%E4%B8%AD%E6%96%87%F0%9F%98%80&amp;other=1">内部链接</a>
+        <a href="https://example.com/?slug=external">外部链接</a></article>
+        """
+        let document = NativeMarkdownArticleDocumentCache.shared.document(for: html)
+        XCTAssertEqual(document.outline.map(\.title), ["章 & 节😀", "é <末尾>", ""])
+        XCTAssertEqual(document.outline.map(\.level), [1, 4, 2])
+        XCTAssertEqual(document.outline.map(\.id), (0..<3).map(MarkdownOutline.anchorID))
+        XCTAssertEqual(document.imageURLs, ["media/中文😀.png?x=1&y=2", "data:image/png;base64,YQ=="])
+        XCTAssertEqual(document.embeddedAttachmentURLs, document.imageURLs)
+        XCTAssertEqual(RichArticleDocument.linkReferences(in: html), ["中文😀"])
+        XCTAssertTrue(document === NativeMarkdownArticleDocumentCache.shared.document(for: html))
+        let changed = NativeMarkdownArticleDocumentCache.shared.document(for: html.replacingOccurrences(of: "节😀", with: "新节😀"))
+        XCTAssertFalse(changed === document)
+        XCTAssertEqual(changed.outline.first?.title, "章 & 新节😀")
+    }
+
+    func testRichArticleReaderMetadataReuseBenchmark() {
+        let source = RichArticleDocument.opening + (0..<1_000).map { index in
+            "<h2>章节\(index) <strong>👩🏽‍💻 &amp; é</strong></h2><p>" + String(repeating: "中文文章的正文与格式。", count: 20) + "</p>"
+        }.joined() + "</article>"
+        let document = NativeMarkdownArticleDocumentCache.shared.document(for: source)
+        let expected = document.outline.map { "\($0.id)|\($0.level)|\($0.title)" }
+        XCTAssertEqual(expected.count, 1_000)
+        func measure(_ operation: () -> [MarkdownOutlineItem]) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            var count = 0
+            for _ in 0..<20 { count += operation().count }
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+            XCTAssertEqual(count, 20_000)
+            XCTAssertEqual(operation().map { "\($0.id)|\($0.level)|\($0.title)" }, expected)
+            return elapsed
+        }
+        // The reader already obtains a cached document for rendering. Compare
+        // its former extra outline scan with reusing that document's outline.
+        let previous = { RichArticleDocument.outline(in: source) }
+        let current = { NativeMarkdownArticleDocumentCache.shared.document(for: source).outline }
+        let oldFirst = measure(previous), newFirst = measure(current)
+        let newSecond = measure(current), oldSecond = measure(previous)
+        let oldMS = min(oldFirst, oldSecond), newMS = min(newFirst, newSecond)
+        print("READER_METADATA_PERFORMANCE repeatedReads=20 previousMS=\(oldMS) cachedMS=\(newMS)")
+        XCTAssertTrue(newMS < oldMS * 0.1, "reader metadata reuse must avoid reparsing an unchanged article")
     }
 
     func testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency() async throws {
@@ -5035,7 +5083,7 @@ final class LocalBlogStoreTests {
         XCTAssertEqual(imported.media.map(\.kind).sorted(), ["file", "image"])
         XCTAssertTrue(imported.body.contains("/media/\(roadmap.slug)/"))
         let markdown = try String(
-            contentsOf: storeRoot.appendingPathComponent("articles/\(roadmap.slug).md"),
+            contentsOf: storeRoot.appendingPathComponent("articles/未分类/\(roadmap.slug).md"),
             encoding: .utf8
         )
         XCTAssertTrue(markdown.contains("aliases: [\"Road Map\"]"))
@@ -5211,7 +5259,7 @@ final class LocalBlogStoreTests {
             .number(4.5)
         )
         let markdown = try String(
-            contentsOf: root.appendingPathComponent("articles/saved-note.md"),
+            contentsOf: root.appendingPathComponent("articles/未分类/saved-note.md"),
             encoding: .utf8
         )
         XCTAssertTrue(markdown.contains("rating: 4.5"))
@@ -5509,7 +5557,7 @@ final class LocalBlogStoreTests {
         XCTAssertTrue(extraction.primaryArticle.body.contains("![[\(extraction.createdArticles[0].slug)]]"))
         XCTAssertEqual(extraction.createdArticles[0].body, extractText)
         XCTAssertTrue(FileManager.default.fileExists(
-            atPath: root.appendingPathComponent("articles/\(extraction.createdArticles[0].slug).md").path
+            atPath: root.appendingPathComponent("articles/未分类/\(extraction.createdArticles[0].slug).md").path
         ))
 
         let split = try await store.splitArticleByLevel2Headings(
@@ -5542,7 +5590,7 @@ final class LocalBlogStoreTests {
         XCTAssertTrue(repaired.body.contains("[[\(mergeDestination.slug)#标题|别名]]"))
         XCTAssertTrue(repaired.body.contains("![[\(mergeDestination.slug)#^idea]]"))
         XCTAssertFalse(FileManager.default.fileExists(
-            atPath: root.appendingPathComponent("articles/\(mergeSource.slug).md").path
+            atPath: root.appendingPathComponent("articles/未分类/\(mergeSource.slug).md").path
         ))
 
         let taskLine = merge.primaryArticle.body.components(separatedBy: .newlines)
@@ -5702,7 +5750,7 @@ final class LocalBlogStoreTests {
 
         _ = try await store.configureMarkdownWorkspaceSource(mode: .copyImport)
         XCTAssertEqual(try await store.listArticles().map(\.slug), ["managed-note"])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("articles/managed-note.md").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("articles/未分类/managed-note.md").path))
         XCTAssertEqual(try String(contentsOf: vault.appendingPathComponent("mounted.md"), encoding: .utf8), mountedSource)
     }
 
@@ -6216,7 +6264,7 @@ final class DataIntegrityTests {
         }
         second.editor.title = "Unsaved draft"
         second.editor.body = "Keep this draft if validation fails"
-        let snapshotArticle = snapshot.url.appendingPathComponent("workspaces/leon/articles/note.md")
+        let snapshotArticle = snapshot.url.appendingPathComponent("workspaces/leon/articles/未分类/note.md")
         try Data("corrupt".utf8).write(to: snapshotArticle, options: .atomic)
         await first.performBackupRestore(snapshot)
         XCTAssertTrue(first.storageReady)
@@ -6235,7 +6283,7 @@ final class DataIntegrityTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = LocalBlogStore(rootURL: root)
         let original = try await store.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: nil, body: "Original"))
-        let file = root.appendingPathComponent("articles/note.md")
+        let file = root.appendingPathComponent("articles/未分类/note.md")
         let external = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "Original", with: "External")
         try Data(external.utf8).write(to: file, options: .atomic)
         do {
@@ -6252,7 +6300,7 @@ final class DataIntegrityTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = LocalBlogStore(rootURL: root)
         let original = try await store.saveArticle(article(slug: "note", status: .draft, expectedUpdatedAt: nil, body: "Original"))
-        let file = root.appendingPathComponent("articles/note.md")
+        let file = root.appendingPathComponent("articles/未分类/note.md")
         let before = try Data(contentsOf: file)
         let fault = try SQLiteDatabase(url: root.appendingPathComponent("leon-book.sqlite"))
         try fault.execute("CREATE TRIGGER reject_article BEFORE INSERT ON articles BEGIN SELECT RAISE(ABORT, 'injected failure'); END;")
@@ -6264,7 +6312,7 @@ final class DataIntegrityTests {
         }
         XCTAssertEqual(try Data(contentsOf: file), before, "failed save must restore the original bytes")
         XCTAssertEqual(try await store.getArticle(slug: "note").body, "Original")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("articles/new-note.md").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("articles/未分类/new-note.md").path))
         fault.close()
         await store.closeForRestore()
     }
@@ -6348,9 +6396,15 @@ final class RichArticleTests {
         XCTAssertEqual(NativeArticleLink.references(in: html), ["other"])
         XCTAssertTrue(RichArticleDocument.plainText(html).contains("if x < 2 { print(x) }"))
         XCTAssertEqual(RichArticleDocument.outline(in: html).map(\.title), ["标题"])
+        let fourLevels = RichArticleDocument.opening + "<h1>章</h1><h2>节</h2><h3>小节</h3><h4><strong>细节</strong></h4></article>"
+        XCTAssertEqual(RichArticleDocument.outline(in: fourLevels).map(\.level), [1, 2, 3, 4])
+        XCTAssertEqual(RichArticleDocument.outline(in: fourLevels).map(\.title), ["章", "节", "小节", "细节"])
         XCTAssertEqual(RichArticleDocument.convertingLegacyBody(html), html)
         XCTAssertEqual(NativeWritingMetrics.characterCount(of: RichArticleDocument.opening + "<p><strong>中文</strong>&amp;🌙</p></article>"), 4)
         XCTAssertEqual(RichArticleDocument.plainText(RichArticleDocument.empty), "")
+        let captionText = RichArticleDocument.plainText(RichArticleDocument.opening + "<figure><img src=\"/media/image.png\"><figcaption>Picture caption</figcaption></figure><p>Following paragraph</p></article>")
+        XCTAssertTrue(captionText.contains("caption\n"), "image captions must remain separate from following paragraphs in search text")
+        XCTAssertFalse(captionText.contains("captionFollowing"))
     }
 
     func testRichArticleHTMLSaveAndReopen() async throws {
@@ -6359,9 +6413,9 @@ final class RichArticleTests {
         let store = LocalBlogStore(rootURL: root)
         let html = RichArticleDocument.opening + "<p><strong>第一段</strong></p><aside data-type=\"callout\">高亮提示</aside><pre data-language=\"swift\"><code>let x = &lt;value&gt;</code></pre></article>"
         let saved = try await store.saveArticle(article(slug: "rich", status: .draft, expectedUpdatedAt: nil, body: html, title: "富文本 & <文章>"))
-        XCTAssertEqual(saved.sourceRelativePath, "rich.html")
+        XCTAssertEqual(saved.sourceRelativePath, "未分类/rich.html")
         let directory = try await store.markdownSourceDirectoryURL()
-        let source = try String(contentsOf: directory.appendingPathComponent("rich.html"), encoding: .utf8)
+        let source = try String(contentsOf: directory.appendingPathComponent("未分类/rich.html"), encoding: .utf8)
         XCTAssertTrue(source.hasPrefix("<!doctype html>"))
         XCTAssertFalse(source.hasPrefix("---"))
         let record = try RichArticleFile.read(source, relativePath: "rich.html", modifiedAt: saved.updatedAt)
@@ -6382,18 +6436,18 @@ final class RichArticleTests {
         let store = LocalBlogStore(rootURL: root)
         let legacy = try await store.saveArticle(article(slug: "legacy", status: .draft, expectedUpdatedAt: nil, body: "第一段\n第二段"))
         let directory = try await store.markdownSourceDirectoryURL()
-        let original = try Data(contentsOf: directory.appendingPathComponent("legacy.md"))
-        let target = directory.appendingPathComponent("legacy.html")
+        let original = try Data(contentsOf: directory.appendingPathComponent("未分类/legacy.md"))
+        let target = directory.appendingPathComponent("未分类/legacy.html")
         try Data("occupied".utf8).write(to: target)
         do {
             _ = try await store.saveArticle(article(slug: "legacy", status: .draft, expectedUpdatedAt: legacy.updatedAt, body: RichArticleDocument.convertingLegacyBody(legacy.body)))
             XCTFail("an existing HTML file must not be overwritten by migration")
         } catch NativeStoreError.fileSystem { }
-        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("legacy.md")), original)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("未分类/legacy.md")), original)
         try FileManager.default.removeItem(at: target)
         let migrated = try await store.saveArticle(article(slug: "legacy", status: .draft, expectedUpdatedAt: legacy.updatedAt, body: RichArticleDocument.convertingLegacyBody(legacy.body)))
-        XCTAssertEqual(migrated.sourceRelativePath, "legacy.html")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("legacy.md").path))
+        XCTAssertEqual(migrated.sourceRelativePath, "未分类/legacy.html")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("未分类/legacy.md").path))
         let archive = directory.appendingPathComponent(".legacy-markdown")
         let files = FileManager.default.enumerator(at: archive, includingPropertiesForKeys: nil)!.allObjects.compactMap { $0 as? URL }.filter { $0.pathExtension == "md" }
         XCTAssertEqual(files.count, 1)
@@ -6402,6 +6456,329 @@ final class RichArticleTests {
         XCTAssertEqual(try await store.listArticles().count, 1)
         XCTAssertEqual(try await store.getArticle(slug: "legacy").body, migrated.body)
         await store.closeForRestore()
+    }
+
+    @MainActor
+    func testRichArticleCaretNavigationAvoidsContentCopies() async throws {
+        try await withWebEditor { view in
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document');
+              LeonArticle.load('<article data-leon-format="html-v1"><p>' + '<strong>富文本段落内容</strong><em>继续编辑</em>'.repeat(1200) + '</p></article>', 'navigation-work', true, 18);
+              const node = root.firstElementChild.lastChild.firstChild;
+              root.focus(); getSelection().setPosition(node, node.length);
+              const clone = Range.prototype.cloneContents, stringify = Range.prototype.toString;
+              let copiedCharacters = 0, scannedCharacters = 0;
+              Range.prototype.cloneContents = function() { const copy = clone.call(this); copiedCharacters += copy.textContent.length; return copy; };
+              Range.prototype.toString = function() { const text = stringify.call(this); scannedCharacters += text.length; return text; };
+              const start = performance.now();
+              try {
+                for (let i = 0; i < 40; i++) {
+                  root.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowLeft', bubbles: true}));
+                  getSelection().setPosition(node, i % (node.length + 1));
+                  document.dispatchEvent(new Event('selectionchange'));
+                }
+              } finally { Range.prototype.cloneContents = clone; Range.prototype.toString = stringify; }
+              return JSON.stringify({copiedCharacters, scannedCharacters, elapsedMS: performance.now() - start, menuHidden: document.getElementById('commands').hidden});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Any]
+            print("CARET_NAVIGATION_PERFORMANCE \(result as! String)")
+            XCTAssertEqual(json["copiedCharacters"] as? Int, 0, "caret bookmarks must not copy paragraph content")
+            XCTAssertTrue((json["scannedCharacters"] as! Int) < 2_000, "ordinary caret movement must not stringify the paragraph for slash detection")
+            XCTAssertEqual(json["menuHidden"] as? Bool, true)
+        }
+    }
+
+    @MainActor
+    func testRichArticleSelectionBookmarksPreserveMixedContent() async throws {
+        try await withWebEditor { view in
+            let result = try await view.callAsyncJavaScript(#"""
+            const root = document.getElementById('document'), opening = '<article data-leon-format="html-v1">';
+            const units = node => node.nodeType === Node.TEXT_NODE ? node.length : ['IMG','BR','HR'].includes(node.nodeName) ? 1 : [...node.childNodes].reduce((sum, child) => sum + units(child), 0);
+            const point = (node, offset) => {
+              const block = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement).closest('[data-block-id]');
+              const range = document.createRange(); range.selectNodeContents(block); range.setEnd(node, offset);
+              return {id: block.dataset.blockId, offset: units(range.cloneContents())};
+            };
+            const bookmark = () => { const s = getSelection(); return JSON.stringify([point(s.anchorNode, s.anchorOffset), point(s.focusNode, s.focusOffset)]); };
+            const source = '<p data-block-id="p">甲<strong>👩🏽‍💻乙</strong><br><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><em>é丙</em>末</p><p data-block-id="q">另一段</p><p data-block-id="empty"><br></p><table><tr><td><p data-block-id="cell">格内<strong>粗体</strong>末尾</p></td></tr></table><pre data-block-id="code"><code>第一行\n😀第二行</code></pre>';
+            const cases = [
+              ['start', p => [p.firstChild, 0]],
+              ['emoji', p => [p.querySelector('strong').firstChild, 7]],
+              ['before inline', p => [p, 1]],
+              ['after break', p => [p, 3]],
+              ['after image', p => [p, 4]],
+              ['combining text', p => [p.querySelector('em').firstChild, 2]],
+              ['backward', p => [p.lastChild, 1, p.firstChild, 0]],
+              ['cross block', p => [root.querySelector('[data-block-id=q]').firstChild, 2, p.querySelector('strong').firstChild, 7]],
+              ['empty', p => [root.querySelector('[data-block-id=empty]'), 0]],
+              ['table', p => [root.querySelector('[data-block-id=cell]'), 2]],
+              ['code', p => [root.querySelector('code').firstChild, 6]],
+              ['text mutation', p => [p, 4]],
+              ['detached mutation', p => [p, 4]]
+            ];
+            for (const [label, endpoints] of cases) {
+              LeonArticle.load(opening + source + '</article>', 'bookmark-' + label, true, 18);
+              const p = root.firstElementChild;
+              root.focus(); getSelection().setPosition(p, 4);
+              root.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowLeft', bubbles: true}));
+              if (label === 'text mutation') p.querySelector('strong').firstChild.data += '追加😀';
+              if (label === 'detached mutation') {
+                p.remove(); LeonArticle.serialize(); await new Promise(resolve => setTimeout(resolve, 0));
+                p.querySelector('strong').firstChild.data += '脱离后追加'; root.prepend(p);
+              }
+              if (label.endsWith('mutation')) {
+                // Publish this separate edit, then leave the typing-coalescing
+                // window so undo of Z should return to the modified document.
+                root.dispatchEvent(new Event('input'));
+                await new Promise(resolve => setTimeout(resolve, 650));
+              }
+              const points = endpoints(p);
+              getSelection().setBaseAndExtent(...(points.length === 2 ? [...points, ...points] : points));
+              const expected = bookmark(), before = LeonArticle.serialize();
+              root.dispatchEvent(new InputEvent('beforeinput', {inputType: 'insertText', data: 'Z', bubbles: true, cancelable: true}));
+              document.execCommand('insertText', false, 'Z');
+              const after = LeonArticle.serialize();
+              if (after === before) throw new Error(label + ': input must change content');
+              LeonArticle.undo(-1);
+              if (bookmark() !== expected || LeonArticle.serialize() !== before) throw new Error(label + ': undo must restore content, direction and inline-object offsets; expected ' + expected + ', got ' + bookmark());
+              LeonArticle.undo(1);
+              if (LeonArticle.serialize() !== after || !getSelection().isCollapsed) throw new Error(label + ': redo must restore the edit and caret');
+            }
+            return cases.length;
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            XCTAssertEqual(result as? Int, 13)
+        }
+    }
+
+    @MainActor
+    func testRichArticleSelectionUIWorkIsBounded() async throws {
+        try await withWebEditor { view in
+            let result = try await view.callAsyncJavaScript(#"""
+            const root = document.getElementById('document'), menu = document.getElementById('commands');
+            const wait = () => new Promise(resolve => setTimeout(resolve, 80));
+            LeonArticle.load('<article data-leon-format="html-v1"><p>/</p></article>', 'menu-reuse', true, 18);
+            root.focus(); getSelection().setPosition(root.firstChild.firstChild, 1);
+            document.dispatchEvent(new Event('selectionchange')); await wait();
+            const observer = new MutationObserver(() => {}); observer.observe(menu, {childList: true, subtree: true});
+            for (let i = 0; i < 40; i++) document.dispatchEvent(new Event('selectionchange'));
+            const menuMutations = observer.takeRecords().length; observer.disconnect();
+            const menuVisible = !menu.hidden;
+            root.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));
+            document.dispatchEvent(new Event('selectionchange'));
+            const selected = menu.querySelector('[aria-selected=true]')?.dataset.commandId;
+            root.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+            const commandApplied = selected === 'code' && root.firstElementChild.tagName === 'PRE';
+            LeonArticle.load('<article data-leon-format="html-v1"><table><tbody><tr><td><p>表格文字</p></td><td><p>另一列</p></td></tr></tbody></table></article>', 'selection-ui', true, 18);
+            root.focus(); getSelection().setPosition(root.querySelector('td p').firstChild, 1); await wait();
+            const read = Element.prototype.getBoundingClientRect; let layoutReads = 0;
+            Element.prototype.getBoundingClientRect = function() { layoutReads++; return read.call(this); };
+            try { for (let i = 0; i < 120; i++) document.dispatchEvent(new Event('selectionchange')); await wait(); }
+            finally { Element.prototype.getBoundingClientRect = read; }
+            const add = document.getElementById('table-add-row'), rowVisible = !add.hidden;
+            add.click(); const rowAdded = root.querySelector('table').rows.length === 2;
+            return JSON.stringify({menuMutations, menuVisible, commandApplied, layoutReads, rowVisible, rowAdded});
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Any]
+            print("SELECTION_UI_PERFORMANCE \(result as! String)")
+            XCTAssertEqual(json["menuMutations"] as? Int, 0, "unchanged slash queries must reuse menu content")
+            XCTAssertTrue((json["layoutReads"] as! Int) < 80, "selection bursts must share table layout measurements")
+            for name in ["menuVisible", "commandApplied", "rowVisible", "rowAdded"] { XCTAssertEqual(json[name] as? Bool, true, name) }
+        }
+    }
+
+    @MainActor
+    func testRichArticlePointerWorkIsFrameBounded() async throws {
+        try await withWebEditor { view in
+            let result = try await view.callAsyncJavaScript(#"""
+              const root = document.getElementById('document');
+              LeonArticle.load('<article data-leon-format="html-v1"><table><tbody>' + '<tr>' + '<td><p>内容</p></td>'.repeat(12) + '</tr>' + '</tbody></table></article>', 'pointer-perf', true, 18);
+              const cell = root.querySelector('td'), rect = cell.getBoundingClientRect();
+              root.focus(); const range = document.createRange(); range.selectNodeContents(cell.firstElementChild); range.collapse(true); getSelection().removeAllRanges(); getSelection().addRange(range);
+              await new Promise(resolve => setTimeout(resolve, 80));
+              const original = Element.prototype.getBoundingClientRect; let layoutReads = 0;
+              Element.prototype.getBoundingClientRect = function() { layoutReads++; return original.call(this); };
+              const start = performance.now();
+              for (let i = 0; i < 120; i++) cell.dispatchEvent(new PointerEvent('pointermove', {bubbles: true, clientX: rect.right - 2, clientY: rect.top + 10}));
+              const eventMS = performance.now() - start;
+              await new Promise(resolve => setTimeout(resolve, 80));
+              Element.prototype.getBoundingClientRect = original;
+              const columnAdd = document.getElementById('table-add-column');
+              const visible = !columnAdd.hidden;
+              columnAdd.click();
+              return JSON.stringify({layoutReads, eventMS, visible, inserted: root.querySelector('tr').cells.length === 13});
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Any]
+            print("POINTER_PERFORMANCE \(result as! String)")
+            XCTAssertTrue((json["layoutReads"] as! Int) < 80, "pointer bursts must share layout measurements within a frame")
+            XCTAssertEqual(json["visible"] as? Bool, true)
+            XCTAssertEqual(json["inserted"] as? Bool, true)
+        }
+    }
+
+    @MainActor
+    func testRichArticleIncrementalSerializationMatchesFullSanitizer() async throws {
+        try await withWebEditor { view in
+            let result = try await view.callAsyncJavaScript(#"""
+              const root = document.getElementById('document'), opening = '<article data-leon-format="html-v1">';
+              LeonArticle.load(opening + '<p>第一段</p><p>第二段</p><table><tr><td><p>单元格</p></td></tr></table></article>', 'serialization-cache', true, 18);
+              const failures = [], check = label => {
+                const actual = LeonArticle.serialize(), reference = opening + LeonArticle.cleanHTML(root.innerHTML) + '</article>';
+                if (actual !== reference) failures.push(label);
+              };
+              check('warm');
+              root.firstElementChild.firstChild.data += '即时输入'; check('character data');
+              root.firstElementChild.style.color = '#4b7dce'; check('color');
+              root.querySelector('td p').innerHTML = '<strong>表格内容</strong><img src="javascript:alert(1)"><span onclick="evil()">安全</span>'; check('table and sanitizer');
+              const table = root.querySelector('table');
+              table.innerHTML = '<colgroup><col style="width:35%"><col style="width:65%"></colgroup><tbody><tr><td><p>文字</p><table><tbody><tr><td>嵌套内容</td></tr></tbody></table></td><td><aside><strong>提示</strong></aside></td></tr><tr><td colspan="2"><p>尾行</p></td></tr></tbody>'; check('nested table');
+              table.querySelector('table td').firstChild.data += '&更新'; check('nested table text');
+              table.querySelector('col').style.width = '45%'; check('column width');
+              table.rows[0].cells[1].style.backgroundColor = '#cceeff'; check('cell color');
+              table.rows[1].cells[0].setAttribute('colspan', '1'); check('cell span');
+              const movedRow = table.rows[1]; movedRow.remove(); check('remove row');
+              await new Promise(resolve => setTimeout(resolve, 0));
+              movedRow.cells[0].firstElementChild.textContent = '脱离表格后更新'; table.tBodies[0].prepend(movedRow); check('reattach changed row');
+              table.rows[1].cells[1].append(document.createTextNode('直接文本 & <')); check('cell text node');
+              table.remove(); check('remove table');
+              await new Promise(resolve => setTimeout(resolve, 0));
+              table.querySelector('table td').textContent = '重新插入前更新'; root.append(table); check('reattach changed nested table');
+              const detached = root.firstElementChild; detached.remove(); check('remove');
+              await new Promise(resolve => setTimeout(resolve, 0));
+              detached.textContent = '离开文档后修改'; root.append(detached); check('reattach modified block');
+              root.prepend(root.lastElementChild); check('reorder');
+              const text = document.createTextNode('顶层 & 文本'); root.append(text); check('root text');
+              text.data += '<更新>'; check('root text mutation');
+              root.firstElementChild.setAttribute('data-type', 'task'); root.dispatchEvent(new Event('input')); check('structural normalization');
+              const saved = LeonArticle.serialize(); LeonArticle.load(saved, 'serialization-reopen', true, 18); check('document switch');
+              return JSON.stringify(failures);
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            XCTAssertEqual(result as? String, "[]", "incremental snapshots must always match the full sanitizer")
+        }
+    }
+
+    func testRichArticleContentPresenceShortCircuitsLongDocuments() {
+        let opening = RichArticleDocument.opening
+        func reference(_ source: String) -> Bool {
+            !RichArticleDocument.plainText(source).isEmpty || (RichArticleDocument.isHTML(source) && ["<img ", "<pre", "<aside", "<table", "<hr"].contains(where: source.contains))
+        }
+        let samples = ["", " ", "普通文字", opening, RichArticleDocument.empty,
+            opening + "<p> \n &nbsp;&#32;&#x20;</p></article>",
+            opening + "<p>&lt;内容&gt; &amp;</p></article>",
+            opening + "<script>忽略文字</script><style>忽略样式</style><p><br></p></article>",
+            opening + "<img src=\"photo.png\"></article>", opening + "<table></table></article>",
+            opening + "<pre><code></code></pre></article>", opening + "<aside></aside></article>",
+            opening + "<p>👩🏽‍💻</p></article>", opening + "<p>&unknown;</p></article>",
+            opening + "<p>&#0;</p></article>", opening + "<"]
+        for sample in samples { XCTAssertEqual(RichArticleDocument.hasContent(sample), reference(sample), "content presence must preserve empty-document semantics") }
+        let entitySamples = [
+            ("&lt;&gt;&quot;&apos;&nbsp;&amp;", "<>\"' &"),
+            ("👩🏽‍💻 &amp; e\u{301} &#x1F600; &#20013;", "👩🏽‍💻 & e\u{301} 😀 中"),
+            ("&amp;lt; &unknown; &#xD800; &#1114112; &#999999999999999999999;", "&lt; &unknown; &#xD800; &#1114112; &#999999999999999999999;"),
+            ("A&#10;B&#9;C&#0;D", "A\nB\tC\0D")
+        ]
+        for (html, expected) in entitySamples { XCTAssertEqual(RichArticleDocument.plainText(opening + "<p>\(html)</p></article>"), expected) }
+        let source = opening + String(repeating: "<p>长文正文内容 &amp; <strong>格式</strong></p>", count: 8_000) + "</article>"
+        func elapsed(_ operation: () -> Bool) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            for _ in 0..<6 { XCTAssertTrue(operation()) }
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+        }
+        let plainStart = DispatchTime.now().uptimeNanoseconds
+        XCTAssertEqual(RichArticleDocument.plainText(source), String(repeating: "长文正文内容 & 格式\n", count: 8_000).trimmingCharacters(in: .whitespacesAndNewlines))
+        let plainMS = Double(DispatchTime.now().uptimeNanoseconds - plainStart) / 1_000_000
+        print("PLAIN_TEXT_PERFORMANCE entities=8000 elapsedMS=\(plainMS)")
+        let oldMS = (0..<3).map { _ in elapsed { reference(source) } }.min()!
+        let newMS = (0..<3).map { _ in elapsed { RichArticleDocument.hasContent(source) } }.min()!
+        print("CONTENT_PRESENCE_PERFORMANCE baselineMS=\(oldMS) currentMS=\(newMS)")
+        XCTAssertTrue(newMS < oldMS * 0.5, "content-presence checks must stop after finding visible content")
+    }
+
+    @MainActor
+    func testRichArticleTableTypingAndParagraphSplitWork() async throws {
+        try await withWebEditor { view in
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document'), opening = '<article data-leon-format="html-v1">';
+              const focus = block => { root.focus(); const range = document.createRange(); range.selectNodeContents(block); range.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(range); };
+              const measure = action => {
+                const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML'); let characters = 0;
+                Object.defineProperty(Element.prototype, 'innerHTML', {...descriptor, set(value) { if (this.tagName === 'TEMPLATE') characters += value.length; descriptor.set.call(this, value); }});
+                const start = performance.now();
+                try { action(); return {characters, elapsedMS: performance.now() - start}; }
+                finally { Object.defineProperty(Element.prototype, 'innerHTML', descriptor); }
+              };
+              const loadStart = performance.now();
+              LeonArticle.load(opening + '<table><tbody>' + '<tr>'.concat('<td><p>表格内的富文本输入<strong>内容</strong></p></td>'.repeat(8), '</tr>').repeat(100) + '</tbody></table></article>', 'large-table', true, 18);
+              const tableLoadMS = performance.now() - loadStart;
+              focus(root.querySelector('td p')); LeonArticle.serialize();
+              const table = measure(() => { for (let i = 0; i < 12; i++) document.execCommand('insertText', false, 'x'); });
+              const tableSaved = LeonArticle.serialize();
+              const tableExact = tableSaved === opening + LeonArticle.cleanHTML(root.innerHTML) + '</article>';
+              LeonArticle.undo(-1); const undoTable = !root.querySelector('td').textContent.endsWith('xxxxxxxxxxxx'); LeonArticle.undo(1);
+              const redoTable = LeonArticle.serialize() === tableSaved;
+              LeonArticle.load(opening + Array.from({length: 2000}, (_, i) => `<p data-block-id="split-${i}">长文段落${i}</p>`).join('') + '</article>', 'long-splits', true, 18);
+              focus(root.children[1000]); LeonArticle.serialize();
+              const split = measure(() => { for (let i = 0; i < 8; i++) root.dispatchEvent(new InputEvent('beforeinput', {inputType: 'insertParagraph', bubbles: true, cancelable: true})); });
+              const splitSaved = LeonArticle.serialize();
+              const splitExact = root.children.length === 2008 && splitSaved === opening + LeonArticle.cleanHTML(root.innerHTML) + '</article>';
+              LeonArticle.undo(-1); const undoSplit = root.children.length === 2007; LeonArticle.undo(1); const redoSplit = LeonArticle.serialize() === splitSaved;
+              return JSON.stringify({tableLoadMS, table, split, tableExact, splitExact, undoTable, redoTable, undoSplit, redoSplit});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Any]
+            print("EDITOR_STRUCTURAL_PERFORMANCE \(result as! String)")
+            for name in ["table", "split"] {
+                let metric = json[name] as! [String: Any]
+                XCTAssertTrue((metric["characters"] as! Int) < 50_000, "\(name) edits must avoid cleaning unchanged document content")
+            }
+            for name in ["tableExact", "splitExact", "undoTable", "redoTable", "undoSplit", "redoSplit"] { XCTAssertEqual(json[name] as? Bool, true, name) }
+        }
+    }
+
+    @MainActor
+    func testRichArticleLongDocumentTypingWork() async throws {
+        try await withWebEditor { view in
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document');
+              const paragraph = '长文输入性能检查，保留加粗、颜色与段落结构。'.repeat(4);
+              LeonArticle.load('<article data-leon-format="html-v1">' + Array.from({length: 2000}, (_, i) => `<p data-block-id="b${i}">${paragraph}<strong>重点</strong></p>`).join('') + '</article>', 'performance', true, 18);
+              const block = root.children[1000], range = document.createRange(); range.selectNodeContents(block); range.collapse(false);
+              root.focus(); getSelection().removeAllRanges(); getSelection().addRange(range);
+              LeonArticle.serialize();
+              const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+              let sanitizedCharacters = 0, documentScans = 0;
+              const query = root.querySelectorAll;
+              root.querySelectorAll = function(selector) { documentScans++; return query.call(this, selector); };
+              Object.defineProperty(Element.prototype, 'innerHTML', {...descriptor, set(value) {
+                if (this.tagName === 'TEMPLATE') sanitizedCharacters += value.length;
+                descriptor.set.call(this, value);
+              }});
+              const timings = [];
+              try {
+                for (let i = 0; i < 12; i++) {
+                  const start = performance.now();
+                  root.dispatchEvent(new KeyboardEvent('keydown', {key: 'x', bubbles: true}));
+                  root.dispatchEvent(new InputEvent('beforeinput', {inputType: 'insertText', data: 'x', bubbles: true}));
+                  document.execCommand('insertText', false, 'x');
+                  timings.push(performance.now() - start);
+                }
+              } finally {
+                Object.defineProperty(Element.prototype, 'innerHTML', descriptor); root.querySelectorAll = query;
+              }
+              const saved = LeonArticle.serialize();
+              LeonArticle.undo(-1); const undone = !root.children[1000].textContent.endsWith('xxxxxxxxxxxx');
+              LeonArticle.undo(1); const redone = root.children[1000].textContent.endsWith('xxxxxxxxxxxx');
+              return JSON.stringify({sanitizedCharacters, documentScans, averageMS: timings.reduce((a,b)=>a+b,0)/timings.length, maxMS: Math.max(...timings), saved: saved.includes('xxxxxxxxxxxx'), undone, redone});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Any]
+            print("EDITOR_PERFORMANCE \(result as! String)")
+            XCTAssertTrue((json["sanitizedCharacters"] as! Int) < 50_000, "typing in one paragraph must not sanitize the entire long document")
+            for key in ["saved", "undone", "redone"] { XCTAssertEqual(json[key] as? Bool, true, key) }
+        }
     }
 
     @MainActor
@@ -6615,6 +6992,309 @@ final class RichArticleTests {
     }
 
     @MainActor
+    func testRichArticleTableQuickAddButtons() async throws {
+        try await withWebEditor { view in
+            let result = try await view.callAsyncJavaScript(#"""
+              const root = document.getElementById('document'), rowAdd = document.getElementById('table-add-row'), columnAdd = document.getElementById('table-add-column');
+              const focus = cell => { root.focus(); const range = document.createRange(); range.selectNodeContents(cell.firstElementChild); range.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(range); };
+              const hover = async (cell, side = 'middle') => { focus(cell); const rect = cell.getBoundingClientRect(); cell.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: side === 'left' ? rect.left + 1 : side === 'right' ? rect.right - 2 : rect.left + 25, clientY: rect.top + 15 })); await new Promise(resolve => setTimeout(resolve, 80)); };
+              LeonArticle.load('<article data-leon-format="html-v1"><p>表格前</p><table><thead><tr><th>名称</th><th>说明</th></tr></thead><tbody><tr><td><strong>已有内容</strong></td><td>第二列</td></tr></tbody></table><p>表格后</p></article>', 'quick-table', true, 18);
+              let table = root.querySelector('table'); await hover(table.rows[1].cells[1]);
+              const rowBox = rowAdd.getBoundingClientRect(), tableBox = table.getBoundingClientRect();
+              const rowAtBottomLeft = !rowAdd.hidden && getComputedStyle(rowAdd).display !== 'none' && Math.abs(rowBox.left + rowBox.width / 2 - tableBox.left) < 1 && Math.abs(rowBox.top + rowBox.height / 2 - tableBox.bottom) < 1;
+              const columnHiddenAwayFromBoundary = columnAdd.hidden && getComputedStyle(columnAdd).display === 'none';
+              const anchor = getSelection().anchorNode, down = new MouseEvent('mousedown', { bubbles: true, cancelable: true }); rowAdd.dispatchEvent(down);
+              const preservesSelectionOnMouseDown = down.defaultPrevented && getSelection().anchorNode === anchor;
+              rowAdd.click();
+              const appendedRow = table.rows.length === 3 && table.rows[2].cells.length === 2 && table.rows[2].cells[0].innerText.trim() === '' && table.rows[1].cells[0].querySelector('strong')?.textContent === '已有内容' && table.rows[1].cells[1].textContent === '第二列';
+              const caretInNewRow = getSelection().anchorNode.parentElement.closest('td') === table.rows[2].cells[0];
+              const rowBoxAfter = rowAdd.getBoundingClientRect(); const followsNewBottom = !rowAdd.hidden && Math.abs(rowBoxAfter.top + rowBoxAfter.height / 2 - table.getBoundingClientRect().bottom) < 1;
+              const afterRow = LeonArticle.serialize(); LeonArticle.undo(-1); table = root.querySelector('table');
+              const undoRow = table.rows.length === 2 && getSelection().anchorNode.parentElement.closest('td') === table.rows[1].cells[1];
+              LeonArticle.undo(1); table = root.querySelector('table'); const redoRow = LeonArticle.serialize() === afterRow;
+              await hover(table.rows[1].cells[0], 'right'); const boundaryFromLeft = !columnAdd.hidden && !document.getElementById('column-grip').hidden;
+              await hover(table.rows[1].cells[1], 'left');
+              const columnBox = columnAdd.getBoundingClientRect(), boundary = table.rows[1].cells[0].getBoundingClientRect().right, toolbarBox = document.getElementById('table-tools').getBoundingClientRect();
+              const columnAtBoundary = !columnAdd.hidden && Math.abs(columnBox.left + columnBox.width / 2 - boundary) < 1 && Math.abs(columnBox.top + columnBox.height / 2 - table.getBoundingClientRect().top) < 1;
+              const separateFromResizeAndToolbar = columnBox.bottom < table.rows[1].cells[0].getBoundingClientRect().top && (columnBox.top >= toolbarBox.bottom || columnBox.bottom <= toolbarBox.top);
+              root.dispatchEvent(new PointerEvent('pointerleave', { relatedTarget: columnAdd })); columnAdd.dispatchEvent(new PointerEvent('pointerenter'));
+              await new Promise(resolve => setTimeout(resolve, 220)); const reachableColumnButton = !columnAdd.hidden;
+              columnAdd.click();
+              const insertedBetweenColumns = [...table.rows].every(row => row.cells.length === 3) && table.rows[0].cells[1].tagName === 'TH' && table.rows[1].cells[1].tagName === 'TD' && table.rows[0].cells[0].textContent === '名称' && table.rows[0].cells[2].textContent === '说明' && table.rows[1].cells[0].querySelector('strong')?.textContent === '已有内容' && table.rows[1].cells[2].textContent === '第二列';
+              const caretInNewColumn = getSelection().anchorNode.parentElement.closest('td') === table.rows[1].cells[1];
+              const afterColumn = LeonArticle.serialize(); LeonArticle.undo(-1); table = root.querySelector('table');
+              const undoColumn = [...table.rows].every(row => row.cells.length === 2);
+              LeonArticle.undo(1); const redoColumn = LeonArticle.serialize() === afterColumn;
+              LeonArticle.load(afterColumn, 'quick-table-reopened', true, 18); table = root.querySelector('table');
+              const savedCleanly = table.rows.length === 3 && table.rows[1].cells.length === 3 && !afterColumn.includes('table-add-row') && !afterColumn.includes('table-add-column') && root.children.length === 3;
+              await hover(table.rows[1].cells[0], 'right'); await new Promise(resolve => setTimeout(resolve, 30));
+              root.lastElementChild.dispatchEvent(new PointerEvent('pointermove', { bubbles: true })); await new Promise(resolve => setTimeout(resolve, 240));
+              const hidesAfterLeavingTable = rowAdd.hidden && columnAdd.hidden;
+              LeonArticle.load(afterColumn, 'quick-table-readonly', false, 18); await hover(root.querySelector('td')); rowAdd.click(); columnAdd.click();
+              const readOnlySafe = rowAdd.hidden && columnAdd.hidden && root.querySelectorAll('table > tbody > tr').length === 2 && root.querySelector('table').rows[0].cells.length === 3;
+              LeonArticle.load('<article data-leon-format="html-v1"><p>另一篇文章</p></article>', 'quick-table-different', true, 18); rowAdd.click(); columnAdd.click();
+              const staleActionsSafe = root.textContent === '另一篇文章' && !root.querySelector('table') && rowAdd.hidden && columnAdd.hidden;
+              LeonArticle.load('<article data-leon-format="html-v1"><table><tr><td>外层<table><tr><td>内层</td><td>内容</td></tr></table></td><td>外层第二列</td></tr></table></article>', 'quick-nested-table', true, 18);
+              const outer = root.querySelector('table'), inner = outer.querySelector('table'); await hover(inner.querySelector('td')); rowAdd.click();
+              const nestedTableSafe = outer.rows.length === 1 && outer.rows[0].cells.length === 2 && inner.rows.length === 2 && inner.rows[1].cells.length === 2;
+              return JSON.stringify({rowAtBottomLeft, columnHiddenAwayFromBoundary, preservesSelectionOnMouseDown, appendedRow, caretInNewRow, followsNewBottom, undoRow, redoRow, boundaryFromLeft, columnAtBoundary, separateFromResizeAndToolbar, reachableColumnButton, insertedBetweenColumns, caretInNewColumn, undoColumn, redoColumn, savedCleanly, hidesAfterLeavingTable, readOnlySafe, staleActionsSafe, nestedTableSafe});
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
+            for (key, value) in json { XCTAssertTrue(value, "table quick add failed: \(key)") }
+        }
+    }
+
+    @MainActor
+    func testRichArticleTableControlsAndColumnWidths() async throws {
+        try await withWebEditor { view in
+            let result = try await view.callAsyncJavaScript(#"""
+              const root = document.getElementById('document');
+              const focus = element => { root.focus(); const range = document.createRange(); range.selectNodeContents(element); range.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(range); };
+              const hover = async cell => { focus(cell.firstElementChild); const rect = cell.getBoundingClientRect(); cell.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: rect.right - 2, clientY: rect.top + 8 })); await new Promise(resolve => setTimeout(resolve, 80)); };
+              LeonArticle.load('<article data-leon-format="html-v1"><p>/table</p></article>', 'table-controls', true, 18); focus(root.firstElementChild);
+              LeonArticle.execute('table'); const picker = document.getElementById('table-picker');
+              const pickerVisible = !picker.hidden;
+              const inputs = picker.querySelectorAll('input'); for (const input of inputs) { input.value = 3; input.dispatchEvent(new Event('change')); }
+              picker.querySelector('.insert-table').click();
+              let table = root.querySelector('table');
+              const chosenSize = table.rows.length === 3 && [...table.rows].every(row => row.cells.length === 3) && picker.hidden;
+              table.rows[1].cells[0].firstElementChild.textContent = '已有内容'; root.dispatchEvent(new Event('input'));
+              await hover(table.rows[1].cells[0]); const tools = document.getElementById('table-tools');
+              const hoverTools = !tools.hidden && tools.textContent.includes('第 2 行');
+              tools.querySelector('[data-table=row-after]').click();
+              const addedRow = table.rows.length === 4 && table.rows[1].cells[0].textContent === '已有内容';
+              LeonArticle.undo(-1); table = root.querySelector('table');
+              const undoRow = table.rows.length === 3 && table.rows[1].cells[0].textContent === '已有内容';
+              LeonArticle.undo(1); table = root.querySelector('table');
+              await hover(table.rows[1].cells[0]); tools.querySelector('[data-table=column-after]').click();
+              const addedColumn = [...table.rows].every(row => row.cells.length === 4) && table.rows[1].cells[0].textContent === '已有内容';
+              await hover(table.rows[1].cells[1]); tools.querySelector('[data-table=column-delete]').click();
+              const deletedColumn = [...table.rows].every(row => row.cells.length === 3) && table.rows[1].cells[0].textContent === '已有内容';
+              await hover(table.rows[2].cells[0]); tools.querySelector('[data-table=row-delete]').click();
+              const deletedRow = table.rows.length === 3 && table.rows[1].cells[0].textContent === '已有内容';
+              await hover(table.rows[1].cells[0]); const grip = document.getElementById('column-grip'), rect = table.rows[1].cells[0].getBoundingClientRect();
+              const gripVisible = !grip.hidden;
+              grip.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: rect.right }));
+              document.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: rect.right + 40 }));
+              document.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: rect.right + 40 }));
+              const widths = [...table.querySelector('colgroup').children].map(col => parseFloat(col.style.width));
+              const resized = widths[0] > widths[1] && Math.abs(widths.reduce((a,b) => a+b, 0) - 100) < .01;
+              const saved = LeonArticle.serialize(); LeonArticle.load(saved, 'table-widths-reopened', true, 18); table = root.querySelector('table');
+              const persistedWidths = [...table.querySelector('colgroup').children].every((col, index) => Math.abs(parseFloat(col.style.width) - widths[index]) < .01);
+              const last = table.rows[table.rows.length - 1].lastElementChild; focus(last.firstElementChild);
+              root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+              const tabAppendsRow = table.rows.length === 4 && getSelection().anchorNode.parentElement.closest('tr') === table.rows[3];
+              LeonArticle.undo(-1); table = root.querySelector('table');
+              const undoRestoresCell = table.rows.length === 3 && getSelection().anchorNode.parentElement.closest('td') === table.rows[2].lastElementChild;
+              LeonArticle.load('<article data-leon-format="html-v1"><table><tr><td>唯一内容</td></tr></table></article>', 'single-cell', true, 18); await hover(root.querySelector('td')); tools.querySelector('[data-table=column-delete]').click();
+              const deletesLastColumn = !root.querySelector('table') && root.firstElementChild.tagName === 'P'; LeonArticle.undo(-1);
+              const restoresLastColumn = root.querySelector('td').textContent === '唯一内容';
+              await hover(root.querySelector('td')); tools.querySelector('[data-table=row-delete]').click();
+              const deletesLastRow = !root.querySelector('table') && root.firstElementChild.tagName === 'P';
+              return JSON.stringify({pickerVisible, chosenSize, hoverTools, addedRow, undoRow, addedColumn, deletedColumn, deletedRow, gripVisible, resized, persistedWidths, tabAppendsRow, undoRestoresCell, deletesLastColumn, restoresLastColumn, deletesLastRow});
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
+            for (key, value) in json { XCTAssertTrue(value, "table controls failed: \(key)") }
+            if let preview = ProcessInfo.processInfo.environment["LEON_RICH_TABLE_PREVIEW_PATH"] {
+                _ = try await view.evaluateJavaScript(#"""
+                (() => {
+                  const root = document.getElementById('document');
+                  LeonArticle.load('<article data-leon-format="html-v1"><h2>项目进度</h2><p>在表格中直接整理内容，调整结构。</p><table><thead><tr><th>任务</th><th>状态</th><th>说明</th></tr></thead><tbody><tr><td>编辑体验</td><td><span style="color:#328568">已完成</span></td><td>表格、图片与选区恢复</td></tr><tr><td>交互验证</td><td><span style="color:#4b7dce">进行中</span></td><td>保留内容与编辑位置</td></tr></tbody></table></article>', 'table-preview', true, 18);
+                  const cell = root.querySelector('td'), range = document.createRange(); root.focus(); range.selectNodeContents(cell.firstElementChild); range.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(range);
+                  const rect = cell.getBoundingClientRect(); cell.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: rect.right - 2, clientY: rect.top + 10 })); return true;
+                })()
+                """#)
+                try await Task.sleep(nanoseconds: 150_000_000)
+                let configuration = WKSnapshotConfiguration()
+                configuration.rect = CGRect(x: 0, y: 40, width: 700, height: 380)
+                let snapshot = try await view.takeSnapshot(configuration: configuration)
+                if let tiff = snapshot.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
+                    try png.write(to: URL(fileURLWithPath: preview))
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func testRichArticleImageControlsAndCaptions() async throws {
+        let messages = RichImagePasteTestHandler()
+        try await withWebEditor(messageHandler: messages) { view in
+            let result = try await view.callAsyncJavaScript(#"""
+              const root = document.getElementById('document');
+              const source = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV1sAAAAASUVORK5CYII=';
+              LeonArticle.load('<article data-leon-format="html-v1"><p>前缀<img src="' + source + '" style="width:60%">后缀</p><p>末尾段落</p></article>', 'image-controls', true, 18);
+              for (let attempt = 0; attempt < 50 && !root.querySelector('img').complete; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+              let image = root.querySelector('img'); image.click();
+              const tools = document.getElementById('image-tools'), frame = document.getElementById('image-frame');
+              const imageToolsVisible = !tools.hidden && !frame.hidden && getComputedStyle(tools).display !== 'none' && getComputedStyle(document.getElementById('image-preview')).display === 'none';
+              const rect = image.getBoundingClientRect(), handle = frame.querySelector('[data-side="1"]');
+              handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 2, clientX: rect.right }));
+              document.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: rect.right - 80 }));
+              document.dispatchEvent(new PointerEvent('pointerup', { pointerId: 2, clientX: rect.right - 80 }));
+              const resizedWidth = image.style.width, resizedImage = parseFloat(resizedWidth) < 60 && parseFloat(resizedWidth) >= 10;
+              LeonArticle.undo(-1); const undoResize = root.querySelector('img').style.width === '60%';
+              LeonArticle.undo(1); image = root.querySelector('img'); const redoResize = image.style.width === resizedWidth; image.click();
+              tools.querySelector('[data-image=caption]').click(); document.execCommand('insertText', false, '图片说明');
+              const caption = root.querySelector('figcaption');
+              const captionCreated = caption?.textContent === '图片说明' && root.querySelector('figure img') === image && root.firstElementChild.textContent === '前缀' && root.children[2].textContent === '后缀';
+              LeonArticle.undo(-1); const undoCaptionCaret = root.querySelector('figcaption')?.textContent === '' && getSelection().anchorNode === root.querySelector('figcaption');
+              LeonArticle.undo(1); image = root.querySelector('img');
+              const saved = LeonArticle.serialize(); LeonArticle.load(saved, 'image-caption-reopened', true, 18); image = root.querySelector('img'); image.click();
+              const persistedCaption = root.querySelector('figcaption').textContent === '图片说明' && image.style.width === resizedWidth;
+              tools.querySelector('[data-image=preview]').click(); const preview = document.getElementById('image-preview');
+              const canPreview = !preview.hidden && preview.querySelector('img').src === source;
+              document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); const closesPreview = preview.hidden && getComputedStyle(preview).display === 'none';
+              image.click(); tools.querySelector('[data-image=replace]').click();
+              return JSON.stringify({imageToolsVisible, resizedImage, undoResize, redoResize, captionCreated, undoCaptionCaret, persistedCaption, canPreview, closesPreview});
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
+            for (key, value) in json { XCTAssertTrue(value, "image controls failed: \(key)") }
+            for _ in 0..<40 where messages.replacements.isEmpty { try await Task.sleep(nanoseconds: 25_000_000) }
+            guard let request = messages.replacements.first else { XCTFail("expected image replacement request"); return }
+            let replaced = try await view.callAsyncJavaScript(#"""
+              const root = document.getElementById('document'), source = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+              const width = root.querySelector('img').style.width;
+              const replacement = LeonArticle.completeImageReplacement(requestID, source) && root.querySelector('img').src === source && root.querySelector('img').style.width === width && root.querySelector('figcaption').textContent === '图片说明';
+              document.querySelector('#image-tools [data-image=delete]').click();
+              const deleted = !root.querySelector('figure,img,figcaption') && root.textContent === '前缀后缀末尾段落';
+              LeonArticle.undo(-1); const undoDelete = root.querySelector('img')?.src === source && root.querySelector('figcaption')?.textContent === '图片说明';
+              const saved = LeonArticle.serialize(); LeonArticle.load(saved, 'image-reader', false, 18); root.querySelector('img').click();
+              const readOnlyPreview = !document.getElementById('image-preview').hidden && document.getElementById('image-tools').hidden;
+              LeonArticle.load('<article data-leon-format="html-v1"><p>另一篇文章</p></article>', 'image-stale', true, 18);
+              const staleReplacementRejected = !LeonArticle.completeImageReplacement(requestID, source) && !root.querySelector('img');
+              return JSON.stringify({replacement, deleted, undoDelete, readOnlyPreview, staleReplacementRejected});
+            """#, arguments: ["requestID": request], in: nil, contentWorld: .page)
+            let replacementJSON = try JSONSerialization.jsonObject(with: Data((replaced as! String).utf8)) as! [String: Bool]
+            for (key, value) in replacementJSON { XCTAssertTrue(value, "image replacement failed: \(key)") }
+        }
+    }
+
+    @MainActor
+    func testRichArticleUndoRestoresSelectionsAndCaret() async throws {
+        try await withWebEditor { view in
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document');
+              LeonArticle.load('<article data-leon-format="html-v1"><table><tr><td>第一段文本</td><td>相邻内容</td></tr></table><p>文章末尾</p></article>', 'undo-caret', true, 18);
+              const selection = getSelection(), text = root.querySelector('td p').firstChild; root.focus(); selection.setBaseAndExtent(text, 4, text, 2);
+              document.dispatchEvent(new Event('selectionchange')); document.querySelector('#selection-toolbar [data-format=bold]').click();
+              const formatted = LeonArticle.serialize(); LeonArticle.undo(-1);
+              const backward = () => { const probe = document.createRange(); probe.setStart(selection.anchorNode, selection.anchorOffset); probe.setEnd(selection.focusNode, selection.focusOffset); return probe.collapsed && !selection.isCollapsed; };
+              const restoresBackwardSelection = selection.toString() === '段文' && backward() && selection.anchorNode.parentElement.closest('td') === root.querySelector('td');
+              LeonArticle.undo(1); const redoFormatting = LeonArticle.serialize() === formatted && selection.toString() === '段文' && backward();
+              root.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: '替换', bubbles: true, cancelable: true })); document.execCommand('insertText', false, '替换');
+              const afterText = root.querySelector('td').textContent;
+              LeonArticle.undo(-1); const restoresReplacedSelection = selection.toString() === '段文' && backward();
+              LeonArticle.undo(1);
+              const prefix = document.createRange(); prefix.selectNodeContents(root.querySelector('td p')); prefix.setEnd(selection.anchorNode, selection.anchorOffset);
+              const restoresTypingCaret = selection.isCollapsed && root.querySelector('td').textContent === afterText && prefix.toString() === '第一替换';
+              root.style.paddingBottom = '1800px'; scrollTo(0, 350);
+              const scrollBefore = scrollY; const current = root.querySelector('td p'); root.focus({preventScroll:true}); const range = document.createRange(); range.selectNodeContents(current); range.collapse(false); selection.removeAllRanges(); selection.addRange(range);
+              root.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertText', data: '末', bubbles: true, cancelable: true })); document.execCommand('insertText', false, '末');
+              LeonArticle.undo(-1); const restoresScroll = scrollY === scrollBefore;
+              return JSON.stringify({restoresBackwardSelection, redoFormatting, restoresReplacedSelection, restoresTypingCaret, restoresScroll});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
+            for (key, value) in json { XCTAssertTrue(value, "undo selection failed: \(key)") }
+        }
+    }
+
+    @MainActor
+    func testRichArticleSelectionToolbarSetsHeadingLevels() async throws {
+        try await withWebEditor { view in
+            view.setFrameSize(NSSize(width: 360, height: 540))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            let result = try await view.evaluateJavaScript(#"""
+            (() => {
+              const root = document.getElementById('document'), toolbar = document.getElementById('selection-toolbar');
+              const panel = document.getElementById('selection-headings'), trigger = toolbar.querySelector('[data-format=heading]');
+              const selection = getSelection();
+              const load = (body, id, editable = true) => LeonArticle.load('<article data-leon-format="html-v1">' + body + '</article>', id, editable, 18);
+              const select = (start, from, end, to, backward = false) => {
+                root.focus(); selection.setBaseAndExtent(...(backward ? [end, to, start, from] : [start, from, end, to]));
+                document.dispatchEvent(new Event('selectionchange'));
+              };
+              const choose = tag => { trigger.click(); panel.querySelector('[data-heading=' + tag + ']').click(); };
+              load('<p data-depth="2">前缀<strong>选中文字</strong>后缀</p><p>不变</p>', 'heading-levels');
+              root.style.paddingTop = '140px';
+              const text = root.querySelector('strong').firstChild;
+              select(text, 0, text, text.length, true);
+              const selected = selection.toString(), original = LeonArticle.serialize(), id = root.firstElementChild.dataset.blockId;
+              trigger.click();
+              const bounds = panel.getBoundingClientRect(), tools = toolbar.getBoundingClientRect();
+              const fitsViewport = bounds.left >= 7 && bounds.right <= innerWidth - 7 && bounds.top >= 7 && bounds.bottom <= innerHeight - 7 && tools.right <= innerWidth - 7;
+              const options = !panel.hidden && panel.querySelectorAll('[data-heading]').length === 5 && panel.querySelector('[data-heading=p]').getAttribute('aria-checked') === 'true';
+              let levels = true, selectionPreserved = true, activeHeading = true;
+              for (let level = 1; level <= 4; level++) {
+                if (panel.hidden) trigger.click();
+                panel.querySelector('[data-heading=h' + level + ']').click();
+                const block = root.firstElementChild;
+                levels &&= block.tagName === 'H' + level && block.dataset.blockId === id && block.dataset.depth === '2' && block.querySelector('strong').textContent === selected && root.lastElementChild.tagName === 'P';
+                const range = selection.getRangeAt(0);
+                selectionPreserved &&= selection.toString() === selected && selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
+                trigger.click(); activeHeading &&= panel.querySelector('[aria-checked=true]')?.dataset.heading === 'h' + level; trigger.click();
+              }
+              const saved = LeonArticle.serialize();
+              for (let i = 0; i < 4; i++) LeonArticle.undo(-1);
+              const undo = LeonArticle.serialize() === original && selection.toString() === selected;
+              for (let i = 0; i < 4; i++) LeonArticle.undo(1);
+              const redo = LeonArticle.serialize() === saved && selection.toString() === selected;
+              LeonArticle.load(saved, 'heading-reopened', true, 18);
+              const reopened = root.firstElementChild.tagName === 'H4' && root.querySelector('h4 strong').textContent === selected;
+              select(root.querySelector('strong').firstChild, 0, root.querySelector('strong').firstChild, selected.length);
+              choose('p'); const resetsToText = root.firstElementChild.tagName === 'P' && !!root.querySelector('p strong');
+              load('<p>第一段</p><p data-type="task" data-checked="true">第二段</p><p>第三段</p>', 'heading-multiple');
+              select(root.children[0].firstChild, 1, root.children[2].firstChild, 0);
+              const multipleText = selection.toString(); choose('h2');
+              const multipleBlocks = [...root.children].map(block => block.tagName).join(',') === 'H2,H2,P' && !root.querySelector('[data-type],[data-checked]') && selection.toString() === multipleText;
+              load('<table><tbody><tr><td><p>单元格文字</p></td><td><p>保留单元格</p></td></tr></tbody></table>', 'heading-table');
+              const cellText = root.querySelector('td p').firstChild; select(cellText, 0, cellText, cellText.length); choose('h4');
+              const tablePreserved = root.querySelectorAll('td').length === 2 && root.querySelector('td h4').textContent === '单元格文字' && root.querySelectorAll('td')[1].firstElementChild.tagName === 'P';
+              const tableSaved = LeonArticle.serialize(); LeonArticle.load(tableSaved, 'heading-table-reopened', true, 18);
+              const tableReopened = root.querySelector('td').firstElementChild.tagName === 'H4';
+              const reopenedText = root.querySelector('h4').firstChild; select(reopenedText, 0, reopenedText, reopenedText.length);
+              trigger.click(); toolbar.querySelector('[data-format=foreColor]').click();
+              const colorExclusive = panel.hidden && !document.getElementById('selection-colors').hidden;
+              trigger.click(); const headingExclusive = !panel.hidden && document.getElementById('selection-colors').hidden;
+              document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}));
+              const escape = panel.hidden && !toolbar.hidden && selection.toString() === '单元格文字';
+              trigger.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowDown', bubbles:true, cancelable:true}));
+              const keyboard = !panel.hidden && document.activeElement.dataset.heading === 'h4';
+              panel.dispatchEvent(new KeyboardEvent('keydown', {key:'Home', bubbles:true, cancelable:true}));
+              const keyboardNavigation = document.activeElement.dataset.heading === 'p';
+              load('<p>另一篇文章</p>', 'heading-new'); panel.querySelector('[data-heading=h1]').click();
+              const staleRange = panel.hidden && !root.querySelector('h1') && root.textContent === '另一篇文章';
+              load('<h4>只读标题</h4>', 'heading-readonly', false);
+              select(root.firstElementChild.firstChild, 0, root.firstElementChild.firstChild, 4); choose('h1');
+              const readonly = toolbar.hidden && panel.hidden && root.firstElementChild.tagName === 'H4';
+              return JSON.stringify({fitsViewport, options, levels, selectionPreserved, activeHeading, undo, redo, reopened, resetsToText, multipleBlocks, tablePreserved, tableReopened, colorExclusive, headingExclusive, escape, keyboard, keyboardNavigation, staleRange, readonly});
+            })()
+            """#)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
+            for (key, value) in json { XCTAssertTrue(value, "selection heading failed: \(key)") }
+            if let preview = ProcessInfo.processInfo.environment["LEON_RICH_HEADING_PREVIEW_PATH"] {
+                view.setFrameSize(NSSize(width: 700, height: 540))
+                _ = try await view.evaluateJavaScript(#"""
+                (() => {
+                  const root = document.getElementById('document'); root.style.paddingTop = '40px';
+                  LeonArticle.load('<article data-leon-format="html-v1"><h3>音乐特点</h3><p>嗓音粗粝、质朴沙哑，歌词聚焦普通人的青春迷惘、理想失落、故乡与漂泊感。</p><p>作品大多来自自身真实生活体验。</p></article>', 'heading-preview', true, 18);
+                  root.focus(); const range = document.createRange(); range.selectNodeContents(root.querySelector('p'));
+                  getSelection().removeAllRanges(); getSelection().addRange(range); document.dispatchEvent(new Event('selectionchange'));
+                  document.querySelector('#selection-toolbar [data-format=heading]').click();
+                })()
+                """#)
+                try await Task.sleep(nanoseconds: 100_000_000)
+                let image = try await view.takeSnapshot(configuration: nil)
+                if let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+                   let png = bitmap.representation(using: .png, properties: [:]) {
+                    try png.write(to: URL(fileURLWithPath: preview))
+                }
+            }
+        }
+    }
+
+    @MainActor
     func testRichArticleSelectionToolbarFormatsAndPersistsColors() async throws {
         try await withWebEditor { view in
             view.setFrameSize(NSSize(width: 360, height: 540))
@@ -6791,6 +7471,59 @@ final class RichArticleTests {
     }
 
     @MainActor
+    func testRichArticleReaderSelectionCoalescesNativeNotifications() async throws {
+        let messages = RichReaderSelectionTestHandler()
+        try await withWebEditor(messageHandler: messages) { view in
+            _ = try await view.callAsyncJavaScript(#"""
+            const root = document.getElementById('document');
+            LeonArticle.load('<article data-leon-format="html-v1"><p>' + '阅读正文'.repeat(100) + '</p></article>', 'reader-selection', false, 18);
+            root.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
+            const text = root.firstChild.firstChild;
+            for (let i = 1; i <= 120; i++) {
+              getSelection().setBaseAndExtent(text, 0, text, i);
+              document.dispatchEvent(new Event('selectionchange'));
+            }
+            await new Promise(resolve => setTimeout(resolve, 80)); return true;
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            let duringDrag = messages.texts.count
+            XCTAssertEqual(duringDrag, 0, "dragging a reader selection must not refresh native comment UI for each intermediate range")
+            _ = try await view.callAsyncJavaScript(#"""
+            document.dispatchEvent(new PointerEvent('pointerup'));
+            await new Promise(resolve => setTimeout(resolve, 80)); return true;
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            XCTAssertEqual(messages.texts.count, 1)
+            XCTAssertEqual(messages.texts.last, String(repeating: "阅读正文", count: 30))
+            _ = try await view.callAsyncJavaScript(#"""
+            const text = document.getElementById('document').firstChild.firstChild;
+            for (let i = 121; i <= 160; i++) {
+              getSelection().setBaseAndExtent(text, 0, text, i);
+              document.dispatchEvent(new Event('selectionchange'));
+            }
+            await new Promise(resolve => setTimeout(resolve, 80));
+            for (let i = 0; i < 20; i++) document.dispatchEvent(new Event('selectionchange'));
+            await new Promise(resolve => setTimeout(resolve, 80)); return true;
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            XCTAssertEqual(messages.texts.count, 2, "keyboard bursts must publish their latest selection once and ignore duplicate notifications")
+            XCTAssertEqual(messages.texts.last, String(repeating: "阅读正文", count: 40))
+            _ = try await view.callAsyncJavaScript(#"""
+            const text = document.getElementById('document').firstChild.firstChild;
+            getSelection().collapse(text, 0); document.dispatchEvent(new Event('selectionchange'));
+            getSelection().setBaseAndExtent(text, 0, text, 160); document.dispatchEvent(new Event('selectionchange'));
+            await new Promise(resolve => setTimeout(resolve, 80)); return true;
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            XCTAssertEqual(messages.texts.count, 3, "a newly made selection must still reopen comments even when its text matches the previous one")
+            _ = try await view.callAsyncJavaScript(#"""
+            const root = document.getElementById('document'), text = root.firstChild.firstChild;
+            getSelection().setBaseAndExtent(text, 0, text, 12); document.dispatchEvent(new Event('selectionchange'));
+            LeonArticle.load('<article data-leon-format="html-v1"><p>另一篇文章</p></article>', 'reader-next', false, 18);
+            await new Promise(resolve => setTimeout(resolve, 80)); return true;
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            XCTAssertEqual(messages.texts.count, 3, "document switches must discard pending selections")
+            print("READER_SELECTION_PERFORMANCE dragEvents=120 notificationsDuringDrag=\(duringDrag) notificationsAfterAllChecks=\(messages.texts.count)")
+        }
+    }
+
+    @MainActor
     func testRichArticleNativeBridgePublishesRichText() async throws {
         _ = NSApplication.shared
         var html = RichArticleDocument.empty
@@ -6830,7 +7563,7 @@ final class RichArticleTests {
     }
 
     @MainActor
-    private func withWebEditor(messageHandler: WKScriptMessageHandler? = nil, _ run: (WKWebView) async throws -> Void) async throws {
+    func withWebEditor(messageHandler: WKScriptMessageHandler? = nil, _ run: (WKWebView) async throws -> Void) async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -6840,7 +7573,8 @@ final class RichArticleTests {
         let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 700, height: 600), configuration: configuration)
         window.contentView = view
         defer { view.stopLoading(); window.close() }
-        view.loadHTMLString(RichArticleEditor.pageHTML, baseURL: nil)
+        let page = try ProcessInfo.processInfo.environment["LEON_RICH_EDITOR_PAGE_PATH"].map { try String(contentsOfFile: $0, encoding: .utf8) } ?? RichArticleEditor.pageHTML
+        view.loadHTMLString(page, baseURL: nil)
         var ready = false
         for _ in 0..<200 {
             try await Task.sleep(nanoseconds: 25_000_000)
@@ -6851,13 +7585,24 @@ final class RichArticleTests {
     }
 }
 
-private final class RichImagePasteTestHandler: NSObject, WKScriptMessageHandler {
-    var requests: [String] = []
+private final class RichReaderSelectionTestHandler: NSObject, WKScriptMessageHandler {
+    var texts: [String] = []
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let payload = message.body as? [String: Any], payload["type"] as? String == "pasteImage",
-              let requestID = payload["requestID"] as? String else { return }
-        requests.append(requestID)
+        guard let payload = message.body as? [String: Any], payload["type"] as? String == "selection",
+              let text = payload["text"] as? String else { return }
+        texts.append(text)
+    }
+}
+
+private final class RichImagePasteTestHandler: NSObject, WKScriptMessageHandler {
+    var requests: [String] = []
+    var replacements: [String] = []
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let payload = message.body as? [String: Any], let requestID = payload["requestID"] as? String else { return }
+        if payload["type"] as? String == "pasteImage" { requests.append(requestID) }
+        if payload["type"] as? String == "chooseImage" { replacements.append(requestID) }
     }
 }
 
@@ -6872,6 +7617,21 @@ private func makeTemporaryDirectory() throws -> URL {
 struct LeonBookUnitTests {
     static func main() async {
         var tests: [(String, () async throws -> Void)] = [
+            ("ArticleWhiteboardTests.testWhiteboardImmutableStorageAndValidation", { try await ArticleWhiteboardTests().testWhiteboardImmutableStorageAndValidation() }),
+            ("ArticleWhiteboardTests.testWhiteboardArticleRoundTripUndoAndStaleRequests", { try await ArticleWhiteboardTests().testWhiteboardArticleRoundTripUndoAndStaleRequests() }),
+            ("ArticleWhiteboardTests.testWhiteboardBundledRuntimeExportsAndReopensOffline", { try await ArticleWhiteboardTests().testWhiteboardBundledRuntimeExportsAndReopensOffline() }),
+            ("TodoTests.testTodoPersistenceCompletionDeletionAndConflicts", { try await TodoTests().testTodoPersistenceCompletionDeletionAndConflicts() }),
+            ("TodoTests.testTodoWorkspaceIsolationAndBackup", { try await TodoTests().testTodoWorkspaceIsolationAndBackup() }),
+            ("TodoTests.testTodoAppCommandsFilteringAndModuleLifecycle", { try await TodoTests().testTodoAppCommandsFilteringAndModuleLifecycle() }),
+            ("RichArticleTests.testRichArticleCaretMatchesTextAndPreservesEditing", { try await RichArticleTests().testRichArticleCaretMatchesTextAndPreservesEditing() }),
+            ("RichArticleTests.testRichArticleCaretNavigationAvoidsContentCopies", { try await RichArticleTests().testRichArticleCaretNavigationAvoidsContentCopies() }),
+            ("RichArticleTests.testRichArticleSelectionBookmarksPreserveMixedContent", { try await RichArticleTests().testRichArticleSelectionBookmarksPreserveMixedContent() }),
+            ("RichArticleTests.testRichArticleSelectionUIWorkIsBounded", { try await RichArticleTests().testRichArticleSelectionUIWorkIsBounded() }),
+            ("RichArticleTests.testRichArticlePointerWorkIsFrameBounded", { try await RichArticleTests().testRichArticlePointerWorkIsFrameBounded() }),
+            ("RichArticleTests.testRichArticleIncrementalSerializationMatchesFullSanitizer", { try await RichArticleTests().testRichArticleIncrementalSerializationMatchesFullSanitizer() }),
+            ("RichArticleTests.testRichArticleContentPresenceShortCircuitsLongDocuments", { RichArticleTests().testRichArticleContentPresenceShortCircuitsLongDocuments() }),
+            ("RichArticleTests.testRichArticleTableTypingAndParagraphSplitWork", { try await RichArticleTests().testRichArticleTableTypingAndParagraphSplitWork() }),
+            ("RichArticleTests.testRichArticleLongDocumentTypingWork", { try await RichArticleTests().testRichArticleLongDocumentTypingWork() }),
             ("RichArticleTests.testRichArticleConversionPreservesContentAndFormatting", { try RichArticleTests().testRichArticleConversionPreservesContentAndFormatting() }),
             ("RichArticleTests.testRichArticleHTMLSaveAndReopen", { try await RichArticleTests().testRichArticleHTMLSaveAndReopen() }),
             ("RichArticleTests.testRichArticleMigrationArchivesLegacyAndRejectsCollisions", { try await RichArticleTests().testRichArticleMigrationArchivesLegacyAndRejectsCollisions() }),
@@ -6879,10 +7639,16 @@ struct LeonBookUnitTests {
             ("RichArticleTests.testRichArticleParagraphPasteAndUndo", { try await RichArticleTests().testRichArticleParagraphPasteAndUndo() }),
             ("RichArticleTests.testRichArticleTableCellsSupportBlocksAndFormatting", { try await RichArticleTests().testRichArticleTableCellsSupportBlocksAndFormatting() }),
             ("RichArticleTests.testRichArticleTableImagePasteAndNativeClipboard", { try await RichArticleTests().testRichArticleTableImagePasteAndNativeClipboard() }),
+            ("RichArticleTests.testRichArticleTableControlsAndColumnWidths", { try await RichArticleTests().testRichArticleTableControlsAndColumnWidths() }),
+            ("RichArticleTests.testRichArticleTableQuickAddButtons", { try await RichArticleTests().testRichArticleTableQuickAddButtons() }),
+            ("RichArticleTests.testRichArticleImageControlsAndCaptions", { try await RichArticleTests().testRichArticleImageControlsAndCaptions() }),
+            ("RichArticleTests.testRichArticleUndoRestoresSelectionsAndCaret", { try await RichArticleTests().testRichArticleUndoRestoresSelectionsAndCaret() }),
             ("RichArticleTests.testRichArticleSelectionToolbarFormatsAndPersistsColors", { try await RichArticleTests().testRichArticleSelectionToolbarFormatsAndPersistsColors() }),
+            ("RichArticleTests.testRichArticleSelectionToolbarSetsHeadingLevels", { try await RichArticleTests().testRichArticleSelectionToolbarSetsHeadingLevels() }),
             ("RichArticleTests.testRichArticleSelectionToolbarHidesAndRejectsStaleRanges", { try await RichArticleTests().testRichArticleSelectionToolbarHidesAndRejectsStaleRanges() }),
             ("RichArticleTests.testRichArticleCommandMenuSupportsPointerKeyboardAndSmallViewports", { try await RichArticleTests().testRichArticleCommandMenuSupportsPointerKeyboardAndSmallViewports() }),
             ("RichArticleTests.testRichArticleNativeBridgePublishesRichText", { try await RichArticleTests().testRichArticleNativeBridgePublishesRichText() }),
+            ("RichArticleTests.testRichArticleReaderSelectionCoalescesNativeNotifications", { try await RichArticleTests().testRichArticleReaderSelectionCoalescesNativeNotifications() }),
             ("AppInteractionTests.testEditorRecoveryStartupRespectsNewerWork", { try await AppInteractionTests().testEditorRecoveryStartupRespectsNewerWork() }),
             ("AppInteractionTests.testEditorRecoveryOnOpenPreservesNewerTyping", { try await AppInteractionTests().testEditorRecoveryOnOpenPreservesNewerTyping() }),
             ("AppInteractionTests.testEditorRecoveryRestoresAnUntouchedStartupDraft", { try await AppInteractionTests().testEditorRecoveryRestoresAnUntouchedStartupDraft() }),
@@ -6942,6 +7708,9 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testDateFiltersUseTheProvidedCalendarAndNow", { NativeModelsTests().testDateFiltersUseTheProvidedCalendarAndNow() }),
             ("NativeModelsTests.testGlobalSearchQueryParsesPhrasesAndFilters", { NativeModelsTests().testGlobalSearchQueryParsesPhrasesAndFilters() }),
             ("NativeModelsTests.testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename", { try NativeModelsTests().testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename() }),
+            ("ArticleDirectoryTests.testDirectoryTreeAndLegacySources", { try await ArticleDirectoryTests().testDirectoryTreeAndLegacySources() }),
+            ("ArticleDirectoryTests.testDirectorySaveAndMoveBoundaries", { try await ArticleDirectoryTests().testDirectorySaveAndMoveBoundaries() }),
+            ("ArticleDirectoryTests.testNewArticlesUseSelectedDirectory", { try await ArticleDirectoryTests().testNewArticlesUseSelectedDirectory() }),
             ("NativeModelsTests.testWorkspaceResourceTreeHidesJSONFiles", { NativeModelsTests().testWorkspaceResourceTreeHidesJSONFiles() }),
             ("NativeModelsTests.testP0PageHierarchyDatabaseLayoutsRelationsAndRollups", { try NativeModelsTests().testP0PageHierarchyDatabaseLayoutsRelationsAndRollups() }),
             ("NativeModelsTests.testDatabaseViewQuickCreatePrefillsDraftFields", { NativeModelsTests().testDatabaseViewQuickCreatePrefillsDraftFields() }),
@@ -6965,6 +7734,7 @@ struct LeonBookUnitTests {
             ("PerformanceRegressionTests.testMarkdownRefreshPlanSkipsUnrelatedDomains", { PerformanceRegressionTests().testMarkdownRefreshPlanSkipsUnrelatedDomains() }),
             ("PerformanceRegressionTests.testMarkdownLiveStylingLimitsOrdinaryEditsToNearbyParagraphs", { PerformanceRegressionTests().testMarkdownLiveStylingLimitsOrdinaryEditsToNearbyParagraphs() }),
             ("PerformanceRegressionTests.testArticleMarkdownAnalysisIsCachedAndSharedAcrossConsumers", { PerformanceRegressionTests().testArticleMarkdownAnalysisIsCachedAndSharedAcrossConsumers() }),
+            ("PerformanceRegressionTests.testRichArticleMetadataPreservesUnicodeAndCacheIdentity", { PerformanceRegressionTests().testRichArticleMetadataPreservesUnicodeAndCacheIdentity() }),
             ("PerformanceRegressionTests.testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency", { try await PerformanceRegressionTests().testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency() }),
             ("PerformanceRegressionTests.testLibraryAndMomentProjectionsCacheDerivedStateWithoutChangingFilters", { PerformanceRegressionTests().testLibraryAndMomentProjectionsCacheDerivedStateWithoutChangingFilters() }),
             ("PerformanceRegressionTests.testArticleProjectionRebuildPreservesConcurrentPageViewUpdate", { await PerformanceRegressionTests().testArticleProjectionRebuildPreservesConcurrentPageViewUpdate() }),
@@ -7019,6 +7789,10 @@ struct LeonBookUnitTests {
         ]
 
         if ProcessInfo.processInfo.environment["LEON_BOOK_PERFORMANCE_BENCHMARKS"] == "1" {
+            tests.append((
+                "PerformanceRegressionTests.testRichArticleReaderMetadataReuseBenchmark",
+                { PerformanceRegressionTests().testRichArticleReaderMetadataReuseBenchmark() }
+            ))
             tests.append((
                 "PerformanceRegressionTests.testWorkspaceResourceInteractionBenchmark",
                 { PerformanceRegressionTests().testWorkspaceResourceInteractionBenchmark() }

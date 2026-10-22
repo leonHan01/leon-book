@@ -40,6 +40,7 @@ public final class NativeAppModel: ObservableObject {
         get { navigation.section }
         set {
             guard navigation.section != newValue else { return }
+            if newValue == .todos && !isTodoModuleEnabled { return }
             if newValue != .reader {
                 articleNavigationGeneration += 1
             }
@@ -59,6 +60,8 @@ public final class NativeAppModel: ObservableObject {
     @Published var totalMomentCount = 0
     @Published var filteredMomentCount = 0
     @Published var questionSession = NativeQuestionSessionState()
+    @Published var todoSession = NativeTodoSession()
+    var todoLoadGeneration = 0
     var questions: [NativeQuestion] {
         get { questionSession.questions }
         set { questionSession.questions = newValue }
@@ -162,7 +165,7 @@ public final class NativeAppModel: ObservableObject {
     @Published var editingMomentID: String?
     @Published var selectedArticleTags: Set<String> = []
     @Published var selectedArticleFolderPath: String?
-    var pendingNewArticleFolderPath: String?
+    @Published var pendingNewArticleFolderPath: String?
     @Published var selectedMomentTags: Set<String> = []
     @Published var momentDateFilter: NativeMomentDateFilter = .all
     @Published var showsOnlyFavoriteMoments = false
@@ -270,6 +273,7 @@ public final class NativeAppModel: ObservableObject {
     private var markdownConfigurationObserver: NSObjectProtocol?
     private var calendarObservers: [NSObjectProtocol] = []
     var automationRetryTask: Task<Void, Never>?
+    let acceptsAutomationRequests: Bool
     private let momentPageSize = 40
 
     public convenience init(navigationScopeID: String? = nil) {
@@ -283,6 +287,7 @@ public final class NativeAppModel: ObservableObject {
         userWorkspaces injectedUserWorkspaces: UserWorkspaceStore? = nil
     ) {
         self.navigationScopeID = navigationScopeID
+        acceptsAutomationRequests = startsAutomatically
         let store = injectedStore ?? LocalBlogStore()
         self.store = store
         userWorkspaces = injectedUserWorkspaces ?? UserWorkspaceStore(rootURL: store.rootURL)
@@ -569,6 +574,7 @@ public final class NativeAppModel: ObservableObject {
                 || isPublishingMoment
                 || isPublishingQuestion
                 || isPublishingQuestionAnswer
+                || isSavingTodo
                 || isUploadingMedia
                 || isBackingUp
                 || isScanningObsidianVault
@@ -693,7 +699,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func chooseWorkDirectory() {
-        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isSavingMomentComment,
+        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isSavingTodo, !isPublishingMoment, !isSavingMomentComment,
               !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia, !isBackingUp,
               !isScanningObsidianVault, !isImportingObsidianVault,
               let rootURL = presentWorkDirectoryPicker() else { return }
@@ -760,7 +766,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func selectUser(_ user: NativeUser) {
-        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isSavingMomentComment,
+        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isSavingTodo, !isPublishingMoment, !isSavingMomentComment,
               !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia,
               !isBackingUp, !isScanningObsidianVault, !isImportingObsidianVault else { return }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return }
@@ -787,7 +793,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func createUser(named name: String) async -> Bool {
-        guard !isSwitchingWorkspace, !isSaving, !isPublishingMoment, !isSavingMomentComment,
+        guard !isSwitchingWorkspace, !isSaving, !isSavingTodo, !isPublishingMoment, !isSavingMomentComment,
               !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia, !isBackingUp,
               !isScanningObsidianVault, !isImportingObsidianVault else { return false }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return false }
@@ -893,6 +899,13 @@ public final class NativeAppModel: ObservableObject {
 
     public func newArticle() {
         guard !isSaving, !isUploadingMedia, !isBackingUp else { return }
+        guard !isMarkdownSourceReadOnly else {
+            errorMessage = NativeStoreError.readOnlyArticleSource.localizedDescription
+            return
+        }
+        let destinationFolder = selectedArticleFolderPath
+            ?? selectedArticle.map { NativeArticlePageHierarchy.parentFolderPath(for: $0.sourceRelativePath) }
+            ?? NativeArticleDirectoryPolicy.defaultFolderPath
         let discardsDirtyEditor = isEditorDirty
         guard confirmDiscardUnsavedWork() else { return }
         articleNavigationGeneration += 1
@@ -911,7 +924,7 @@ public final class NativeAppModel: ObservableObject {
         articleComments = []
         pendingArticleCommentSelection = nil
         editor = NativeEditorDraft()
-        pendingNewArticleFolderPath = nil
+        pendingNewArticleFolderPath = NativeArticleDirectoryPolicy.displayFolderPath(destinationFolder)
         editorBodySelection = NSRange(location: 0, length: 0)
         articleRevisions = []
         editorAutosaveStatus = "尚未自动保存"
@@ -922,15 +935,20 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func newArticle(inFolder folderPath: String) {
+        let normalized: String
+        do {
+            normalized = try NativeArticleDirectoryPolicy.validatedFolderPath(
+                folderPath.isEmpty ? NativeArticleDirectoryPolicy.defaultFolderPath : folderPath
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let previousRecoveryID = editor.recoveryID
         newArticle()
         guard editor.recoveryID != previousRecoveryID else { return }
-        let normalized = folderPath.replacingOccurrences(of: "\\", with: "/")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        pendingNewArticleFolderPath = normalized.isEmpty ? nil : normalized
-        editorAutosaveStatus = normalized.isEmpty
-            ? "将在资料库根目录保存"
-            : "将在“\(normalized)”文件夹保存"
+        pendingNewArticleFolderPath = normalized
+        editorAutosaveStatus = "将在“\(normalized)”目录保存"
     }
 
     func editSelected() {
@@ -1111,9 +1129,9 @@ public final class NativeAppModel: ObservableObject {
             title: title,
             expectedUpdatedAt: editor.updatedAt,
             properties: editor.properties,
-            sourceRelativePath: editor.isNew ? pendingNewArticleFolderPath.map {
-                "\($0)/\(slug).html"
-            } : nil
+            sourceRelativePath: editor.isNew
+                ? "\(pendingNewArticleFolderPath ?? NativeArticleDirectoryPolicy.defaultFolderPath)/\(slug).html"
+                : nil
         )
 
         do {

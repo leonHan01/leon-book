@@ -17,6 +17,13 @@ extension NativeAppModel {
         workspaceResourceIndex.folderPaths
     }
 
+    var articleCreationFolderPaths: [String] {
+        let pending = pendingNewArticleFolderPath.map { [$0] } ?? []
+        return Array(Set(workspaceFolderPaths + pending + [NativeArticleDirectoryPolicy.defaultFolderPath]))
+            .filter { (try? NativeArticleDirectoryPolicy.validatedFolderPath($0)) != nil }
+            .sorted()
+    }
+
     func workspaceResource(id: String) -> NativeWorkspaceResourceNode? {
         workspaceResourceIndex.resource(id: id)
     }
@@ -37,6 +44,10 @@ extension NativeAppModel {
     func promptToCreateWorkspaceFolder(parentPath: String) {
         guard !isMarkdownSourceReadOnly else {
             errorMessage = NativeStoreError.readOnlyArticleSource.localizedDescription
+            return
+        }
+        guard NativeArticleDirectoryPolicy.depth(of: parentPath) < NativeArticleDirectoryPolicy.maximumDepth else {
+            errorMessage = "目录最多支持 5 级。"
             return
         }
         let field = NSTextField()
@@ -92,9 +103,10 @@ extension NativeAppModel {
             errorMessage = "名称不能包含路径分隔符；如需移动，请使用“移动…”。"
             return
         }
+        let sourceExtension = URL(fileURLWithPath: sourcePath).pathExtension
         if resource.kind == .article,
-           URL(fileURLWithPath: nextName).pathExtension.caseInsensitiveCompare("md") != .orderedSame {
-            nextName += ".md"
+           URL(fileURLWithPath: nextName).pathExtension.caseInsensitiveCompare(sourceExtension) != .orderedSame {
+            nextName += ".\(sourceExtension)"
         }
         let parentPath = sourcePath.split(separator: "/").dropLast().joined(separator: "/")
         let destination = joinedWorkspacePath(parentPath, nextName)
@@ -120,7 +132,8 @@ extension NativeAppModel {
         let excludedFolders = eligible.compactMap {
             $0.kind == .folder ? $0.sourceRelativePath : nil
         }
-        let candidates = [""] + workspaceFolderPaths.filter { candidate in
+        let canMoveToRoot = !eligible.contains { $0.kind == .article }
+        let candidates = (canMoveToRoot ? [""] : []) + articleCreationFolderPaths.filter { candidate in
             !excludedFolders.contains(where: {
                 candidate == $0 || candidate.hasPrefix($0 + "/")
             })
@@ -233,8 +246,8 @@ extension NativeAppModel {
         }
         if let pendingNewArticleFolderPath,
            !workspaceFolderPaths.contains(pendingNewArticleFolderPath) {
-            self.pendingNewArticleFolderPath = nil
-            if editor.isNew { editorAutosaveStatus = "目标文件夹已移除，将在资料库根目录保存" }
+            self.pendingNewArticleFolderPath = NativeArticleDirectoryPolicy.defaultFolderPath
+            if editor.isNew { editorAutosaveStatus = "目标目录已移除，将在“未分类”目录保存" }
         }
         articleTabs.removeAll(where: { !liveSlugs.contains($0.slug) })
         recentArticleSlugs.removeAll(where: { !liveSlugs.contains($0) })

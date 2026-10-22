@@ -10,17 +10,13 @@ enum NativeArticlePageHierarchy {
     }
 
     static func containerPath(for sourceRelativePath: String) -> String {
-        let normalized = normalize(sourceRelativePath)
-        let components = normalized.split(separator: "/").map(String.init)
-        guard let filename = components.last else { return "" }
-        let folder = components.dropLast().joined(separator: "/")
-        let stem = URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
-        if stem.caseInsensitiveCompare("index") == .orderedSame { return folder }
-        return [folder, stem].filter { !$0.isEmpty }.joined(separator: "/")
+        parentFolderPath(for: sourceRelativePath)
     }
 
     static func parentFolderPath(for sourceRelativePath: String) -> String {
-        normalize(sourceRelativePath).split(separator: "/").dropLast().joined(separator: "/")
+        NativeArticleDirectoryPolicy.displayFolderPath(
+            normalize(sourceRelativePath).split(separator: "/").dropLast().joined(separator: "/")
+        )
     }
 
     static func breadcrumbs(folderPath: String) -> [Breadcrumb] {
@@ -40,28 +36,22 @@ enum NativeArticlePageHierarchy {
 struct ArticlePathBreadcrumb: View {
     let sourceRelativePath: String?
     let draftFolderPath: String?
-    let showsCreateSubpage: Bool
+    let showsCreateArticle: Bool
     let onSelectRoot: () -> Void
     let onSelectFolder: (String) -> Void
-    let onCreateSubpage: (String) -> Void
+    let onCreateArticle: (String) -> Void
 
     private var folderPath: String {
         if let sourceRelativePath {
             return NativeArticlePageHierarchy.parentFolderPath(for: sourceRelativePath)
         }
-        return draftFolderPath ?? ""
-    }
-
-    private var containerPath: String {
-        sourceRelativePath.map(NativeArticlePageHierarchy.containerPath(for:))
-            ?? draftFolderPath
-            ?? ""
+        return draftFolderPath ?? NativeArticleDirectoryPolicy.defaultFolderPath
     }
 
     var body: some View {
         HStack(spacing: 6) {
             Button(action: onSelectRoot) {
-                Label("页面", systemImage: "book.closed")
+                Label("文章", systemImage: "book.closed")
             }
             .buttonStyle(.plain)
 
@@ -74,15 +64,15 @@ struct ArticlePathBreadcrumb: View {
                     .lineLimit(1)
             }
 
-            if showsCreateSubpage {
+            if showsCreateArticle {
                 Spacer(minLength: 8)
                 Button {
-                    onCreateSubpage(containerPath)
+                    onCreateArticle(folderPath)
                 } label: {
-                    Label("新建子页面", systemImage: "plus.square.on.square")
+                    Label("在此目录新建文章", systemImage: "doc.badge.plus")
                 }
                 .buttonStyle(.borderless)
-                .help(containerPath.isEmpty ? Text("在资料库根目录新建页面") : Text("在 \(containerPath) 下新建子页面"))
+                .help(Text("在 \(folderPath) 下新建文章"))
             }
         }
         .font(.caption)

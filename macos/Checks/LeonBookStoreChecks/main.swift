@@ -1065,9 +1065,9 @@ func testMarkdownIsPrimaryArticleSource() async throws {
             expectedUpdatedAt: nil,
             properties: ["reviewed": .checkbox(false)]
         ))
-        let sourceURL = root.appendingPathComponent("articles/markdown-source.md")
+        let sourceURL = root.appendingPathComponent("articles/未分类/markdown-source.md")
         expect(FileManager.default.fileExists(atPath: sourceURL.path), "saving should create the canonical Markdown source")
-        expect(saved.sourceRelativePath == "markdown-source.md", "saved article should expose its source-relative path")
+        expect(saved.sourceRelativePath == "未分类/markdown-source.md", "saved article should expose its source-relative path")
         expect(saved.sourceContentHash?.isEmpty == false, "saved article should persist a source content hash")
         expect(saved.sourceImportedAt != nil, "saved article should persist the last source import timestamp")
         _ = try await store.createArticleComment(
@@ -1077,7 +1077,7 @@ func testMarkdownIsPrimaryArticleSource() async throws {
         )
         let referringArticle = try await store.saveArticle(NativeSaveArticle(
             banner: nil,
-            body: "参见 [[markdown-source.md#背景|真源说明]]。",
+            body: "参见 [[\(saved.sourceRelativePath)#背景|真源说明]]。",
             category: "Notes",
             excerpt: "",
             media: [],

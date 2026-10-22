@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src leoncanvas:; style-src leoncanvas: 'unsafe-inline'; img-src leoncanvas: https: http: data:; media-src leoncanvas: https: http:; frame-src https: http: leoncanvas:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>无限画布</title>
+  <link rel="stylesheet" href="InfiniteCanvas.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-icon">▧</span><strong>无限画布</strong></div>
+    <select id="boards" aria-label="选择画布"><option value="">选择画布</option></select>
+    <button id="new-board" title="新建画布">＋ 新建</button>
+    <input id="title" aria-label="画布名称" maxlength="200" placeholder="未命名画布" disabled>
+    <span id="status" role="status" aria-live="polite">本地工作区</span>
+    <button id="retry" hidden>重试保存</button>
+    <details class="more"><summary aria-label="画布菜单">•••</summary><div class="menu">
+      <button id="import">导入 .canvas…</button><button id="export">导出 .canvas…</button><button id="delete-board" class="danger">删除当前画布…</button>
+    </div></details>
+  </header>
+  <main>
+    <aside id="library" hidden>
+      <div class="library-head"><strong>添加内容</strong><button id="close-library" aria-label="关闭内容面板">×</button></div>
+      <div class="tabs"><button data-kind="article" class="active">博客 / 文章</button><button data-kind="moment">微博</button></div>
+      <input id="search" type="search" placeholder="搜索工作区内容…" aria-label="搜索工作区内容">
+      <p class="muted small">点击加入画布 · 每次显示最多 100 项</p>
+      <div id="results"></div>
+    </aside>
+    <section id="viewport" tabindex="0" aria-label="无限画布。拖动空白处平移，按住 Command 滚轮缩放，双击新建便签。">
+      <div id="world"><svg id="edges" aria-label="卡片连线"></svg><div id="nodes"></div></div>
+      <div id="marquee" hidden></div>
+      <div id="welcome"><div class="welcome-symbol">▧</div><h1>让内容自由连接</h1><p>把文章、想法和素材放在一起，<br>用空间组织知识，用连线发现关系。</p><button id="start" class="primary">创建第一张画布</button><p class="small muted">保存在当前用户的本地工作区</p></div>
+      <div id="empty-hint" hidden><strong>从一个想法开始</strong><p>双击空白处写便签，或从上方添加内容。</p></div>
+      <nav id="tools" aria-label="添加内容与编辑画布" hidden>
+        <button id="show-library" title="加入博客、文章或微博">▤ <span>内容</span></button>
+        <button id="note" title="添加便签 (N)">▱ <span>便签</span></button>
+        <button id="link" title="添加网页 (L)">↗ <span>网页</span></button>
+        <button id="file" title="添加图片、PDF、音视频或任意文件">＋ <span>文件</span></button>
+        <button id="group" title="添加分组 (G)">▧ <span>分组</span></button>
+        <i></i><button id="undo" title="撤销 (⌘Z)" aria-label="撤销">↶</button><button id="redo" title="重做 (⇧⌘Z)" aria-label="重做">↷</button>
+      </nav>
+      <div id="selection-tools" hidden>
+        <span id="selection-label"></span><input id="label" aria-label="分组或连线名称" placeholder="输入名称…" maxlength="200" hidden>
+        <select id="color" aria-label="卡片或连线颜色"><option value="">默认</option><option value="1">红色</option><option value="2">橙色</option><option value="3">黄色</option><option value="4">绿色</option><option value="5">青色</option><option value="6">紫色</option></select>
+        <button id="connect" title="连接到另一张卡片">连线</button><button id="duplicate">复制</button><button id="remove" class="danger">移除</button>
+      </div>
+      <div id="navigation" hidden><button id="zoom-out" aria-label="缩小">−</button><button id="zoom-reset" title="恢复 100%">100%</button><button id="zoom-in" aria-label="放大">＋</button><i></i><button id="fit" title="显示全部卡片 (F)">适应画布</button></div>
+      <div id="hint" class="small muted" hidden>拖空白处平移 · ⌘滚轮缩放 · ⇧点击多选 · 拖卡片圆点连线</div>
+      <div id="toast" role="alert" hidden></div>
+    </section>
+  </main>
+  <dialog id="url-dialog"><form id="url-form"><h2>添加网页</h2><label>网页地址<input id="url-input" type="url" required placeholder="https://…"></label><p class="muted small">可在卡片内加载网页；不支持嵌入的网站可在浏览器中打开。</p><div class="dialog-actions"><button type="button" id="cancel-url">取消</button><button class="primary" type="submit">加入画布</button></div></form></dialog>
+  <script src="InfiniteCanvas.js"></script>
+</body>
+</html>

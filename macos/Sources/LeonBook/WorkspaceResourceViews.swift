@@ -11,7 +11,7 @@ struct NativeWorkspaceResourceSection: View {
         Section {
             rootRow
             if model.workspaceResources.isEmpty {
-                Text("还没有页面。可在根目录新建页面或文件夹。")
+                Text("还没有文章。请新建目录，或在“未分类”目录中开始写作。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 4)
@@ -25,7 +25,7 @@ struct NativeWorkspaceResourceSection: View {
             }
         } header: {
             HStack(spacing: 8) {
-                Text("页面")
+                Text("文章目录")
                 Spacer(minLength: 4)
                 Button {
                     model.newArticle(inFolder: "")
@@ -33,7 +33,7 @@ struct NativeWorkspaceResourceSection: View {
                     Image(systemName: "note.text.badge.plus")
                 }
                 .buttonStyle(.plain)
-                .help("在根目录新建页面")
+                .help("在“未分类”目录新建文章")
                 .disabled(model.isMarkdownSourceReadOnly)
 
                 Button {
@@ -66,7 +66,7 @@ struct NativeWorkspaceResourceSection: View {
             HStack(spacing: 7) {
                 Image(systemName: "externaldrive.fill")
                     .foregroundStyle(.secondary)
-                Text("全部页面")
+                Text("全部文章")
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text("\(model.articles.count)")
@@ -83,7 +83,7 @@ struct NativeWorkspaceResourceSection: View {
                 && selectedResourceIDs.isEmpty
         ))
         .contextMenu {
-            Button("新建页面") { model.newArticle(inFolder: "") }
+            Button("新建文章") { model.newArticle(inFolder: "") }
                 .disabled(model.isMarkdownSourceReadOnly)
             Button("新建文件夹…") { model.promptToCreateWorkspaceFolder(parentPath: "") }
                 .disabled(model.isMarkdownSourceReadOnly)
@@ -157,7 +157,7 @@ private struct NativeWorkspaceResourceBranch: View {
                 select(resource)
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: resource.children.isEmpty ? resource.systemImage : "doc.on.doc.fill")
+                    Image(systemName: resource.systemImage)
                         .foregroundStyle(iconColor(resource))
                         .frame(width: 16)
                     Text(resource.articleTitle ?? resource.name)
@@ -192,7 +192,7 @@ private struct NativeWorkspaceResourceBranch: View {
                         .frame(width: 18, height: 18)
                 }
                 .buttonStyle(.plain)
-                .help("新建子页面")
+                .help("在此目录新建文章")
                 .disabled(model.isMarkdownSourceReadOnly)
             }
         }
@@ -216,19 +216,19 @@ private struct NativeWorkspaceResourceBranch: View {
         let resources = contextualResources(for: resource)
 
         if resource.canContainPages {
-            Button(LocalizedStringKey(resource.kind == .article ? "新建子页面" : "新建页面")) {
+            Button("新建文章") {
                 model.newArticle(inFolder: resource.pageContainerPath)
             }
             .disabled(model.isMarkdownSourceReadOnly)
             Button("新建文件夹…") {
                 model.promptToCreateWorkspaceFolder(parentPath: resource.pageContainerPath)
             }
-            .disabled(model.isMarkdownSourceReadOnly)
+            .disabled(model.isMarkdownSourceReadOnly
+                || NativeArticleDirectoryPolicy.depth(of: resource.pageContainerPath) >= NativeArticleDirectoryPolicy.maximumDepth)
             Divider()
-            if resource.kind == .article {
-                Button("打开") { select(resource, ignoresModifiers: true) }
-                Divider()
-            }
+        } else if resource.kind == .article {
+            Button("打开") { select(resource, ignoresModifiers: true) }
+            Divider()
         } else {
             Button("打开附件") { model.openWorkspaceAttachment(resource) }
             Divider()

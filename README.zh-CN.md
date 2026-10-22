@@ -175,3 +175,7 @@ swift run --package-path macos LeonBook
 ## 设计原则
 
 `leon-book` 优先保证本地可用、数据透明和界面响应。文章和媒体都以普通本地文件保存，用户可以使用 Finder、备份工具或版本控制工具管理自己的内容。
+
+## 外部 AI 自动化
+
+通过 `./scripts/leonblog api capabilities` 发现 CLI / JSON Lines 能力，直接创建、编辑、发布文章和本地微博，管理评论、问答、待办、素材、集合与备份。运行中的 App 提供同一用户的本地 Socket 接口；App 关闭时可离线调用。完整参数和 Python 示例见 [AI 自动化接入](docs/AI_AUTOMATION.md)。

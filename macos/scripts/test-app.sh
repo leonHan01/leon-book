@@ -25,7 +25,7 @@ swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}"
 # Build failures still stop immediately; a failed suite must not hide the
 # results of the remaining independent checks.
 FAILED_SUITES=()
-for TEST_PRODUCT in LeonBookModuleTests LeonBookTests LeonBookChecks LeonBookStoreChecks; do
+for TEST_PRODUCT in LeonBookModuleTests LeonBookTests LeonBookChecks LeonBookStoreChecks LeonBookAutomationTests; do
     if ! swift run "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" --skip-build "${TEST_PRODUCT}"; then
         FAILED_SUITES+=("${TEST_PRODUCT}")
     fi

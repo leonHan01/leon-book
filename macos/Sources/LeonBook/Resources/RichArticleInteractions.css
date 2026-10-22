@@ -1,0 +1,38 @@
+.editor-popover { position: fixed; z-index: 14; padding: 8px; border: 1px solid #dce2e9; border-radius: 11px; color: #39485d; background: #fffffff7; box-shadow: 0 10px 30px -7px #26364b30; font: 12px/1.45 -apple-system, sans-serif; max-width: calc(100vw - 16px); }
+.editor-popover[hidden], .editor-overlay[hidden], #table-tools[hidden], #image-tools[hidden], #image-preview[hidden], #image-progress[hidden] { display: none; }
+.editor-popover button { font: inherit; padding: 6px 8px; border-radius: 6px; }
+.editor-popover button:hover, .editor-popover button:focus-visible { outline: none; color: #477cbd; background: #eaf3ff; }
+.editor-popover .danger { color: #bd535c; }
+.editor-popover .tool-label { padding: 1px 6px 6px; color: #8b97a7; font-size: 10px; }
+.editor-popover input { min-width: 0; border: 1px solid #dce2e9; border-radius: 5px; padding: 5px 7px; color: #39485d; background: #fff; font: inherit; outline-color: #8db2e5; }
+#table-tools .tool-actions, #image-tools { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+#table-tools { display: flex; align-items: center; gap: 4px; }
+#table-tools .tool-label { padding: 0 8px 0 2px; border-right: 1px solid #e7ebf1; white-space: nowrap; }
+@media (max-width: 500px) { #table-tools .tool-label { display: none; } }
+#table-picker { width: 272px; padding: 12px; }
+#table-picker .table-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin: 10px 0 12px; }
+#table-picker .table-grid button { height: 23px; padding: 0; border: 1px solid #dce2e9; border-radius: 3px; background: #f7f9fc; }
+#table-picker .table-grid button.active { border-color: #91b3e1; background: #e2eeff; }
+#table-picker .table-dimensions { display: flex; align-items: center; gap: 6px; }
+#table-picker input { width: 52px; }
+#table-picker .insert-table { margin-left: auto; background: #eaf3ff; color: #477cbd; }
+#column-grip { position: fixed; z-index: 13; width: 9px; cursor: col-resize; touch-action: none; border-radius: 4px; background: #8db2e540; }
+#column-grip[hidden] { display: none; }
+.table-quick-add { position: fixed; z-index: 15; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid #cdddf0; border-radius: 6px; background: #f7faff; color: #5c83b9; box-shadow: 0 2px 6px #26364b0c; cursor: pointer; }
+.table-quick-add[hidden] { display: none; }
+.table-quick-add::before { content: ''; position: absolute; inset: -4px; }
+.table-quick-add svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; pointer-events: none; }
+.table-quick-add:hover, .table-quick-add:focus-visible { outline: 2px solid #cfdef3; outline-offset: 1px; border-color: #94b6e4; background: #eaf3ff; color: #477cbd; }
+#image-frame { position: fixed; z-index: 10; border: 2px solid #8db2e5; border-radius: 8px; pointer-events: none; }
+#image-frame .image-resize { position: absolute; top: calc(50% - 15px); width: 8px; height: 30px; border: 1px solid #7da6dd; border-radius: 5px; background: #fff; pointer-events: auto; cursor: ew-resize; touch-action: none; }
+#image-frame .image-resize:first-child { left: -5px; }
+#image-frame .image-resize:last-child { right: -5px; }
+#image-tools output { color: #8b97a7; padding: 0 7px; min-width: 43px; }
+#image-preview { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; padding: 54px 32px 32px; background: #16202edb; backdrop-filter: blur(10px); }
+#image-preview img { max-width: 100%; max-height: calc(100vh - 86px); object-fit: contain; border-radius: 6px; }
+#image-preview button { position: absolute; right: 20px; top: 14px; color: #fff; background: #ffffff20; font-size: 22px; }
+#image-progress { position: fixed; z-index: 20; bottom: 18px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border: 1px solid #dce2e9; border-radius: 20px; background: #fff; color: #6e7e92; box-shadow: 0 6px 20px #26364b18; font-size: 12px; pointer-events: none; }
+#document figure { margin-inline: 0; }
+#document figcaption { min-height: 1.6em; margin-top: 5px; color: var(--muted); font: 12px/1.6 -apple-system, sans-serif; text-align: center; outline: none; }
+#document[contenteditable=true] figcaption:empty::before { content: '添加图片说明'; color: #9ba4ae; pointer-events: none; }
+body.readonly #document figcaption:empty { display: none; }

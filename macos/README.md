@@ -14,11 +14,17 @@ The toolbar search button and `⌘⇧F` open unified full-text search across art
 
 Press `⌘O` to search and open an article quickly. Press `⌘P` for a fuzzy command palette with recent and pinned commands. **Settings → Commands & Hotkeys** records, removes, or restores per-command shortcuts. Menus, URL-scheme actions, and App Intents ultimately invoke the same command registry. Type `/` at the start of an editor line to insert headings, tasks, callouts, code, tables, links, embeds, or smart collections.
 
+## TODO list
+
+Open **Workspace → To-do** in the sidebar. Type a task and press Return to add it, or choose **New To-do** to set a priority, due date, and notes. Click a title to edit it, check a task to complete or reopen it, and use the task menu to delete it. The bottom bar can undo the most recent deletion.
+
+Filter by open, today, overdue, all, or completed tasks, and search titles and notes. Tasks are stored in the current user's SQLite workspace, included in full workspace backups, and refreshed across windows with revision conflict checks. **Settings → First-party Modules** controls the module; the command palette offers **Go to To-do** and **New To-do**.
+
 ## Smart collections and bookmarks
 
 Smart collections are saved virtual queries over the current user's SQLite workspace. Filtering and sorting compile into parameterized SQL, so only matching article summaries are decoded instead of loading every body into memory first. A collection can combine article status, category, tags, title or body text, YAML/Properties values, update or publish dates, word count, and page views with all/any logic. Up to three sort keys, one grouping field, and list, table, cards, board, or calendar layouts are stored with each collection. Board grouping can be switched inline and cards can move between status/category/tag lanes; each lane can also create a page with its group value prefilled. Calendar date sources can be switched inline, each day can create a predated page, and undated pages stay in an unscheduled tray that also accepts cards to clear their date. Properties include text, list, number, date, checkbox, tags, select, status, relation, and rollup values; table and editor controls reuse existing options, select related pages, and configure rollups without hand-writing a formula string. Selecting a collection never moves or duplicates an article.
 
-The sidebar is page-first: `folder/index.md` and `Page.md` plus an adjacent `Page/` directory become expandable pages with subpages. Reader and editor breadcrumbs expose the current hierarchy and can create a child page without changing Markdown portability.
+The sidebar organizes articles under directories, up to five levels deep. Articles are leaves, including `index.md` and files beside a same-named directory. New articles select a destination directory and default to `未分类` (Uncategorized). Folder creation, article saves, and resource moves validate the depth of the entire destination subtree. Existing external source paths remain intact: root articles appear under Uncategorized, and deeper content is displayed in the fifth directory. Reader and editor breadcrumbs can create another article in the same directory.
 
 Bookmarks are separate shortcuts in the sidebar. Articles, individual Markdown headings, full-text searches, and the global article graph can be added or removed from their source view and reopened directly.
 
@@ -204,3 +210,7 @@ macos/
 ├── Resources/Info.plist     # App metadata
 └── scripts/                 # Build and check scripts
 ```
+
+## External AI automation
+
+From the repository root, run `./scripts/leonblog api capabilities` for the JSON CLI operation catalog. The CLI supports JSON Lines and a same-user Unix socket in the running app, with offline storage fallback. See the [AI automation guide](../docs/AI_AUTOMATION.md).

@@ -49,6 +49,8 @@ extension NativeAppModel {
         guard generation == workspaceGeneration else { return }
         try await reloadQuestionList()
         guard generation == workspaceGeneration else { return }
+        try await reloadTodos()
+        guard generation == workspaceGeneration else { return }
         let loadedTrash = try await store.listTrash()
         guard generation == workspaceGeneration else { return }
         trashItems = loadedTrash
@@ -256,6 +258,13 @@ extension NativeAppModel {
         users = workspace.users
         currentUser = workspace.activeUser
         dataDirectoryPath = workspace.workspaceURL.path
+        if acceptsAutomationRequests {
+            do {
+                try await NativeAutomationServers.start(root: URL(fileURLWithPath: dataRootDirectoryPath, isDirectory: true))
+            } catch {
+                errorMessage = "外部自动化接口启动失败：\(error.localizedDescription)"
+            }
+        }
         reloadDeclarativeExtensions()
         activeMarkdownWorkspaceMode = sourceState.mode
         selectedMarkdownWorkspaceMode = sourceState.mode
@@ -268,6 +277,8 @@ extension NativeAppModel {
         totalMomentCount = 0
         filteredMomentCount = 0
         questionSession.reset()
+        todoLoadGeneration += 1
+        todoSession = NativeTodoSession()
         clearMomentFacetRecords()
         nextMomentCursor = nil
         hasMoreMoments = false

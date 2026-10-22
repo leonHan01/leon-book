@@ -969,3 +969,55 @@
 "写点什么，或分享照片、视频与音频" = "Write something, or share photos, videos, and audio";
 
 "播放音频" = "Play audio";
+
+// TODO list
+"管理任务、优先级和截止日期，记录完成进度。" = "Manage tasks, priorities, due dates, and progress.";
+"前往待办" = "Go to To-do";
+"查看和管理 TODO list" = "View and manage your to-do list";
+"新建待办" = "New To-do";
+"快速添加一项待办任务" = "Quickly add a task";
+"编辑待办" = "Edit To-do";
+"删除待办" = "Delete To-do";
+"撤销删除" = "Undo Delete";
+"待完成" = "Open";
+"已完成" = "Completed";
+"已逾期" = "Overdue";
+"今天到期" = "Due Today";
+"优先级" = "Priority";
+"高优先级" = "High Priority";
+"普通优先级" = "Normal Priority";
+"低优先级" = "Low Priority";
+"设置截止日期" = "Set Due Date";
+"截止日期" = "Due Date";
+"备注" = "Notes";
+"添加待办，按回车保存" = "Add a task, press Return to save";
+"添加" = "Add";
+"待办筛选" = "To-do Filter";
+"搜索待办或备注" = "Search tasks or notes";
+"清除搜索" = "Clear Search";
+"标记完成" = "Mark Complete";
+"标记未完成" = "Mark Incomplete";
+"待办操作" = "Task Actions";
+"开始第一项待办" = "Start your first task";
+"没有匹配的待办" = "No matching tasks";
+"在上方输入任务，按回车添加。" = "Type a task above and press Return to add it.";
+"试试其他筛选条件或搜索关键词。" = "Try another filter or search term.";
+"正在加载待办…" = "Loading tasks…";
+"安排任务，记录每一次完成。" = "Plan your tasks and track every completion.";
+"要完成什么？" = "What needs to get done?";
+"已完成 %lld / %lld" = "Completed %lld / %lld";
+"已删除：%@" = "Deleted: %@";
+
+"所属目录" = "Directory";
+
+"文章目录" = "Article Directories";
+
+"在此目录新建文章" = "New Article in This Directory";
+
+"在“未分类”目录新建文章" = "Create an article in Uncategorized";
+
+"还没有文章。请新建目录，或在“未分类”目录中开始写作。" = "No articles yet. Create a directory or start writing in Uncategorized.";
+
+"在 %@ 下新建文章" = "Create an article in %@";
+
+"文章必须归属目录，目录最多 5 级。" = "Articles must belong to a directory, with up to 5 directory levels.";

@@ -10,6 +10,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "LeonBook", targets: ["LeonBookApp"]),
+        .executable(name: "LeonBookCLI", targets: ["LeonBookCLI"]),
     ],
     targets: [
         .systemLibrary(
@@ -50,6 +51,11 @@ let package = Package(
             path: "Sources/LeonBookCaptureModule"
         ),
         .target(
+            name: "LeonBookTodoModule",
+            dependencies: ["LeonBookModuleKit"],
+            path: "Sources/LeonBookTodoModule"
+        ),
+        .target(
             name: "LeonBook",
             dependencies: [
                 "CSQLite",
@@ -60,11 +66,18 @@ let package = Package(
                 "LeonBookPublishingModule",
                 "LeonBookBackupModule",
                 "LeonBookCaptureModule",
+                "LeonBookTodoModule",
             ],
             path: "Sources/LeonBook",
             resources: [
                 .process("Resources"),
+                .copy("Whiteboard"),
             ]
+        ),
+        .executableTarget(
+            name: "LeonBookCLI",
+            dependencies: ["LeonBook"],
+            path: "Sources/LeonBookCLI"
         ),
         .executableTarget(
             name: "LeonBookApp",
@@ -90,11 +103,17 @@ let package = Package(
             dependencies: [
                 "LeonBook",
                 "LeonBookExtensionKit",
+                "LeonBookTodoModule",
             ],
             path: "Tests/LeonBookTests",
             resources: [
                 .copy("Fixtures"),
             ]
+        ),
+        .executableTarget(
+            name: "LeonBookAutomationTests",
+            dependencies: ["LeonBook", "LeonBookTodoModule"],
+            path: "Tests/LeonBookAutomationTests"
         ),
         .executableTarget(
             name: "LeonBookModuleTests",
@@ -105,6 +124,7 @@ let package = Package(
                 "LeonBookPublishingModule",
                 "LeonBookBackupModule",
                 "LeonBookCaptureModule",
+                "LeonBookTodoModule",
             ],
             path: "Tests/LeonBookModuleTests"
         ),

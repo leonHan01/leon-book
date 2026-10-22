@@ -9,8 +9,8 @@ final class NativeWorkspaceResourceIndex {
     private let indexByArticleSlug: [String: Int]
     private let parentIndices: [Int?]
 
-    // Folder destinations are only needed when moving or creating pages.
-    // Avoid deriving every article's container path during normal navigation.
+    // Folder destinations are only needed when moving or creating articles.
+    // Avoid scanning the tree for directories during normal navigation.
     private(set) lazy var folderPaths = NativeWorkspaceResourceTree.folderPaths(for: items)
 
     init(roots: [NativeWorkspaceResourceNode]) {

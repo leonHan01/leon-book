@@ -39,7 +39,7 @@ extension LocalBlogStore {
     func createWorkspaceFolder(relativePath: String) throws {
         try prepare()
         try requireWritableArticleSource()
-        let safePath = try MarkdownArticleSource.validatedRelativeDirectoryPath(relativePath)
+        let safePath = try NativeArticleDirectoryPolicy.validatedFolderPath(relativePath)
         guard !safePath.isEmpty else {
             throw NativeStoreError.fileSystem("不能新建资料库根目录")
         }
@@ -56,7 +56,7 @@ extension LocalBlogStore {
         do {
             try FileManager.default.createDirectory(
                 at: destination,
-                withIntermediateDirectories: false
+                withIntermediateDirectories: true
             )
         } catch {
             throw NativeStoreError.fileSystem("无法新建文件夹：\(error.localizedDescription)")
@@ -267,9 +267,19 @@ extension LocalBlogStore {
                destinationPath.hasPrefix(sourcePath + "/") {
                 throw NativeStoreError.fileSystem("不能把文件夹移动到其自身内部")
             }
-            if source.pathExtension.caseInsensitiveCompare("md") == .orderedSame,
-               destination.pathExtension.caseInsensitiveCompare("md") != .orderedSame {
-                throw NativeStoreError.fileSystem("Markdown 文件必须保留 .md 扩展名")
+            if values?.isDirectory == true {
+                try validateWorkspaceDirectoryMove(source: source, destinationPath: destinationPath)
+            } else {
+                _ = try NativeArticleDirectoryPolicy.validatedFolderPath(
+                    destinationPath.split(separator: "/").dropLast().joined(separator: "/"),
+                    allowsRoot: true
+                )
+                if ["md", "html"].contains(source.pathExtension.lowercased()) {
+                    try NativeArticleDirectoryPolicy.validateArticlePath(destinationPath)
+                    guard source.pathExtension.caseInsensitiveCompare(destination.pathExtension) == .orderedSame else {
+                        throw NativeStoreError.fileSystem("文章文件必须保留原扩展名。")
+                    }
+                }
             }
             guard destinations.insert(destinationPath).inserted else {
                 throw NativeStoreError.fileSystem("多个资源将产生同一个目标路径")
@@ -280,6 +290,36 @@ extension LocalBlogStore {
             results.append((sourcePath, destinationPath, source, destination))
         }
         return results
+    }
+
+    /// Validate the entire subtree before any move in the batch changes disk.
+    private func validateWorkspaceDirectoryMove(source: URL, destinationPath: String) throws {
+        _ = try NativeArticleDirectoryPolicy.validatedFolderPath(destinationPath)
+        var enumerationError: Error?
+        guard let enumerator = FileManager.default.enumerator(
+            at: source,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            }
+        ) else { throw NativeStoreError.fileSystem("无法读取待移动目录。") }
+        for case let child as URL in enumerator {
+            let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if values.isSymbolicLink == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard values.isDirectory == true else { continue }
+            // Enumerator URLs may use a different /var vs /private/var alias.
+            // Its relative level avoids deriving depth from absolute strings.
+            guard NativeArticleDirectoryPolicy.depth(of: destinationPath) + enumerator.level
+                    <= NativeArticleDirectoryPolicy.maximumDepth else {
+                throw NativeStoreError.fileSystem("移动后子目录“\(child.lastPathComponent)”将超过 5 级。")
+            }
+        }
+        if let enumerationError { throw enumerationError }
     }
 
     private func normalizedTopLevelWorkspacePaths(_ requestedPaths: [String]) throws -> [String] {

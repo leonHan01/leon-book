@@ -248,7 +248,7 @@ struct NativeArticleLibraryProjection: @unchecked Sendable {
                 draftArticleCount += 1
             }
 
-            let folderPath = article.sourceFolderPath
+            let folderPath = NativeArticleDirectoryPolicy.displayFolderPath(article.sourceFolderPath)
             if !folderPath.isEmpty {
                 let components = folderPath.split(separator: "/")
                 for length in 1...components.count {

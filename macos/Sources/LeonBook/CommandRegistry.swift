@@ -20,6 +20,8 @@ public struct NativeCommandID: RawRepresentable, Hashable, Codable, Identifiable
     public static let articles = Self(rawValue: "navigation.articles")
     public static let graph = Self(rawValue: "navigation.graph")
     public static let moments = Self(rawValue: "navigation.moments")
+    public static let todos = Self(rawValue: "navigation.todos")
+    public static let newTodo = Self(rawValue: "todo.new")
     public static let today = Self(rawValue: "navigation.today")
     public static let trash = Self(rawValue: "navigation.trash")
     public static let settings = Self(rawValue: "navigation.settings")

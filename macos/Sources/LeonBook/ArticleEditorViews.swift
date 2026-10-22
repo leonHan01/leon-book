@@ -699,10 +699,10 @@ struct ArticleEditorView: View {
                 ArticlePathBreadcrumb(
                     sourceRelativePath: model.editor.isNew ? nil : model.selectedArticle?.sourceRelativePath,
                     draftFolderPath: model.pendingNewArticleFolderPath,
-                    showsCreateSubpage: !model.editor.isNew && !model.isMarkdownSourceReadOnly,
+                    showsCreateArticle: !model.editor.isNew && !model.isMarkdownSourceReadOnly,
                     onSelectRoot: { model.showAllArticles() },
                     onSelectFolder: { model.showArticleFolder($0) },
-                    onCreateSubpage: { model.newArticle(inFolder: $0) }
+                    onCreateArticle: { model.newArticle(inFolder: $0) }
                 )
                 Spacer()
                 if model.editor.isNew {
@@ -713,6 +713,19 @@ struct ArticleEditorView: View {
             TextField("给这篇文章起个标题", text: $editorSession.draft.title)
                 .font(.system(size: 40, weight: .bold, design: .serif))
                 .textFieldStyle(.plain)
+
+            if model.editor.isNew {
+                Picker("所属目录", selection: Binding(
+                    get: { model.pendingNewArticleFolderPath ?? NativeArticleDirectoryPolicy.defaultFolderPath },
+                    set: { model.pendingNewArticleFolderPath = $0 }
+                )) {
+                    ForEach(model.articleCreationFolderPaths, id: \.self) { path in
+                        Text(path).tag(path)
+                    }
+                }
+                .frame(maxWidth: 360, alignment: .leading)
+                .help("文章必须归属目录，目录最多 5 级。")
+            }
 
             Divider()
 
@@ -1296,7 +1309,7 @@ struct ArticleEditorView: View {
     }
 
     private var editorOutline: [MarkdownOutlineItem] {
-        RichArticleDocument.outline(in: model.editor.body)
+        documentAnalysis.value.document.outline
     }
 
     private var editorWikiLinks: [EditorWikiLink] {

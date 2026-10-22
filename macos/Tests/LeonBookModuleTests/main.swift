@@ -5,6 +5,7 @@ import LeonBookKnowledgeGraphModule
 import LeonBookModuleKit
 import LeonBookPublishingModule
 import LeonBookSearchModule
+import LeonBookTodoModule
 
 private struct TestFailure: Error, CustomStringConvertible {
     let description: String
@@ -46,7 +47,8 @@ struct LeonBookModuleTestsMain {
         try testPublicationPolicy()
         try testBackupLocationPolicy()
         try testCapturePolicy()
-        print("LeonBookModuleTests passed (7 suites)")
+        try testTodos()
+        print("LeonBookModuleTests passed (8 suites)")
     }
 
     private static var descriptors: [FirstPartyModuleDescriptor] {
@@ -56,12 +58,40 @@ struct LeonBookModuleTestsMain {
             PublishingFirstPartyModule.descriptor,
             BackupFirstPartyModule.descriptor,
             CaptureFirstPartyModule.descriptor,
+            TodoFirstPartyModule.descriptor,
         ]
+    }
+
+    private static func testTodos() throws {
+        let normalized = try TodoDraft(title: "  Ship checklist  ", notes: "  details  ", priority: .high, dueDay: "2024-02-29").validated()
+        try expect(normalized.title == "Ship checklist" && normalized.notes == "details", "task drafts must normalize surrounding whitespace")
+        try expect((try? TodoDraft(title: "  ").validated()) == nil, "blank tasks must not be stored")
+        try expect((try? TodoDraft(title: String(repeating: "x", count: 201)).validated()) == nil, "task titles must stay bounded")
+        try expect((try? TodoDraft(title: "Task", dueDay: "2026-02-29").validated()) == nil, "invalid calendar days must be rejected")
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
+        let instant = ISO8601DateFormatter().date(from: "2026-10-21T16:30:00Z")!
+        try expect(TodoDay.string(from: instant, calendar: calendar) == "2026-10-22", "today must follow the user's local calendar day")
+        let chosenDate = TodoDay.date(from: "2026-10-22", calendar: calendar)!
+        try expect(TodoDay.string(from: chosenDate, calendar: calendar) == "2026-10-22", "date picker round trips must retain the chosen day")
+        func task(_ id: String, due: String? = nil, priority: TodoPriority = .normal, completed: Bool = false, deleted: Bool = false, notes: String = "") -> TodoItem {
+            .init(id: id, title: id, notes: notes, priority: priority, dueDay: due, completedAt: completed ? "2026-10-22T09:00:00Z" : nil, createdAt: "2026-10-21T09:00:00Z", updatedAt: "2026-10-22T09:00:00Z", deletedAt: deleted ? "2026-10-22T10:00:00Z" : nil)
+        }
+        let tasks = [task("no-date", priority: .high), task("today-low", due: "2026-10-22", priority: .low), task("today-high", due: "2026-10-22", priority: .high, notes: "Review Café design"), task("overdue", due: "2026-10-21"), task("done", due: "2026-10-20", completed: true), task("deleted", deleted: true)]
+        let all = TodoListProjection(items: tasks, filter: .all, today: "2026-10-22")
+        try expect(all.items.map(\.id) == ["overdue", "today-high", "today-low", "no-date", "done"], "unfinished tasks must sort by due day and priority before completed tasks")
+        try expect(all.openCount == 4 && all.todayCount == 2 && all.overdueCount == 1 && all.completedCount == 1, "summary counts must exclude deleted and completed overdue tasks")
+        try expect(TodoListProjection(items: tasks, filter: .today, today: "2026-10-22").items.count == 2, "today must include only unfinished tasks due today")
+        try expect(TodoListProjection(items: tasks, filter: .overdue, today: "2026-10-22").items.map(\.id) == ["overdue"], "overdue tasks must exclude completed tasks")
+        try expect(TodoListProjection(items: tasks, filter: .all, search: "CAFE review", today: "2026-10-22").items.map(\.id) == ["today-high"], "search must match notes, case and accents consistently")
+        var runtime = FirstPartyModuleRuntime(catalog: try FirstPartyModuleCatalog(descriptors))
+        try expect(runtime.authorization(forCommand: "todo.new").isAllowed, "new TODO module must default to enabled")
+        _ = runtime.setEnabled(false, for: TodoFirstPartyModule.id)
+        try expect(!runtime.authorization(forCommand: "todo.new").isAllowed && !runtime.authorization(forCommand: "navigation.todos").isAllowed, "disabling TODO must remove its command permissions")
     }
 
     private static func testCatalogAndEnablement() throws {
         let catalog = try FirstPartyModuleCatalog(descriptors)
-        try expect(catalog.modules.count == 5, "all first-party modules must be discoverable")
+        try expect(catalog.modules.count == 6, "all first-party modules must be discoverable")
         try expect(
             catalog.module(owningCommand: "navigation.graph")?.id == KnowledgeGraphFirstPartyModule.id,
             "command ownership must resolve through the catalog"
@@ -75,7 +105,7 @@ struct LeonBookModuleTestsMain {
             "all modules must expose common lifecycle events"
         )
         let commands = descriptors.flatMap(\.commands)
-        try expect(commands.count == 6, "all feature commands must be declared by their owning module")
+        try expect(commands.count == 8, "all feature commands must be declared by their owning module")
         try expect(
             commands.allSatisfy { !$0.title.isEmpty && !$0.detail.isEmpty && !$0.systemImage.isEmpty },
             "module commands must carry complete native presentation metadata"

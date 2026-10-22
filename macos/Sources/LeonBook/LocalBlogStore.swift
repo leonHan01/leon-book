@@ -8,7 +8,7 @@ public actor LocalBlogStore {
     private static let articleAutosaveRevisionInterval: TimeInterval = 5 * 60
     private static let maximumArticleRevisionsPerDraft = 100
 
-    static let reservedMediaDirectories: Set<String> = ["inbox", "moments", "question-answers"]
+    static let reservedMediaDirectories: Set<String> = ["inbox", "moments", "question-answers", "whiteboards"]
 
     let rootURL: URL
     private var database: SQLiteDatabase?
@@ -1223,12 +1223,14 @@ public actor LocalBlogStore {
         id: String,
         text: String,
         textRuns: [NativeMomentTextRun],
-        images: [NativeMedia]
+        images: [NativeMedia],
+        expectedUpdatedAt: String? = nil
     ) throws -> NativeMoment {
         try prepare()
         let safeID = try requireSafeSegment(id, label: "微博 ID")
         guard let previous = try moment(withID: safeID) else { throw NativeStoreError.notFound }
 
+        if let expectedUpdatedAt, previous.updatedAt != expectedUpdatedAt { throw NativeStoreError.conflict }
         let normalizedInput = normalizedMomentText(text, textRuns: textRuns)
         let normalizedText = NativeMomentTag.content(
             from: normalizedInput.text,
@@ -1255,6 +1257,7 @@ public actor LocalBlogStore {
         )
 
         try db().transaction {
+            if let expectedUpdatedAt, try moment(withID: safeID)?.updatedAt != expectedUpdatedAt { throw NativeStoreError.conflict }
             try insertMoment(updated, into: db())
             try recordActivityEvent(type: "moment_edited", at: activityDate(from: updated.updatedAt) ?? Date())
         }
@@ -1296,17 +1299,20 @@ public actor LocalBlogStore {
         return updated
     }
 
-    public func deleteMoment(id: String) throws {
+    public func deleteMoment(id: String, expectedUpdatedAt: String? = nil) throws {
         try prepare()
         let safeID = try requireSafeSegment(id, label: "微博 ID")
         guard try moment(withID: safeID) != nil else { throw NativeStoreError.notFound }
 
         let deletedAt = timestamp(from: Date())
         let expiresAt = timestamp(afterDays: Self.trashRetentionDays)
-        try db().execute(
-            "UPDATE moments SET deleted_at = ?, delete_expires_at = ? WHERE id = ?",
-            values: [.text(deletedAt), .text(expiresAt), .text(safeID)]
-        )
+        try db().transaction {
+            if let expectedUpdatedAt, try moment(withID: safeID)?.updatedAt != expectedUpdatedAt { throw NativeStoreError.conflict }
+            try db().execute(
+                "UPDATE moments SET deleted_at = ?, delete_expires_at = ? WHERE id = ?",
+                values: [.text(deletedAt), .text(expiresAt), .text(safeID)]
+            )
+        }
         removeMomentSidecar(id: safeID)
         try writeTrashBackup()
     }
@@ -1934,6 +1940,7 @@ public actor LocalBlogStore {
         guard article.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
         let destination = try MarkdownArticleSource.validatedRelativePath(relativePath)
         guard destination != article.sourceRelativePath else { return article }
+        try NativeArticleDirectoryPolicy.validateArticlePath(destination)
         let occupied = try db().integer(
             "SELECT COUNT(*) FROM articles WHERE source_relative_path = ? AND slug <> ?",
             values: [.text(destination), .text(article.slug)]
@@ -2455,6 +2462,9 @@ public actor LocalBlogStore {
         }
         if RichArticleDocument.isHTML(article.body) {
             sourceRelativePath = (sourceRelativePath as NSString).deletingPathExtension + ".html"
+        }
+        if previous == nil {
+            try NativeArticleDirectoryPolicy.validateArticlePath(sourceRelativePath)
         }
         let migratesLegacyFile = previous.map { $0.sourceRelativePath != sourceRelativePath } ?? false
         if previous == nil || migratesLegacyFile,
@@ -3263,6 +3273,9 @@ public actor LocalBlogStore {
     ) throws {
         for item in media {
             let normalizedURL = normalizeMediaURL(item.url)
+            // Whiteboard revisions can still be referenced by draft/undo/history
+            // snapshots. They are retained with the workspace's backup data.
+            if normalizedURL.hasPrefix("/media/whiteboards/") { continue }
             let referenceCount = try db().integer(
                 "SELECT COUNT(*) FROM media_references WHERE normalized_url = ?",
                 values: [.text(normalizedURL)]

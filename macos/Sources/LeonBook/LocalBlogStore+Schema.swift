@@ -7,6 +7,19 @@ extension LocalBlogStore {
             key TEXT PRIMARY KEY NOT NULL,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS todos (
+            id TEXT PRIMARY KEY NOT NULL,
+            title TEXT NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            priority INTEGER NOT NULL DEFAULT 1 CHECK(priority BETWEEN 0 AND 2),
+            due_day TEXT,
+            completed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+            deleted_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS todos_active_idx ON todos(created_at DESC, id) WHERE deleted_at IS NULL;
         CREATE TABLE IF NOT EXISTS articles (
             slug TEXT PRIMARY KEY NOT NULL,
             title TEXT NOT NULL,

@@ -253,6 +253,7 @@ private struct NativeSidebar: View {
                         || model.isPublishingMoment
                         || model.isPublishingQuestion
                         || model.isPublishingQuestionAnswer
+                        || model.isSavingTodo
                 )
             }
 
@@ -269,6 +270,9 @@ private struct NativeSidebar: View {
                 }
                 sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
                 sidebarButton(.qAndA, title: "问答", icon: "questionmark.bubble")
+                if model.isTodoModuleEnabled {
+                    sidebarButton(.todos, title: "待办", icon: "checklist")
+                }
                 sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
             }
 
@@ -380,6 +384,7 @@ private struct NativeSidebar: View {
     @ViewBuilder
     private func sidebarButton(_ section: NativeSection, title: String, icon: String) -> some View {
         Button {
+            if section == .todos { model.openTodos(); return }
             model.section = section
             if section == .editor && model.editor.isNew == false { model.newArticle() }
         } label: {
@@ -446,6 +451,7 @@ private struct NativeNavigationDetail: View {
                 pageState: pageStateCache.moments
             )
         case .qAndA: QAndAView(model: model)
+        case .todos: TodoListView(model: model)
         case .reader: ArticleReaderView(
             model: model,
             workspaceLayout: workspaceLayout,

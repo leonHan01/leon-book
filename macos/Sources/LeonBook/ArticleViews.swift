@@ -25,7 +25,7 @@ struct ArticleReaderView: View {
             Group {
                 if let article = model.selectedArticle {
                     let document = NativeMarkdownArticleDocumentCache.shared.document(for: article.body)
-                    let outline = RichArticleDocument.outline(in: article.body)
+                    let outline = document.outline
                     GeometryReader { proxy in
                         let usesCompactInspector = proxy.size.width < 980
                         ScrollViewReader { scrollProxy in
@@ -141,10 +141,10 @@ struct ArticleReaderView: View {
                 ArticlePathBreadcrumb(
                     sourceRelativePath: article.sourceRelativePath,
                     draftFolderPath: nil,
-                    showsCreateSubpage: !model.isMarkdownSourceReadOnly,
-                onSelectRoot: { model.showAllArticles() },
-                onSelectFolder: { model.showArticleFolder($0) },
-                onCreateSubpage: { model.newArticle(inFolder: $0) }
+                    showsCreateArticle: !model.isMarkdownSourceReadOnly,
+                    onSelectRoot: { model.showAllArticles() },
+                    onSelectFolder: { model.showArticleFolder($0) },
+                    onCreateArticle: { model.newArticle(inFolder: $0) }
                 )
 
                 HStack {

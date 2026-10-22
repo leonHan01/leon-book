@@ -20,13 +20,14 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #document > *, #document :is(td, th) > * { position: relative; margin: 0 0 14px; min-height: 1.75em; outline: none; }
 #document :is(td, th) > :last-child { margin-bottom: 0; }
 #document[contenteditable=true] > *:focus-within { border-radius: 4px; }
-#document[contenteditable=true] > * { transition: background-color 120ms ease, box-shadow 120ms ease; }
-#document[contenteditable=true] > *:hover { background-color: var(--block-hover); border-radius: 6px; box-shadow: 0 0 0 4px var(--block-hover); }
-#document[contenteditable=true] > table:hover :is(th, td) { background-color: var(--block-hover); }
+#document[contenteditable=true] > * { border-radius: 6px; }
+#document[contenteditable=true] > *:hover { background-color: var(--block-hover); border-radius: 6px; outline: 4px solid var(--block-hover); }
+#document[contenteditable=true] :is(th, td):hover { background-color: var(--block-hover); }
 #document > p:only-child:has(>br:only-child)::before { content: '输入文字，或输入 / 添加内容块'; color: var(--muted); pointer-events: none; position: absolute; }
 #document h1 { font-size: 1.8em; line-height: 1.4; font-weight: 720; margin-top: 20px; }
 #document h2 { font-size: 1.4em; line-height: 1.5; margin-top: 16px; }
 #document h3 { font-size: 1.15em; margin-top: 12px; }
+#document h4 { font-size: 1em; font-weight: 650; margin-top: 10px; }
 #document pre { white-space: pre-wrap; tab-size: 4; background: var(--soft); border: 1px solid var(--line); border-radius: 9px; padding: 34px 18px 16px; font: 14px/1.7 ui-monospace, Menlo, monospace; }
 #document pre::before { content: attr(data-language); position: absolute; top: 8px; left: 18px; color: var(--muted); font: 11px/1.5 -apple-system, sans-serif; pointer-events: none; }
 #document pre code { padding: 0; background: transparent; font: inherit; }
@@ -76,8 +77,8 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #commands .command-empty { padding: 22px 14px; text-align: center; color: #8692a2; font-size: 12px; }
 @keyframes command-appear { from { opacity: 0; transform: translateY(3px) scale(.985); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { #commands { animation: none; } }
-#selection-toolbar { position: fixed; z-index: 12; display: flex; align-items: center; gap: 2px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid #dce2e9; border-radius: 11px; background: #fffffff7; color: #39485d; box-shadow: 0 8px 28px -5px #26364b30, 0 2px 6px #26364b0a; -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
-#selection-toolbar[hidden], #selection-colors[hidden] { display: none; }
+#selection-toolbar { position: fixed; z-index: 12; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid #dce2e9; border-radius: 11px; background: #fffffff7; color: #39485d; box-shadow: 0 8px 28px -5px #26364b30, 0 2px 6px #26364b0a; -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+#selection-toolbar[hidden], #selection-colors[hidden], #selection-headings[hidden] { display: none; }
 #selection-toolbar button { display: inline-flex; justify-content: center; align-items: center; gap: 4px; min-width: 30px; height: 30px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: 15px/1 -apple-system, sans-serif; outline: none; }
 #selection-toolbar button:hover, #selection-toolbar button:focus-visible, #selection-toolbar button[aria-pressed=true], #selection-toolbar button[aria-expanded=true] { background: #eaf3ff; color: #477cbd; outline: none; }
 #selection-toolbar .format-divider { width: 1px; height: 18px; margin: 0 4px; background: #e7ebf1; }
@@ -87,6 +88,18 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #selection-toolbar .format-chevron { width: 5px; height: 5px; margin: -3px 1px 0 2px; border-right: 1px solid #8e9aac; border-bottom: 1px solid #8e9aac; transform: rotate(45deg); }
 #selection-toolbar .clear-format { font-size: 14px; }
 #selection-toolbar .clear-format sub { color: #8996a8; font-size: 11px; }
+#selection-toolbar [data-format=heading] { font-size: 13px; white-space: nowrap; }
+#selection-toolbar button:disabled { opacity: .4; cursor: default; background: transparent; color: inherit; }
+#selection-headings { position: fixed; z-index: 13; width: 180px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; padding: 6px; border: 1px solid #dce2e9; border-radius: 12px; background: #fff; color: #39485d; box-shadow: 0 12px 32px -5px #26364b30; font: 13px/1.4 -apple-system, sans-serif; }
+#selection-headings button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px; text-align: left; }
+#selection-headings button:hover, #selection-headings button:focus-visible, #selection-headings button[aria-checked=true] { background: #eaf3ff; color: #477cbd; outline: none; }
+#selection-headings .heading-icon { width: 24px; color: #8996a8; font-size: 15px; text-align: center; }
+#selection-headings button[aria-checked=true]::after { content: '✓'; margin-left: auto; }
+@media (max-width: 440px) {
+  #selection-toolbar { gap: 0; }
+  #selection-toolbar button { min-width: 28px; padding: 0 5px; gap: 3px; }
+  #selection-toolbar .format-divider { margin: 0 2px; }
+}
 #selection-colors { position: fixed; z-index: 13; width: 218px; max-width: calc(100vw - 16px); padding: 12px; border: 1px solid #dce2e9; border-radius: 12px; background: #fff; color: #39485d; box-shadow: 0 12px 32px -5px #26364b30; font: 12px/1.4 -apple-system, sans-serif; }
 #selection-colors .palette-title { margin: 0 0 10px; font-weight: 550; }
 #selection-colors .palette-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
@@ -97,6 +110,13 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 body.readonly #toolbar { display: none; }
 body.readonly #document { padding: 0 0 12px; min-height: 0; }
 body.readonly #document p:only-child:has(>br:only-child)::before { content: none; }
+/* editor-interactions-style */
+/* editor-caret-style */
+#document figure[data-type=whiteboard] { border:1px solid var(--line); border-radius:9px; padding:10px; cursor:pointer; }
+#document figure[data-type=whiteboard] img { max-height:580px; object-fit:contain; width:100%; }
+#document figure[data-type=whiteboard]:focus { outline:2px solid var(--accent); }
+#whiteboard-tools { position:fixed; z-index:14; display:flex; gap:4px; padding:4px; border:1px solid var(--line); border-radius:8px; background:var(--surface); box-shadow:0 3px 15px #0002; font-size:12px; }
+#whiteboard-tools[hidden] { display:none; }
 </style>
 </head>
 <body>
@@ -109,12 +129,15 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   <button data-command="link" title="添加链接">↗</button>
   <button data-command="undo" title="撤销 ⌘Z">↶</button>
   <button data-command="redo" title="重做 ⇧⌘Z">↷</button>
+  <button data-command="whiteboard" title="插入 Excalidraw 画板">画板</button>
   <select id="language" aria-label="代码语言" hidden><option>text</option><option>javascript</option><option>typescript</option><option>swift</option><option>python</option><option>html</option><option>css</option><option>json</option><option>sql</option><option>bash</option></select>
   <span class="hint">/ 添加块 · 回车分段 · ⇧回车换行</span>
 </div>
 <article id="document" contenteditable="false" spellcheck="false" aria-label="文章富文本编辑器"></article>
 <div id="commands" role="listbox" aria-label="快捷操作" hidden></div>
 <div id="selection-toolbar" role="toolbar" aria-label="选区文字样式" hidden>
+  <button type="button" data-format="heading" title="设置标题" aria-label="设置标题" aria-expanded="false" aria-controls="selection-headings"><span>标题</span><span class="format-chevron" aria-hidden="true"></span></button>
+  <span class="format-divider" aria-hidden="true"></span>
   <button type="button" data-format="bold" title="加粗 ⌘B" aria-label="加粗" aria-pressed="false"><b>B</b></button>
   <button type="button" data-format="italic" title="斜体 ⌘I" aria-label="斜体" aria-pressed="false"><i>I</i></button>
   <button type="button" data-format="underline" title="下划线 ⌘U" aria-label="下划线" aria-pressed="false"><u>U</u></button>
@@ -126,12 +149,20 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   <button type="button" data-format="removeFormat" title="清除样式" aria-label="清除样式"><span class="clear-format">T<sub>×</sub></span></button>
 </div>
 <div id="selection-colors" role="dialog" aria-label="选择颜色" hidden></div>
+<div id="selection-headings" role="radiogroup" aria-label="设置标题" hidden>
+  <button type="button" data-heading="p" role="radio" aria-checked="false"><span class="heading-icon" aria-hidden="true">¶</span>正文</button>
+  <button type="button" data-heading="h1" role="radio" aria-checked="false"><span class="heading-icon" aria-hidden="true">H₁</span>一级标题</button>
+  <button type="button" data-heading="h2" role="radio" aria-checked="false"><span class="heading-icon" aria-hidden="true">H₂</span>二级标题</button>
+  <button type="button" data-heading="h3" role="radio" aria-checked="false"><span class="heading-icon" aria-hidden="true">H₃</span>三级标题</button>
+  <button type="button" data-heading="h4" role="radio" aria-checked="false"><span class="heading-icon" aria-hidden="true">H₄</span>四级标题</button>
+</div>
 <script>
 (() => {
   'use strict';
   const root = document.getElementById('document'), menu = document.getElementById('commands');
   const language = document.getElementById('language');
   const selectionToolbar = document.getElementById('selection-toolbar'), colorPanel = document.getElementById('selection-colors');
+  const headingPanel = document.getElementById('selection-headings'), headingButton = selectionToolbar.querySelector('[data-format=heading]');
   const opening = '<article data-leon-format="html-v1">';
   const uuid = () => {
     const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -143,21 +174,25 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     { id: 'text', tag: 'p', label: '正文', detail: '普通段落', icon: '¶', aliases: 'paragraph 文本 正文' },
     { id: 'code', tag: 'pre', label: '代码框', detail: '保留缩进和换行，可选择语言', icon: '</>', aliases: '代码 代码块' },
     { id: 'callout', tag: 'aside', label: '高亮框', detail: '突出显示提示和重要信息', icon: '✦', aliases: 'note tip highlight 提示 高亮' },
+    { id: 'whiteboard', tag: 'figure', label: '画板', detail: 'Excalidraw 手绘、图形、箭头和文字', aliases: 'excalidraw canvas board 画板 绘图' },
     { id: 'h1', tag: 'h1', label: '一级标题', detail: '最大的章节标题', icon: 'H₁', aliases: 'heading title 标题' },
     { id: 'h2', tag: 'h2', label: '二级标题', detail: '章节标题', icon: 'H₂', aliases: 'heading subtitle 标题' },
     { id: 'h3', tag: 'h3', label: '三级标题', detail: '小节标题', icon: 'H₃', aliases: 'heading 标题' },
+    { id: 'h4', tag: 'h4', label: '四级标题', detail: '小节内的细分标题', icon: 'H₄', aliases: 'heading 标题' },
     { id: 'quote', tag: 'blockquote', label: '引用', detail: '引用一段内容', icon: '“', aliases: '引用' },
     { id: 'bullet', tag: 'p', label: '项目列表', detail: '无序列表项', icon: '•', aliases: 'list ul 列表 无序' },
     { id: 'number', tag: 'p', label: '编号列表', detail: '有序列表项', icon: '1.', aliases: 'list ol numbered 编号 有序' },
     { id: 'task', tag: 'p', label: '待办', detail: '可勾选的任务', icon: '☐', aliases: 'todo checkbox 待办 任务' },
-    { id: 'table', tag: 'table', label: '表格', detail: '两列表格，可直接编辑单元格', icon: '▦', aliases: 'grid 表格' },
+    { id: 'table', tag: 'table', label: '表格', detail: '选择行列数，插入可编辑表格', icon: '▦', aliases: 'grid 表格' },
     { id: 'divider', tag: 'hr', label: '分割线', detail: '分隔上下内容', icon: '—', aliases: 'hr rule 分割线' }
   ];
   const commandIcons = {
+    whiteboard: '<rect x="2" y="3" width="16" height="14" rx="2"/><path d="m5 13 3-6 4 6 3-4"/>',
     text: '<path d="M4 5h12M10 5v11M7 16h6"/>',
     h1: '<path d="M3 5v10M10 5v10M3 10h7"/><text x="13" y="16">1</text>',
     h2: '<path d="M3 5v10M10 5v10M3 10h7"/><text x="13" y="16">2</text>',
     h3: '<path d="M3 5v10M10 5v10M3 10h7"/><text x="13" y="16">3</text>',
+    h4: '<path d="M3 5v10M10 5v10M3 10h7"/><text x="13" y="16">4</text>',
     code: '<path d="m6 5-4 5 4 5m8-10 4 5-4 5M12 3 8 17"/>',
     callout: '<rect x="3" y="3" width="14" height="14" rx="4"/><path d="M10 6.5v4M10 13.5h.01"/>',
     quote: '<path d="M8 5H3v6h5V5Zm9 0h-5v6h5V5ZM8 11c0 3-1 4-3 4m12-4c0 3-1 4-3 4"/>',
@@ -167,14 +202,26 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     table: '<rect x="3" y="4" width="14" height="12" rx="2"/><path d="M3 8h14M3 12h14M9 4v12"/>',
     divider: '<path d="M3 10h14M6 5h8M6 15h8"/>'
   };
-  const allowed = new Set('P H1 H2 H3 PRE CODE ASIDE BLOCKQUOTE TABLE TBODY THEAD TR TH TD STRONG B EM I U S STRIKE MARK A BR IMG HR SPAN UL OL LI'.split(' '));
+  const allowed = new Set('P H1 H2 H3 H4 PRE CODE ASIDE BLOCKQUOTE TABLE TBODY THEAD TFOOT TR TH TD COLGROUP COL FIGURE FIGCAPTION STRONG B EM I U S STRIKE MARK A BR IMG HR SPAN UL OL LI'.split(' '));
   const attributes = new Set(['data-block-id', 'data-type', 'data-depth', 'data-checked', 'data-number', 'data-language']);
-  const blockTags = new Set('P H1 H2 H3 PRE ASIDE BLOCKQUOTE TABLE UL OL LI HR'.split(' '));
+  const blockTags = new Set('P H1 H2 H3 H4 PRE ASIDE BLOCKQUOTE TABLE FIGURE UL OL LI HR'.split(' '));
   const pendingImagePastes = new Map();
   let documentID = '', editable = false, composing = false, pendingLoad = null;
-  let matches = [], menuIndex = 0, slashBlock = null, history = [], historyIndex = -1, lastEdit = 0;
-  let formatRange = null, formatDocumentID = '', colorMode = null, selectingWithPointer = false;
+  let matches = [], menuIndex = 0, slashBlock = null, menuQuery = null, history = [], historyIndex = -1, lastEdit = 0;
+  let formatRange = null, formatDocumentID = '', formatBackward = false, colorMode = null, selectingWithPointer = false;
   const send = payload => window.webkit?.messageHandlers?.richArticle?.postMessage({ ...payload, documentID });
+  // Visual work consumes only the latest event in a display frame. Content
+  // publication stays synchronous so save/navigation never miss the last edit.
+  function frameTask(work) {
+    // WebKit suspends animation frames in occluded native windows. This one-shot
+    // fallback keeps pending controls usable without an idle polling loop.
+    let frame = 0, timer = 0, args;
+    const run = () => { cancelAnimationFrame(frame); clearTimeout(timer); frame = timer = 0; const current = args; args = null; if (current) work(...current); };
+    const schedule = (...next) => { args = next; if (!frame && !timer) { frame = requestAnimationFrame(run); timer = setTimeout(run, 48); } };
+    schedule.cancel = () => { cancelAnimationFrame(frame); clearTimeout(timer); frame = timer = 0; args = null; };
+    schedule.flush = () => { if (frame || timer) run(); };
+    return schedule;
+  }
   const safeURL = (value, image = false) => {
     const url = (value || '').trim();
     if (image && /^data:image\/(png|jpeg|gif|webp);base64,/i.test(url)) return url;
@@ -202,6 +249,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
         if (!allowed.has(node.tagName)) { node.replaceWith(...node.childNodes); continue; }
         const foreground = safeColor(node.style.color), background = safeColor(node.style.backgroundColor);
         const normalWeight = node.tagName === 'SPAN' && /^(normal|[1-5]00)$/.test(node.style.fontWeight);
+        const width = ['IMG', 'COL'].includes(node.tagName) && /^(?:\d+(?:\.\d+)?)%$/.test(node.style.width) ? Math.max(2, Math.min(100, parseFloat(node.style.width))) + '%' : '';
         if (node.tagName === 'SPAN') {
           const wrappers = [];
           if (/bold|[6-9]00/.test(node.style.fontWeight)) wrappers.push('strong');
@@ -212,6 +260,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
         }
         for (const attr of [...node.attributes]) {
           const keep = attributes.has(attr.name) || (node.tagName === 'A' && attr.name === 'href')
+            || (node.tagName === 'FIGURE' && node.dataset.type === 'whiteboard' && attr.name === 'data-whiteboard-source' && /^\/media\/whiteboards\/[a-f0-9]{64}\.excalidraw$/.test(attr.value))
             || (node.tagName === 'IMG' && ['src', 'alt', 'data-original-src'].includes(attr.name));
           if (!keep) node.removeAttribute(attr.name);
         }
@@ -225,12 +274,61 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
         if (foreground) node.style.color = foreground;
         if (background && background !== 'transparent') node.style.backgroundColor = background;
         if (normalWeight) node.style.fontWeight = 'normal';
+        if (width) node.style.width = width;
         if (node.tagName === 'SPAN' && !node.style.length) node.replaceWith(...node.childNodes);
       }
     }
     clean(container.content); return container.innerHTML;
   }
-  function serialize() { return opening + cleanHTML(root.innerHTML) + '</article>'; }
+  // Keep sanitized fragments by DOM identity. Drain records synchronously too:
+  // input/commands can serialize before MutationObserver's microtask runs.
+  const serializedBlocks = new WeakMap();
+  const selectionUnits = new WeakMap(), selectionOffsets = new WeakMap();
+  let serializedBody = null, needsPreparation = true;
+  const structuralSelector = 'p,h1,h2,h3,h4,pre,aside,blockquote,table,td,th,figure,figcaption,img,ul,ol,li,hr';
+  function discardNodeCaches(node) {
+    serializedBlocks.delete(node); selectionUnits.delete(node); selectionOffsets.delete(node);
+  }
+  function invalidate(records) {
+    for (const record of records) {
+      if (record.target === root && record.type === 'attributes') continue;
+      serializedBody = null;
+      if (record.type === 'childList') for (const node of record.addedNodes) {
+        // A moved subtree may have changed while detached from observation.
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_ALL);
+        do { discardNodeCaches(walker.currentNode); } while (walker.nextNode());
+      }
+      let block = record.target;
+      while (block) { discardNodeCaches(block); if (block === root) break; block = block.parentElement; }
+      if (record.type === 'attributes' && ['data-type', 'data-depth', 'data-block-id', 'src'].includes(record.attributeName)) needsPreparation = true;
+      if (record.type === 'childList' && (record.target === root || record.target.matches?.('td,th') ||
+          [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === Node.ELEMENT_NODE && (node.matches(structuralSelector) || node.querySelector(structuralSelector))))) needsPreparation = true;
+    }
+  }
+  const contentObserver = new MutationObserver(invalidate);
+  contentObserver.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
+  // Tables share unchanged row/cell fragments, so a keystroke does not parse
+  // hundreds of neighboring cells. Rich text leaves still use the full cleaner.
+  const serializedContainers = new Set('TABLE THEAD TBODY TFOOT TR TD TH COLGROUP'.split(' '));
+  function serializeNode(node) {
+    let fragment = serializedBlocks.get(node);
+    if (fragment !== undefined) return fragment;
+    if (serializedContainers.has(node.nodeName)) {
+      const shell = cleanHTML(node.cloneNode(false).outerHTML), end = shell.indexOf('>') + 1;
+      fragment = shell.slice(0, end) + [...node.childNodes].map(serializeNode).join('') + shell.slice(end);
+    } else {
+      const html = node.nodeType === Node.ELEMENT_NODE ? node.outerHTML : node.nodeType === Node.TEXT_NODE
+        ? node.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
+      fragment = cleanHTML(html);
+    }
+    serializedBlocks.set(node, fragment);
+    return fragment;
+  }
+  function serialize() {
+    invalidate(contentObserver.takeRecords());
+    if (serializedBody === null) serializedBody = opening + [...root.childNodes].map(serializeNode).join('') + '</article>';
+    return serializedBody;
+  }
   function cellFor(node) {
     const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
     return element && root.contains(element) ? element.closest('td,th') : null;
@@ -259,6 +357,79 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     const range = document.createRange(); range.selectNodeContents(target); range.collapse(!atEnd);
     const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range); root.focus();
   }
+  function units(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.length;
+    if (['IMG', 'BR', 'HR'].includes(node.nodeName)) return 1;
+    let length = selectionUnits.get(node);
+    if (length === undefined) {
+      length = [...node.childNodes].reduce((total, child) => total + units(child), 0);
+      selectionUnits.set(node, length);
+    }
+    return length;
+  }
+  function childOffsets(node) {
+    let offsets = selectionOffsets.get(node);
+    if (!offsets) {
+      offsets = { starts: new WeakMap(), boundaries: [0] };
+      let total = 0;
+      for (const child of node.childNodes) {
+        offsets.starts.set(child, total); total += units(child); offsets.boundaries.push(total);
+      }
+      selectionOffsets.set(node, offsets);
+    }
+    return offsets;
+  }
+  function selectionPoint(node, offset) {
+    if (!node || !root.contains(node)) return null;
+    let block = (node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement).closest('[data-block-id]');
+    if (!block || !root.contains(block)) block = root;
+    if (node === root) {
+      block = root.children[Math.min(offset, root.children.length - 1)] || root;
+      return { id: block.dataset.blockId || '', offset: offset >= root.children.length ? units(block) : 0 };
+    }
+    // Count UTF-16 text units and inline objects without cloning the paragraph.
+    // Prefix offsets are reused until a mutation invalidates their ancestor.
+    let position = node.nodeType === Node.TEXT_NODE ? offset : childOffsets(node).boundaries[offset];
+    for (let current = node; current !== block; current = current.parentNode) {
+      position += childOffsets(current.parentNode).starts.get(current);
+    }
+    return { id: block.dataset.blockId || '', offset: position };
+  }
+  function captureSelection() {
+    invalidate(contentObserver.takeRecords());
+    const selection = getSelection();
+    const anchor = selectionPoint(selection?.anchorNode, selection?.anchorOffset);
+    const focus = selection?.isCollapsed ? anchor : selectionPoint(selection?.focusNode, selection?.focusOffset);
+    return anchor && focus ? { anchor, focus, x: scrollX, y: scrollY } : null;
+  }
+  function resolvePoint(point) {
+    const block = point.id ? root.querySelector(`[data-block-id="${CSS.escape(point.id)}"]`) : root;
+    if (!block) return null;
+    let remaining = Math.max(0, point.offset);
+    function find(parent) {
+      for (const [index, child] of [...parent.childNodes].entries()) {
+        const length = units(child);
+        if (remaining <= length) {
+          if (child.nodeType === Node.TEXT_NODE) return [child, remaining];
+          if (['IMG', 'BR', 'HR'].includes(child.nodeName)) return [parent, index + (remaining > 0 ? 1 : 0)];
+          return find(child);
+        }
+        remaining -= length;
+      }
+      return [parent, parent.childNodes.length];
+    }
+    return find(block);
+  }
+  function restoreSelection(bookmark, restoreScroll = false) {
+    if (!bookmark) return false;
+    const anchor = resolvePoint(bookmark.anchor), focus = resolvePoint(bookmark.focus); if (!anchor || !focus) return false;
+    root.focus({ preventScroll: true }); getSelection().setBaseAndExtent(...anchor, ...focus);
+    if (restoreScroll) window.scrollTo(bookmark.x, bookmark.y); return true;
+  }
+  function checkpoint() {
+    const entry = history[historyIndex];
+    if (entry && entry.body === serialize()) entry.selection = captureSelection() || entry.selection;
+  }
   const formatColors = [
     { name: '默认', color: '#252827', background: '#f0f1ef' },
     { name: '灰色', color: '#778194', background: '#e9edf3' },
@@ -273,10 +444,13 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   ];
   function closeColorPanel() {
     colorPanel.hidden = true; colorMode = null;
-    for (const button of selectionToolbar.querySelectorAll('[aria-expanded]')) button.setAttribute('aria-expanded', 'false');
+    for (const button of selectionToolbar.querySelectorAll('[aria-controls=selection-colors]')) button.setAttribute('aria-expanded', 'false');
+  }
+  function closeHeadingPanel() {
+    headingPanel.hidden = true; headingButton.setAttribute('aria-expanded', 'false');
   }
   function hideSelectionToolbar(clear = true) {
-    selectionToolbar.hidden = true; closeColorPanel();
+    selectionToolbar.hidden = true; closeColorPanel(); closeHeadingPanel();
     if (clear) { formatRange = null; formatDocumentID = ''; }
   }
   function validFormatRange(range) {
@@ -284,12 +458,15 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   }
   function positionColorPanel() {
     if (colorPanel.hidden || !colorMode) return;
-    const button = selectionToolbar.querySelector(`[data-format="${colorMode}"]`), anchor = button.getBoundingClientRect();
-    const left = Math.max(8, Math.min(anchor.left, innerWidth - colorPanel.offsetWidth - 8));
+    positionFormatPanel(colorPanel, selectionToolbar.querySelector(`[data-format="${colorMode}"]`));
+  }
+  function positionFormatPanel(panel, button) {
+    const anchor = button.getBoundingClientRect();
+    const left = Math.max(8, Math.min(anchor.left, innerWidth - panel.offsetWidth - 8));
     const below = selectionToolbar.offsetTop + selectionToolbar.offsetHeight + 6;
-    const above = selectionToolbar.offsetTop - colorPanel.offsetHeight - 6;
-    colorPanel.style.left = left + 'px';
-    colorPanel.style.top = Math.max(8, Math.min(below + colorPanel.offsetHeight <= innerHeight - 8 ? below : above, innerHeight - colorPanel.offsetHeight - 8)) + 'px';
+    const above = selectionToolbar.offsetTop - panel.offsetHeight - 6;
+    panel.style.left = left + 'px';
+    panel.style.top = Math.max(8, Math.min(below + panel.offsetHeight <= innerHeight - 8 ? below : above, innerHeight - panel.offsetHeight - 8)) + 'px';
   }
   function positionSelectionToolbar() {
     if (selectionToolbar.hidden || !validFormatRange(formatRange)) return;
@@ -303,14 +480,18 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     selectionToolbar.style.left = Math.max(8, Math.min(first.left + first.width / 2 - width / 2, innerWidth - width - 8)) + 'px';
     selectionToolbar.style.top = Math.max(8, Math.min(fitsAbove ? first.top - height - 9 : last.bottom + 9, innerHeight - height - 8)) + 'px';
     positionColorPanel();
+    if (!headingPanel.hidden) positionFormatPanel(headingPanel, headingButton);
   }
   function updateSelectionToolbar() {
     const selection = getSelection();
     if (!editable || composing || selectingWithPointer || !selection?.rangeCount) { hideSelectionToolbar(!selectingWithPointer); return; }
     const range = selection.getRangeAt(0);
-    if (!validFormatRange(range) || [...root.querySelectorAll('pre')].some(block => range.intersectsNode(block))) { hideSelectionToolbar(); return; }
+    const common = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+    if (!validFormatRange(range) || common.closest('pre') || [...common.querySelectorAll('pre')].some(block => range.intersectsNode(block))) { hideSelectionToolbar(); return; }
     formatRange = range.cloneRange(); formatDocumentID = documentID;
+    formatBackward = selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
     selectionToolbar.hidden = false;
+    updateHeadingOptions();
     for (const button of selectionToolbar.querySelectorAll('[aria-pressed]')) button.setAttribute('aria-pressed', String(document.queryCommandState(button.dataset.format)));
     const foreground = safeColor(document.queryCommandValue('foreColor'));
     const background = safeColor(document.queryCommandValue('hiliteColor'));
@@ -321,10 +502,59 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   function restoreFormatRange() {
     if (!editable || composing || formatDocumentID !== documentID || !validFormatRange(formatRange)) { hideSelectionToolbar(); return false; }
     const range = formatRange.cloneRange(); root.focus({ preventScroll: true });
-    const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range); return true;
+    const selection = getSelection();
+    if (formatBackward) selection.setBaseAndExtent(range.endContainer, range.endOffset, range.startContainer, range.startOffset);
+    else { selection.removeAllRanges(); selection.addRange(range); }
+    return true;
+  }
+  function selectedHeadingBlocks() {
+    if (!validFormatRange(formatRange)) return [];
+    const selector = 'p,h1,h2,h3,h4,aside,blockquote';
+    const common = formatRange.commonAncestorContainer;
+    const element = common.nodeType === Node.ELEMENT_NODE ? common : common.parentElement;
+    const scope = element.closest(selector) || element;
+    return [...(scope.matches(selector) ? [scope] : []), ...scope.querySelectorAll(selector)].filter(block => {
+      // Convert text blocks within containers without replacing tables or lists.
+      if (block.querySelector('p,h1,h2,h3,h4,pre,aside,blockquote,table,figure,ul,ol,li,hr')) return false;
+      const overlap = document.createRange(); overlap.selectNodeContents(block);
+      if (formatRange.compareBoundaryPoints(Range.START_TO_START, overlap) > 0) overlap.setStart(formatRange.startContainer, formatRange.startOffset);
+      if (formatRange.compareBoundaryPoints(Range.END_TO_END, overlap) < 0) overlap.setEnd(formatRange.endContainer, formatRange.endOffset);
+      // A boundary at the next text node's offset 0 can enclose an empty
+      // DOM range even though no text or inline content in that block is selected.
+      return !overlap.collapsed && (overlap.toString().length > 0 || !!overlap.cloneContents().querySelector('br,img'));
+    });
+  }
+  function updateHeadingOptions() {
+    const blocks = selectedHeadingBlocks(); headingButton.disabled = !blocks.length;
+    for (const button of headingPanel.querySelectorAll('[data-heading]')) {
+      const active = blocks.length > 0 && blocks.every(block => block.localName === button.dataset.heading && !block.dataset.type);
+      button.setAttribute('aria-checked', String(active));
+    }
+  }
+  function showHeadingPanel() {
+    if (!restoreFormatRange()) return;
+    if (!headingPanel.hidden) { closeHeadingPanel(); return; }
+    updateHeadingOptions(); if (headingButton.disabled) return;
+    closeColorPanel(); headingPanel.hidden = false; headingButton.setAttribute('aria-expanded', 'true');
+    positionFormatPanel(headingPanel, headingButton);
+  }
+  function applySelectionHeading(tag) {
+    if (!['p', 'h1', 'h2', 'h3', 'h4'].includes(tag) || !restoreFormatRange()) return;
+    const blocks = selectedHeadingBlocks(); if (!blocks.length) return;
+    const bookmark = captureSelection(); checkpoint();
+    for (const block of blocks) {
+      const next = document.createElement(tag);
+      for (const name of ['data-block-id', 'data-depth', 'style']) {
+        if (block.hasAttribute(name)) next.setAttribute(name, block.getAttribute(name));
+      }
+      next.append(...block.childNodes); block.replaceWith(next);
+    }
+    prepareBlocks(); restoreSelection(bookmark); closeHeadingPanel(); closeMenu(); notify(); updateSelectionToolbar();
   }
   function applySelectionFormat(command, value = null) {
     if (!restoreFormatRange()) return;
+    const backward = formatBackward;
+    checkpoint();
     if (command === 'foreColor' || command === 'hiliteColor') {
       const color = safeColor(value); if (!color) return;
       const previousCSS = document.queryCommandState('styleWithCSS');
@@ -334,12 +564,16 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     } else if (['bold', 'italic', 'underline', 'strikeThrough', 'removeFormat'].includes(command)) {
       document.execCommand(command, false);
     } else return;
-    closeColorPanel(); notify(); updateSelectionToolbar();
+    const selection = getSelection();
+    if (backward && selection.rangeCount && !selection.isCollapsed) {
+      const range = selection.getRangeAt(0); selection.setBaseAndExtent(range.endContainer, range.endOffset, range.startContainer, range.startOffset);
+    }
+    closeColorPanel(); closeHeadingPanel(); notify(); updateSelectionToolbar();
   }
   function showColorPanel(mode) {
     if (!restoreFormatRange()) return;
     if (!colorPanel.hidden && colorMode === mode) { closeColorPanel(); return; }
-    closeColorPanel(); colorMode = mode;
+    closeHeadingPanel(); closeColorPanel(); colorMode = mode;
     const title = document.createElement('div'); title.className = 'palette-title'; title.textContent = mode === 'foreColor' ? '文字颜色' : '背景高亮';
     const grid = document.createElement('div'); grid.className = 'palette-grid'; grid.setAttribute('role', 'radiogroup'); grid.setAttribute('aria-label', title.textContent);
     const current = safeColor(document.queryCommandValue(mode));
@@ -357,7 +591,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   selectionToolbar.addEventListener('mousedown', event => event.preventDefault());
   selectionToolbar.addEventListener('click', event => {
     const button = event.target.closest('button[data-format]'); if (!button) return;
-    if (['foreColor', 'hiliteColor'].includes(button.dataset.format)) showColorPanel(button.dataset.format);
+    if (button.dataset.format === 'heading') showHeadingPanel();
+    else if (['foreColor', 'hiliteColor'].includes(button.dataset.format)) showColorPanel(button.dataset.format);
     else applySelectionFormat(button.dataset.format);
   });
   colorPanel.addEventListener('mousedown', event => event.preventDefault());
@@ -365,19 +600,55 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     const button = event.target.closest('button[data-color-value]');
     if (button && colorMode) applySelectionFormat(colorMode, button.dataset.colorValue);
   });
-  root.addEventListener('pointerdown', () => { selectingWithPointer = true; hideSelectionToolbar(false); });
-  document.addEventListener('pointerup', () => { selectingWithPointer = false; updateSelectionToolbar(); });
+  headingPanel.addEventListener('mousedown', event => event.preventDefault());
+  headingPanel.addEventListener('click', event => {
+    const button = event.target.closest('button[data-heading]');
+    if (button) applySelectionHeading(button.dataset.heading);
+  });
+  headingButton.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowDown') return;
+    event.preventDefault(); if (headingPanel.hidden) showHeadingPanel();
+    if (!headingPanel.hidden) (headingPanel.querySelector('[aria-checked=true]') || headingPanel.firstElementChild).focus({ preventScroll: true });
+  });
+  headingPanel.addEventListener('keydown', event => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault(); const buttons = [...headingPanel.querySelectorAll('button')];
+    const index = buttons.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next].focus({ preventScroll: true });
+  });
+  let lastReaderSelection = '';
+  function publishReaderSelection() {
+    if (editable || selectingWithPointer) return;
+    const selection = getSelection();
+    if (!root.contains(selection?.anchorNode) || selection.isCollapsed) { lastReaderSelection = ''; return; }
+    const text = selection.toString().trim().slice(0, 800);
+    if (text && text !== lastReaderSelection) { lastReaderSelection = text; send({ type: 'selection', text }); }
+  }
+  const scheduleReaderSelection = frameTask(publishReaderSelection);
+  function resetReaderSelection() { scheduleReaderSelection.cancel(); lastReaderSelection = ''; }
+  root.addEventListener('pointerdown', () => { selectingWithPointer = true; resetReaderSelection(); hideSelectionToolbar(false); });
+  document.addEventListener('pointerup', () => {
+    selectingWithPointer = false; updateSelectionToolbar();
+    // Native comment preparation scans the article and refreshes SwiftUI.
+    // Publish the final range once, after the pointer has finished selecting.
+    scheduleReaderSelection.cancel(); publishReaderSelection();
+  });
+  document.addEventListener('pointercancel', () => { selectingWithPointer = false; resetReaderSelection(); });
   document.addEventListener('pointerdown', event => {
-    if (!root.contains(event.target) && !selectionToolbar.contains(event.target) && !colorPanel.contains(event.target)) hideSelectionToolbar();
+    if (!root.contains(event.target) && !selectionToolbar.contains(event.target) && !colorPanel.contains(event.target) && !headingPanel.contains(event.target)) hideSelectionToolbar();
   });
   document.addEventListener('keydown', event => {
     if (event.key === 'Escape' && !selectionToolbar.hidden) {
       event.preventDefault();
-      if (!colorPanel.hidden) { closeColorPanel(); restoreFormatRange(); }
+      if (!headingPanel.hidden) { closeHeadingPanel(); restoreFormatRange(); }
+      else if (!colorPanel.hidden) { closeColorPanel(); restoreFormatRange(); }
       else hideSelectionToolbar();
     }
   });
   function prepareBlocks() {
+    invalidate(contentObserver.takeRecords());
+    if (!needsPreparation) return;
     if (!root.children.length) root.innerHTML = '<p><br></p>';
     for (const cell of root.querySelectorAll('td,th')) {
       let paragraph = null;
@@ -395,40 +666,60 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       for (const block of container.children) {
         if (!block.dataset.blockId || ids.has(block.dataset.blockId)) block.dataset.blockId = uuid();
         ids.add(block.dataset.blockId);
-        if (block.dataset.type === 'number') block.dataset.number = String(++number); else number = 0;
+        if (block.dataset.type === 'number') { const value = String(++number); if (block.dataset.number !== value) block.dataset.number = value; } else number = 0;
         const depth = Math.max(0, Math.min(12, parseInt(block.dataset.depth || '0') || 0));
-        block.style.marginLeft = depth ? `${depth * 24}px` : '';
+        const margin = depth ? `${depth * 24}px` : '';
+        if (block.style.marginLeft !== margin) block.style.marginLeft = margin;
       }
+    }
+    for (const caption of root.querySelectorAll('figcaption')) {
+      if (!caption.dataset.blockId || ids.has(caption.dataset.blockId)) caption.dataset.blockId = uuid();
+      ids.add(caption.dataset.blockId);
+    }
+    for (const board of root.querySelectorAll('figure[data-type=whiteboard]')) {
+      if (board.contentEditable !== 'false') board.contentEditable = 'false';
+      if (board.tabIndex !== 0) board.tabIndex = 0;
+      board.title = editable ? '双击编辑画板，或选中后使用画板操作' : 'Excalidraw 画板';
     }
     for (const img of root.querySelectorAll('img')) {
       const src = img.dataset.originalSrc || img.getAttribute('src');
       if (src && !/^(https?:|data:|leonmedia:)/i.test(src)) {
-        img.dataset.originalSrc = src; img.src = 'leonmedia://asset?path=' + encodeURIComponent(src);
+        const resolved = 'leonmedia://asset?path=' + encodeURIComponent(src);
+        if (img.dataset.originalSrc !== src) img.dataset.originalSrc = src;
+        if (img.getAttribute('src') !== resolved) img.src = resolved;
       }
     }
+    invalidate(contentObserver.takeRecords());
+    needsPreparation = false;
   }
   function notify(coalesce = false) {
     if (composing) return;
     prepareBlocks(); const body = serialize(); const now = Date.now();
-    if (history[historyIndex] !== body) {
+    if (history[historyIndex]?.body !== body) {
       history.splice(historyIndex + 1);
-      if (coalesce && now - lastEdit < 600 && historyIndex > 0) history[historyIndex] = body;
-      else { history.push(body); historyIndex++; }
+      const entry = { body, selection: captureSelection() };
+      if (coalesce && now - lastEdit < 600 && historyIndex > 0) history[historyIndex] = entry;
+      else { history.push(entry); historyIndex++; }
       if (history.length > 100) { history.shift(); historyIndex--; }
-    }
+    } else if (history[historyIndex]) history[historyIndex].selection = captureSelection() || history[historyIndex].selection;
     lastEdit = coalesce ? now : 0;
-    send({ type: 'change', body }); resize();
+    send({ type: 'change', body }); scheduleResize();
   }
+  let lastHeight = -1;
+  const scheduleResize = frameTask(resize);
   function resize() {
-    send({ type: 'height', height: Math.ceil(root.getBoundingClientRect().height) });
+    const height = Math.ceil(root.getBoundingClientRect().height);
+    if (height !== lastHeight) { lastHeight = height; send({ type: 'height', height }); }
     if (!editable) {
       const top = root.getBoundingClientRect().top;
-      const headings = [...root.querySelectorAll('h1,h2,h3')].map(heading => heading.getBoundingClientRect().top - top);
+      const headings = [...root.querySelectorAll('h1,h2,h3,h4')].map(heading => heading.getBoundingClientRect().top - top);
       send({ type: 'outline', offsets: headings });
     }
   }
   function closeMenu() {
-    menu.hidden = true; slashBlock = null; matches = [];
+    scheduleMenuPosition.cancel();
+    if (menu.hidden && !slashBlock) return;
+    menu.hidden = true; slashBlock = null; menuQuery = null; matches = [];
     root.setAttribute('aria-expanded', 'false'); root.removeAttribute('aria-activedescendant');
   }
   function selectMenuItem(index, reveal = false) {
@@ -458,17 +749,32 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     menu.style.left = Math.max(12, Math.min(anchor.left, window.innerWidth - width - 12)) + 'px';
     menu.style.top = Math.max(12, Math.min(opensBelow ? anchor.bottom + 8 : anchor.top - height - 8, window.innerHeight - height - 12)) + 'px';
   }
+  const scheduleMenuPosition = frameTask(positionMenu);
+  function startsWithSlash(block) {
+    // Range.toString() copies every character before the caret. Most paragraphs
+    // can reject slash completion by inspecting their first nonempty text node.
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.length) return node.data.charCodeAt(0) === 47;
+    }
+    return false;
+  }
   function updateMenu() {
     if (!editable || composing) { closeMenu(); return; }
     const block = blockAtSelection();
     if (!block || block.tagName === 'PRE' || block.tagName === 'TABLE') { closeMenu(); return; }
     const selection = window.getSelection(); if (!selection.isCollapsed) { closeMenu(); return; }
+    if (!startsWithSlash(block)) { closeMenu(); return; }
     const range = selection.getRangeAt(0).cloneRange(); range.selectNodeContents(block); range.setEnd(selection.anchorNode, selection.anchorOffset);
     const prefix = range.toString(); const query = prefix.match(/^\/([^\s/]*)$/);
     if (!query) { closeMenu(); return; }
     const needle = query[1].toLowerCase();
+    if (!menu.hidden && slashBlock === block && menuQuery === needle) {
+      if (menu.querySelector('[aria-selected=true]')?.dataset.commandId !== matches[menuIndex]?.id) selectMenuItem(menuIndex, true);
+      scheduleMenuPosition(); return;
+    }
     matches = commands.filter(command => `${command.id} ${command.label} ${command.aliases}`.toLowerCase().includes(needle));
-    slashBlock = block; menuIndex = Math.max(0, Math.min(menuIndex, matches.length - 1));
+    slashBlock = block; menuQuery = needle; menuIndex = Math.max(0, Math.min(menuIndex, matches.length - 1));
     const header = document.createElement('div'); header.className = 'command-header';
     const heading = document.createElement('strong'); heading.textContent = needle ? '搜索结果' : '添加内容块';
     const count = document.createElement('span'); count.className = 'command-count'; count.textContent = matches.length + ' 项'; header.append(heading, count);
@@ -476,7 +782,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     let previousGroup = '';
     for (const [index, command] of matches.entries()) {
       const group = ['text', 'code', 'callout'].includes(command.id) ? '常用内容'
-        : ['h1', 'h2', 'h3'].includes(command.id) ? '标题' : '列表与结构';
+        : ['h1', 'h2', 'h3', 'h4'].includes(command.id) ? '标题' : '列表与结构';
       if (group !== previousGroup) {
         const title = document.createElement('div'); title.className = 'command-group'; title.textContent = group; title.setAttribute('aria-hidden', 'true'); list.append(title); previousGroup = group;
       }
@@ -498,9 +804,12 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     root.setAttribute('aria-controls', 'commands'); root.setAttribute('aria-expanded', 'true');
     positionMenu(); selectMenuItem(menuIndex, true);
   }
-  function execute(id) {
+  function execute(id, options = {}) {
     const command = commands.find(item => item.id === id); const block = slashBlock || blockAtSelection();
     if (!editable || !command || !block) return false;
+    if (id === 'whiteboard') return whiteboards.create(block, !!slashBlock || !block.textContent.trim() && !block.querySelector('img'));
+    if (id === 'table' && !options.rows) { editorUI.chooseTable(block); return true; }
+    checkpoint();
     const selection = window.getSelection(); let content;
     if (slashBlock && selection.rangeCount) {
       const remainder = selection.getRangeAt(0).cloneRange(); remainder.selectNodeContents(block);
@@ -511,7 +820,13 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (['callout', 'bullet', 'number', 'task'].includes(id)) next.dataset.type = id;
     if (id === 'task') next.dataset.checked = 'false';
     if (id === 'code') { const code = document.createElement('code'); code.textContent = content.textContent; if (!code.textContent) code.append(document.createElement('br')); next.append(code); next.dataset.language = 'text'; }
-    else if (id === 'table') next.innerHTML = '<tbody><tr><th>内容</th><th>说明</th></tr><tr><td><br></td><td><br></td></tr></tbody>';
+    else if (id === 'table') {
+      const rows = Math.max(1, Math.min(30, Number(options.rows) || 2)), columns = Math.max(1, Math.min(12, Number(options.columns) || 2));
+      for (let row = 0; row < rows; row++) {
+        const section = row === 0 ? next.createTHead() : next.tBodies[0] || next.createTBody(), tr = section.insertRow();
+        for (let column = 0; column < columns; column++) { const cell = document.createElement(row === 0 ? 'th' : 'td'); cell.innerHTML = '<p><br></p>'; tr.append(cell); }
+      }
+    }
     else if (id !== 'divider') { next.append(content); if (!next.textContent && !next.querySelector('br,img')) next.append(document.createElement('br')); }
     block.replaceWith(next); closeMenu(); prepareBlocks();
     if (id === 'divider') { const paragraph = document.createElement('p'); paragraph.innerHTML = '<br>'; next.after(paragraph); focusBlock(paragraph); }
@@ -521,6 +836,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   function newParagraph(block) {
     const selection = window.getSelection(); if (!selection.rangeCount) return;
     if (!insertionRange()) return;
+    checkpoint();
     const range = selection.getRangeAt(0); range.deleteContents();
     const tail = range.cloneRange(); tail.setEndAfter(block.lastChild || block);
     const remainder = tail.extractContents();
@@ -536,16 +852,20 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   }
   function undo(delta) {
     const index = historyIndex + delta; if (index < 0 || index >= history.length) return;
-    hideSelectionToolbar(); pendingImagePastes.clear(); historyIndex = index; const parsed = new DOMParser().parseFromString(history[index], 'text/html');
-    root.innerHTML = parsed.querySelector('article').innerHTML; prepareBlocks(); closeMenu(); focusBlock(root.lastElementChild, true);
-    send({ type: 'change', body: serialize() }); resize();
+    history[historyIndex].selection = captureSelection() || history[historyIndex].selection;
+    editorUI.reset(); hideSelectionToolbar(); pendingImagePastes.clear(); historyIndex = index; lastEdit = 0;
+    const parsed = new DOMParser().parseFromString(history[index].body, 'text/html');
+    root.innerHTML = parsed.querySelector('article').innerHTML; prepareBlocks(); closeMenu();
+    if (!restoreSelection(history[index].selection, true)) focusBlock(root.firstElementChild);
+    send({ type: 'change', body: serialize() }); scheduleResize();
   }
   function updateLanguage() { const block = blockAtSelection(); language.hidden = block?.tagName !== 'PRE'; if (!language.hidden) language.value = block.dataset.language || 'text'; }
-  root.addEventListener('compositionstart', () => { composing = true; closeMenu(); hideSelectionToolbar(); });
+  root.addEventListener('compositionstart', () => { checkpoint(); composing = true; closeMenu(); hideSelectionToolbar(); });
   root.addEventListener('compositionend', () => { composing = false; notify(true); updateMenu(); if (pendingLoad) { const args = pendingLoad; pendingLoad = null; load(...args); } });
   root.addEventListener('input', event => { if (!event.isComposing) { notify(true); menuIndex = 0; updateMenu(); } });
   root.addEventListener('beforeinput', event => {
     if (!editable || composing || event.isComposing) return;
+    checkpoint();
     const block = blockAtSelection();
     if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') { event.preventDefault(); undo(event.inputType === 'historyUndo' ? -1 : 1); }
     if (event.inputType === 'insertParagraph' && block && block.tagName !== 'PRE' && block.tagName !== 'TABLE') { event.preventDefault(); newParagraph(block); }
@@ -559,6 +879,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       if (matches.length && ['Enter', 'Tab'].includes(event.key)) { event.preventDefault(); execute(matches[menuIndex].id); return; }
     }
     const block = blockAtSelection(); if (!block) return;
+    checkpoint();
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault(); const next = document.createElement('p'); next.innerHTML = '<br>';
       const anchor = block.tagName === 'PRE' ? block : cellFor(getSelection().anchorNode)?.closest('table') || block;
@@ -571,16 +892,19 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       const cells = [...table.querySelectorAll('td,th')].filter(item => item.closest('table') === table);
       const next = cells[cells.indexOf(cell) + (event.shiftKey ? -1 : 1)];
       if (next) focusBlock(next);
+      else if (!event.shiftKey) editorUI.appendRow(table);
     }
     else if (event.key === 'Tab') { event.preventDefault(); block.dataset.depth = String(Math.max(0, Math.min(12, Number(block.dataset.depth || 0) + (event.shiftKey ? -1 : 1)))); notify(); }
   });
   function rememberImagePaste() {
     const range = insertionRange(), block = blockAtSelection(); if (!range || !block || block.tagName === 'PRE') return null;
-    const requestID = uuid(); pendingImagePastes.set(requestID, { range, block, documentID });
+    checkpoint(); const requestID = uuid(); pendingImagePastes.set(requestID, { range, block, documentID });
+    editorUI.imageProgress(pendingImagePastes.size);
     closeMenu(); hideSelectionToolbar(); return requestID;
   }
   function insertPastedImages(requestID, sources) {
     const pending = pendingImagePastes.get(requestID); pendingImagePastes.delete(requestID);
+    editorUI.imageProgress(pendingImagePastes.size);
     if (!pending || !editable || composing || pending.documentID !== documentID || !root.contains(pending.block)
         || !root.contains(pending.range.startContainer) || !root.contains(pending.range.endContainer)) return false;
     const images = sources.filter(source => /^data:image\/(png|jpeg|gif|webp);base64,/i.test(source)).map(source => {
@@ -599,13 +923,14 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   root.addEventListener('paste', event => {
     if (!editable || composing) return; event.preventDefault();
     const clipboard = event.clipboardData; const block = blockAtSelection(); if (!clipboard || !block || !insertionRange()) return;
+    checkpoint(); lastEdit = 0;
     if (block.tagName === 'PRE') { document.execCommand('insertText', false, clipboard.getData('text/plain')); notify(); return; }
     const images = [...clipboard.files].filter(file => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
     if (images.length) {
       const requestID = rememberImagePaste(); if (!requestID) return;
       Promise.all(images.map(file => new Promise((resolve, reject) => {
         const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file);
-      }))).then(sources => insertPastedImages(requestID, sources), () => pendingImagePastes.delete(requestID));
+      }))).then(sources => insertPastedImages(requestID, sources), () => { pendingImagePastes.delete(requestID); editorUI.imageProgress(pendingImagePastes.size, true); });
       return;
     }
     const html = clipboard.getData('text/html'); const text = clipboard.getData('text/plain').replace(/\r\n?|\u2029/g, '\n');
@@ -627,9 +952,9 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   function flattenPastedBlocks() {
     // Browsers may nest pasted paragraphs inside the active paragraph. Promote
     // those paragraphs so every paragraph remains a directly addressable block.
-    for (const parent of [...root.children, ...root.querySelectorAll('td > p,td > h1,td > h2,td > h3,th > p,th > h1,th > h2,th > h3')]) {
-      if (!['P', 'H1', 'H2', 'H3'].includes(parent.tagName)) continue;
-      const nested = [...parent.querySelectorAll('p,div,h1,h2,h3,pre,aside,table,blockquote')].filter(child => child.parentElement === parent);
+    for (const parent of [...root.children, ...root.querySelectorAll(':is(td,th) > :is(p,h1,h2,h3,h4)')]) {
+      if (!['P', 'H1', 'H2', 'H3', 'H4'].includes(parent.tagName)) continue;
+      const nested = [...parent.querySelectorAll('p,div,h1,h2,h3,h4,pre,aside,table,blockquote')].filter(child => child.parentElement === parent);
       let anchor = parent;
       for (const child of nested) { anchor.after(child); anchor = child; }
       if (!parent.textContent && !parent.querySelector('img')) parent.remove();
@@ -641,44 +966,57 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   root.addEventListener('click', event => {
     const link = event.target.closest('a'); if (link && (!editable || event.metaKey)) { event.preventDefault(); send({ type: 'link', url: link.getAttribute('href') }); }
     const block = event.target.closest('[data-type=task]');
-    if (block && event.clientX - block.getBoundingClientRect().left < 26 && editable) { block.dataset.checked = String(block.dataset.checked !== 'true'); notify(); }
+    if (block && !event.target.closest('img') && event.clientX - block.getBoundingClientRect().left < 26 && editable) { checkpoint(); block.dataset.checked = String(block.dataset.checked !== 'true'); notify(); }
   });
   document.addEventListener('selectionchange', () => {
     updateLanguage(); if (!composing) updateMenu(); updateSelectionToolbar();
-    if (!editable && root.contains(getSelection()?.anchorNode)) {
-      const text = getSelection().toString().trim(); if (text) send({ type: 'selection', text: text.slice(0, 800) });
+    if (!editable) {
+      const selection = getSelection();
+      if (!root.contains(selection?.anchorNode) || selection.isCollapsed) resetReaderSelection();
+      else if (!selectingWithPointer) scheduleReaderSelection();
     }
   });
   document.getElementById('toolbar').addEventListener('mousedown', event => {
     const button = event.target.closest('button'); if (!button) return; event.preventDefault();
     const action = button.dataset.command;
+    if (action === 'whiteboard') { whiteboards.create(blockAtSelection() || root.lastElementChild, false); return; }
+    checkpoint();
     if (action === 'undo' || action === 'redo') { undo(action === 'undo' ? -1 : 1); return; }
     if (action === 'link') { send({ type: 'requestLink' }); return; }
     if (action === 'highlight') document.execCommand('hiliteColor', false, '#f2ce5e');
     else document.execCommand(action, false); notify();
   });
-  language.addEventListener('change', () => { const block = blockAtSelection(); if (block?.tagName === 'PRE') { block.dataset.language = language.value; notify(); } });
+  language.addEventListener('change', () => { const block = blockAtSelection(); if (block?.tagName === 'PRE') { checkpoint(); block.dataset.language = language.value; notify(); } });
   function load(body, id, canEdit, size) {
     if (composing) { pendingLoad = [body, id, canEdit, size]; return false; }
     const changed = documentID !== id || serialize() !== body;
+    if (documentID !== id) lastHeight = -1;
     documentID = id; editable = canEdit; document.body.classList.toggle('readonly', !editable);
     root.contentEditable = String(editable); document.documentElement.style.setProperty('--size', size + 'px');
-    if (changed || !editable) { selectingWithPointer = false; hideSelectionToolbar(); pendingImagePastes.clear(); }
+    if (changed || !editable) { selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); whiteboards.reset(); }
     if (changed) {
       const parsed = new DOMParser().parseFromString(body, 'text/html');
       root.innerHTML = cleanHTML(parsed.querySelector('article')?.innerHTML || '<p><br></p>');
-      prepareBlocks(); history = [serialize()]; historyIndex = 0; closeMenu();
+      prepareBlocks(); history = [{ body: serialize(), selection: null }]; historyIndex = 0; lastEdit = 0; closeMenu();
     }
-    resize(); return true;
+    editorCaret.refresh(); resize(); return true;
   }
+  /* editor-interactions-script */
+  const editorUI = createArticleInteractions({ root, canEdit: () => editable && !composing, checkpoint, notify, focusBlock, blockAtSelection, captureSelection, restoreSelection, execute, send, uuid, closeMenu, frameTask });
+  /* editor-caret-script */
+  const editorCaret = createArticleCaret({ root, canEdit: () => editable && !composing, frameTask });
+  /* editor-whiteboards-script */
+  const whiteboards = createArticleWhiteboards({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, frameTask });
   window.LeonArticle = { load, serialize, execute, commands, cleanHTML, undo, insertPastedImages,
-    insertLink(url) { const safe = safeURL(url); if (editable && safe) { document.execCommand('createLink', false, safe); notify(); } },
-    scrollToHeading(index) { root.querySelectorAll('h1,h2,h3')[index]?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    completeWhiteboard: whiteboards.complete, cancelWhiteboard: whiteboards.cancel,
+    completeImageReplacement: editorUI.completeImageReplacement,
+    insertLink(url) { const safe = safeURL(url); if (editable && safe) { checkpoint(); document.execCommand('createLink', false, safe); notify(); } },
+    scrollToHeading(index) { root.querySelectorAll('h1,h2,h3,h4')[index]?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   };
-  new ResizeObserver(resize).observe(root);
-  window.addEventListener('resize', () => { resize(); positionMenu(); positionSelectionToolbar(); });
-  window.addEventListener('scroll', () => { positionMenu(); positionSelectionToolbar(); });
-  window.addEventListener('blur', () => { selectingWithPointer = false; hideSelectionToolbar(); });
+  new ResizeObserver(scheduleResize).observe(root);
+  window.addEventListener('resize', frameTask(() => { resize(); positionMenu(); positionSelectionToolbar(); }));
+  window.addEventListener('scroll', frameTask(() => { positionMenu(); positionSelectionToolbar(); }), { passive: true });
+  window.addEventListener('blur', () => { selectingWithPointer = false; scheduleReaderSelection.cancel(); hideSelectionToolbar(); });
   send({ type: 'ready' });
 })();
 </script>

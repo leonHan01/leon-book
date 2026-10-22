@@ -29,11 +29,14 @@ SWIFT_ARGUMENTS=(
 swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" \
     --configuration release \
     --product "${EXECUTABLE_NAME}"
+swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" \
+    --configuration release --product LeonBookCLI
 BIN_PATH="$(swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" --configuration release --show-bin-path)"
 
 rm -rf "${STAGING_APP}" "${APP_BUNDLE}"
 mkdir -p "${CONTENTS_DIR}/MacOS" "${CONTENTS_DIR}/Resources"
 COPYFILE_DISABLE=1 cp "${BIN_PATH}/${EXECUTABLE_NAME}" "${CONTENTS_DIR}/MacOS/${EXECUTABLE_NAME}"
+COPYFILE_DISABLE=1 cp "${BIN_PATH}/LeonBookCLI" "${CONTENTS_DIR}/MacOS/leonbook"
 COPYFILE_DISABLE=1 cp "${MACOS_DIR}/Resources/Info.plist" "${CONTENTS_DIR}/Info.plist"
 COPYFILE_DISABLE=1 cp "${MACOS_DIR}/Resources/Notes.icns" "${CONTENTS_DIR}/Resources/Notes.icns"
 for LOCALIZATION_DIR in "${MACOS_DIR}/Sources/LeonBook/Resources/"*.lproj; do

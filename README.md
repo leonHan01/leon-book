@@ -148,3 +148,7 @@ swift run --package-path macos LeonBook
 ## Design principles
 
 `leon-book` prioritizes local availability, transparent data storage, and a responsive interface. Articles and media are stored as ordinary local files that users can manage with Finder, backup tools, or version control.
+
+## External AI automation
+
+Run `./scripts/leonblog api capabilities` to discover the CLI and JSON Lines API for articles, local microblog posts, comments, Q&A, tasks, media, collections and backups. Calls use the running app’s local socket or the same storage layer offline. See the [AI automation guide](docs/AI_AUTOMATION.md) for parameter contracts and Python examples.

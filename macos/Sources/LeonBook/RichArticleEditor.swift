@@ -15,11 +15,25 @@ struct RichArticleEditor: NSViewRepresentable {
     var onSelectText: ((String) -> Void)? = nil
     var onOutlinePositions: (([CGFloat]) -> Void)? = nil
 
-    static var pageHTML: String {
+    static let pageHTML: String = {
         guard let url = Bundle.module.url(forResource: "RichArticleEditor", withExtension: "html"),
               let html = try? String(contentsOf: url, encoding: .utf8) else { return "" }
-        return html
-    }
+        guard let scriptURL = Bundle.module.url(forResource: "RichArticleInteractions", withExtension: "js"),
+              let styleURL = Bundle.module.url(forResource: "RichArticleInteractions", withExtension: "css"),
+              let script = try? String(contentsOf: scriptURL, encoding: .utf8),
+              let style = try? String(contentsOf: styleURL, encoding: .utf8) else { return "" }
+        guard let caretScriptURL = Bundle.module.url(forResource: "RichArticleCaret", withExtension: "js"),
+              let caretStyleURL = Bundle.module.url(forResource: "RichArticleCaret", withExtension: "css"),
+              let caretScript = try? String(contentsOf: caretScriptURL, encoding: .utf8),
+              let caretStyle = try? String(contentsOf: caretStyleURL, encoding: .utf8) else { return "" }
+        guard let boardURL = Bundle.module.url(forResource: "RichArticleWhiteboards", withExtension: "js"),
+              let boardScript = try? String(contentsOf: boardURL, encoding: .utf8) else { return "" }
+        return html.replacingOccurrences(of: "/* editor-interactions-script */", with: script)
+            .replacingOccurrences(of: "/* editor-interactions-style */", with: style)
+            .replacingOccurrences(of: "/* editor-caret-script */", with: caretScript)
+            .replacingOccurrences(of: "/* editor-caret-style */", with: caretStyle)
+            .replacingOccurrences(of: "/* editor-whiteboards-script */", with: boardScript)
+    }()
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -48,9 +62,10 @@ struct RichArticleEditor: NSViewRepresentable {
         view.navigationDelegate = nil
         view.stopLoading()
         coordinator.mediaHandler?.cancelAll()
+        coordinator.closeWhiteboard()
     }
 
-    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+    @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var parent: RichArticleEditor
         var mediaHandler: RichArticleMediaHandler?
         private var isReady = false
@@ -58,11 +73,14 @@ struct RichArticleEditor: NSViewRepresentable {
         private var lastID: String?
         private var lastEditable: Bool?
         private var lastFontSize: CGFloat?
+        private var whiteboard: ArticleWhiteboardWindow?
+        private var whiteboardRequestID: String?
 
         init(parent: RichArticleEditor) { self.parent = parent }
 
         func synchronize(_ webView: WKWebView) {
             guard isReady else { return }
+            if lastID != parent.documentID || !parent.isEditable { closeWhiteboard() }
             let html = RichArticleDocument.convertingLegacyBody(parent.html)
             guard lastBody != html || lastID != parent.documentID
                 || lastEditable != parent.isEditable || lastFontSize != parent.fontSize else { return }
@@ -87,6 +105,10 @@ struct RichArticleEditor: NSViewRepresentable {
             }
             guard payload["documentID"] as? String == parent.documentID else { return }
             switch type {
+            case "editWhiteboard":
+                guard parent.isEditable, let requestID = payload["requestID"] as? String,
+                      let source = payload["source"] as? String, let view = message.webView else { return }
+                openWhiteboard(requestID: requestID, source: source, in: view)
             case "change":
                 guard parent.isEditable, let html = payload["body"] as? String,
                       RichArticleDocument.isHTML(html) else { return }
@@ -108,6 +130,22 @@ struct RichArticleEditor: NSViewRepresentable {
                     "return window.LeonArticle.insertPastedImages(requestID, sources)",
                     arguments: ["requestID": requestID, "sources": sources], in: nil, in: .page
                 ) { _ in }
+            case "chooseImage":
+                guard parent.isEditable, let requestID = payload["requestID"] as? String,
+                      let view = message.webView else { return }
+                let panel = NSOpenPanel()
+                panel.title = "替换图片"
+                panel.allowedContentTypes = [.png, .jpeg, .gif, .tiff, .webP, .bmp]
+                panel.allowsMultipleSelection = false
+                let source: String
+                if panel.runModal() == .OK, let url = panel.url,
+                   let data = try? Data(contentsOf: url), let image = RichArticleClipboard.imageDataURL(from: data) {
+                    source = image
+                } else { source = "" }
+                view.callAsyncJavaScript(
+                    "return window.LeonArticle.completeImageReplacement(requestID, source)",
+                    arguments: ["requestID": requestID, "source": source], in: nil, in: .page
+                ) { _ in }
             case "requestLink":
                 guard parent.isEditable, let view = message.webView else { return }
                 let alert = NSAlert()
@@ -120,6 +158,63 @@ struct RichArticleEditor: NSViewRepresentable {
                 guard alert.runModal() == .alertFirstButtonReturn else { return }
                 view.callAsyncJavaScript("window.LeonArticle.insertLink(url)", arguments: ["url": field.stringValue], in: nil, in: .page) { _ in }
             default: break
+            }
+        }
+
+        func closeWhiteboard() {
+            whiteboardRequestID = nil
+            whiteboard?.finish()
+            whiteboard = nil
+        }
+
+        private func openWhiteboard(requestID: String, source: String, in view: WKWebView) {
+            guard whiteboardRequestID == nil else { return }
+            guard let store = parent.store else {
+                view.callAsyncJavaScript("window.LeonArticle.cancelWhiteboard(requestID)", arguments: ["requestID": requestID], in: nil, in: .page) { _ in }
+                return
+            }
+            whiteboardRequestID = requestID
+            let documentID = parent.documentID
+            Task { [weak self, weak view] in
+                guard let self, let view else { return }
+                do {
+                    let scene = source.isEmpty ? "" : try await store.loadWhiteboard(source: source)
+                    guard parent.documentID == documentID, parent.isEditable,
+                          parent.store === store, whiteboardRequestID == requestID else { return }
+                    let controller = ArticleWhiteboardWindow(scene: scene, onSave: { [weak self, weak view] scene, preview in
+                        guard let self, let view, self.parent.documentID == documentID, self.parent.isEditable,
+                              self.parent.store === store, self.whiteboardRequestID == requestID else {
+                            throw NativeStoreError.fileSystem("当前文章已改变，画板未写入文章。")
+                        }
+                        let asset = try await store.saveWhiteboard(scene: scene, preview: preview)
+                        guard self.parent.documentID == documentID, self.parent.isEditable,
+                              self.parent.store === store, self.whiteboardRequestID == requestID else {
+                            throw NativeStoreError.fileSystem("当前文章已改变，画板未写入文章。")
+                        }
+                        let applied = try await view.callAsyncJavaScript(
+                            "return window.LeonArticle.completeWhiteboard(requestID, source, preview)",
+                            arguments: ["requestID": requestID, "source": asset.source, "preview": asset.preview], in: nil, contentWorld: .page
+                        )
+                        guard applied as? Bool == true else {
+                            throw NativeStoreError.fileSystem("文章中的原位置已改变，请取消后重新插入画板。")
+                        }
+                    }, onClose: { [weak self, weak view] in
+                        guard let self, self.whiteboardRequestID == requestID else { return }
+                        self.whiteboardRequestID = nil
+                        self.whiteboard = nil
+                        view?.callAsyncJavaScript("window.LeonArticle.cancelWhiteboard(requestID)", arguments: ["requestID": requestID], in: nil, in: .page) { _ in }
+                    })
+                    whiteboard = controller
+                    controller.present(on: view.window)
+                } catch {
+                    guard whiteboardRequestID == requestID else { return }
+                    whiteboardRequestID = nil
+                    view.callAsyncJavaScript("window.LeonArticle.cancelWhiteboard(requestID)", arguments: ["requestID": requestID], in: nil, in: .page) { _ in }
+                    let alert = NSAlert()
+                    alert.messageText = "无法打开画板"
+                    alert.informativeText = error.localizedDescription
+                    if let window = view.window { alert.beginSheetModal(for: window) { _ in } }
+                }
             }
         }
 
@@ -146,12 +241,15 @@ enum RichArticleClipboard {
     static func imageDataURL(from pasteboard: NSPasteboard) -> String? {
         let types: [NSPasteboard.PasteboardType] = [.png, .tiff, .init("public.jpeg"), .init("com.compuserve.gif"), .init("org.webmproject.webp"), .init("com.microsoft.bmp")]
         for type in types {
-            guard let data = pasteboard.data(forType: type),
-                  let bitmap = NSBitmapImageRep(data: data),
-                  let png = bitmap.representation(using: .png, properties: [:]) else { continue }
-            return "data:image/png;base64," + png.base64EncodedString()
+            if let data = pasteboard.data(forType: type), let result = imageDataURL(from: data) { return result }
         }
         return nil
+    }
+
+    static func imageDataURL(from data: Data) -> String? {
+        guard let bitmap = NSBitmapImageRep(data: data),
+              let png = bitmap.representation(using: .png, properties: [:]) else { return nil }
+        return "data:image/png;base64," + png.base64EncodedString()
     }
 }
 

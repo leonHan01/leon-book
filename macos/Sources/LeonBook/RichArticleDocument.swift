@@ -7,11 +7,31 @@ enum RichArticleDocument {
     static let empty = opening + "<p><br></p></article>"
 
     static func isHTML(_ body: String) -> Bool {
-        body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(opening)
+        body.hasPrefix(opening) || body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(opening)
     }
 
+    private static let contentSegments = try! NSRegularExpression(
+        pattern: #"(?is)<(script|style)\b[^>]*>.*?</\1>|<[^>]*>|([^<]+)|(<)"#
+    )
+    private static let entityExpression = try! NSRegularExpression(pattern: #"&(#x[0-9a-fA-F]+|#[0-9]+|[a-z]+);"#)
+
     static func hasContent(_ body: String) -> Bool {
-        !plainText(body).isEmpty || (isHTML(body) && ["<img ", "<pre", "<aside", "<table", "<hr"].contains(where: body.contains))
+        guard isHTML(body) else { return !body.isEmpty }
+        let source = body as NSString
+        var found = false
+        // Dirty-state checks run during editing. Stop at the first visible text
+        // segment instead of allocating/decoding a plain-text copy of the article.
+        contentSegments.enumerateMatches(in: body, range: NSRange(location: 0, length: source.length)) { match, _, stop in
+            guard let match else { return }
+            if match.range(at: 3).location != NSNotFound { found = true }
+            else if match.range(at: 2).location != NSNotFound {
+                let segment = source.substring(with: match.range(at: 2))
+                let text = segment.contains("&") ? decodeEntities(segment) : segment
+                found = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            if found { stop.pointee = true }
+        }
+        return found || ["<img ", "<pre", "<aside", "<table", "<hr"].contains(where: body.contains)
     }
 
     static func escape(_ text: String) -> String {
@@ -23,25 +43,36 @@ enum RichArticleDocument {
 
     static func plainText(_ source: String) -> String {
         guard isHTML(source) else { return source }
-        var text = source
+        let text = source
             .replacingOccurrences(of: #"(?is)<(script|style)\b[^>]*>.*?</\1>"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"(?i)<br\s*/?>|</(?:p|h[1-6]|pre|aside|blockquote|li|tr)>"#, with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)<br\s*/?>|</(?:p|h[1-6]|pre|aside|blockquote|li|tr|figure|figcaption)>"#, with: "\n", options: .regularExpression)
             .replacingOccurrences(of: #"<[^>]*>"#, with: "", options: .regularExpression)
+        return decodeEntities(text).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func decodeEntities(_ text: String) -> String {
+        guard text.contains("&") else { return text }
         let entities = ["lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": " ", "amp": "&"]
-        let expression = try! NSRegularExpression(pattern: #"&(#x[0-9a-fA-F]+|#[0-9]+|[a-z]+);"#)
-        for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
-            guard let nameRange = Range(match.range(at: 1), in: text),
-                  let range = Range(match.range, in: text) else { continue }
-            let name = String(text[nameRange])
+        let source = text as NSString
+        var cursor = 0, pieces: [String] = []
+        // Regex ranges are UTF-16. Append source spans once; converting each
+        // range to a Swift String index and mutating backwards was quadratic.
+        entityExpression.enumerateMatches(in: text, range: NSRange(location: 0, length: source.length)) { match, _, _ in
+            guard let match else { return }
+            if match.range.location > cursor { pieces.append(source.substring(with: NSRange(location: cursor, length: match.range.location - cursor))) }
+            let name = source.substring(with: match.range(at: 1))
             let decoded: String?
             if name.hasPrefix("#x") {
                 decoded = UInt32(name.dropFirst(2), radix: 16).flatMap(UnicodeScalar.init).map(String.init)
             } else if name.hasPrefix("#") {
                 decoded = UInt32(name.dropFirst()).flatMap(UnicodeScalar.init).map(String.init)
             } else { decoded = entities[name] }
-            if let decoded { text.replaceSubrange(range, with: decoded) }
+            pieces.append(decoded ?? source.substring(with: match.range))
+            cursor = NSMaxRange(match.range)
         }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cursor > 0 else { return text }
+        if cursor < source.length { pieces.append(source.substring(from: cursor)) }
+        return pieces.joined()
     }
 
     static func convertingLegacyBody(_ source: String) -> String {
@@ -149,7 +180,7 @@ enum RichArticleDocument {
 
     static func outline(in body: String) -> [MarkdownOutlineItem] {
         guard isHTML(body) else { return MarkdownOutline.items(in: body) }
-        let expression = try! NSRegularExpression(pattern: #"(?is)<h([1-3])\b[^>]*>(.*?)</h\1>"#)
+        let expression = try! NSRegularExpression(pattern: #"(?is)<h([1-4])\b[^>]*>(.*?)</h\1>"#)
         return expression.matches(in: body, range: NSRange(body.startIndex..., in: body)).enumerated().compactMap { index, match in
             guard let levelRange = Range(match.range(at: 1), in: body),
                   let textRange = Range(match.range(at: 2), in: body) else { return nil }
@@ -193,8 +224,9 @@ enum RichArticleFile {
         <style>
         body{max-width:860px;margin:auto;padding:40px 24px;color:#252827;font:18px/1.75 system-ui,sans-serif;overflow-wrap:anywhere}
         article>p,article>aside,article>blockquote,article>pre{margin:0 0 16px}pre{padding:18px;background:#f4f6f4;border:1px solid #e4e8e5;border-radius:8px;white-space:pre-wrap;tab-size:4}code{font-family:ui-monospace,Menlo,monospace}
-        aside{padding:14px 18px;background:#fff6d8;border-left:4px solid #d3a229;border-radius:6px}blockquote{border-left:3px solid #328568;padding:6px 16px;color:#68746c}img{max-width:100%;height:auto}mark{background:#f2ce5e70}
-        table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px 12px}[data-type=bullet]::before{content:'• ';}[data-type=number]::before{content:attr(data-number) '. ';}[data-type=task]::before{content:'☐ ';}[data-checked=true]::before{content:'☑ ';}[data-checked=true]{text-decoration:line-through}
+        aside{padding:14px 18px;background:#fff6d8;border-left:4px solid #d3a229;border-radius:6px}blockquote{border-left:3px solid #328568;padding:6px 16px;color:#68746c}img{display:block;max-width:100%;height:auto}mark{background:#f2ce5e70}
+        figure{margin:0 0 14px}figcaption{margin-top:5px;color:#848a86;font:12px/1.6 -apple-system,sans-serif;text-align:center}figcaption:empty{display:none}
+        table{border-collapse:collapse;table-layout:fixed;width:100%;overflow-wrap:anywhere}th,td{border:1px solid #ddd;padding:8px 12px;vertical-align:top}[data-type=bullet]::before{content:'• ';}[data-type=number]::before{content:attr(data-number) '. ';}[data-type=task]::before{content:'☐ ';}[data-checked=true]::before{content:'☑ ';}[data-checked=true]{text-decoration:line-through}
         </style></head>
         <body>\(article.body)</body></html>
         """

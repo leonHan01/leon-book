@@ -24,6 +24,8 @@ leonblog - leon-book 原生 macOS 应用管理
   leonblog build              构建原生应用
   leonblog test               运行原生应用检查
   leonblog coverage           运行单元测试并生成覆盖率报告
+  leonblog api METHOD [...]   外部 AI JSON CLI（api capabilities 列出所有能力）
+  leonblog api --stdio        JSON Lines 接口，每行一个请求和响应
   leonblog help               显示帮助
 
 数据位置：
@@ -127,6 +129,7 @@ case "$command_name" in
   build) build_native_app ;;
   test) "$PROJECT_DIR/macos/scripts/test-app.sh" ;;
   coverage) "$PROJECT_DIR/macos/scripts/coverage.sh" ;;
+  api) shift; exec /bin/zsh "$PROJECT_DIR/macos/scripts/run-cli.sh" "$@" ;;
   help|-h|--help) print_help ;;
   *) printf '[ERROR] 未知命令：%s\n\n' "$command_name" >&2; print_help >&2; exit 2 ;;
 esac

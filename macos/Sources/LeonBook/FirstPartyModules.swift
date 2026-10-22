@@ -5,6 +5,7 @@ import LeonBookKnowledgeGraphModule
 import LeonBookModuleKit
 import LeonBookPublishingModule
 import LeonBookSearchModule
+import LeonBookTodoModule
 
 private struct NativeFirstPartyModuleAdapter {
     typealias Predicate = @MainActor (NativeAppModel) -> Bool
@@ -39,6 +40,22 @@ enum NativeFirstPartyModules {
     /// lifecycle and native command execution. Feature targets own metadata
     /// and behaviour that does not depend on AppKit or app state.
     private static let adapters: [NativeFirstPartyModuleAdapter] = [
+        .init(
+            descriptor: TodoFirstPartyModule.descriptor,
+            canDeactivate: { !$0.isSavingTodo },
+            activate: { model in
+                guard model.storageReady else { return }
+                Task { [weak model] in
+                    do { try await model?.reloadTodos() }
+                    catch { model?.errorMessage = error.localizedDescription }
+                }
+            },
+            deactivate: { $0.deactivateTodos() },
+            commandHandlers: [
+                "navigation.todos": { model, _ in model.openTodos() },
+                "todo.new": { model, _ in model.openTodos(focusComposer: true) },
+            ]
+        ),
         .init(
             descriptor: SearchFirstPartyModule.descriptor,
             deactivate: { model in
