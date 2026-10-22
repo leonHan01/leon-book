@@ -777,6 +777,8 @@ struct ArticleEditorView: View {
                 fontSize: readingPreferences.typography.fontSize,
                 store: model.store,
                 sourceRelativePath: model.editor.isNew ? nil : model.selectedArticle?.sourceRelativePath,
+                onImportAudio: { try await model.importEditorAudio(from: $0) },
+                onAudioInserted: { model.registerEditorAudio($0) },
                 onOpenLink: { url in
                     if url.scheme == "leonbook" { model.handleAutomationURL(url) }
                     else { NSWorkspace.shared.open(url) }
@@ -1030,7 +1032,7 @@ struct ArticleEditorView: View {
 
             EditorCard(title: "附件", systemImage: "paperclip") {
                 if model.editor.media.isEmpty {
-                    Text("还没有图片、视频或文件附件")
+                    Text("还没有图片、视频、音频或文件附件")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {

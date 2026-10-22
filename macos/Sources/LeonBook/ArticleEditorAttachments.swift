@@ -8,7 +8,7 @@ struct EditorAttachmentRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: media.isVideo ? "video.fill" : media.isImage ? "photo.fill" : "doc.fill")
+            Image(systemName: media.isVideo ? "video.fill" : media.isImage ? "photo.fill" : media.isAudio ? "waveform" : "doc.fill")
                 .font(.caption)
                 .foregroundStyle(.tint)
                 .frame(width: 24, height: 24)

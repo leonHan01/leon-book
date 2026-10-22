@@ -36,6 +36,7 @@ final class SQLiteDatabase {
     private var statementCache: [String: OpaquePointer] = [:]
     private var statementLRU: [String] = []
     private let maximumCachedStatementCount = 96
+    private var cancellableQueryDepth = 0
 
     init(url: URL) throws {
         var openedHandle: OpaquePointer?
@@ -112,13 +113,34 @@ final class SQLiteDatabase {
         guard result == SQLITE_DONE else { throw databaseError() }
     }
 
-    func query(_ sql: String, values: [SQLiteValue] = [], row: (SQLiteRow) throws -> Void) throws {
+    func query(_ sql: String, values: [SQLiteValue] = [], checkingCancellation: Bool = false, row: (SQLiteRow) throws -> Void) throws {
+        if checkingCancellation { try Task.checkCancellation() }
         let statement = try takeStatement(sql)
         defer { returnStatement(statement, for: sql) }
         try bind(values, to: statement)
 
+        if checkingCancellation {
+            guard sqlite3_stmt_readonly(statement) != 0 else {
+                throw NativeStoreError.fileSystem("SQLite：只有只读查询支持取消")
+            }
+            // The owning actor runs this synchronous query without suspension.
+            // SQLite calls back on the same task, including inside a long step
+            // that sorts/ranks results before returning its first row.
+            if cancellableQueryDepth == 0 {
+                sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+            }
+            cancellableQueryDepth += 1
+        }
+        defer {
+            if checkingCancellation {
+                cancellableQueryDepth -= 1
+                if cancellableQueryDepth == 0 { sqlite3_progress_handler(handle, 0, nil, nil) }
+            }
+        }
         while true {
+            if checkingCancellation { try Task.checkCancellation() }
             let result = sqlite3_step(statement)
+            if checkingCancellation { try Task.checkCancellation() }
             switch result {
             case SQLITE_ROW:
                 try row(SQLiteRow(statement: statement))

@@ -6,6 +6,8 @@ extension LocalBlogStore {
         restrictingTo forcedTypes: Set<NativeSearchDocumentType> = [],
         limit: Int = 60
     ) throws -> [NativeGlobalSearchResult] {
+        // A superseded search may have been waiting behind another store call.
+        try Task.checkCancellation()
         try prepare()
         let query = NativeGlobalSearchQuery(rawQuery)
         let effectiveTypes: Set<NativeSearchDocumentType>
@@ -122,7 +124,8 @@ extension LocalBlogStore {
             ORDER BY \(ordering)
             LIMIT ?
             """,
-            values: values
+            values: values,
+            checkingCancellation: true
         ) { row in
             guard let typeValue = row.text(at: 0),
                   let documentType = NativeSearchDocumentType(rawValue: typeValue),

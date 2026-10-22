@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data: leonmedia:;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data: leonmedia:; media-src https: http: leonmedia:;">
 <style>
 :root { color-scheme: light dark; --surface: #fff; --text: #252827; --muted: #848a86; --line: #e4e8e5; --accent: #328568; --soft: #f4f6f4; --size: 18px; }
 @media (prefers-color-scheme: dark) { :root { --surface: #222522; --text: #e5e9e5; --muted: #9ca69e; --line: #3c433d; --soft: #2b302c; --accent: #86c7a5; } }
@@ -45,6 +45,10 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #document mark { background: #f2ce5e70; color: inherit; border-radius: 3px; }
 #document a { color: var(--accent); text-decoration: underline; }
 #document img { display: block; max-width: 100%; height: auto; border-radius: 8px; }
+#document figure[data-type=audio] { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); }
+#document figure[data-type=audio]:focus { outline: 2px solid var(--accent); }
+#document audio { display: block; width: 100%; max-width: 100%; }
+#document figure[data-type=audio] figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 #document table { border-collapse: collapse; table-layout: fixed; width: 100%; }
 #document th, #document td { border: 1px solid var(--line); padding: 10px 12px; min-width: 70px; vertical-align: top; }
 #document :is(td, th) img { max-width: 100%; margin: 6px 0; }
@@ -130,6 +134,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   <button data-command="undo" title="撤销 ⌘Z">↶</button>
   <button data-command="redo" title="重做 ⇧⌘Z">↷</button>
   <button data-command="whiteboard" title="插入 Excalidraw 画板">画板</button>
+  <button data-command="audio" title="选择 MP3 并插入文章" aria-label="插入音频">插入音频</button>
   <select id="language" aria-label="代码语言" hidden><option>text</option><option>javascript</option><option>typescript</option><option>swift</option><option>python</option><option>html</option><option>css</option><option>json</option><option>sql</option><option>bash</option></select>
   <span class="hint">/ 添加块 · 回车分段 · ⇧回车换行</span>
 </div>
@@ -175,6 +180,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     { id: 'code', tag: 'pre', label: '代码框', detail: '保留缩进和换行，可选择语言', icon: '</>', aliases: '代码 代码块' },
     { id: 'callout', tag: 'aside', label: '高亮框', detail: '突出显示提示和重要信息', icon: '✦', aliases: 'note tip highlight 提示 高亮' },
     { id: 'whiteboard', tag: 'figure', label: '画板', detail: 'Excalidraw 手绘、图形、箭头和文字', aliases: 'excalidraw canvas board 画板 绘图' },
+    { id: 'audio', tag: 'figure', label: '插入音频', detail: '选择 MP3，在文章中直接播放', aliases: 'mp3 music 音频 音乐 录音' },
     { id: 'h1', tag: 'h1', label: '一级标题', detail: '最大的章节标题', icon: 'H₁', aliases: 'heading title 标题' },
     { id: 'h2', tag: 'h2', label: '二级标题', detail: '章节标题', icon: 'H₂', aliases: 'heading subtitle 标题' },
     { id: 'h3', tag: 'h3', label: '三级标题', detail: '小节标题', icon: 'H₃', aliases: 'heading 标题' },
@@ -187,6 +193,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     { id: 'divider', tag: 'hr', label: '分割线', detail: '分隔上下内容', icon: '—', aliases: 'hr rule 分割线' }
   ];
   const commandIcons = {
+    audio: '<path d="M9 14V4l8-2v10M9 7l8-2"/><ellipse cx="6" cy="15" rx="3" ry="2"/><ellipse cx="14" cy="13" rx="3" ry="2"/>',
     whiteboard: '<rect x="2" y="3" width="16" height="14" rx="2"/><path d="m5 13 3-6 4 6 3-4"/>',
     text: '<path d="M4 5h12M10 5v11M7 16h6"/>',
     h1: '<path d="M3 5v10M10 5v10M3 10h7"/><text x="13" y="16">1</text>',
@@ -202,7 +209,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     table: '<rect x="3" y="4" width="14" height="12" rx="2"/><path d="M3 8h14M3 12h14M9 4v12"/>',
     divider: '<path d="M3 10h14M6 5h8M6 15h8"/>'
   };
-  const allowed = new Set('P H1 H2 H3 H4 PRE CODE ASIDE BLOCKQUOTE TABLE TBODY THEAD TFOOT TR TH TD COLGROUP COL FIGURE FIGCAPTION STRONG B EM I U S STRIKE MARK A BR IMG HR SPAN UL OL LI'.split(' '));
+  const allowed = new Set('P H1 H2 H3 H4 PRE CODE ASIDE BLOCKQUOTE TABLE TBODY THEAD TFOOT TR TH TD COLGROUP COL FIGURE FIGCAPTION STRONG B EM I U S STRIKE MARK A BR IMG AUDIO HR SPAN UL OL LI'.split(' '));
   const attributes = new Set(['data-block-id', 'data-type', 'data-depth', 'data-checked', 'data-number', 'data-language']);
   const blockTags = new Set('P H1 H2 H3 H4 PRE ASIDE BLOCKQUOTE TABLE FIGURE UL OL LI HR'.split(' '));
   const pendingImagePastes = new Map();
@@ -227,6 +234,10 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (image && /^data:image\/(png|jpeg|gif|webp);base64,/i.test(url)) return url;
     if (/^(https?:|mailto:|leonbook:)/i.test(url) || /^\/(?!\/)|^(?![a-z][a-z0-9+.-]*:)[^\s]+$/i.test(url)) return url;
     return '';
+  };
+  const safeAudioURL = value => {
+    const url = safeURL(value);
+    return /^(mailto:|leonbook:)/i.test(url) ? '' : url;
   };
   function safeColor(value) {
     const color = String(value || '').trim();
@@ -261,7 +272,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
         for (const attr of [...node.attributes]) {
           const keep = attributes.has(attr.name) || (node.tagName === 'A' && attr.name === 'href')
             || (node.tagName === 'FIGURE' && node.dataset.type === 'whiteboard' && attr.name === 'data-whiteboard-source' && /^\/media\/whiteboards\/[a-f0-9]{64}\.excalidraw$/.test(attr.value))
-            || (node.tagName === 'IMG' && ['src', 'alt', 'data-original-src'].includes(attr.name));
+            || (node.tagName === 'IMG' && ['src', 'alt', 'data-original-src'].includes(attr.name))
+            || (node.tagName === 'AUDIO' && ['src', 'data-original-src'].includes(attr.name));
           if (!keep) node.removeAttribute(attr.name);
         }
         if (node.tagName === 'A') {
@@ -270,6 +282,13 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
         if (node.tagName === 'IMG') {
           const src = safeURL(node.dataset.originalSrc || node.getAttribute('src'), true);
           if (src) { node.setAttribute('src', src); delete node.dataset.originalSrc; } else node.remove();
+        }
+        if (node.tagName === 'AUDIO') {
+          const src = safeAudioURL(node.dataset.originalSrc || node.getAttribute('src'));
+          if (src) {
+            node.setAttribute('src', src); delete node.dataset.originalSrc;
+            node.setAttribute('controls', ''); node.setAttribute('preload', 'none');
+          } else node.remove();
         }
         if (foreground) node.style.color = foreground;
         if (background && background !== 'transparent') node.style.backgroundColor = background;
@@ -285,7 +304,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   const serializedBlocks = new WeakMap();
   const selectionUnits = new WeakMap(), selectionOffsets = new WeakMap();
   let serializedBody = null, needsPreparation = true;
-  const structuralSelector = 'p,h1,h2,h3,h4,pre,aside,blockquote,table,td,th,figure,figcaption,img,ul,ol,li,hr';
+  const structuralSelector = 'p,h1,h2,h3,h4,pre,aside,blockquote,table,td,th,figure,figcaption,img,audio,ul,ol,li,hr';
   function discardNodeCaches(node) {
     serializedBlocks.delete(node); selectionUnits.delete(node); selectionOffsets.delete(node);
   }
@@ -359,7 +378,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   }
   function units(node) {
     if (node.nodeType === Node.TEXT_NODE) return node.length;
-    if (['IMG', 'BR', 'HR'].includes(node.nodeName)) return 1;
+    if (['IMG', 'AUDIO', 'BR', 'HR'].includes(node.nodeName)) return 1;
     let length = selectionUnits.get(node);
     if (length === undefined) {
       length = [...node.childNodes].reduce((total, child) => total + units(child), 0);
@@ -411,7 +430,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
         const length = units(child);
         if (remaining <= length) {
           if (child.nodeType === Node.TEXT_NODE) return [child, remaining];
-          if (['IMG', 'BR', 'HR'].includes(child.nodeName)) return [parent, index + (remaining > 0 ? 1 : 0)];
+          if (['IMG', 'AUDIO', 'BR', 'HR'].includes(child.nodeName)) return [parent, index + (remaining > 0 ? 1 : 0)];
           return find(child);
         }
         remaining -= length;
@@ -681,7 +700,12 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       if (board.tabIndex !== 0) board.tabIndex = 0;
       board.title = editable ? '双击编辑画板，或选中后使用画板操作' : 'Excalidraw 画板';
     }
-    for (const img of root.querySelectorAll('img')) {
+    for (const figure of root.querySelectorAll('figure[data-type=audio]')) {
+      if (figure.contentEditable !== 'false') figure.contentEditable = 'false';
+      if (figure.tabIndex !== 0) figure.tabIndex = 0;
+      figure.title = editable ? '点击播放；选中音频块后按 Delete 删除' : '音频';
+    }
+    for (const img of root.querySelectorAll('img,audio')) {
       const src = img.dataset.originalSrc || img.getAttribute('src');
       if (src && !/^(https?:|data:|leonmedia:)/i.test(src)) {
         const resolved = 'leonmedia://asset?path=' + encodeURIComponent(src);
@@ -808,6 +832,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     const command = commands.find(item => item.id === id); const block = slashBlock || blockAtSelection();
     if (!editable || !command || !block) return false;
     if (id === 'whiteboard') return whiteboards.create(block, !!slashBlock || !block.textContent.trim() && !block.querySelector('img'));
+    if (id === 'audio') return audioBlocks.create(block, !!slashBlock || block.tagName === 'P' && !block.textContent.trim() && !block.querySelector('img,audio'));
     if (id === 'table' && !options.rows) { editorUI.chooseTable(block); return true; }
     checkpoint();
     const selection = window.getSelection(); let content;
@@ -980,6 +1005,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     const button = event.target.closest('button'); if (!button) return; event.preventDefault();
     const action = button.dataset.command;
     if (action === 'whiteboard') { whiteboards.create(blockAtSelection() || root.lastElementChild, false); return; }
+    if (action === 'audio') { audioBlocks.create(blockAtSelection() || root.lastElementChild); return; }
     checkpoint();
     if (action === 'undo' || action === 'redo') { undo(action === 'undo' ? -1 : 1); return; }
     if (action === 'link') { send({ type: 'requestLink' }); return; }
@@ -993,7 +1019,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (documentID !== id) lastHeight = -1;
     documentID = id; editable = canEdit; document.body.classList.toggle('readonly', !editable);
     root.contentEditable = String(editable); document.documentElement.style.setProperty('--size', size + 'px');
-    if (changed || !editable) { selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); whiteboards.reset(); }
+    if (changed || !editable) { selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); whiteboards.reset(); audioBlocks.reset(); }
     if (changed) {
       const parsed = new DOMParser().parseFromString(body, 'text/html');
       root.innerHTML = cleanHTML(parsed.querySelector('article')?.innerHTML || '<p><br></p>');
@@ -1007,7 +1033,10 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   const editorCaret = createArticleCaret({ root, canEdit: () => editable && !composing, frameTask });
   /* editor-whiteboards-script */
   const whiteboards = createArticleWhiteboards({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, frameTask });
+  /* editor-audio-script */
+  const audioBlocks = createArticleAudio({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu });
   window.LeonArticle = { load, serialize, execute, commands, cleanHTML, undo, insertPastedImages,
+    completeAudio: audioBlocks.complete, cancelAudio: audioBlocks.cancel,
     completeWhiteboard: whiteboards.complete, cancelWhiteboard: whiteboards.cancel,
     completeImageReplacement: editorUI.completeImageReplacement,
     insertLink(url) { const safe = safeURL(url); if (editable && safe) { checkpoint(); document.execCommand('createLink', false, safe); notify(); } },

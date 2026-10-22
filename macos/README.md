@@ -52,6 +52,8 @@ An anchored comment stores both its source quote and nearest Markdown heading. C
 
 Articles are authored and stored as semantic HTML (`.html`), with metadata in the document head. Enter creates a paragraph block, Shift+Enter inserts an inline break, and pasted paragraphs become separate blocks. The toolbar provides bold, italic, underline, strike, highlight, links, undo, and redo.
 
+The **画板** toolbar button or `/whiteboard` inserts an offline Excalidraw drawing. Select a drawing to edit or delete it, or double-click to reopen its editor. Articles render PNG previews; the full editor is loaded only when needed. Immutable editable scenes (including image files) and previews live in `media/whiteboards/` and are backed up with the workspace. Old drawing versions are retained for undo and article history. See [Whiteboard/README.md](Whiteboard/README.md) for rebuilding the bundled resources and storage limits.
+
 Type `/` at the beginning of a paragraph to open the searchable command menu. `/code` creates a code box with a language selector; `/callout` creates a highlighted box. Headings (`/h1`–`/h3`), lists (`/bullet`, `/number`, `/task`), `/quote`, `/table`, `/divider`, and `/text` are also available. Use arrows to choose, Enter or Tab to confirm, and Escape to dismiss. In code blocks, Enter inserts a newline and Command+Enter creates a paragraph below.
 
 Legacy Markdown is converted once on editing. Saving writes HTML and archives the original bytes under `.legacy-markdown/`; collisions abort migration and failed saves roll back. Markdown/Obsidian round-trip compatibility is retired. Existing autosaves and revisions remain local.

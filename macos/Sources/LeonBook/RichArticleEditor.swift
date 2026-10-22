@@ -10,6 +10,8 @@ struct RichArticleEditor: NSViewRepresentable {
     var fontSize: CGFloat = 18
     var store: LocalBlogStore? = nil
     var sourceRelativePath: String? = nil
+    var onImportAudio: ((URL) async throws -> NativeMedia)? = nil
+    var onAudioInserted: ((NativeMedia) -> Void)? = nil
     var onHeightChange: ((CGFloat) -> Void)? = nil
     var onOpenLink: ((URL) -> Void)? = nil
     var onSelectText: ((String) -> Void)? = nil
@@ -28,11 +30,14 @@ struct RichArticleEditor: NSViewRepresentable {
               let caretStyle = try? String(contentsOf: caretStyleURL, encoding: .utf8) else { return "" }
         guard let boardURL = Bundle.module.url(forResource: "RichArticleWhiteboards", withExtension: "js"),
               let boardScript = try? String(contentsOf: boardURL, encoding: .utf8) else { return "" }
+        guard let audioURL = Bundle.module.url(forResource: "RichArticleAudio", withExtension: "js"),
+              let audioScript = try? String(contentsOf: audioURL, encoding: .utf8) else { return "" }
         return html.replacingOccurrences(of: "/* editor-interactions-script */", with: script)
             .replacingOccurrences(of: "/* editor-interactions-style */", with: style)
             .replacingOccurrences(of: "/* editor-caret-script */", with: caretScript)
             .replacingOccurrences(of: "/* editor-caret-style */", with: caretStyle)
             .replacingOccurrences(of: "/* editor-whiteboards-script */", with: boardScript)
+            .replacingOccurrences(of: "/* editor-audio-script */", with: audioScript)
     }()
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -105,6 +110,10 @@ struct RichArticleEditor: NSViewRepresentable {
             }
             guard payload["documentID"] as? String == parent.documentID else { return }
             switch type {
+            case "chooseAudio":
+                guard parent.isEditable, let requestID = payload["requestID"] as? String,
+                      let view = message.webView else { return }
+                chooseAudio(requestID: requestID, in: view)
             case "editWhiteboard":
                 guard parent.isEditable, let requestID = payload["requestID"] as? String,
                       let source = payload["source"] as? String, let view = message.webView else { return }
@@ -165,6 +174,56 @@ struct RichArticleEditor: NSViewRepresentable {
             whiteboardRequestID = nil
             whiteboard?.finish()
             whiteboard = nil
+        }
+
+        private func chooseAudio(requestID: String, in view: WKWebView) {
+            func cancel() {
+                view.callAsyncJavaScript("window.LeonArticle.cancelAudio(requestID)", arguments: ["requestID": requestID], in: nil, in: .page) { _ in }
+            }
+            guard let store = parent.store, let importAudio = parent.onImportAudio else { cancel(); return }
+            let documentID = parent.documentID
+            let panel = NSOpenPanel()
+            panel.title = "插入音频"
+            panel.message = "选择一个 MP3 音频，插入文章后可直接播放。"
+            panel.allowedContentTypes = [.mp3]
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = false
+            guard panel.runModal() == .OK, let url = panel.url else { cancel(); return }
+            Task { [weak self, weak view] in
+                guard let self, let view else { return }
+                @MainActor func isCurrent() -> Bool {
+                    self.parent.documentID == documentID && self.parent.isEditable
+                        && self.parent.store === store && view.navigationDelegate === self
+                }
+                guard isCurrent() else { return }
+                var imported: NativeMedia?
+                do {
+                    let media = try await importAudio(url)
+                    imported = media
+                    guard isCurrent() else {
+                        try? await store.discardUnreferencedMedia([media])
+                        return
+                    }
+                    let result = try await view.callAsyncJavaScript(
+                        "return window.LeonArticle.completeAudio(requestID, source, title) ? window.LeonArticle.serialize() : null",
+                        arguments: ["requestID": requestID, "source": media.url, "title": media.name], in: nil, contentWorld: .page
+                    )
+                    guard isCurrent(), let body = result as? String, RichArticleDocument.isHTML(body) else {
+                        throw NativeStoreError.fileSystem("文章中的插入位置已改变，请重新插入音频。")
+                    }
+                    lastBody = body
+                    parent.html = body
+                    parent.onAudioInserted?(media)
+                } catch {
+                    if let imported { try? await store.discardUnreferencedMedia([imported]) }
+                    guard isCurrent() else { return }
+                    cancel()
+                    let alert = NSAlert()
+                    alert.messageText = "无法插入音频"
+                    alert.informativeText = error.localizedDescription
+                    if let window = view.window { alert.beginSheetModal(for: window) { _ in } }
+                }
+            }
         }
 
         private func openWhiteboard(requestID: String, source: String, in view: WKWebView) {

@@ -118,7 +118,15 @@ enum RichArticleDocument {
     }
 
     static func imageURLs(in body: String) -> [String] {
-        let expression = try! NSRegularExpression(pattern: #"(?i)<img\b[^>]*\bsrc="([^"]+)""#)
+        mediaURLs(in: body, tag: "img")
+    }
+
+    static func audioURLs(in body: String) -> [String] {
+        mediaURLs(in: body, tag: "audio")
+    }
+
+    private static func mediaURLs(in body: String, tag: String) -> [String] {
+        let expression = try! NSRegularExpression(pattern: "(?i)<\(tag)\\b[^>]*\\bsrc=\"([^\"]+)\"")
         return expression.matches(in: body, range: NSRange(body.startIndex..., in: body)).compactMap { match in
             Range(match.range(at: 1), in: body).map { String(body[$0]).replacingOccurrences(of: "&amp;", with: "&") }
         }
@@ -225,7 +233,7 @@ enum RichArticleFile {
         body{max-width:860px;margin:auto;padding:40px 24px;color:#252827;font:18px/1.75 system-ui,sans-serif;overflow-wrap:anywhere}
         article>p,article>aside,article>blockquote,article>pre{margin:0 0 16px}pre{padding:18px;background:#f4f6f4;border:1px solid #e4e8e5;border-radius:8px;white-space:pre-wrap;tab-size:4}code{font-family:ui-monospace,Menlo,monospace}
         aside{padding:14px 18px;background:#fff6d8;border-left:4px solid #d3a229;border-radius:6px}blockquote{border-left:3px solid #328568;padding:6px 16px;color:#68746c}img{display:block;max-width:100%;height:auto}mark{background:#f2ce5e70}
-        figure{margin:0 0 14px}figcaption{margin-top:5px;color:#848a86;font:12px/1.6 -apple-system,sans-serif;text-align:center}figcaption:empty{display:none}
+        figure{margin:0 0 14px}figcaption{margin-top:5px;color:#848a86;font:12px/1.6 -apple-system,sans-serif;text-align:center}figcaption:empty{display:none}audio{display:block;width:100%;max-width:100%}
         table{border-collapse:collapse;table-layout:fixed;width:100%;overflow-wrap:anywhere}th,td{border:1px solid #ddd;padding:8px 12px;vertical-align:top}[data-type=bullet]::before{content:'• ';}[data-type=number]::before{content:attr(data-number) '. ';}[data-type=task]::before{content:'☐ ';}[data-checked=true]::before{content:'☑ ';}[data-checked=true]{text-decoration:line-through}
         </style></head>
         <body>\(article.body)</body></html>

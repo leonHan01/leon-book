@@ -152,7 +152,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
                     let articles: [NativeArticleSummary]
                     if query.isEmpty { articles = Array(try await store.listArticles().prefix(100)) }
                     else {
-                        let results = try await store.search(query: query + " type:article", limit: 100)
+                        let results = try await store.search(query + " type:article", limit: 100)
                         articles = try await store.listArticleSummaries(slugs: results.map(\.documentID))
                     }
                     items = articles.map { ["id": $0.slug, "title": $0.title, "subtitle": $0.excerpt, "kind": "article", "file": "articles/" + $0.sourceRelativePath] }

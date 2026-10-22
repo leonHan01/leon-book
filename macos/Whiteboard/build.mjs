@@ -1,16 +1,17 @@
 import { build } from 'esbuild';
-import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const output = path.resolve(here, '../Sources/LeonBook/Whiteboard');
-await rm(output, { recursive: true, force: true });
-await mkdir(output, { recursive: true });
+const destination = path.resolve(here, '../Sources/LeonBook/Whiteboard');
+const output = await mkdtemp(path.join(tmpdir(), 'leon-whiteboard-build-'));
 await build({
   absWorkingDir: here, entryPoints: ['editor.jsx'], outfile: path.join(output, 'editor.js'),
   bundle: true, minify: true, format: 'iife', platform: 'browser', target: ['safari16'],
-  define: { 'process.env.NODE_ENV': '"production"', 'process.env.IS_PREACT': '"false"' },
+  conditions: ['production'],
+  define: { 'process.env.NODE_ENV': '"production"', 'process.env.IS_PREACT': '"false"', 'import.meta.url': '"leonboard://app/editor.js"' },
   loader: { '.woff2': 'file', '.woff': 'file', '.ttf': 'file' },
   legalComments: 'eof', logLevel: 'info',
 });
@@ -31,3 +32,8 @@ for (const [relative, info] of Object.entries(lock.packages)) {
   }
 }
 await writeFile(path.join(output, 'THIRD-PARTY-NOTICES.txt'), notices.join('\n'));
+await cp(path.join(here, 'licenses'), path.join(output, 'licenses'), { recursive: true });
+// A failed bundle must leave the previously shipped runtime intact.
+await rm(destination, { recursive: true, force: true });
+await cp(output, destination, { recursive: true });
+await rm(output, { recursive: true, force: true });

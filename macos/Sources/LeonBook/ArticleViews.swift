@@ -1411,7 +1411,7 @@ final class NativeMarkdownArticleDocument {
             blocks = []
             outline = RichArticleDocument.outline(in: markdown)
             imageURLs = Set(RichArticleDocument.imageURLs(in: markdown))
-            embeddedAttachmentURLs = imageURLs
+            embeddedAttachmentURLs = imageURLs.union(RichArticleDocument.audioURLs(in: markdown))
             return
         }
         var parsedBlocks: [MarkdownArticleBlock] = []
