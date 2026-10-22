@@ -1021,3 +1021,14 @@
 "在 %@ 下新建文章" = "Create an article in %@";
 
 "文章必须归属目录，目录最多 5 级。" = "Articles must belong to a directory, with up to 5 directory levels.";
+
+"主导航" = "Main navigation";
+
+"工作区操作" = "Workspace actions";
+
+"切换工作空间" = "Switch workspace";
+
+"%lld 篇文章" = "%lld articles";
+"无限画布" = "Infinite Canvas";
+"前往无限画布" = "Open Infinite Canvas";
+"在画布中组织文章、网页和素材" = "Organize articles, web pages, and attachments on a canvas";

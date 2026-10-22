@@ -19,6 +19,7 @@ public struct NativeCommandID: RawRepresentable, Hashable, Codable, Identifiable
     public static let dashboard = Self(rawValue: "navigation.dashboard")
     public static let articles = Self(rawValue: "navigation.articles")
     public static let graph = Self(rawValue: "navigation.graph")
+    public static let canvas = Self(rawValue: "navigation.canvas")
     public static let moments = Self(rawValue: "navigation.moments")
     public static let todos = Self(rawValue: "navigation.todos")
     public static let newTodo = Self(rawValue: "todo.new")
@@ -552,6 +553,7 @@ private extension NativeCommandRegistry {
             defaultShortcut: .init(key: "s", modifiers: [.command])
         ),
         .init(id: .dashboard, title: "前往概览", detail: "打开活动概览", keywords: "home dashboard", systemImage: "rectangle.grid.2x2"),
+        .init(id: .canvas, title: "前往无限画布", detail: "在画布中组织文章、网页和素材", keywords: "canvas board obsidian 画布 白板", systemImage: "rectangle.3.group"),
         .init(id: .articles, title: "前往全部文章", detail: "浏览文章列表", keywords: "notes article", systemImage: "doc.text"),
         .init(id: .moments, title: "前往微博", detail: "浏览和发布微博", keywords: "moment post", systemImage: "rectangle.3.group"),
         .init(id: .today, title: "前往今日微博", detail: "只查看今天发布的微博", keywords: "today calendar", systemImage: "calendar"),

@@ -64,7 +64,7 @@ struct NativeWorkspaceResourceSection: View {
             model.showAllArticles()
         } label: {
             HStack(spacing: 7) {
-                Image(systemName: "externaldrive.fill")
+                Image(systemName: "tray")
                     .foregroundStyle(.secondary)
                 Text("全部文章")
                     .lineLimit(1)
@@ -176,10 +176,10 @@ private struct NativeWorkspaceResourceBranch: View {
                     }
                 }
                 .padding(.horizontal, 5)
-                .padding(.vertical, 3)
+                .padding(.vertical, 5)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .background(rowBackground(resource), in: RoundedRectangle(cornerRadius: 5))
+                .background(rowBackground(resource), in: RoundedRectangle(cornerRadius: 7))
             }
             .buttonStyle(.plain)
 
@@ -329,15 +329,15 @@ private struct NativeWorkspaceResourceBranch: View {
             return NativeTheme.selection
         }
         if resource.articleSlug == model.selectedSlug {
-            return NativeTheme.lightBlue
+            return NativeTheme.selection
         }
-        return .clear
+        return hoveredResourceID == resource.id ? NativeTheme.surfaceSecondary : .clear
     }
 
     private func iconColor(_ resource: NativeWorkspaceResourceNode) -> Color {
         switch resource.kind {
         case .folder:
-            return NativeTheme.accent
+            return NativeTheme.textSecondary
         case .article:
             return resource.articleSlug == model.selectedSlug ? NativeTheme.deepBlue : NativeTheme.textPrimary
         case .attachment:

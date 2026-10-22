@@ -16,6 +16,12 @@ public enum AutomationSocket {
     /// nil means no listener was present BEFORE sending. Once connected, any
     /// failure is reported; writes are never replayed against the offline store.
     public static func call(_ request: AutomationRequest, root: URL) throws -> AutomationResponse? {
+        // Validate the complete encoded envelope before connecting or permitting
+        // offline fallback. --json and --body-file share this one size budget.
+        let data = try JSONEncoder().encode(request)
+        guard data.count <= maximumMessageBytes else {
+            throw AutomationFailure("message_too_large", "Encoded request exceeds 8 MiB, including metadata and JSON escaping; shorten the content or split independent operations.")
+        }
         let fd = try descriptor()
         defer { Darwin.close(fd) }
         var address = try address(path(for: root))
@@ -27,7 +33,7 @@ public enum AutomationSocket {
             throw failure("Cannot connect to app")
         }
         try verifyPeer(fd)
-        try write(JSONEncoder().encode(request), to: fd)
+        try write(data, to: fd)
         return try JSONDecoder().decode(AutomationResponse.self, from: read(from: fd))
     }
 

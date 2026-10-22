@@ -116,11 +116,18 @@ final class ArticleWhiteboardTests {
           elements:[{id:'image-1',type:'image',x:20,y:20,width:180,height:120,angle:0,strokeColor:'transparent',backgroundColor:'transparent',fillStyle:'solid',strokeWidth:1,strokeStyle:'solid',roughness:0,opacity:100,groupIds:[],frameId:null,roundness:null,seed:1,version:1,versionNonce:1,isDeleted:false,boundElements:null,updated:1,link:null,locked:false,fileId:'image-file',status:'saved',scale:[1,1],crop:null}],
           files:{'image-file':{id:'image-file',mimeType:'image/png',dataURL:png,created:1,lastRetrieved:1}}
         };
+        scene.elements.push({...scene.elements[0], id:'title', type:'text', y:170, width:350, height:35,
+          strokeColor:'#1e1e1e', fileId:undefined, text:'文章画板 · Excalidraw', originalText:'文章画板 · Excalidraw',
+          fontSize:28, fontFamily:5, textAlign:'left', verticalAlign:'top', containerId:null, autoResize:true, lineHeight:1.25});
         LeonWhiteboard.load(JSON.stringify(scene));
         for (let i=0;i<200 && (!LeonWhiteboard.getAPI() || !LeonWhiteboard.getAPI().getSceneElements().length);i++) await new Promise(resolve=>setTimeout(resolve,25));
         const api = LeonWhiteboard.getAPI();
         if (!api || !api.getSceneElements().length) throw new Error('initialData did not restore the image');
         const result = await LeonWhiteboard.snapshot();
+        const fonts = await document.fonts.load('28px Excalifont', 'Excalidraw');
+        if (!fonts.length || fonts.some(font=>font.status !== 'loaded')) throw new Error('bundled drawing font did not load');
+        const chineseFonts = await document.fonts.load('28px Xiaolai', '文章画板');
+        if (!chineseFonts.length || chineseFonts.some(font=>font.status !== 'loaded')) throw new Error('bundled Chinese font did not load');
         const saved = JSON.parse(result.scene);
         if (!saved.files['image-file']?.dataURL || !result.preview.startsWith('data:image/png;base64,')) throw new Error('image source or PNG export missing');
         const resources = performance.getEntriesByType('resource').map(entry=>entry.name);
@@ -133,6 +140,28 @@ final class ArticleWhiteboardTests {
         }
         _ = try ArticleWhiteboardData.sceneData(scene)
         _ = try ArticleWhiteboardData.previewData(preview)
+        if let path = ProcessInfo.processInfo.environment["LEON_WHITEBOARD_PREVIEW_PATH"],
+           let tiff = try await view.takeSnapshot(configuration: nil).tiffRepresentation,
+           let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: URL(fileURLWithPath: path))
+        }
+        view.reload()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        ready = false
+        for _ in 0..<400 {
+            try await Task.sleep(nanoseconds: 25_000_000)
+            if (try? await view.evaluateJavaScript("typeof window.LeonWhiteboard === 'object' && !window.LeonWhiteboard.getAPI()")) as? Bool == true { ready = true; break }
+        }
+        try boardExpect(ready, "editor must release its previous scene on reload")
+        _ = try await view.callAsyncJavaScript(#"""
+        LeonWhiteboard.load(scene);
+        for (let i=0;i<200 && (!LeonWhiteboard.getAPI() || LeonWhiteboard.getAPI().getSceneElements().length !== 2);i++) await new Promise(resolve=>setTimeout(resolve,25));
+        const api = LeonWhiteboard.getAPI();
+        if (api.getSceneElements().length !== 2 || !api.getFiles()['image-file']?.dataURL) throw new Error('saved scene lost text or image on reopen');
+        const result = await LeonWhiteboard.snapshot();
+        if (!result.preview.startsWith('data:image/png;base64,')) throw new Error('reopened scene failed to export');
+        return true;
+        """#, arguments: ["scene": scene], in: nil, contentWorld: .page)
     }
 }
 

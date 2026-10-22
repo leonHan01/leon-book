@@ -8,7 +8,7 @@ public actor LocalBlogStore {
     private static let articleAutosaveRevisionInterval: TimeInterval = 5 * 60
     private static let maximumArticleRevisionsPerDraft = 100
 
-    static let reservedMediaDirectories: Set<String> = ["inbox", "moments", "question-answers", "whiteboards"]
+    static let reservedMediaDirectories: Set<String> = ["inbox", "moments", "question-answers", "whiteboards", "canvases"]
 
     let rootURL: URL
     private var database: SQLiteDatabase?
@@ -3275,7 +3275,7 @@ public actor LocalBlogStore {
             let normalizedURL = normalizeMediaURL(item.url)
             // Whiteboard revisions can still be referenced by draft/undo/history
             // snapshots. They are retained with the workspace's backup data.
-            if normalizedURL.hasPrefix("/media/whiteboards/") { continue }
+            if normalizedURL.hasPrefix("/media/whiteboards/") || normalizedURL.hasPrefix("/media/canvases/") { continue }
             let referenceCount = try db().integer(
                 "SELECT COUNT(*) FROM media_references WHERE normalized_url = ?",
                 values: [.text(normalizedURL)]

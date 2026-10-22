@@ -34,7 +34,9 @@ Posts support local comments and replies, with comment counts on each card. Dele
 
 ## Features
 
+- Infinite canvas for articles, moments, notes, web pages, and attachments, with pan/zoom, groups, connections, undo/redo, local autosave, and `.canvas` import/export
 - Read, edit, and publish articles
+- Insert offline Excalidraw drawings with `/whiteboard`, save previews in articles, and double-click to continue editing
 - Automatically save recovery snapshots after 3 seconds of inactivity, with version diffs and restore
 - Search articles, typed properties, excerpts, bodies, and moments with SQLite FTS5, `[property:value]` filters, `⌘O` quick open, and a `⌘P` command palette with fuzzy matching, recents, pins, and configurable hotkeys
 - Save smart collections that SQLite filters and sorts directly, combining status, category, property, date, and numeric conditions with multi-sort, grouping, and list, table, or card layouts

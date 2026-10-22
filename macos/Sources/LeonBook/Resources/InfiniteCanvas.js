@@ -4,7 +4,7 @@
   const viewport = $('viewport'), world = $('world'), layer = $('nodes'), svg = $('edges');
   const post = (type, data = {}) => window.webkit?.messageHandlers.canvas.postMessage({ type, ...data });
   const clone = value => JSON.parse(JSON.stringify(value));
-  const uid = () => crypto.randomUUID();
+  const uid = () => crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const colors = { '1': '#dd7886', '2': '#da9b62', '3': '#cfb95c', '4': '#65ad94', '5': '#6aaec8', '6': '#a48acf' };
   const colorOf = value => colors[value] || (/^#[0-9a-f]{6}$/i.test(value || '') ? value : '');
   const isEditing = target => !!target?.closest('input,textarea,select,[contenteditable=true]');
@@ -12,13 +12,19 @@
   const mediaURL = (path, source = '') => `leoncanvas://media/resource?path=${encodeURIComponent(path)}&source=${encodeURIComponent(source)}`;
   let boardID = '', doc = { nodes: [], edges: [], leonbook: { title: '', viewport: { x: 80, y: 80, zoom: 1 } } };
   let selection = new Set(), selectedEdge = null, connecting = null, gesture = null, space = false;
-  let undo = [], redo = [], frame = 0, libraryKind = 'article', queryTimer, titleEditing = false;
+  let undo = [], redo = [], frame = 0, libraryKind = 'article', queryTimer, titleEditing = false, busy = false;
   const elements = new Map(), contentCache = new Map(), requested = new Set(), activated = new Set();
   let v = doc.leonbook.viewport;
   function local(event) { const r = viewport.getBoundingClientRect(); return { x: event.clientX - r.left, y: event.clientY - r.top }; }
   function point(event) { const p = local(event); return { x: (p.x - v.x) / v.zoom, y: (p.y - v.y) / v.zoom }; }
   function center() { return { x: (viewport.clientWidth / 2 - v.x) / v.zoom, y: (viewport.clientHeight / 2 - v.y) / v.zoom }; }
   function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toast.timer); toast.timer = setTimeout(() => $('toast').hidden = true, 6500); }
+  function setBusy(value) {
+    busy = value;
+    $('boards').disabled = value; $('new-board').disabled = value; $('start').disabled = value;
+    $('viewport').style.pointerEvents = value ? 'none' : ''; $('library').style.pointerEvents = value ? 'none' : '';
+    $('title').disabled = value || !boardID;
+  }
   function checkpoint() {
     undo.push(JSON.stringify(doc));
     let size = undo.reduce((n, item) => n + item.length, 0);
@@ -26,7 +32,7 @@
     redo = []; updateTools();
   }
   function save() {
-    if (!boardID) return;
+    if (!boardID || busy) return;
     doc.leonbook.viewport = { ...v };
     $('status').textContent = '正在保存…';
     post('save', { id: boardID, document: JSON.stringify(doc) });
@@ -36,6 +42,7 @@
     const source = direction < 0 ? undo : redo, target = direction < 0 ? redo : undo;
     if (!source.length) return;
     target.push(JSON.stringify(doc)); doc = JSON.parse(source.pop()); v = doc.leonbook.viewport;
+    $('title').value = doc.leonbook.title;
     selection.clear(); selectedEdge = null; connecting = null;
     resetCards(); save(); render();
   }
@@ -47,7 +54,7 @@
     selectedEdge = null; render();
   }
   function addNode(fields, position) {
-    if (!boardID) return;
+    if (!boardID || busy) return;
     if (doc.nodes.length >= 1500) { toast('每张画布最多 1,500 张卡片，请新建画布。'); return; }
     const p = position || center(), group = fields.type === 'group';
     const node = { id: uid(), x: Math.round(p.x - (group ? 330 : 180)), y: Math.round(p.y - (group ? 230 : 130)), width: group ? 660 : 360, height: group ? 460 : 300, ...fields };
@@ -113,7 +120,7 @@
     const left = (-v.x - 180) / v.zoom, top = (-v.y - 180) / v.zoom;
     const right = (viewport.clientWidth - v.x + 180) / v.zoom, bottom = (viewport.clientHeight - v.y + 180) / v.zoom;
     const visible = new Set();
-    for (const node of doc.nodes) {
+    for (const [index, node] of doc.nodes.entries()) {
       const focused = elements.get(node.id)?.contains(document.activeElement);
       if (!focused && (node.x + node.width < left || node.y + node.height < top || node.x > right || node.y > bottom)) continue;
       visible.add(node.id);
@@ -124,7 +131,7 @@
       el.classList.toggle('selected', selection.has(node.id));
       if (node.type === 'group') el.querySelector('.card-title').textContent = node.label || '未命名分组';
       if (!el.isConnected) layer.append(el);
-      el.style.zIndex = doc.nodes.indexOf(node);
+      el.style.zIndex = index;
     }
     for (const [id, el] of elements) if (!visible.has(id)) { el.remove(); elements.delete(id); activated.delete(id); }
     renderEdges(); updateTools();
@@ -152,6 +159,7 @@
     for (const edge of doc.edges) {
       const from = byID.get(edge.fromNode), to = byID.get(edge.toNode); if (!from || !to) continue;
       const a = anchor(from, edge.fromSide || 'right'), b = anchor(to, edge.toSide || 'left'), d = curve(a, b);
+      if (Math.max(a.x,b.x) < (-v.x-300)/v.zoom || Math.min(a.x,b.x) > (viewport.clientWidth-v.x+300)/v.zoom || Math.max(a.y,b.y) < (-v.y-300)/v.zoom || Math.min(a.y,b.y) > (viewport.clientHeight-v.y+300)/v.zoom) continue;
       const stroke = edge.id === selectedEdge ? '#7d8aeb' : colorOf(edge.color) || '#9ba8bc';
       const path = svgElement('path', { d, fill: 'none', stroke, 'stroke-width': edge.id === selectedEdge ? 3 : 2 });
       if (edge.toEnd !== 'none') path.setAttribute('marker-end', 'url(#arrow)');
@@ -179,7 +187,7 @@
     const kind = document.createElement('span'); kind.className = 'card-type';
     kind.textContent = node.leonbook?.kind === 'article' ? '文章' : node.leonbook?.kind === 'moment' ? '微博' : ({ text: '便签', link: '网页', file: '文件', group: '分组' })[node.type];
     const title = document.createElement('span'); title.className = 'card-title';
-    title.textContent = node.leonbook?.title || node.label || (node.type === 'link' ? new URL(node.url).hostname : node.file?.split('/').pop() || '便签');
+    title.textContent = contentCache.get(node.id)?.title || node.leonbook?.title || node.label || (node.type === 'link' ? new URL(node.url).hostname : node.file?.split('/').pop() || '便签');
     header.append(kind, title);
     if (node.leonbook?.kind === 'article') header.append(button('↗', () => post('openArticle', { slug: node.leonbook.id }), '打开原文'));
     else if (node.type === 'link') header.append(button('↗', () => post('external', { url: node.url }), '在浏览器中打开'));
@@ -199,8 +207,9 @@
     body.className = 'card-body'; body.replaceChildren();
     if (node.type === 'text' && !node.leonbook) {
       body.classList.add('note'); const textarea = document.createElement('textarea'); textarea.value = node.text || ''; textarea.placeholder = '写下想法…'; textarea.setAttribute('aria-label', '便签内容');
-      textarea.addEventListener('focus', () => { checkpoint(); selection = new Set([node.id]); selectedEdge = null; updateTools(); });
-      textarea.addEventListener('input', () => { const live = doc.nodes.find(n => n.id === node.id); if (live) { live.text = textarea.value; save(); } });
+      let editingStarted = false;
+      textarea.addEventListener('focus', () => { editingStarted = false; selection = new Set([node.id]); selectedEdge = null; scheduleRender(); });
+      textarea.addEventListener('input', () => { const live = doc.nodes.find(n => n.id === node.id); if (live) { if (!editingStarted) { checkpoint(); editingStarted = true; } live.text = textarea.value; save(); } });
       body.append(textarea); return;
     }
     if (node.type === 'link') {
@@ -285,13 +294,13 @@
     } else if (card) {
       if (event.target.closest('button,input,textarea,video,audio,iframe,a')) return;
       const node = doc.nodes.find(n => n.id === card.dataset.id); if (!node) return;
-      if (event.target.closest('.resize')) { checkpoint(); gesture = { mode: 'resize', node, start: p, width: node.width, height: node.height }; }
+      if (event.target.closest('.resize')) { gesture = { mode: 'resize', node, start: p, width: node.width, height: node.height }; }
       else if (event.target.closest('.card-header')) {
         event.preventDefault();
         if (!selection.has(node.id) || event.shiftKey) selectNode(node.id, event.shiftKey);
         if (!selection.has(node.id)) return;
         const moving = doc.nodes.filter(n => selection.has(n.id) || (node.type === 'group' && n.x >= node.x && n.y >= node.y && n.x + n.width <= node.x + node.width && n.y + n.height <= node.y + node.height));
-        checkpoint(); gesture = { mode: 'move', start: p, originals: moving.map(n => ({ node: n, x: n.x, y: n.y })) };
+        gesture = { mode: 'move', start: p, originals: moving.map(n => ({ node: n, x: n.x, y: n.y })) };
       } else { selectNode(node.id, event.shiftKey); return; }
     } else return;
     viewport.setPointerCapture(event.pointerId);
@@ -300,6 +309,10 @@
     const p = point(event);
     if (connecting) { connecting.point = { ...p, dx: -1, dy: 0 }; scheduleRender(); }
     if (!gesture) return;
+    if (['move', 'resize'].includes(gesture.mode) && !gesture.changed) {
+      if (Math.abs(p.x - gesture.start.x) + Math.abs(p.y - gesture.start.y) < 2) return;
+      checkpoint(); gesture.changed = true;
+    }
     if (gesture.mode === 'pan') { const l = local(event); const dx = l.x - gesture.start.x, dy = l.y - gesture.start.y; gesture.moved ||= Math.abs(dx) + Math.abs(dy) > 3; v.x = gesture.x + dx; v.y = gesture.y + dy; }
     if (gesture.mode === 'move') for (const item of gesture.originals) { item.node.x = Math.round(Math.max(-1e7, Math.min(1e7, item.x + p.x - gesture.start.x))); item.node.y = Math.round(Math.max(-1e7, Math.min(1e7, item.y + p.y - gesture.start.y))); }
     if (gesture.mode === 'resize') { gesture.node.width = Math.round(Math.max(200, Math.min(20000, gesture.width + p.x - gesture.start.x))); gesture.node.height = Math.round(Math.max(140, Math.min(20000, gesture.height + p.y - gesture.start.y))); }
@@ -339,7 +352,7 @@
   viewport.addEventListener('gesturechange', event => { event.preventDefault(); zoomTo(pinchZoom * event.scale, local(event)); }, { passive: false });
   viewport.addEventListener('gestureend', event => { event.preventDefault(); save(); }, { passive: false });
   document.addEventListener('keydown', event => {
-    if (!boardID || isEditing(event.target) || $('url-dialog').open) return;
+    if (!boardID || busy || isEditing(event.target) || $('url-dialog').open) return;
     const cmd = event.metaKey || event.ctrlKey, key = event.key.toLowerCase();
     if (key === ' ') { event.preventDefault(); space = true; }
     else if (key === 'escape') { connecting = null; selection.clear(); selectedEdge = null; render(); }
@@ -370,8 +383,8 @@
   });
   function showURL() { $('url-input').value = ''; $('url-dialog').showModal(); $('url-input').focus(); }
   function requestLibrary() { $('results').textContent = '正在搜索…'; post('library', { kind: libraryKind, query: $('search').value }); }
-  $('new-board').onclick = $('start').onclick = () => post('create');
-  $('boards').onchange = () => { if ($('boards').value) { save(); post('open', { id: $('boards').value }); } };
+  $('new-board').onclick = $('start').onclick = () => { save(); setBusy(true); post('create'); };
+  $('boards').onchange = () => { if ($('boards').value) { save(); setBusy(true); post('open', { id: $('boards').value }); } };
   $('title').onfocus = () => { if (!titleEditing) checkpoint(); titleEditing = true; };
   $('title').oninput = () => { doc.leonbook.title = $('title').value || '未命名画布'; save(); };
   $('title').onblur = () => titleEditing = false;
@@ -405,7 +418,7 @@
       } else if (action === 'load') {
         boardID = payload.id; doc = JSON.parse(payload.document); v = doc.leonbook.viewport;
         selection.clear(); selectedEdge = null; connecting = null; gesture = null; undo = []; redo = []; titleEditing = false;
-        contentCache.clear(); resetCards(); $('boards').value = boardID; $('title').value = doc.leonbook.title; $('title').disabled = false;
+        setBusy(false); contentCache.clear(); resetCards(); $('boards').value = boardID; $('title').value = doc.leonbook.title; $('title').disabled = false;
         $('welcome').hidden = true; for (const id of ['tools', 'navigation', 'hint']) $(id).hidden = false;
         $('status').textContent = '已保存到本地'; $('retry').hidden = true; render();
       } else if (action === 'empty') {
@@ -416,7 +429,7 @@
         if (payload.forked) { boardID = payload.id; doc.leonbook.title = payload.title; $('title').value = payload.title; toast('检测到其他窗口的修改，已将本次内容另存为冲突副本。'); }
         if (payload.id !== boardID) return;
         const option = [...$('boards').options].find(o => o.value === boardID); if (option) option.textContent = doc.leonbook.title;
-        $('status').textContent = '已保存到本地'; $('retry').hidden = true;
+        $('status').textContent = payload.pending ? '正在保存…' : '已保存到本地'; $('retry').hidden = true;
       } else if (action === 'library') {
         if (payload.kind !== libraryKind || payload.query !== $('search').value) return;
         $('results').replaceChildren();
@@ -430,11 +443,17 @@
         }
       } else if (action === 'content') {
         if (payload.id !== boardID || !doc.nodes.some(n => n.id === payload.nodeID)) return;
-        contentCache.set(payload.nodeID, payload); const node = doc.nodes.find(n => n.id === payload.nodeID), el = elements.get(payload.nodeID);
+        contentCache.delete(payload.nodeID); contentCache.set(payload.nodeID, payload);
+        let size = [...contentCache.values()].reduce((total, item) => total + (item.html?.length || 0) + (item.text?.length || 0), 0);
+        while (contentCache.size > 64 || (size > 6 * 1024 * 1024 && contentCache.size > 1)) {
+          const key = contentCache.keys().next().value, old = contentCache.get(key);
+          size -= (old.html?.length || 0) + (old.text?.length || 0); contentCache.delete(key); requested.delete(key);
+        }
+        const node = doc.nodes.find(n => n.id === payload.nodeID), el = elements.get(payload.nodeID);
         if (el) { if (payload.title) el.querySelector('.card-title').textContent = payload.title; fillBody(node, el.querySelector('.card-body')); }
       } else if (action === 'addFile') {
         if (payload.id === boardID) addNode({ type: 'file', file: payload.file, leonbook: { kind: 'attachment', id: payload.file, title: payload.title }, width: 420, height: 340 });
-      } else if (action === 'error') { $('status').textContent = '操作未完成'; $('retry').hidden = false; $('boards').value = boardID; toast(payload.message); }
+      } else if (action === 'error') { setBusy(false); $('status').textContent = '操作未完成'; $('retry').hidden = false; $('boards').value = boardID; toast(payload.message); }
     },
     // Small deterministic surface also used by the headless WebKit checks.
     snapshot: () => clone(doc), addNode, connect, fit,

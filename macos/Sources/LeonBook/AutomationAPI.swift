@@ -44,6 +44,22 @@ public struct AutomationRequest: Codable, Sendable {
     public init(id: AutomationValue? = nil, method: String, params: [String: AutomationValue] = [:], userID: String? = nil) {
         self.id = id; self.method = method; self.params = params; self.userID = userID
     }
+
+    private enum CodingKeys: String, CodingKey { case id, method, params, userID }
+
+    public init(from decoder: Decoder) throws {
+        // A misspelled userID must never silently fall back to the active user.
+        let values = try decoder.singleValueContainer().decode([String: AutomationValue].self)
+        let unknown = Set(values.keys).subtracting(["id", "method", "params", "userID"])
+        guard unknown.isEmpty else {
+            throw AutomationFailure("invalid_request", "Unknown request field(s): \(unknown.sorted().joined(separator: ", ")); use id, method, params and userID.")
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(AutomationValue.self, forKey: .id)
+        method = try container.decode(String.self, forKey: .method)
+        params = try container.decodeIfPresent([String: AutomationValue].self, forKey: .params)
+        userID = try container.decodeIfPresent(String.self, forKey: .userID)
+    }
 }
 
 public struct AutomationFailure: Error, Codable, LocalizedError, Sendable {

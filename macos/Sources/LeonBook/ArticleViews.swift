@@ -38,8 +38,9 @@ struct ArticleReaderView: View {
 
                                 if !usesCompactInspector && workspaceLayout.isReaderInspectorVisible {
                                     Rectangle()
-                                        .fill(Color.secondary.opacity(0.18))
+                                        .fill(NativeTheme.sidebar)
                                         .frame(width: 7)
+                                        .overlay { NativeTheme.border.frame(width: 1) }
                                         .contentShape(Rectangle())
                                         .onHover { hovering in
                                             if hovering { NSCursor.resizeLeftRight.push() }
@@ -147,70 +148,10 @@ struct ArticleReaderView: View {
                     onCreateArticle: { model.newArticle(inFolder: $0) }
                 )
 
-                HStack {
-                    Label(
-                        LocalizedStringKey(article.status.label),
-                        systemImage: article.status == .published
-                            ? "checkmark.circle.fill" : "pencil.circle.fill"
-                    )
-                    .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
-                    Spacer()
-                    if let summary = model.articleSummary(for: article.slug) {
-                        Button {
-                            model.toggleArticleBookmark(summary)
-                        } label: {
-                                    Label(
-                                        LocalizedStringKey(model.isBookmarked(.article(slug: article.slug)) ? "取消收藏" : "收藏文章"),
-                                systemImage: model.isBookmarked(.article(slug: article.slug)) ? "bookmark.fill" : "bookmark"
-                            )
-                        }
-                    }
-                    NativeWorkspaceLayoutMenu(model: model, workspaceLayout: workspaceLayout)
-                    let outline = document.outline
-                    if !outline.isEmpty {
-                        Menu {
-                            ForEach(outline) { heading in
-                                Button {
-                                    model.bookmarkHeading(article: article, heading: heading)
-                                } label: {
-                                    let target = NativeBookmarkTarget.heading(
-                                        slug: article.slug,
-                                        heading: heading.title,
-                                        anchorID: heading.id
-                                    )
-                                    Label(
-                                        heading.title,
-                                        systemImage: model.isBookmarked(target) ? "bookmark.fill" : "textformat.size"
-                                    )
-                                }
-                            }
-                        } label: {
-                            Label("收藏标题", systemImage: "textformat.size")
-                        }
-                    }
-                    Button {
-                        if usesCompactInspector {
-                            isPresentingCompactInspector = true
-                        } else {
-                            workspaceLayout.isReaderInspectorVisible.toggle()
-                        }
-                    } label: {
-                        Label(
-                            LocalizedStringKey(usesCompactInspector || !workspaceLayout.isReaderInspectorVisible ? "文章面板" : "隐藏面板"),
-                            systemImage: "sidebar.right"
-                        )
-                    }
-                    .help(Text(LocalizedStringKey(usesCompactInspector || !workspaceLayout.isReaderInspectorVisible ? "打开文章大纲与关系" : "隐藏文章大纲与关系")))
-                    Button("版本历史") {
-                        model.refreshArticleHistory()
-                        isPresentingHistory = true
-                    }
-                    Button("编辑") { model.editSelected() }
-                    Button("移入回收站", role: .destructive) { Task { await model.deleteSelected() } }
-                }
+                readerActions(article: article, outline: document.outline, usesCompactInspector: usesCompactInspector)
 
                 Text(article.title)
-                    .font(readingPreferences.profile.bodyFont.swiftUIFont(size: 38, weight: .bold))
+                    .font(readingPreferences.profile.bodyFont.swiftUIFont(size: 32, weight: .semibold))
                     .id(NativeArticleCommentAnchor.articleTopID)
                 HStack(spacing: 12) {
                     Text(article.category)
@@ -334,6 +275,83 @@ struct ArticleReaderView: View {
         )
         .environment(\.nativeReadingTypography, readingPreferences.typography)
     }
+
+    private func readerActions(
+        article: NativeArticle,
+        outline: [MarkdownOutlineItem],
+        usesCompactInspector: Bool
+    ) -> some View {
+        HStack(spacing: 12) {
+            Label(
+                LocalizedStringKey(article.status.label),
+                systemImage: article.status == .published ? "checkmark.circle" : "pencil.circle"
+            )
+            .font(.system(size: 12))
+            .foregroundStyle(NativeTheme.textSecondary)
+            Spacer(minLength: 8)
+
+            if let summary = model.articleSummary(for: article.slug) {
+                Button { model.toggleArticleBookmark(summary) } label: {
+                    Label(
+                        LocalizedStringKey(model.isBookmarked(.article(slug: article.slug)) ? "取消收藏" : "收藏文章"),
+                        systemImage: model.isBookmarked(.article(slug: article.slug)) ? "bookmark.fill" : "bookmark"
+                    )
+                }
+                .labelStyle(.iconOnly)
+                .help("收藏文章")
+            }
+
+            NativeWorkspaceLayoutMenu(model: model, workspaceLayout: workspaceLayout)
+                .labelStyle(.iconOnly)
+                .menuIndicator(.hidden)
+                .fixedSize()
+
+            Button {
+                if usesCompactInspector { isPresentingCompactInspector = true }
+                else { workspaceLayout.isReaderInspectorVisible.toggle() }
+            } label: {
+                Label("文章面板", systemImage: "sidebar.right")
+            }
+            .labelStyle(.iconOnly)
+            .help("文章面板")
+
+            Menu {
+                if !outline.isEmpty {
+                    Menu("收藏标题") {
+                        ForEach(outline) { heading in
+                            Button { model.bookmarkHeading(article: article, heading: heading) } label: {
+                                let target = NativeBookmarkTarget.heading(
+                                    slug: article.slug, heading: heading.title, anchorID: heading.id
+                                )
+                                Label(heading.title, systemImage: model.isBookmarked(target) ? "bookmark.fill" : "textformat.size")
+                            }
+                        }
+                    }
+                }
+                Button("版本历史", systemImage: "clock.arrow.circlepath") {
+                    model.refreshArticleHistory()
+                    isPresentingHistory = true
+                }
+                Divider()
+                Button("移入回收站", systemImage: "trash", role: .destructive) {
+                    Task { await model.deleteSelected() }
+                }
+            } label: {
+                Label("页面操作", systemImage: "ellipsis")
+            }
+            .labelStyle(.iconOnly)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("页面操作")
+
+            Button("编辑") { model.editSelected() }
+                .buttonStyle(.bordered)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .foregroundStyle(NativeTheme.textSecondary)
+    }
+
 }
 
 private struct ArticleTabBar: View {
@@ -372,6 +390,8 @@ private struct ArticleTabBar: View {
                 Label("最近文章", systemImage: "clock.arrow.circlepath")
             }
             .menuStyle(.borderlessButton)
+            .labelStyle(.iconOnly)
+            .menuIndicator(.hidden)
             .fixedSize()
             .help("打开最近浏览的文章")
 
@@ -410,7 +430,7 @@ private struct ArticleTabBar: View {
         }
         .controlSize(.small)
         .padding(.horizontal, 12)
-        .background(NativeTheme.canvas)
+        .background(NativeTheme.sidebar)
     }
 }
 
@@ -455,13 +475,9 @@ private struct ArticleTabItem: View {
         .padding(.horizontal, 10)
         .frame(height: 28)
         .background(
-            isActive ? Color.accentColor.opacity(0.17) : Color.primary.opacity(isHovered ? 0.08 : 0.04),
+            isActive ? NativeTheme.selection : (isHovered ? NativeTheme.surfaceSecondary : .clear),
             in: RoundedRectangle(cornerRadius: 7, style: .continuous)
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(isActive ? Color.accentColor.opacity(0.35) : .clear)
-        }
         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .onHover { isHovered = $0 }
         .contextMenu {
@@ -531,7 +547,7 @@ private struct ArticleInspectorView: View {
                 contextNavigation
             }
         }
-        .background(NativeTheme.surface)
+        .background(NativeTheme.sidebar)
         .onChange(of: model.articleCommentSelectionRevision) { _ in
             if model.pendingArticleCommentSelection != nil {
                 selectedPane = .comments

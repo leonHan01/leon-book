@@ -10,10 +10,17 @@ struct LeonBookCLI {
             if options.help { print(help); return }
             if options.stdio {
                 // JSON Lines: one complete request per line, no prompts/banners.
-                while let line = readLine() {
+                var input = AutomationInput(.standardInput)
+                while true {
+                    let data: Data
                     do {
-                        guard line.utf8.count <= AutomationSocket.maximumMessageBytes else { throw AutomationFailure("message_too_large", "Request exceeds 8 MiB") }
-                        var request = try JSONDecoder().decode(AutomationRequest.self, from: Data(line.utf8))
+                        guard let line = try input.nextLine() else { break }
+                        data = line
+                    } catch let error as AutomationFailure where error.code == "message_too_large" {
+                        output(.init(error: error)); continue
+                    }
+                    do {
+                        var request = try JSONDecoder().decode(AutomationRequest.self, from: data)
                         if request.userID == nil { request.userID = options.userID }
                         output(await dispatch(request, root: options.root))
                     } catch { output(.init(error: failure(error))) }
@@ -21,15 +28,15 @@ struct LeonBookCLI {
             } else {
                 var params: [String: AutomationValue] = [:]
                 if let json = options.json {
-                    let data = json == "-" ? FileHandle.standardInput.readDataToEndOfFile()
-                        : json.hasPrefix("@") ? try Data(contentsOf: URL(fileURLWithPath: String(json.dropFirst()))) : Data(json.utf8)
+                    let data = json == "-" ? try AutomationInput.readAll(.standardInput)
+                        : json.hasPrefix("@") ? try AutomationInput.readFile(String(json.dropFirst())) : Data(json.utf8)
                     guard data.count <= AutomationSocket.maximumMessageBytes else { throw AutomationFailure("message_too_large", "Request exceeds 8 MiB") }
                     params = try JSONDecoder().decode([String: AutomationValue].self, from: data)
                 }
                 if let path = options.bodyFile {
                     guard params["body"] == nil else { throw AutomationFailure("invalid_params", "Use body or --body-file, not both") }
-                    let data = try Data(contentsOf: URL(fileURLWithPath: path))
-                    guard data.count <= AutomationSocket.maximumMessageBytes, let body = String(data: data, encoding: .utf8) else { throw AutomationFailure("invalid_params", "Body file must be UTF-8, at most 8 MiB") }
+                    let data = try AutomationInput.readFile(path)
+                    guard let body = String(data: data, encoding: .utf8) else { throw AutomationFailure("invalid_params", "Body file must be UTF-8") }
                     params["body"] = .string(body)
                 }
                 let response = await dispatch(.init(method: options.method, params: params, userID: options.userID), root: options.root)

@@ -388,13 +388,15 @@ if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift")
     expect(contentView.contains("过去一年"), "activity heatmap should label its one-year range")
     expect(contentView.contains("pageState: pageStateCache.moments"), "ContentView should restore lightweight moment page state")
     expect(contentView.contains("case .trash: TrashView(model: model)"), "ContentView should show the recycle bin")
-    expect(contentView.contains("回收站"), "sidebar should expose the recycle bin")
-    expect(contentView.contains("新建用户…"), "sidebar should support creating users")
-    expect(contentView.contains("独立工作空间"), "sidebar should identify user-isolated workspaces")
+    let sidebar = (try? String(contentsOfFile: sourcePath("NativeSidebar.swift"), encoding: .utf8)) ?? ""
+    let workspaceChrome = (try? String(contentsOfFile: sourcePath("NativeWorkspaceChrome.swift"), encoding: .utf8)) ?? ""
+    expect(workspaceChrome.contains("destination(.trash"), "navigation rail should expose the recycle bin")
+    expect(sidebar.contains("新建用户…"), "sidebar should support creating users")
+    expect(sidebar.contains("model.selectUser(user)"), "sidebar should allow switching user-isolated workspaces")
     expect(contentView.contains("ArticleTagFilterBar"), "article list should expose hashtag filters")
     expect(contentView.contains("SmartArticleLibraryView(model: model)"), "article library should use smart collection views")
-    expect(contentView.contains("Section(\"智能集合\")"), "sidebar should list saved smart collections")
-    expect(contentView.contains("Section(\"收藏\")"), "sidebar should list saved bookmarks")
+    expect(sidebar.contains("Section(\"智能集合\")"), "sidebar should list saved smart collections")
+    expect(sidebar.contains("Section(\"收藏\")"), "sidebar should list saved bookmarks")
     expect(contentView.contains(".onOpenURL(perform: model.handleAutomationURL)"), "main window should receive leonbook URLs")
     let smartCollectionView = try? String(contentsOfFile: sourcePath("SmartCollectionViews.swift"), encoding: .utf8)
     expect(
@@ -412,10 +414,10 @@ if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift")
     expect(!contentView.contains("prewarmNavigationSections"), "ContentView should not prewarm inactive destinations")
     expect(!contentView.contains("RetainedNavigationPage"), "ContentView should not retain inactive hosting views")
     expect(
-        contentView.contains(".frame(maxWidth: .infinity, alignment: .leading)\n                .contentShape(Rectangle())"),
+        sidebar.contains(".frame(maxWidth: .infinity, alignment: .leading)") && sidebar.contains(".contentShape(Rectangle())"),
         "sidebar navigation labels should expose their full row as the click target"
     )
-    expect(contentView.contains("SidebarNavigationButtonStyle(isSelected:"), "sidebar navigation rows should use a dedicated hover style")
+    expect(sidebar.contains("SidebarNavigationButtonStyle(isSelected:"), "sidebar navigation rows should use a dedicated hover style")
     expect(contentView.contains(".onHover { isHovered = $0 }"), "sidebar navigation rows should react to pointer movement")
 } else {
     failures.append("native content view should be readable")

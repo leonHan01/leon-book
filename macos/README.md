@@ -133,7 +133,17 @@ The sidebar reads the authoritative Markdown directory as a real file tree. Fold
 
 Read-only Markdown mounts expose the same tree but disable all filesystem mutations.
 
-## Checks
+## Infinite canvas
+
+Open **Infinite Canvas** in the left navigation or from the command palette. Create multiple named boards and add live article/blog references, moments, notes, websites, images, PDFs, audio/video, and arbitrary file attachments. Drag headers to move cards, drag corners to resize, and drag edge handles to connect cards. Shift-click or Shift-drag selects multiple cards. Groups move their contained cards together; selected edges can have labels and colors.
+
+Pan on the background, pinch or Command-scroll to zoom, and use **Fit** to show everything. Double-click creates a note; `N`, `L`, `G`, and `F` add notes, links, groups, and fit the view. Paste text/URLs, drag web links, or use the file picker for local attachments. `⌘D` duplicates, `⌘Z` undoes, and `⇧⌘Z` redoes. Article references read their current source when a board opens or the card is refreshed. Websites/PDFs load on request, with external-open actions for unsupported previews.
+
+Boards autosave atomically to the current user's `canvases/<id>.canvas`; imported attachments are copied to `media/canvases/`. Both are part of normal workspace backups. Concurrent edits create a conflict copy instead of overwriting the other window. Deleting a board moves it into `canvases/.trash/`; references and attachments remain intact.
+
+Import/export uses the core [JSON Canvas 1.0](https://jsoncanvas.org/spec/1.0/) node/edge structure with namespaced `leonbook` metadata. Export does not bundle attachments. Referenced files must exist at matching workspace-relative paths; missing files show placeholders. Other applications' private fields and group backgrounds are not fully preserved. The limits are 1,500 nodes, 5,000 edges, and 8 MB per board. Cards outside the viewport are unmounted, and leaving the page releases WebKit.
+
+## Check commands
 
 ```bash
 ./scripts/leonblog test

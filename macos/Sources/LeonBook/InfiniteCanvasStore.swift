@@ -101,10 +101,11 @@ struct InfiniteCanvasDocument: Codable, Equatable {
                 try require(!reference.id.isEmpty && reference.id.count <= 2_000 && reference.title.count <= 1_000)
             }
         }
+        let nodeIDs = ids
         let sides = ["top", "right", "bottom", "left"]
         for edge in edges {
             try require(!edge.id.isEmpty && ids.insert(edge.id).inserted)
-            try require(nodes.contains { $0.id == edge.fromNode } && nodes.contains { $0.id == edge.toNode })
+            try require(nodeIDs.contains(edge.fromNode) && nodeIDs.contains(edge.toNode))
             try require(edge.fromSide.map(sides.contains) ?? true)
             try require(edge.toSide.map(sides.contains) ?? true)
             try require(edge.fromEnd.map { ["none", "arrow"].contains($0) } ?? true)
@@ -183,7 +184,7 @@ extension LocalBlogStore {
         // Keep a recoverable file inside the workspace and its regular backups.
         let trash = try canvasDirectory().appendingPathComponent(".trash", isDirectory: true)
         try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
-        guard trash.resolvingSymlinksInPath() == trash.standardizedFileURL else {
+        guard trash.resolvingSymlinksInPath().path == trash.standardizedFileURL.path else {
             throw InfiniteCanvasError.invalid("画布回收目录不能是符号链接。")
         }
         try FileManager.default.moveItem(at: url, to: trash.appendingPathComponent("\(id)-\(UUID().uuidString).canvas"))
@@ -195,13 +196,14 @@ extension LocalBlogStore {
             let relative = path.hasPrefix("/") ? String(path.dropFirst()) : path
             guard InfiniteCanvasDocument.safeRelativePath(relative) else { return nil }
             let root = mediaURL.standardizedFileURL.resolvingSymlinksInPath()
+            guard root.path.hasPrefix(rootURL.standardizedFileURL.resolvingSymlinksInPath().path + "/") else { return nil }
             let file = rootURL.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
             return file.path.hasPrefix(root.path + "/") && FileManager.default.fileExists(atPath: file.path) ? file : nil
         }
         guard InfiniteCanvasDocument.safeRelativePath(path) else { return nil }
         let root = articlesURL.standardizedFileURL.resolvingSymlinksInPath()
         let relative = path.hasPrefix("articles/") ? String(path.dropFirst(9)) : path
-        let base = source.map { root.appendingPathComponent($0).deletingLastPathComponent() } ?? root
+        let base = source.flatMap { $0.isEmpty ? nil : root.appendingPathComponent($0).deletingLastPathComponent() } ?? root
         let file = base.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
         return file.path.hasPrefix(root.path + "/") && FileManager.default.fileExists(atPath: file.path) ? file : nil
     }
@@ -209,7 +211,7 @@ extension LocalBlogStore {
     private func canvasDirectory() throws -> URL {
         let root = rootURL.standardizedFileURL.resolvingSymlinksInPath()
         let directory = root.appendingPathComponent("canvases", isDirectory: true)
-        guard directory.resolvingSymlinksInPath() == directory else {
+        guard directory.resolvingSymlinksInPath().path == directory.path else {
             throw InfiniteCanvasError.invalid("画布目录不能是符号链接。")
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -219,7 +221,7 @@ extension LocalBlogStore {
     private func canvasURL(id: String) throws -> URL {
         guard UUID(uuidString: id) != nil else { throw InfiniteCanvasError.invalid("画布 ID 无效。") }
         let file = try canvasDirectory().appendingPathComponent(id + ".canvas")
-        guard file.resolvingSymlinksInPath() == file else { throw InfiniteCanvasError.invalid("画布文件不能是符号链接。") }
+        guard file.resolvingSymlinksInPath().path == file.path else { throw InfiniteCanvasError.invalid("画布文件不能是符号链接。") }
         return file
     }
 

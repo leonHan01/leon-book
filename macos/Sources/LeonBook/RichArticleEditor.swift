@@ -58,6 +58,10 @@ struct RichArticleEditor: NSViewRepresentable {
 
     func updateNSView(_ view: WKWebView, context: Context) {
         context.coordinator.parent = self
+        if context.coordinator.mediaHandler?.store !== store {
+            context.coordinator.mediaHandler?.cancelAll()
+            context.coordinator.mediaHandler?.store = store
+        }
         context.coordinator.mediaHandler?.sourceRelativePath = sourceRelativePath
         context.coordinator.synchronize(view)
     }
@@ -73,6 +77,7 @@ struct RichArticleEditor: NSViewRepresentable {
     @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var parent: RichArticleEditor
         var mediaHandler: RichArticleMediaHandler?
+        var audioDropPasteboard = NSPasteboard(name: .drag)
         private var isReady = false
         private var lastBody: String?
         private var lastID: String?
@@ -114,6 +119,15 @@ struct RichArticleEditor: NSViewRepresentable {
                 guard parent.isEditable, let requestID = payload["requestID"] as? String,
                       let view = message.webView else { return }
                 chooseAudio(requestID: requestID, in: view)
+            case "dropAudio":
+                guard parent.isEditable, let requestID = payload["requestID"] as? String,
+                      let names = payload["names"] as? [String], let view = message.webView else { return }
+                guard let urls = NativeArticleAudioDrop.fileURLs(from: audioDropPasteboard, matching: names) else {
+                    cancelAudio(requestID: requestID, in: view)
+                    showAudioError("无法读取拖入的 MP3 文件，请从访达重新拖入，或使用“插入音频”按钮。", in: view)
+                    return
+                }
+                insertAudio(urls: urls, requestID: requestID, in: view)
             case "editWhiteboard":
                 guard parent.isEditable, let requestID = payload["requestID"] as? String,
                       let source = payload["source"] as? String, let view = message.webView else { return }
@@ -177,18 +191,31 @@ struct RichArticleEditor: NSViewRepresentable {
         }
 
         private func chooseAudio(requestID: String, in view: WKWebView) {
-            func cancel() {
-                view.callAsyncJavaScript("window.LeonArticle.cancelAudio(requestID)", arguments: ["requestID": requestID], in: nil, in: .page) { _ in }
-            }
-            guard let store = parent.store, let importAudio = parent.onImportAudio else { cancel(); return }
-            let documentID = parent.documentID
+            guard parent.store != nil, parent.onImportAudio != nil else { cancelAudio(requestID: requestID, in: view); return }
             let panel = NSOpenPanel()
             panel.title = "插入音频"
             panel.message = "选择一个 MP3 音频，插入文章后可直接播放。"
             panel.allowedContentTypes = [.mp3]
             panel.canChooseDirectories = false
             panel.allowsMultipleSelection = false
-            guard panel.runModal() == .OK, let url = panel.url else { cancel(); return }
+            guard panel.runModal() == .OK, let url = panel.url else { cancelAudio(requestID: requestID, in: view); return }
+            insertAudio(urls: [url], requestID: requestID, in: view)
+        }
+
+        private func cancelAudio(requestID: String, in view: WKWebView) {
+            view.callAsyncJavaScript("window.LeonArticle.cancelAudio(requestID)", arguments: ["requestID": requestID], in: nil, in: .page) { _ in }
+        }
+
+        private func showAudioError(_ message: String, in view: WKWebView) {
+            let alert = NSAlert()
+            alert.messageText = "无法插入音频"
+            alert.informativeText = message
+            if let window = view.window { alert.beginSheetModal(for: window) { _ in } }
+        }
+
+        private func insertAudio(urls: [URL], requestID: String, in view: WKWebView) {
+            guard let store = parent.store, let importAudio = parent.onImportAudio else { cancelAudio(requestID: requestID, in: view); return }
+            let documentID = parent.documentID
             Task { [weak self, weak view] in
                 guard let self, let view else { return }
                 @MainActor func isCurrent() -> Bool {
@@ -196,32 +223,28 @@ struct RichArticleEditor: NSViewRepresentable {
                         && self.parent.store === store && view.navigationDelegate === self
                 }
                 guard isCurrent() else { return }
-                var imported: NativeMedia?
+                var imported: [NativeMedia] = []
                 do {
-                    let media = try await importAudio(url)
-                    imported = media
-                    guard isCurrent() else {
-                        try? await store.discardUnreferencedMedia([media])
-                        return
+                    for url in urls {
+                        guard isCurrent() else { throw CancellationError() }
+                        imported.append(try await importAudio(url))
                     }
+                    guard isCurrent() else { throw CancellationError() }
                     let result = try await view.callAsyncJavaScript(
-                        "return window.LeonArticle.completeAudio(requestID, source, title) ? window.LeonArticle.serialize() : null",
-                        arguments: ["requestID": requestID, "source": media.url, "title": media.name], in: nil, contentWorld: .page
+                        "return window.LeonArticle.completeAudios(requestID, items) ? window.LeonArticle.serialize() : null",
+                        arguments: ["requestID": requestID, "items": imported.map { ["source": $0.url, "title": $0.name] }], in: nil, contentWorld: .page
                     )
                     guard isCurrent(), let body = result as? String, RichArticleDocument.isHTML(body) else {
                         throw NativeStoreError.fileSystem("文章中的插入位置已改变，请重新插入音频。")
                     }
                     lastBody = body
                     parent.html = body
-                    parent.onAudioInserted?(media)
+                    for media in imported { parent.onAudioInserted?(media) }
                 } catch {
-                    if let imported { try? await store.discardUnreferencedMedia([imported]) }
+                    try? await store.discardUnreferencedMedia(imported)
                     guard isCurrent() else { return }
-                    cancel()
-                    let alert = NSAlert()
-                    alert.messageText = "无法插入音频"
-                    alert.informativeText = error.localizedDescription
-                    if let window = view.window { alert.beginSheetModal(for: window) { _ in } }
+                    cancelAudio(requestID: requestID, in: view)
+                    showAudioError(error.localizedDescription, in: view)
                 }
             }
         }
@@ -313,7 +336,7 @@ enum RichArticleClipboard {
 }
 
 final class RichArticleMediaHandler: NSObject, WKURLSchemeHandler {
-    let store: LocalBlogStore?
+    var store: LocalBlogStore?
     var sourceRelativePath: String?
     private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
 

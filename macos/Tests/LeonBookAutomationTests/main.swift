@@ -32,6 +32,7 @@ struct AutomationTests {
             try await articles(service, root)
             try await timelineAndTasks(service)
             try await workspaceAndBackup(service, root)
+            try await wrongRoot(root, defaults)
             try await transport(service, root)
             try await cli(root)
             var runtime = NativeFirstPartyModules.loadRuntime(defaults: defaults)
@@ -144,6 +145,15 @@ struct AutomationTests {
         try expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600, "socket permissions must be private")
         let missing = try await Task.detached { try AutomationSocket.call(.init(method: "capabilities"), root: root.appendingPathComponent("absent")) }.value
         try expect(missing == nil, "absent socket must permit offline fallback")
+        let oversized = AutomationRequest(method: "articles.create", params: ["title": .string("too large"), "body": .string(String(repeating: "\"", count: AutomationSocket.maximumMessageBytes / 2))])
+        for target in [root, root.appendingPathComponent("absent")] {
+            do {
+                _ = try await Task.detached { try AutomationSocket.call(oversized, root: target) }.value
+                throw Failure(description: "encoded request limit must apply before online/offline routing")
+            } catch let error as AutomationFailure {
+                try expect(error.code == "message_too_large", "oversized request must have a specific error")
+            }
+        }
         // A real CLI process must route into the app-owned store even while the
         // registry lock is held by this process. Offline fallback would fail.
         let executable = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("LeonBookCLI")
@@ -155,6 +165,22 @@ struct AutomationTests {
         let fromCLI: NativeMoment = try rpc.result!.decoded()
         let found: NativeMoment = try await call(service, "moments.get", ["id": .string(fromCLI.id)]).decoded()
         try expect(found.text == "external process", "external CLI write must be visible")
+    }
+
+    static func wrongRoot(_ root: URL, _ defaults: UserDefaults) async throws {
+        let workspace = root.appendingPathComponent("workspaces/leon")
+        let articleDirectory = workspace.appendingPathComponent("articles")
+        try expect(FileManager.default.fileExists(atPath: articleDirectory.path), "fixture needs existing articles")
+        let alias = root.appendingPathComponent("workspace-alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: workspace)
+        for wrong in [workspace, articleDirectory, workspace.deletingLastPathComponent(), alias] {
+            let misplaced = AutomationService(rootURL: wrong, defaults: defaults)
+            try await expectError(misplaced, "workspace.info", [:], "invalid_root")
+            await misplaced.close()
+            try expect(!FileManager.default.fileExists(atPath: wrong.appendingPathComponent("workspaces").path), "invalid root must not initialize or migrate anything")
+        }
+        try expect(FileManager.default.fileExists(atPath: articleDirectory.path), "wrong root must leave content in place")
+        try FileManager.default.removeItem(at: alias)
     }
 
     static func cli(_ root: URL) async throws {
@@ -169,6 +195,41 @@ struct AutomationTests {
         try expect(invalid.status == 1, "API errors must produce nonzero exit status")
         let usage = try await Task.detached { try runCLI(executable, ["--unknown"]) }.value
         try expect(usage.status == 2, "CLI errors must produce exit 2")
+
+        let untouched = root.appendingPathComponent("rejected-input")
+        let rejected = try await Task.detached {
+            try runCLI(executable, ["--stdio", "--root", untouched.path], input:
+                "{\"method\":\"articles.create\",\"userId\":\"missing\",\"params\":{\"title\":\"wrong user\",\"body\":\"must not save\"}}\n" +
+                String(repeating: " ", count: AutomationSocket.maximumMessageBytes + 1) + "\n" +
+                "{\"id\":\"after-error\",\"method\":\"capabilities\"}")
+        }.value
+        let rejectedResponses = try rejected.text.split(separator: "\n").map { try JSONDecoder().decode(AutomationResponse.self, from: Data($0.utf8)) }
+        try expect(rejected.status == 0 && rejectedResponses.count == 3 && rejectedResponses[0].error?.code == "invalid_request" && rejectedResponses[1].error?.code == "message_too_large" && rejectedResponses[2].id == .string("after-error") && rejectedResponses[2].error == nil, "stdio must reject misspelled targeting, drain oversized lines, and accept a final line without newline")
+        try expect(!FileManager.default.fileExists(atPath: untouched.path), "rejected targeting must not initialize the default user")
+
+        let bodyFile = root.appendingPathComponent("oversized-body.txt")
+        try String(repeating: "\"", count: AutomationSocket.maximumMessageBytes / 2).write(to: bodyFile, atomically: true, encoding: .utf8)
+        let large = try await Task.detached { try runCLI(executable, ["articles.create", "--root", untouched.path, "--json", "{\"title\":\"large\",\"format\":\"text\"}", "--body-file", bodyFile.path]) }.value
+        let largeResponse = try JSONDecoder().decode(AutomationResponse.self, from: Data(large.text.utf8))
+        try expect(large.status == 1 && largeResponse.error?.code == "message_too_large" && !FileManager.default.fileExists(atPath: untouched.path), "body-file plus envelope escaping must be bounded before an offline write")
+        try FileManager.default.removeItem(at: bodyFile)
+        try interactiveCLI(executable, untouched)
+    }
+
+    static func interactiveCLI(_ executable: URL, _ root: URL) throws {
+        let process = Process(), output = Pipe(), input = Pipe()
+        process.executableURL = executable
+        process.arguments = ["--stdio", "--root", root.path]
+        process.standardOutput = output; process.standardInput = input
+        try process.run()
+        defer { if process.isRunning { process.terminate() }; process.waitUntilExit() }
+        try input.fileHandleForWriting.write(contentsOf: Data("{\"id\":\"live\",\"method\":\"capabilities\"}\n".utf8))
+        var readiness = pollfd(fd: output.fileHandleForReading.fileDescriptor, events: Int16(POLLIN), revents: 0)
+        try expect(poll(&readiness, 1, 5_000) > 0 && readiness.revents & Int16(POLLIN) != 0, "stdio must respond without waiting for EOF or a full input chunk")
+        try input.fileHandleForWriting.close()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let response = try JSONDecoder().decode(AutomationResponse.self, from: data)
+        try expect(response.id == .string("live") && response.error == nil, "interactive response correlation")
     }
 
     static func runCLI(_ executable: URL, _ arguments: [String], input: String? = nil) throws -> (status: Int32, text: String) {

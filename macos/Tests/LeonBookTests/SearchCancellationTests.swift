@@ -65,7 +65,7 @@ final class SearchCancellationTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let progress = SearchQueryProgress()
-        let task = Task.detached { () throws -> (Bool, Int) in
+        let task = Task.detached { () throws -> (Bool, Int, UInt64) in
             let database = try SQLiteDatabase(url: root.appendingPathComponent("test.sqlite"))
             defer { database.close() }
             // The first row signals that SQL execution has started. The next
@@ -84,6 +84,7 @@ final class SearchCancellationTests {
                     progress.markStarted()
                 }
             } catch is CancellationError { cancelled = true }
+            let stoppedAt = DispatchTime.now().uptimeNanoseconds
 
             // This task is still cancelled: ordinary writes/reads must remain
             // usable, including the statement that was interrupted above.
@@ -99,7 +100,7 @@ final class SearchCancellationTests {
             guard values == [0, 55] else {
                 throw SearchCancellationFailure.expectation("connection or interrupted statement was not reusable")
             }
-            return (cancelled, rows)
+            return (cancelled, rows, stoppedAt)
         }
         for _ in 0..<2_000 where !progress.hasStarted {
             try await Task.sleep(nanoseconds: 1_000_000)
@@ -114,7 +115,8 @@ final class SearchCancellationTests {
         task.cancel()
         let result = try await task.value
         let elapsedMS = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-        print("SEARCH_CANCELLATION activeStepCancelled=\(result.0) rows=\(result.1) releaseMS=\(elapsedMS)")
+        let stopMS = Double(result.2 > start ? result.2 - start : 0) / 1_000_000
+        print("SEARCH_CANCELLATION activeStepCancelled=\(result.0) rows=\(result.1) stopMS=\(stopMS) recoveryMS=\(elapsedMS)")
         guard result.0, result.1 == 1 else {
             throw SearchCancellationFailure.expectation("cancelled SQL must stop inside sqlite3_step before producing its aggregate")
         }

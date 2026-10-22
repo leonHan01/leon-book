@@ -91,81 +91,101 @@ struct SmartArticleLibraryView: View {
         articleCount: Int,
         currentLayout: NativeSmartCollectionLayout
     ) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                if model.selectedSmartCollection == nil, model.selectedArticleFolderPath == nil {
-                    Text("全部文章").font(.title2.weight(.semibold))
-                } else {
-                    Text(model.articleListTitle).font(.title2.weight(.semibold))
-                }
-                Text("\(articleCount) 篇 · 虚拟集合，不移动原文章")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-
-            if let definition = model.selectedSmartCollectionDefinition,
-               definition.views.count > 1 {
-                Picker("Base 视图", selection: Binding(
-                    get: { model.selectedSmartCollectionViewID ?? definition.views[0].id },
-                    set: { model.selectSmartCollectionView($0) }
-                )) {
-                    ForEach(definition.views) { view in
-                        Text(view.name).tag(view.id)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    if model.selectedSmartCollection == nil, model.selectedArticleFolderPath == nil {
+                        Text("全部文章").font(.title2.weight(.semibold))
+                    } else {
+                        Text(model.articleListTitle).font(.title2.weight(.semibold))
                     }
+                    Text("\(articleCount) 篇文章")
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.textSecondary)
                 }
-                .frame(width: 150)
-                .help("切换 .base 中的命名视图")
-            }
+                Spacer()
 
-            Menu {
-                ForEach(NativeSmartCollectionLayout.allCases) { option in
-                    Button {
-                        if model.selectedSmartCollection == nil {
-                            allArticlesLayoutRaw = option.rawValue
-                        } else {
-                            model.setSmartCollectionLayout(option)
+                if let definition = model.selectedSmartCollectionDefinition,
+                   definition.views.count > 1 {
+                    Picker("Base 视图", selection: Binding(
+                        get: { model.selectedSmartCollectionViewID ?? definition.views[0].id },
+                        set: { model.selectSmartCollectionView($0) }
+                    )) {
+                        ForEach(definition.views) { view in
+                            Text(view.name).tag(view.id)
                         }
-                    } label: {
-                        Label(
-                            LocalizedStringKey(option.label),
-                            systemImage: currentLayout == option ? "checkmark" : option.systemImage
-                        )
                     }
+                    .frame(width: 150)
+                    .help("切换 .base 中的命名视图")
                 }
-            } label: {
-                Label(LocalizedStringKey(currentLayout.label), systemImage: currentLayout.systemImage)
-            }
-            .help("切换列表、表格、卡片、看板或日历视图")
 
-            TextField("搜索标题、摘要、正文或标签", text: $model.searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 240)
-                .onChange(of: model.searchText) { model.updateArticleListSearch($0) }
-            if model.isSearchingArticles { ProgressView().controlSize(.small) }
-            if model.isFilteringArticles {
-                Button("清除临时筛选") { model.clearArticleFilters() }
-                    .buttonStyle(.bordered)
-            }
+                Menu {
+                    ForEach(NativeSmartCollectionLayout.allCases) { option in
+                        Button {
+                            if model.selectedSmartCollection == nil {
+                                allArticlesLayoutRaw = option.rawValue
+                            } else {
+                                model.setSmartCollectionLayout(option)
+                            }
+                        } label: {
+                            Label(
+                                LocalizedStringKey(option.label),
+                                systemImage: currentLayout == option ? "checkmark" : option.systemImage
+                            )
+                        }
+                    }
+                } label: {
+                    Label(LocalizedStringKey(currentLayout.label), systemImage: currentLayout.systemImage)
+                }
+                .help("切换列表、表格、卡片、看板或日历视图")
 
-            Menu {
-                Button("新建智能集合…") {
-                    editorRequest = SmartCollectionEditorRequest(collection: nil)
-                }
-                if let collection = model.selectedSmartCollection {
-                    Button("编辑“\(collection.name)”…") {
-                        editorRequest = SmartCollectionEditorRequest(collection: collection)
+                Menu {
+                    Button("新建智能集合…") {
+                        editorRequest = SmartCollectionEditorRequest(collection: nil)
                     }
-                    Divider()
-                    Button("删除当前集合", role: .destructive) {
-                        Task { await model.deleteSmartCollection(collection) }
+                    if let collection = model.selectedSmartCollection {
+                        Button("编辑“\(collection.name)”…") {
+                            editorRequest = SmartCollectionEditorRequest(collection: collection)
+                        }
+                        Divider()
+                        Button("删除当前集合", role: .destructive) {
+                            Task { await model.deleteSmartCollection(collection) }
+                        }
                     }
+                } label: {
+                    Label("集合", systemImage: "slider.horizontal.3")
                 }
-            } label: {
-                Label("集合", systemImage: "slider.horizontal.3")
+                .labelStyle(.iconOnly)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("智能集合")
+            }
+            .controlSize(.small)
+
+            HStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(NativeTheme.textSecondary)
+                    TextField("搜索标题、摘要、正文或标签", text: $model.searchText)
+                        .textFieldStyle(.plain)
+                        .onChange(of: model.searchText) { model.updateArticleListSearch($0) }
+                    if model.isSearchingArticles { ProgressView().controlSize(.small) }
+                }
+                .font(.system(size: 12))
+                .padding(10)
+                .frame(maxWidth: 420)
+                .background(NativeTheme.surfaceSecondary, in: RoundedRectangle(cornerRadius: 8))
+
+                if model.isFilteringArticles {
+                    Button("清除临时筛选") { model.clearArticleFilters() }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                }
+                Spacer(minLength: 0)
             }
         }
-        .padding(22)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 24)
     }
 
     private func listLayout(groups: [SmartArticleDisplayGroup]) -> some View {

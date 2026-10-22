@@ -8,9 +8,9 @@ import WebKit
 private enum ArticleEditorLayout {
     static let contentInset: CGFloat = 20
     static let titleVerticalInset: CGFloat = 24
-    static let canvas = Color(red: 0.953, green: 0.953, blue: 0.949)
-    static let surface = Color(red: 0.980, green: 0.980, blue: 0.976)
-    static let sidebar = Color(red: 0.941, green: 0.941, blue: 0.937)
+    static let canvas = NativeTheme.canvas
+    static let surface = NativeTheme.surface
+    static let sidebar = NativeTheme.sidebar
 }
 
 enum NativeBodyEditorAppearance {
@@ -492,8 +492,9 @@ struct ArticleEditorView: View {
 
                     if showsSidebar {
                         Rectangle()
-                            .fill(Color.secondary.opacity(0.18))
+                            .fill(ArticleEditorLayout.sidebar)
                             .frame(width: dividerWidth)
+                            .overlay { NativeTheme.border.frame(width: 1) }
                             .contentShape(Rectangle())
                             .onHover { hovering in
                                 if hovering { NSCursor.resizeLeftRight.push() }
@@ -599,6 +600,9 @@ struct ArticleEditorView: View {
             Spacer()
 
             NativeWorkspaceLayoutMenu(model: model, workspaceLayout: workspaceLayout)
+                .labelStyle(.iconOnly)
+                .menuIndicator(.hidden)
+                .fixedSize()
 
             Button {
                 workspaceLayout.isEditorSidebarVisible.toggle()
@@ -608,6 +612,7 @@ struct ArticleEditorView: View {
                     systemImage: "sidebar.right"
                 )
             }
+            .labelStyle(.iconOnly)
             .disabled(editorMode == .focus)
             .help(Text(LocalizedStringKey(editorMode == .focus ? "专注写作模式会隐藏右侧面板" : "显示或隐藏编辑右侧面板")))
 
@@ -669,6 +674,9 @@ struct ArticleEditorView: View {
             } label: {
                 Label("页面操作", systemImage: "ellipsis.circle")
             }
+            .labelStyle(.iconOnly)
+            .menuIndicator(.hidden)
+            .fixedSize()
             .help("切换编辑视图、保存草稿或打开更多页面操作")
 
             Button {
@@ -681,7 +689,7 @@ struct ArticleEditorView: View {
         }
         .controlSize(.regular)
         .padding(.horizontal, ArticleEditorLayout.contentInset)
-        .padding(.vertical, 14)
+        .padding(.vertical, 10)
     }
 
     private func modeMenuButton(_ mode: ArticleEditorMode, shortcut: KeyEquivalent) -> some View {
@@ -711,7 +719,7 @@ struct ArticleEditorView: View {
             }
 
             TextField("给这篇文章起个标题", text: $editorSession.draft.title)
-                .font(.system(size: 40, weight: .bold, design: .serif))
+                .font(.system(size: 32, weight: .semibold))
                 .textFieldStyle(.plain)
 
             if model.editor.isNew {

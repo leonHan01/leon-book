@@ -7563,13 +7563,17 @@ final class RichArticleTests {
     }
 
     @MainActor
-    func withWebEditor(messageHandler: WKScriptMessageHandler? = nil, _ run: (WKWebView) async throws -> Void) async throws {
+    func withWebEditor(messageHandler: WKScriptMessageHandler? = nil, mediaStore: LocalBlogStore? = nil, _ run: (WKWebView) async throws -> Void) async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         if let messageHandler { configuration.userContentController.add(messageHandler, name: "richArticle") }
+        if let mediaStore {
+            configuration.setURLSchemeHandler(RichArticleMediaHandler(store: mediaStore, sourceRelativePath: nil), forURLScheme: "leonmedia")
+            configuration.mediaTypesRequiringUserActionForPlayback = []
+        }
         let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 700, height: 600), configuration: configuration)
         window.contentView = view
         defer { view.stopLoading(); window.close() }
@@ -7617,6 +7621,14 @@ private func makeTemporaryDirectory() throws -> URL {
 struct LeonBookUnitTests {
     static func main() async {
         var tests: [(String, () async throws -> Void)] = [
+            ("InfiniteCanvasTests.testCanvasStorageValidationIsolationAndRecovery", { try await InfiniteCanvasTests().testCanvasStorageValidationIsolationAndRecovery() }),
+            ("InfiniteCanvasTests.testCanvasWriterOrdersEditsAndPreservesConflictCopies", { try await InfiniteCanvasTests().testCanvasWriterOrdersEditsAndPreservesConflictCopies() }),
+            ("InfiniteCanvasTests.testCanvasResourcesStayInsideWorkspace", { try await InfiniteCanvasTests().testCanvasResourcesStayInsideWorkspace() }),
+            ("InfiniteCanvasTests.testCanvasRuntimeEditingConnectionsAndCulling", { try await InfiniteCanvasTests().testCanvasRuntimeEditingConnectionsAndCulling() }),
+            ("InfiniteCanvasTests.testCanvasNativeBridgeLoadsAndRefreshesArticleReferences", { try await InfiniteCanvasTests().testCanvasNativeBridgeLoadsAndRefreshesArticleReferences() }),
+            ("ArticleAudioTests.testAudioInsertionUndoCancellationAndSanitization", { try await ArticleAudioTests().testAudioInsertionUndoCancellationAndSanitization() }),
+            ("ArticleAudioTests.testAudioDropImportsAtDropLocationThroughNativeBridge", { try await ArticleAudioTests().testAudioDropImportsAtDropLocationThroughNativeBridge() }),
+            ("ArticleAudioTests.testAudioPersistsAndPlaysFromWorkspace", { try await ArticleAudioTests().testAudioPersistsAndPlaysFromWorkspace() }),
             ("ArticleWhiteboardTests.testWhiteboardImmutableStorageAndValidation", { try await ArticleWhiteboardTests().testWhiteboardImmutableStorageAndValidation() }),
             ("ArticleWhiteboardTests.testWhiteboardArticleRoundTripUndoAndStaleRequests", { try await ArticleWhiteboardTests().testWhiteboardArticleRoundTripUndoAndStaleRequests() }),
             ("ArticleWhiteboardTests.testWhiteboardBundledRuntimeExportsAndReopensOffline", { try await ArticleWhiteboardTests().testWhiteboardBundledRuntimeExportsAndReopensOffline() }),

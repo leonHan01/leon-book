@@ -9,6 +9,7 @@ struct NativeWorkspaceRail: View {
         VStack(spacing: 10) {
             destination(.dashboard, title: "概览", icon: "house", selectedIcon: "house.fill")
             destination(.articles, title: "全部文章", icon: "doc.on.doc")
+            destination(.canvas, title: "无限画布", icon: "rectangle.3.group")
             destination(.moments, title: "微博", icon: "bubble.left.and.bubble.right")
             destination(.qAndA, title: "问答", icon: "questionmark.bubble")
             if model.isTodoModuleEnabled {
@@ -104,18 +105,23 @@ struct NativeWorkspaceTitle: View {
         .accessibilityElement(children: .combine)
     }
 
+    private func localized(_ key: String) -> String {
+        NativeLocalization.string(key, language: NativeLocalization.currentLanguage)
+    }
+
     private var title: String {
         switch navigation.section {
-        case .dashboard: NativeLocalization.string("概览")
+        case .dashboard: localized("概览")
         case .articles: model.articleListTitle
-        case .reader: model.selectedArticle?.title ?? NativeLocalization.string("全部文章")
-        case .editor: NativeLocalization.string("写作")
-        case .graph: NativeLocalization.string("关系图")
-        case .moments: NativeLocalization.string("微博")
-        case .qAndA: NativeLocalization.string("问答")
-        case .todos: NativeLocalization.string("待办")
-        case .trash: NativeLocalization.string("回收站")
-        case .settings: NativeLocalization.string("设置")
+        case .reader: model.selectedArticle?.title ?? localized("全部文章")
+        case .editor: localized("写作")
+        case .graph: localized("关系图")
+        case .canvas: localized("无限画布")
+        case .moments: localized("微博")
+        case .qAndA: localized("问答")
+        case .todos: localized("待办")
+        case .trash: localized("回收站")
+        case .settings: localized("设置")
         }
     }
 }

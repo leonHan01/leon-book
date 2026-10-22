@@ -18,6 +18,8 @@ LeonBook 提供 **CLI + JSON Lines 接口 + App 本地 Unix Socket**。外部 AI
 
 每个命令可以带 `--root /绝对路径/数据根目录` 和 `--user 用户ID`。数据根目录是包含 `workspaces/` 的目录，不能传某个用户的工作区目录。默认顺序是 `--root`、`LEON_BOOK_WORKDIR`、App 记住的目录、`/Volumes/T7Shield/myblog`。省略 `--user` 使用注册表中的当前用户；需要固定目标的 AI 应始终指定 `--user`。
 
+误传已注册的用户工作区、其子目录或 `workspaces/` 容器时，返回 `invalid_root` 并指出正确根目录，拒绝执行迁移或写入。指定已有资料库时先确认路径存在：包括 `workspace.info` 在内的存储调用会初始化不存在的数据根目录。
+
 App 正在运行时，CLI 连接它的本地接口；App 关闭时，CLI 直接调用同一套存储逻辑。旧版 App 没有监听接口且占用了资料库时，会返回存储锁错误；请保存内容并重新打开新构建的 App。不会自动退出 App。
 
 `./scripts/leonblog build` 同时把 CLI 打包为：
@@ -59,7 +61,7 @@ macos/dist/leon-book.app/Contents/MacOS/leonbook
 
 实际成功返回完整对象，上面的文章仅列出部分字段。单次调用退出码：`0` 成功，`1` 操作失败，`2` 命令行或请求格式错误。未知参数会报错，避免拼写错误被忽略。
 
-常见错误码：`invalid_params`、`invalid_request`、`method_not_found`、`not_found`、`already_exists`、`conflict`、`read_only`、`module_disabled`、`storage_error`、`busy`、`confirmation_required`、`app_unavailable`、`ambiguous_window`、`transport_error`。
+常见错误码：`invalid_params`、`invalid_request`、`invalid_root`、`message_too_large`、`method_not_found`、`not_found`、`already_exists`、`conflict`、`read_only`、`module_disabled`、`storage_error`、`busy`、`confirmation_required`、`app_unavailable`、`ambiguous_window`、`transport_error`。
 
 ## 正确编辑与发布
 
@@ -115,7 +117,9 @@ post = call("moments.create", text="新文章已完成 #创作")
 {"id":"2","method":"moments.create","params":{"text":"由外部 AI 发布"},"userID":"leon"}
 ```
 
-一条请求失败不会结束 stdio 进程。EOF 结束进程。stdio 是本项目的 JSON Lines 协议，**不是 MCP 或 HTTP**；支持执行命令或启动子进程的 AI 都可以使用。
+顶层字段仅接受 `id`、`method`、`params`、`userID`。字段区分大小写，`userId`、`user` 等未知字段返回 `invalid_request`，不会退回默认用户后执行。省略 `userID` 时使用启动参数 `--user`，再省略才使用注册表当前用户。
+
+一条请求失败不会结束 stdio 进程。超长行被丢弃至换行后返回 `message_too_large`，后续请求继续执行；读取时限制内存，不会先装入整个输入。EOF 结束进程，也允许最后一行没有换行。stdio 是本项目的 JSON Lines 协议，**不是 MCP 或 HTTP**；支持执行命令或启动子进程的 AI 都可以使用。
 
 ## 能力发现与数据格式
 
@@ -139,7 +143,7 @@ post = call("moments.create", text="新文章已完成 #创作")
 | 回收站 | `trash.list/restore/delete/empty` |
 | 备份 | `backup.create/list/validate` |
 
-文章与微博列表返回 `{items,total,offset,hasMore}`，默认 `limit=100`，范围 1–1000。搜索默认 60 条，最多 1000 条。其他列表返回数组。请求与 Socket 响应上限 8 MiB；大资料库请分批读取正文。
+文章与微博列表返回 `{items,total,offset,hasMore}`，默认 `limit=100`，范围 1–1000。搜索默认 60 条，最多 1000 条。其他列表返回数组。完整请求与 Socket 响应上限 8 MiB；请求包括元数据、正文、JSON 转义和外层字段，`--json` 与 `--body-file` 共用一个额度。CLI 在连接 App 或进入离线存储之前检查完整请求，两种模式一致。请求过大时尚未执行；响应过大时写入可能已成功，不能直接重发。大资料库请减小页数、按需读取正文。
 
 素材先调用 `media.upload`：
 
@@ -184,4 +188,4 @@ Socket 连接建立后如果中断，CLI **不会自动把写入请求重发到�
 ./scripts/leonblog test
 ```
 
-`LeonBookAutomationTests` 使用临时资料库验证文章/微博生命周期、部分字段更新、旧版本冲突、问答、待办、用户隔离、只读挂载、模块权限、备份校验和 Socket 通信。测试不启动正式 App，不操作用户实际资料库。
+`LeonBookAutomationTests` 使用临时资料库验证文章/微博生命周期、部分字段更新、旧版本冲突、问答、待办、用户隔离、只读挂载、模块权限、备份校验和 Socket 通信；还检查误传数据根目录、请求字段拼写、在线/离线请求大小一致、超长行恢复及无需关闭 stdin 的交互响应。测试不启动正式 App，不操作用户实际资料库。

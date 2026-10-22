@@ -11,6 +11,8 @@ struct LeonBookApp: App {
                 .environment(\.locale, languagePreferences.language.locale)
         }
         .defaultSize(width: 1280, height: 820)
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             LeonBookCommands()
         }

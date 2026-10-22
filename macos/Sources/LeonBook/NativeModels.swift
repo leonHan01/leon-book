@@ -1705,6 +1705,7 @@ enum NativeSection: Hashable {
     case dashboard
     case articles
     case graph
+    case canvas
     case moments
     case qAndA
     case todos

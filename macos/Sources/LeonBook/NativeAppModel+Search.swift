@@ -252,6 +252,8 @@ extension NativeAppModel {
             Task { await saveEditor(as: .draft) }
         } else if command == .dashboard {
             section = .dashboard
+        } else if command == .canvas {
+            section = .canvas
         } else if command == .articles {
             showAllArticles()
         } else if command == .moments {

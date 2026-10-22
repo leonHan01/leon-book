@@ -6,7 +6,7 @@ import WebKit
 struct InfiniteCanvasView: View {
     @ObservedObject var model: NativeAppModel
     var body: some View {
-        InfiniteCanvasWebView(store: model.store) { slug in
+        InfiniteCanvasWebView(store: model.store, onSave: { model.scheduleBackup() }) { slug in
             model.openArticleLink(slug, disposition: .currentTab)
         }
         .id(model.dataDirectoryPath)
@@ -18,6 +18,8 @@ struct InfiniteCanvasView: View {
 final class InfiniteCanvasWriter {
     let store: LocalBlogStore
     var snapshot: InfiniteCanvasSnapshot
+    let originalID: String
+    var latestDocument: InfiniteCanvasDocument
     var pending: InfiniteCanvasDocument?
     var failure: Error?
     var task: Task<Void, Never>?
@@ -27,9 +29,16 @@ final class InfiniteCanvasWriter {
     init(store: LocalBlogStore, snapshot: InfiniteCanvasSnapshot) {
         self.store = store
         self.snapshot = snapshot
+        originalID = snapshot.id
+        latestDocument = snapshot.document
     }
 
     func enqueue(_ document: InfiniteCanvasDocument) {
+        if document == latestDocument && failure == nil {
+            if task == nil { onSave?(snapshot, false) }
+            return
+        }
+        latestDocument = document
         pending = document
         failure = nil
         guard task == nil else { return }
@@ -44,6 +53,8 @@ final class InfiniteCanvasWriter {
                         var copy = document
                         copy.leonbook.title = String(copy.leonbook.title.prefix(180)) + " · 冲突副本"
                         snapshot = try await store.saveCanvas(id: UUID().uuidString.lowercased(), document: copy, expectedRevision: nil)
+                        latestDocument.leonbook.title = copy.leonbook.title
+                        pending?.leonbook.title = copy.leonbook.title
                         forked = true
                     }
                     onSave?(snapshot, forked)
@@ -66,9 +77,10 @@ final class InfiniteCanvasWriter {
 
 struct InfiniteCanvasWebView: NSViewRepresentable {
     let store: LocalBlogStore
+    var onSave: () -> Void = {}
     var onOpenArticle: (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(store: store, onOpenArticle: onOpenArticle) }
+    func makeCoordinator() -> Coordinator { Coordinator(store: store, onSave: onSave, onOpenArticle: onOpenArticle) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -95,13 +107,15 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let store: LocalBlogStore
+        let onSave: () -> Void
         let onOpenArticle: (String) -> Void
         weak var webView: WKWebView?
         var writer: InfiniteCanvasWriter?
         private var generation = 0
 
-        init(store: LocalBlogStore, onOpenArticle: @escaping (String) -> Void) {
+        init(store: LocalBlogStore, onSave: @escaping () -> Void = {}, onOpenArticle: @escaping (String) -> Void) {
             self.store = store
+            self.onSave = onSave
             self.onOpenArticle = onOpenArticle
         }
 
@@ -115,7 +129,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
                   let payload = message.body as? [String: Any], let type = payload["type"] as? String else { return }
             if type == "save", let raw = payload["document"] as? String, let writer {
                 do {
-                    guard payload["id"] as? String == writer.snapshot.id else { return }
+                    guard let id = payload["id"] as? String, [writer.originalID, writer.snapshot.id].contains(id) else { return }
                     writer.enqueue(try .decode(Data(raw.utf8)))
                 } catch { send("error", ["message": error.localizedDescription]) }
                 return
@@ -131,7 +145,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
             case "ready":
                 let list = try await store.listCanvases()
                 send("catalog", ["items": list])
-                let root = await store.rootURL.path
+                let root = store.rootURL.path
                 let recent = UserDefaults.standard.string(forKey: "canvas.last.\(root)")
                 if let id = list.first(where: { $0["id"] == recent })?["id"] ?? list.first?["id"] { try await open(id) }
             case "open":
@@ -152,7 +166,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
                     let articles: [NativeArticleSummary]
                     if query.isEmpty { articles = Array(try await store.listArticles().prefix(100)) }
                     else {
-                        let results = try await store.search(query + " type:article", limit: 100)
+                        let results = try await store.search(query, restrictingTo: [.article], limit: 100)
                         articles = try await store.listArticleSummaries(slugs: results.map(\.documentID))
                     }
                     items = articles.map { ["id": $0.slug, "title": $0.title, "subtitle": $0.excerpt, "kind": "article", "file": "articles/" + $0.sourceRelativePath] }
@@ -161,7 +175,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
             case "content":
                 guard let nodeID = payload["nodeID"] as? String, let writer,
                       payload["id"] as? String == writer.snapshot.id,
-                      let node = (writer.pending ?? writer.snapshot.document).nodes.first(where: { $0.id == nodeID }) else { return }
+                      let node = writer.latestDocument.nodes.first(where: { $0.id == nodeID }) else { return }
                 let boardID = writer.snapshot.id
                 do {
                     var result = try await content(node)
@@ -211,6 +225,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
                 alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "删除画布")
                 if alert.runModal() == .alertSecondButtonReturn {
                     try await store.deleteCanvas(id: writer.snapshot.id, expectedRevision: writer.snapshot.revision)
+                    onSave()
                     self.writer = nil
                     send("empty")
                     try await catalog()
@@ -236,14 +251,15 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
             self.writer = writer
             writer.onSave = { [weak self, weak writer] snapshot, forked in
                 guard let self, self.writer === writer else { return }
-                self.send("saved", ["id": snapshot.id, "title": snapshot.document.leonbook.title, "forked": forked])
+                self.onSave()
+                self.send("saved", ["id": snapshot.id, "title": snapshot.document.leonbook.title, "forked": forked, "pending": writer?.pending != nil])
                 if forked { Task { try? await self.catalog() } }
             }
             writer.onError = { [weak self] error in self?.send("error", ["message": "保存失败：\(error.localizedDescription)"]) }
             if let data = try? snapshot.document.encoded(), let raw = String(data: data, encoding: .utf8) {
                 send("load", ["id": snapshot.id, "document": raw])
             }
-            Task { UserDefaults.standard.set(snapshot.id, forKey: "canvas.last.\(await store.rootURL.path)") }
+            UserDefaults.standard.set(snapshot.id, forKey: "canvas.last.\(store.rootURL.path)")
         }
 
         private func addAttachment() async throws {

@@ -46,6 +46,7 @@ public actor AutomationService {
                     "examples": try AutomationCatalog.examples(),
                 ]))
             }
+            try validateDataRoot()
             try authorize(request.method, p)
             if request.method.hasPrefix("app.") {
                 let result = try await NativeWorkspaceWindows.automationCommand(request, root: rootURL)
@@ -83,6 +84,27 @@ public actor AutomationService {
 
     private func workspaceInfo(_ state: NativeWorkspaceState) throws -> AutomationValue {
         .object(["root": .string(rootURL.path), "workspace": .string(state.workspaceURL.path), "user": try .encoded(state.activeUser), "users": try .encoded(state.users)])
+    }
+
+    private func validateDataRoot() throws {
+        // UserWorkspaceStore.prepare migrates legacy content into workspaces/leon.
+        // Detect a registered workspace (including its descendants) before that
+        // code can interpret an accidental --root as a legacy data root.
+        var candidate = rootURL
+        while candidate.path != "/" {
+            let parent = candidate.deletingLastPathComponent()
+            let registryRoot = candidate.lastPathComponent == "workspaces" ? parent : parent.deletingLastPathComponent()
+            if candidate.lastPathComponent == "workspaces" || parent.lastPathComponent == "workspaces" {
+                let registry = registryRoot.appendingPathComponent("users.json")
+                if let data = try? Data(contentsOf: registry),
+                   let registered = try? JSONDecoder().decode([NativeUser].self, from: data),
+                   !registered.isEmpty,
+                   candidate.lastPathComponent == "workspaces" || registered.contains(where: { $0.id == candidate.lastPathComponent }) {
+                    throw AutomationFailure("invalid_root", "--root must be the data root '\(registryRoot.path)', not workspaces/ or a user's workspace. Select the user with --user.")
+                }
+            }
+            candidate = parent
+        }
     }
 
     private func authorize(_ method: String, _ p: AutomationParameters) throws {

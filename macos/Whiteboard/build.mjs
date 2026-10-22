@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,14 @@ await build({
   legalComments: 'eof', logLevel: 'info',
 });
 await cp(path.join(here, 'index.html'), path.join(output, 'index.html'));
-await cp(path.join(here, 'node_modules/@excalidraw/excalidraw/dist/prod/fonts'), output, { recursive: true });
+await cp(path.join(here, 'node_modules/@excalidraw/excalidraw/dist/prod/fonts'), path.join(output, 'fonts'), { recursive: true });
+// Liberation is Excalidraw's server-side SVG fallback, never used by this
+// browser-only PNG editor. Keep the native distribution to browser fonts.
+await rm(path.join(output, 'fonts/Liberation'), { recursive: true, force: true });
+const javascript = await readFile(path.join(output, 'editor.js'), 'utf8');
+for (const [, font] of javascript.matchAll(/["'](\.\/fonts\/[^"']+\.woff2)["']/g)) {
+  if (!font.includes('/Liberation/')) await access(path.join(output, font));
+}
 
 // Ship license texts alongside the exact compiled dependencies, including font
 // licenses. No network access or npm installation is needed when running Swift.

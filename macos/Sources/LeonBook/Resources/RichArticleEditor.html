@@ -4,19 +4,19 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data: leonmedia:; media-src https: http: leonmedia:;">
 <style>
-:root { color-scheme: light dark; --surface: #fff; --text: #252827; --muted: #848a86; --line: #e4e8e5; --accent: #328568; --soft: #f4f6f4; --size: 18px; }
-@media (prefers-color-scheme: dark) { :root { --surface: #222522; --text: #e5e9e5; --muted: #9ca69e; --line: #3c433d; --soft: #2b302c; --accent: #86c7a5; } }
+:root { color-scheme: light dark; --surface: #fff; --text: #303238; --muted: #72737a; --line: #e9e9eb; --accent: #3976cf; --soft: #f5f5f6; --size: 18px; }
+@media (prefers-color-scheme: dark) { :root { --surface: #252628; --text: #e4e5e8; --muted: #a1a2a8; --line: #3a3b3e; --soft: #2d2e31; --accent: #8abcf8; } }
 * { box-sizing: border-box; }
 body { margin: 0; background: transparent; color: var(--text); font: var(--size)/1.75 -apple-system, BlinkMacSystemFont, sans-serif; }
-body:not(.readonly) { color-scheme: light; min-height: 100vh; background: #f5f5f4; --surface: #fafaf9; --text: #252827; --muted: #7c827f; --line: #dedfdd; --accent: #328568; --soft: #edeeec; --block-hover: #e5f1ff; }
-#toolbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+body:not(.readonly) { color-scheme: light; min-height: 100vh; background: #fff; --surface: #fff; --text: #303238; --muted: #72737a; --line: #e9e9eb; --accent: #3976cf; --soft: #f5f5f6; --block-hover: #e5f1ff; }
+#toolbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface); font: 12px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
 button, select, input { font: inherit; color: inherit; }
 button { border: 0; border-radius: 6px; background: transparent; padding: 4px 9px; cursor: pointer; }
 button:hover, button:focus-visible { background: var(--soft); outline: 2px solid var(--accent); outline-offset: -2px; }
-#toolbar button { min-width: 32px; font-size: 15px; }
+#toolbar button { min-width: 30px; min-height: 28px; font-size: 13px; }
 #toolbar .hint { margin-left: auto; font-size: 12px; color: var(--muted); }
 #language { max-width: 130px; font-size: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--soft); padding: 4px; }
-#document { padding: 22px 28px 120px; min-height: 280px; outline: none; overflow-wrap: anywhere; }
+#document { padding: 22px 20px 120px; min-height: 280px; outline: none; overflow-wrap: anywhere; }
 #document > *, #document :is(td, th) > * { position: relative; margin: 0 0 14px; min-height: 1.75em; outline: none; }
 #document :is(td, th) > :last-child { margin-bottom: 0; }
 #document[contenteditable=true] > *:focus-within { border-radius: 4px; }
@@ -48,6 +48,7 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #document figure[data-type=audio] { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); }
 #document figure[data-type=audio]:focus { outline: 2px solid var(--accent); }
 #document audio { display: block; width: 100%; max-width: 100%; }
+#document[data-audio-drop=true] { box-shadow: inset 0 0 0 2px var(--accent); background: var(--soft); }
 #document figure[data-type=audio] figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 #document table { border-collapse: collapse; table-layout: fixed; width: 100%; }
 #document th, #document td { border: 1px solid var(--line); padding: 10px 12px; min-width: 70px; vertical-align: top; }
@@ -134,7 +135,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   <button data-command="undo" title="撤销 ⌘Z">↶</button>
   <button data-command="redo" title="重做 ⇧⌘Z">↷</button>
   <button data-command="whiteboard" title="插入 Excalidraw 画板">画板</button>
-  <button data-command="audio" title="选择 MP3 并插入文章" aria-label="插入音频">插入音频</button>
+  <button data-command="audio" title="选择 MP3，或将 MP3 文件拖入正文" aria-label="插入音频">插入音频</button>
   <select id="language" aria-label="代码语言" hidden><option>text</option><option>javascript</option><option>typescript</option><option>swift</option><option>python</option><option>html</option><option>css</option><option>json</option><option>sql</option><option>bash</option></select>
   <span class="hint">/ 添加块 · 回车分段 · ⇧回车换行</span>
 </div>
@@ -1012,6 +1013,9 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (action === 'highlight') document.execCommand('hiliteColor', false, '#f2ce5e');
     else document.execCommand(action, false); notify();
   });
+  document.getElementById('toolbar').addEventListener('click', event => {
+    if (event.detail === 0 && event.target.closest('[data-command=audio]')) audioBlocks.create(blockAtSelection() || root.lastElementChild);
+  });
   language.addEventListener('change', () => { const block = blockAtSelection(); if (block?.tagName === 'PRE') { checkpoint(); block.dataset.language = language.value; notify(); } });
   function load(body, id, canEdit, size) {
     if (composing) { pendingLoad = [body, id, canEdit, size]; return false; }
@@ -1037,6 +1041,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   const audioBlocks = createArticleAudio({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu });
   window.LeonArticle = { load, serialize, execute, commands, cleanHTML, undo, insertPastedImages,
     completeAudio: audioBlocks.complete, cancelAudio: audioBlocks.cancel,
+    completeAudios: audioBlocks.completeMany,
     completeWhiteboard: whiteboards.complete, cancelWhiteboard: whiteboards.cancel,
     completeImageReplacement: editorUI.completeImageReplacement,
     insertLink(url) { const safe = safeURL(url); if (editable && safe) { checkpoint(); document.execCommand('createLink', false, safe); notify(); } },

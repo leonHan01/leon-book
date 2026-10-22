@@ -15,47 +15,57 @@ public struct ContentView: View {
     }
 
     public var body: some View {
-        NavigationSplitView {
-            NativeSidebar(model: model, navigation: model.navigation, isPresentingNewUser: $isPresentingNewUser)
-                .navigationSplitViewColumnWidth(
-                    min: 210,
-                    ideal: CGFloat(workspaceLayout.navigationSidebarWidth),
-                    max: 380
+        HStack(spacing: 0) {
+            NativeWorkspaceRail(model: model, navigation: model.navigation)
+
+            NavigationSplitView {
+                NativeSidebar(model: model, navigation: model.navigation, isPresentingNewUser: $isPresentingNewUser)
+                    .navigationSplitViewColumnWidth(
+                        min: 210,
+                        ideal: CGFloat(workspaceLayout.navigationSidebarWidth),
+                        max: 380
+                    )
+            } detail: {
+                NativeNavigationDetail(
+                    model: model,
+                    navigation: model.navigation,
+                    workspaceLayout: workspaceLayout,
+                    readingPreferences: readingPreferences,
+                    pageStateCache: pageStateCache
                 )
-        } detail: {
-            NativeNavigationDetail(
-                model: model,
-                navigation: model.navigation,
-                workspaceLayout: workspaceLayout,
-                readingPreferences: readingPreferences,
-                pageStateCache: pageStateCache
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(NativeTheme.canvas)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(NativeTheme.canvas)
+            }
+            .navigationSplitViewStyle(.balanced)
         }
         .frame(minWidth: 1_080, minHeight: 680)
-        .toolbarBackground(NativeTheme.surface, for: .windowToolbar)
+        .toolbarBackground(NativeTheme.sidebar, for: .windowToolbar)
         .toolbarBackground(.visible, for: .windowToolbar)
         .disabled(model.isRestoringBackup)
         .environment(\.nativeDeclarativeExtensions, model.declarativeExtensions)
         .toolbar {
-            ToolbarItemGroup {
-                Button { model.executeCommand(.globalSearch) } label: {
-                    Label("搜索", systemImage: "magnifyingglass")
-                }
-
-                Button { model.executeCommand(.reload) } label: {
-                    Label("刷新", systemImage: "arrow.clockwise")
-                }
-                .disabled(model.isLoading)
-
+            ToolbarItem(placement: .navigation) {
+                NativeWorkspaceTitle(model: model, navigation: model.navigation)
+            }
+            ToolbarItem {
                 Button { model.executeCommand(.newArticle) } label: {
                     Label("新文章", systemImage: "square.and.pencil")
                 }
-
-                Button { model.executeCommand(.moments) } label: {
-                    Label("发微博", systemImage: "square.grid.2x2")
+                .help("新文章")
+            }
+            ToolbarItem {
+                Menu {
+                    Button("搜索", systemImage: "magnifyingglass") { model.executeCommand(.globalSearch) }
+                    Button("快速打开", systemImage: "doc.text.magnifyingglass") { model.executeCommand(.quickOpen) }
+                    Button("命令面板", systemImage: "command") { model.executeCommand(.commandPalette) }
+                    Divider()
+                    Button("刷新", systemImage: "arrow.clockwise") { model.executeCommand(.reload) }
+                        .disabled(model.isLoading)
+                    Button("设置", systemImage: "gearshape") { model.section = .settings }
+                } label: {
+                    Label("工作区操作", systemImage: "ellipsis")
                 }
+                .help("工作区操作")
             }
         }
         .overlay(alignment: .bottom) {
@@ -214,189 +224,6 @@ private struct ArticleSourceConflictSheet: View {
     }
 }
 
-private struct NativeSidebar: View {
-    @ObservedObject var model: NativeAppModel
-    @ObservedObject var navigation: NativeNavigationState
-    @Binding var isPresentingNewUser: Bool
-    @State private var smartCollectionEditorRequest: SmartCollectionEditorRequest?
-    @State private var expandedWorkspaceFolderIDs = Set<String>()
-    @State private var selectedWorkspaceResourceIDs = Set<String>()
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            List {
-            Section("用户") {
-                Menu {
-                    ForEach(model.users) { user in
-                        Button {
-                            model.selectUser(user)
-                        } label: {
-                            Label(user.name, systemImage: user.id == model.currentUser.id ? "checkmark" : "person")
-                        }
-                        .disabled(user.id == model.currentUser.id)
-                    }
-                    Divider()
-                    Button("新建用户…") { isPresentingNewUser = true }
-                } label: {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Label(model.currentUser.name, systemImage: "person.crop.circle.fill")
-                        Text("独立工作空间")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .disabled(
-                    model.isLoading
-                        || model.isSwitchingWorkspace
-                        || model.isSaving
-                        || model.isPublishingMoment
-                        || model.isPublishingQuestion
-                        || model.isPublishingQuestionAnswer
-                        || model.isSavingTodo
-                )
-            }
-
-                NativeWorkspaceResourceSection(
-                    model: model,
-                    expandedFolderIDs: $expandedWorkspaceFolderIDs,
-                    selectedResourceIDs: $selectedWorkspaceResourceIDs
-                )
-
-            Section("工作区") {
-                sidebarButton(.dashboard, title: "概览", icon: "rectangle.grid.2x2")
-                if model.isKnowledgeGraphModuleEnabled {
-                    sidebarButton(.graph, title: "关系图", icon: "point.3.connected.trianglepath.dotted")
-                }
-                sidebarButton(.moments, title: "微博", icon: "rectangle.3.group")
-                sidebarButton(.qAndA, title: "问答", icon: "questionmark.bubble")
-                if model.isTodoModuleEnabled {
-                    sidebarButton(.todos, title: "待办", icon: "checklist")
-                }
-                sidebarButton(.trash, title: "回收站 \(model.trashItems.count)", icon: "trash")
-            }
-
-            Section("智能集合") {
-                ForEach(model.smartCollections) { collection in
-                    Button {
-                        model.showSmartCollection(collection)
-                    } label: {
-                        Label(collection.name, systemImage: "rectangle.stack.badge.play")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(SidebarNavigationButtonStyle(
-                        isSelected: navigation.section == .articles
-                            && model.selectedSmartCollectionID == collection.id
-                    ))
-                    .contextMenu {
-                        Button("编辑") {
-                            smartCollectionEditorRequest = SmartCollectionEditorRequest(collection: collection)
-                        }
-                        Button("删除", role: .destructive) {
-                            Task { await model.deleteSmartCollection(collection) }
-                        }
-                    }
-                }
-                Button {
-                    smartCollectionEditorRequest = SmartCollectionEditorRequest(collection: nil)
-                } label: {
-                    Label("新建智能集合…", systemImage: "plus")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-            }
-
-            if !model.bookmarks.isEmpty {
-                Section("收藏") {
-                    ForEach(model.bookmarks) { bookmark in
-                        Button {
-                            model.openBookmark(bookmark)
-                        } label: {
-                            Label(bookmark.title, systemImage: bookmark.target.systemImage)
-                                .lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("移除收藏", role: .destructive) {
-                                model.deleteBookmark(bookmark)
-                            }
-                        }
-                    }
-                }
-            }
-
-            Section("状态") {
-                Label {
-                    Text(LocalizedStringKey(model.storageReady ? "本地文件已连接" : "正在读取本地文件"))
-                } icon: {
-                    Image(systemName: model.storageReady ? "checkmark.circle.fill" : "circle.dotted")
-                        .foregroundStyle(model.storageReady ? NativeTheme.accent : NativeTheme.textSecondary)
-                }
-                Text("\(model.publishedArticleCount) 篇已发布 · \(model.draftArticleCount) 篇草稿 · \(model.totalMomentCount) 条微博 · \(model.totalQuestionCount) 个问题")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                sidebarButton(.settings, title: "设置", icon: "gearshape")
-            }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(NativeTheme.sidebar)
-            .overlay(alignment: .trailing) {
-                Rectangle()
-                    .fill(NativeTheme.border)
-                    .frame(width: 1)
-                    .allowsHitTesting(false)
-            }
-            .frame(minWidth: 210)
-            .onChange(of: model.selectedSlug) { slug in
-                revealSelectedArticle(slug, proxy: proxy)
-            }
-            .onChange(of: model.workspaceResources) { _ in
-                let liveIDs = Set(model.workspaceResourceItems.map(\.id))
-                selectedWorkspaceResourceIDs.formIntersection(liveIDs)
-                revealSelectedArticle(model.selectedSlug, proxy: proxy)
-            }
-            .sheet(item: $smartCollectionEditorRequest) { request in
-                SmartCollectionEditorSheet(model: model, collection: request.collection)
-            }
-        }
-    }
-
-    private func revealSelectedArticle(_ slug: String?, proxy: ScrollViewProxy) {
-        guard let slug, let resourceID = model.workspaceResourceID(articleSlug: slug) else { return }
-        expandedWorkspaceFolderIDs.formUnion(
-            model.workspaceResourceAncestorIDs(resourceID: resourceID)
-        )
-        selectedWorkspaceResourceIDs = [resourceID]
-        DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.18)) {
-                proxy.scrollTo(resourceID, anchor: .center)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func sidebarButton(_ section: NativeSection, title: String, icon: String) -> some View {
-        Button {
-            if section == .todos { model.openTodos(); return }
-            model.section = section
-            if section == .editor && model.editor.isNew == false { model.newArticle() }
-        } label: {
-            Label(LocalizedStringKey(title), systemImage: icon)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarNavigationButtonStyle(isSelected: navigation.section == section))
-        .foregroundStyle(navigation.section == section ? NativeTheme.deepBlue : NativeTheme.textPrimary)
-    }
-}
-
 struct SidebarNavigationButtonStyle: ButtonStyle {
     let isSelected: Bool
 
@@ -427,7 +254,7 @@ private struct SidebarNavigationButtonBody: View {
             return NativeTheme.selection
         }
         if isSelected {
-            return isHovered ? NativeTheme.selection : NativeTheme.lightBlue
+            return NativeTheme.selection
         }
         return isHovered ? NativeTheme.surfaceSecondary : .clear
     }
@@ -445,6 +272,7 @@ private struct NativeNavigationDetail: View {
         case .dashboard: DashboardView(model: model)
         case .articles: ArticleListView(model: model)
         case .graph: ArticleGraphView(model: model, pageState: pageStateCache.graph)
+        case .canvas: InfiniteCanvasView(model: model)
         case .moments:
             MomentFeedView(
                 model: model,
@@ -518,45 +346,94 @@ private struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("leon-book")
-                        .font(.system(size: 38, weight: .bold, design: .rounded))
-                        .foregroundStyle(NativeTheme.deepBlue)
+            VStack(alignment: .leading, spacing: 32) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("概览")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(NativeTheme.textSecondary)
                     Text("你的本地写作空间")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(NativeTheme.textPrimary)
                 }
 
-                HStack(spacing: 14) {
-                    StatCard(title: "已发布", value: "\(model.publishedArticleCount)", color: NativeTheme.accent)
-                    StatCard(title: "草稿", value: "\(model.draftArticleCount)", color: NativeTheme.textSecondary)
-                    StatCard(title: "全部文章", value: "\(model.articles.count)", color: NativeTheme.deepBlue)
-                    StatCard(title: "微博", value: "\(model.totalMomentCount)", color: NativeTheme.blue)
-                }
+                newArticleCard
 
-                ActivityHeatmapView(activity: model.activity)
+                HStack(spacing: 0) {
+                    StatCard(title: "全部文章", value: "\(model.articles.count)")
+                    Divider().frame(height: 32)
+                    StatCard(title: "已发布", value: "\(model.publishedArticleCount)")
+                    Divider().frame(height: 32)
+                    StatCard(title: "草稿", value: "\(model.draftArticleCount)")
+                    Divider().frame(height: 32)
+                    StatCard(title: "微博", value: "\(model.totalMomentCount)")
+                }
 
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         Text("最近编辑")
-                            .font(.title2.weight(.semibold))
+                            .font(.system(size: 14, weight: .semibold))
                         Spacer()
-                        Button("查看全部") { model.section = .articles }
+                        Button { model.showAllArticles() } label: {
+                            HStack(spacing: 5) {
+                                Text("查看全部")
+                                Image(systemName: "arrow.right").font(.system(size: 10))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(NativeTheme.textSecondary)
                     }
 
                     if model.articles.isEmpty {
                         EmptyState(title: "还没有文章", message: "从一篇新笔记开始。", actionTitle: "写第一篇") { model.newArticle() }
                     } else {
-                        ForEach(Array(model.articles.prefix(5))) { article in
-                            ArticleRow(article: article) { model.selectSlug(article.slug) }
+                        LazyVStack(spacing: 2) {
+                            ForEach(Array(model.articles.prefix(5))) { article in
+                                ArticleRow(article: article) { model.selectSlug(article.slug) }
+                            }
                         }
                     }
                 }
+
+                Divider()
+                ActivityHeatmapView(activity: model.activity)
             }
-            .frame(maxWidth: 900, alignment: .leading)
-            .padding(38)
+            .frame(maxWidth: 820, alignment: .leading)
+            .padding(.horizontal, 40)
+            .padding(.vertical, 48)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
+        .background(NativeTheme.canvas)
+    }
+
+    private var newArticleCard: some View {
+        Button { model.executeCommand(.newArticle) } label: {
+            VStack(alignment: .leading, spacing: 28) {
+                Text("从一篇新笔记开始。")
+                    .font(.system(size: 15))
+                    .foregroundStyle(NativeTheme.textSecondary)
+                HStack {
+                    Label("新文章", systemImage: "plus")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(NativeTheme.textPrimary)
+                    Spacer()
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(NativeTheme.buttonBlue, in: Circle())
+                }
+            }
+            .padding(20)
+            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 18))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18).strokeBorder(NativeTheme.border)
+            }
+            .shadow(color: NativeTheme.shadow.opacity(0.025), radius: 12, y: 4)
+            .contentShape(RoundedRectangle(cornerRadius: 18))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("新文章")
     }
 }
 
@@ -596,7 +473,7 @@ private struct ActivityHeatmapView: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("创作活动")
-                        .font(.title2.weight(.semibold))
+                        .font(.system(size: 14, weight: .semibold))
                     Text("发布文章、编辑文章或上传图片时留下记录")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -641,8 +518,7 @@ private struct ActivityHeatmapView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-        .padding(18)
-        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.vertical, 4)
     }
 
     private var weekdayLabels: some View {
@@ -696,19 +572,20 @@ private struct HeatmapDay: Identifiable {
 private struct StatCard: View {
     let title: String
     let value: String
-    let color: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(LocalizedStringKey(title)).font(.callout).foregroundStyle(NativeTheme.textSecondary)
-            Text(value).font(.system(size: 30, weight: .bold, design: .rounded)).foregroundStyle(color)
+        VStack(alignment: .leading, spacing: 7) {
+            Text(LocalizedStringKey(title))
+                .font(.system(size: 11))
+                .foregroundStyle(NativeTheme.textSecondary)
+            Text(value)
+                .font(.system(size: 24, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(NativeTheme.textPrimary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 14))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14).strokeBorder(NativeTheme.border)
-        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 6)
     }
 }
 
@@ -765,19 +642,20 @@ private struct ArticleTagFilterBar: View {
 private struct ArticleRow: View {
     let article: NativeArticleSummary
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 14) {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(article.status == .published ? NativeTheme.lightBlue : NativeTheme.surfaceSecondary)
-                    .frame(width: 42, height: 42)
+                    .fill(NativeTheme.surfaceSecondary)
+                    .frame(width: 36, height: 40)
                     .overlay {
                         Image(systemName: article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis")
-                            .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
+                            .foregroundStyle(NativeTheme.textSecondary)
                     }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(article.title).font(.headline).foregroundStyle(.primary)
+                    Text(article.title).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
                     Text(article.excerpt.isEmpty ? article.category : article.excerpt)
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -800,9 +678,11 @@ private struct ArticleRow: View {
                 }
             }
             .padding(12)
+            .background(isHovered ? NativeTheme.surfaceSecondary : .clear, in: RoundedRectangle(cornerRadius: 10))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 
