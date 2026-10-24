@@ -6,15 +6,15 @@ extension NativeAppModel {
     @discardableResult
     func applyArticlePageTemplate(_ template: NativeArticlePageTemplate) -> Bool {
         guard editor.isNew else {
-            errorMessage = "整页模板只能应用到尚未保存的新页面。"
+            errorMessage = NativeLocalization.text("整页模板只能应用到尚未保存的新页面。")
             return false
         }
         if isEditorDirty {
             let alert = NSAlert()
-            alert.messageText = "应用“\(template.name)”模板？"
-            alert.informativeText = "当前新页面已有内容。模板会替换标题、正文、分类、标签和属性，并移除尚未保存的附件。"
-            alert.addButton(withTitle: "应用模板")
-            alert.addButton(withTitle: "取消")
+            alert.messageText = NativeLocalization.text("应用“\(template.name)”模板？")
+            alert.informativeText = NativeLocalization.text("当前新页面已有内容。模板会替换标题、正文、分类、标签和属性，并移除尚未保存的附件。")
+            alert.addButton(withTitle: NativeLocalization.text("应用模板"))
+            alert.addButton(withTitle: NativeLocalization.text("取消"))
             guard alert.runModal() == .alertFirstButtonReturn else { return false }
         }
 
@@ -25,7 +25,7 @@ extension NativeAppModel {
         pendingEditorMediaCleanup = []
         template.apply(to: &editor)
         editorBodySelection = NSRange(location: 0, length: 0)
-        editorAutosaveStatus = "已应用页面模板“\(template.name)”"
+        editorAutosaveStatus = NativeLocalization.text("已应用页面模板“\(template.name)”")
         errorMessage = nil
         return true
     }
@@ -35,7 +35,7 @@ extension NativeAppModel {
         newArticle()
         guard editor.recoveryID != previousRecoveryID else { return }
         if NativeArticleDraftPrefill.applyBoardGroup(label: label, field: field, to: &editor) {
-            editorAutosaveStatus = "已按“\(label)”预填新页面"
+            editorAutosaveStatus = NativeLocalization.text("已按“\(label)”预填新页面")
         }
     }
 
@@ -44,7 +44,7 @@ extension NativeAppModel {
         newArticle()
         guard editor.recoveryID != previousRecoveryID else { return }
         if NativeArticleDraftPrefill.applyCalendarDate(value, propertyKey: propertyKey, to: &editor) {
-            editorAutosaveStatus = "已预填日期 \(value)"
+            editorAutosaveStatus = NativeLocalization.text("已预填日期 \(value)")
         }
     }
 
@@ -74,9 +74,6 @@ extension NativeAppModel {
             }
             do {
                 self.workspaceResources = try await activeStore.listWorkspaceResources()
-                if self.selectedSmartCollection != nil {
-                    try await self.refreshSelectedSmartCollection()
-                }
                 let revisions = try await activeStore.listArticleRevisions(
                     articleSlug: saved.slug,
                     draftKey: recoveryID
@@ -110,7 +107,7 @@ extension NativeAppModel {
                 scheduleBackup()
                 errorMessage = nil
             } catch {
-                errorMessage = "更新任务失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text("更新任务失败：\(error.localizedDescription)")
             }
         }
     }
@@ -163,7 +160,7 @@ extension NativeAppModel {
                 targetAfter: targetAfter
             )
         } catch {
-            errorMessage = "跨笔记写入块失败：\(error.localizedDescription)"
+            errorMessage = NativeLocalization.text("跨笔记写入块失败：\(error.localizedDescription)")
             return nil
         }
     }
@@ -193,7 +190,7 @@ extension NativeAppModel {
             errorMessage = nil
             return true
         } catch {
-            errorMessage = "撤销跨笔记块操作失败：\(error.localizedDescription)"
+            errorMessage = NativeLocalization.text("撤销跨笔记块操作失败：\(error.localizedDescription)")
             return false
         }
     }
@@ -221,10 +218,7 @@ extension NativeAppModel {
             editor.updatedAt = sourceArticle.updatedAt
             editorOriginalArticle = sourceArticle
             editorAutosaveTask?.cancel()
-            editorAutosaveStatus = "跨笔记块操作已保存"
-        }
-        if selectedSmartCollection != nil {
-            try? await refreshSelectedSmartCollection()
+            editorAutosaveStatus = NativeLocalization.text("跨笔记块操作已保存")
         }
         try? await reloadKnowledgeGraph()
         if let selectedSlug {
@@ -248,27 +242,27 @@ extension NativeAppModel {
             .trimmingCharacters(in: CharacterSet(charactersIn: "# \t")) ?? ""
 
         let titleField = NSTextField(string: String(suggestedTitle.prefix(60)))
-        titleField.placeholderString = "新文章标题"
+        titleField.placeholderString = NativeLocalization.text("新文章标题")
         let replacementPopup = NSPopUpButton()
-        replacementPopup.addItems(withTitles: NativeArticleExtractionReplacement.allCases.map(\.label))
+        replacementPopup.addItems(withTitles: NativeArticleExtractionReplacement.allCases.map { NativeLocalization.string($0.label, language: NativeLocalization.currentLanguage) })
         let stack = NSStackView(views: [
-            labeledRefactorControl("标题", control: titleField),
-            labeledRefactorControl("原位置", control: replacementPopup),
+            labeledRefactorControl(NativeLocalization.text("标题"), control: titleField),
+            labeledRefactorControl(NativeLocalization.text("原位置"), control: replacementPopup),
         ])
         stack.orientation = .vertical
         stack.spacing = 10
         stack.frame = NSRect(x: 0, y: 0, width: 380, height: 76)
 
         let alert = NSAlert()
-        alert.messageText = "提取为新文章"
-        alert.informativeText = "选中文字会成为一篇新的 Markdown 文章；原位置可替换为双链或嵌入。"
-        alert.addButton(withTitle: "提取")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = NativeLocalization.text("提取为新文章")
+        alert.informativeText = NativeLocalization.text("选中文字会成为一篇新的 Markdown 文章；原位置可替换为双链或嵌入。")
+        alert.addButton(withTitle: NativeLocalization.text("提取"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.accessoryView = stack
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let title = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
-            errorMessage = "请输入新文章标题。"
+            errorMessage = NativeLocalization.text("请输入新文章标题。")
             return
         }
         let replacement = NativeArticleExtractionReplacement.allCases[replacementPopup.indexOfSelectedItem]
@@ -287,11 +281,11 @@ extension NativeAppModel {
                 )
                 acceptArticleRefactor(result.primaryArticle)
                 try await refreshAfterArticleRefactor(primarySlug: result.primaryArticle.slug)
-                editorAutosaveStatus = "已提取“\(title)”并保存 Markdown"
+                editorAutosaveStatus = NativeLocalization.text("已提取“\(title)”并保存 Markdown")
                 scheduleBackup()
                 errorMessage = nil
             } catch {
-                errorMessage = "提取文章失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text("提取文章失败：\(error.localizedDescription)")
             }
         }
     }
@@ -304,13 +298,13 @@ extension NativeAppModel {
             return
         }
         let replacementPopup = NSPopUpButton()
-        replacementPopup.addItems(withTitles: NativeArticleExtractionReplacement.allCases.map(\.label))
+        replacementPopup.addItems(withTitles: NativeArticleExtractionReplacement.allCases.map { NativeLocalization.string($0.label, language: NativeLocalization.currentLanguage) })
         let alert = NSAlert()
-        alert.messageText = "按二级标题拆分文章？"
-        alert.informativeText = "将创建 \(split.sections.count) 篇草稿：\(split.sections.map(\.title).joined(separator: "、"))"
-        alert.addButton(withTitle: "拆分")
-        alert.addButton(withTitle: "取消")
-        alert.accessoryView = labeledRefactorControl("原文保留", control: replacementPopup)
+        alert.messageText = NativeLocalization.text("按二级标题拆分文章？")
+        alert.informativeText = NativeLocalization.text("将创建 \(split.sections.count) 篇草稿：\(split.sections.map(\.title).joined(separator: "、"))")
+        alert.addButton(withTitle: NativeLocalization.text("拆分"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
+        alert.accessoryView = labeledRefactorControl(NativeLocalization.text("原文保留"), control: replacementPopup)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let replacement = NativeArticleExtractionReplacement.allCases[replacementPopup.indexOfSelectedItem]
         let slug = editor.slug
@@ -326,11 +320,11 @@ extension NativeAppModel {
                 )
                 acceptArticleRefactor(result.primaryArticle)
                 try await refreshAfterArticleRefactor(primarySlug: result.primaryArticle.slug)
-                editorAutosaveStatus = "已拆分为 \(result.createdArticles.count) 篇 Markdown 草稿"
+                editorAutosaveStatus = NativeLocalization.text("已拆分为 \(result.createdArticles.count) 篇 Markdown 草稿")
                 scheduleBackup()
                 errorMessage = nil
             } catch {
-                errorMessage = "拆分文章失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text("拆分文章失败：\(error.localizedDescription)")
             }
         }
     }
@@ -338,7 +332,7 @@ extension NativeAppModel {
     func promptToMergeEditedArticle() {
         guard !editor.isNew, let source = selectedArticle, source.slug == editor.slug else { return }
         guard !hasUnsavedEditorChanges else {
-            errorMessage = "合并前请先保存或放弃当前修改，避免丢失未保存内容。"
+            errorMessage = NativeLocalization.text("合并前请先保存或放弃当前修改，避免丢失未保存内容。")
             return
         }
         let destinations = articles.filter { $0.slug != source.slug }
@@ -346,10 +340,10 @@ extension NativeAppModel {
         let destinationPopup = NSPopUpButton()
         destinationPopup.addItems(withTitles: destinations.map { "\($0.title)  ·  \($0.slug)" })
         let positionPopup = NSPopUpButton()
-        positionPopup.addItems(withTitles: ["追加到目标末尾", "插入到目标开头"])
+        positionPopup.addItems(withTitles: [NativeLocalization.text("追加到目标末尾"), NativeLocalization.text("插入到目标开头")])
         let stack = NSStackView(views: [
-            labeledRefactorControl("合并到", control: destinationPopup),
-            labeledRefactorControl("位置", control: positionPopup),
+            labeledRefactorControl(NativeLocalization.text("合并到"), control: destinationPopup),
+            labeledRefactorControl(NativeLocalization.text("位置"), control: positionPopup),
         ])
         stack.orientation = .vertical
         stack.spacing = 10
@@ -357,10 +351,10 @@ extension NativeAppModel {
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "合并“\(source.title)”？"
-        alert.informativeText = "来源文章会移入回收站，所有指向它的双链和嵌入会批量改为目标文章。"
-        alert.addButton(withTitle: "合并并更新入链")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = NativeLocalization.text("合并“\(source.title)”？")
+        alert.informativeText = NativeLocalization.text("来源文章会移入回收站，所有指向它的双链和嵌入会批量改为目标文章。")
+        alert.addButton(withTitle: NativeLocalization.text("合并并更新入链"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.buttons.first?.hasDestructiveAction = true
         alert.accessoryView = stack
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -387,7 +381,7 @@ extension NativeAppModel {
                 scheduleBackup()
                 errorMessage = nil
             } catch {
-                errorMessage = "合并文章失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text("合并文章失败：\(error.localizedDescription)")
             }
         }
     }
@@ -396,7 +390,6 @@ extension NativeAppModel {
         await replaceArticleSummaries(try await store.listArticles())
         try await reloadKnowledgeGraph()
         selectedArticleRelations = try await store.articleRelations(for: primarySlug)
-        try await refreshSelectedSmartCollection()
     }
 
     private func labeledRefactorControl(_ label: String, control: NSView) -> NSView {
@@ -411,7 +404,7 @@ extension NativeAppModel {
     }
 
     private func throwMergeUnavailable() {
-        errorMessage = "没有可作为合并目标的其他文章。"
+        errorMessage = NativeLocalization.text("没有可作为合并目标的其他文章。")
     }
 
     func renameArticleProperty(from oldKey: String, to newKey: String) {
@@ -429,7 +422,6 @@ extension NativeAppModel {
                 editor.properties = editorProperties
                 await replaceArticleSummaries(try await store.listArticles())
                 try await reloadKnowledgeGraph()
-                try await refreshSelectedSmartCollection()
                 if let slug = selectedArticle?.slug {
                     selectedArticle = try await store.getArticle(slug: slug)
                 }
@@ -437,12 +429,12 @@ extension NativeAppModel {
                     updateArticleListSearch(searchText, debounce: false)
                 }
                 articlePropertyStatus = changedCount == 0
-                    ? "没有文章使用属性“\(oldKey)”"
-                    : "已在 \(changedCount) 篇文章中将“\(oldKey)”重命名为“\(newKey)”"
+                    ? NativeLocalization.text("没有文章使用属性“\(oldKey)”")
+                    : NativeLocalization.text("已在 \(changedCount) 篇文章中将“\(oldKey)”重命名为“\(newKey)”")
                 if changedCount > 0 { scheduleBackup() }
                 errorMessage = nil
             } catch {
-                errorMessage = "属性重命名失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text("属性重命名失败：\(error.localizedDescription)")
             }
         }
     }
@@ -496,28 +488,18 @@ extension NativeAppModel {
             persistArticleNavigationState()
         }
         errorMessage = nil
-        let refreshesPageViewCollection = recordsPageView
-            && selectedSmartCollection?.dependsOnPageViews == true
         loadArticleAncillaryState(
             slug: summary.slug,
             navigationGeneration: navigationGeneration,
-            workspaceGeneration: workspace,
-            refreshesPageViewCollection: false
+            workspaceGeneration: workspace
         )
-        // The reader is already visible at this point. Keep the selected Base
-        // semantically current before returning, without putting comments and
-        // backlinks back on the navigation critical path.
-        if refreshesPageViewCollection {
-            try await refreshSelectedSmartCollection()
-        }
         return true
     }
 
     func loadArticleAncillaryState(
         slug: String,
         navigationGeneration: Int,
-        workspaceGeneration: Int,
-        refreshesPageViewCollection: Bool
+        workspaceGeneration: Int
     ) {
         articleAncillaryLoadTask?.cancel()
         let activeStore = store
@@ -538,9 +520,6 @@ extension NativeAppModel {
                       self.selectedSlug == slug else { return }
                 self.selectedArticleRelations = relations
 
-                if refreshesPageViewCollection {
-                    try await self.refreshSelectedSmartCollection()
-                }
             } catch is CancellationError {
                 return
             } catch {
@@ -570,18 +549,12 @@ extension NativeAppModel {
     }
 
     func showAllArticles() {
-        selectedSmartCollectionID = nil
-        selectedSmartCollectionViewID = nil
-        clearSmartCollectionArticleSummaries()
         selectedArticleFolderPath = nil
         clearArticleFilters()
         section = .articles
     }
 
     func showArticleFolder(_ path: String) {
-        selectedSmartCollectionID = nil
-        selectedSmartCollectionViewID = nil
-        clearSmartCollectionArticleSummaries()
         selectedArticleFolderPath = path
         clearArticleFilters()
         section = .articles
@@ -599,7 +572,7 @@ extension NativeAppModel {
                 workspaceResources = try await store.listWorkspaceResources()
                 guard let resourceID = workspaceResourceID(articleSlug: summary.slug),
                       let resource = workspaceResource(id: resourceID) else {
-                    errorMessage = "无法在文件资源树中定位这篇文章。请刷新后重试。"
+                    errorMessage = NativeLocalization.text("无法在文件资源树中定位这篇文章。请刷新后重试。")
                     return
                 }
                 promptToMoveWorkspaceResources([resource])

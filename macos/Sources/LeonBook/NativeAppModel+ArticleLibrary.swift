@@ -2,84 +2,6 @@ import Foundation
 import LeonBookPublishingModule
 
 extension NativeAppModel {
-    func showSmartCollection(_ collection: NativeSmartCollection) {
-        selectedSmartCollectionID = collection.id
-        selectedSmartCollectionViewID = collection.views.first?.id
-        clearSmartCollectionArticleSummaries()
-        selectedArticleFolderPath = nil
-        clearArticleFilters()
-        section = .articles
-        Task {
-            do { try await refreshSelectedSmartCollection() }
-            catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    func saveSmartCollection(_ collection: NativeSmartCollection) async -> Bool {
-        do {
-            let saved = try await store.saveSmartCollection(collection)
-            smartCollections = try await store.listSmartCollections()
-            selectedSmartCollectionID = saved.id
-            selectedSmartCollectionViewID = saved.activeViewID ?? saved.views.first?.id
-            try await refreshSelectedSmartCollection()
-            scheduleBackup()
-            errorMessage = nil
-            return true
-        } catch {
-            errorMessage = error.localizedDescription
-            return false
-        }
-    }
-
-    func setSmartCollectionLayout(_ layout: NativeSmartCollectionLayout) {
-        guard var collection = selectedSmartCollection, collection.layout != layout else { return }
-        collection.layout = layout
-        Task { _ = await saveSmartCollection(collection) }
-    }
-
-    func setSmartCollectionGroupBy(_ field: NativeArticleGroupField) {
-        guard var collection = selectedSmartCollection, collection.groupBy != field else { return }
-        collection.groupBy = field
-        Task { _ = await saveSmartCollection(collection) }
-    }
-
-    func setSmartCollectionCalendarDateProperty(_ rawKey: String?) {
-        guard var collection = selectedSmartCollection else { return }
-        let key = rawKey.flatMap { rawValue -> String? in
-            let normalized = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            return normalized.isEmpty ? nil : normalized
-        }
-        guard collection.calendarDatePropertyKey != key else { return }
-        collection.calendarDatePropertyKey = key
-        if let key {
-            if let index = collection.columns.firstIndex(where: {
-                $0.source == .property && $0.key.caseInsensitiveCompare(key) == .orderedSame
-            }) {
-                collection.columns[index].propertyKind = .date
-            } else if collection.columns.count < 30 {
-                collection.columns.append(NativeSmartCollectionColumn(
-                    source: .property,
-                    key: key,
-                    title: key,
-                    propertyKind: .date
-                ))
-            }
-        }
-        Task { _ = await saveSmartCollection(collection) }
-    }
-
-    func selectSmartCollectionView(_ viewID: String) {
-        guard let definition = selectedSmartCollectionDefinition,
-              definition.views.contains(where: { $0.id == viewID }),
-              selectedSmartCollectionViewID != viewID else { return }
-        selectedSmartCollectionViewID = viewID
-        clearSmartCollectionArticleSummaries()
-        Task {
-            do { try await refreshSelectedSmartCollection() }
-            catch { errorMessage = error.localizedDescription }
-        }
-    }
-
     func updateArticleProperty(
         article: NativeArticleSummary,
         key: String,
@@ -98,13 +20,12 @@ extension NativeAppModel {
                     value: value
                 )
                 await replaceArticleSummaries(try await store.listArticles())
-                try await refreshSelectedSmartCollection()
                 if selectedArticle?.slug == updated.slug { selectedArticle = updated }
                 try await reloadKnowledgeGraph()
                 scheduleBackup()
                 errorMessage = nil
             } catch {
-                errorMessage = "更新 Property 失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text("更新 Property 失败：\(error.localizedDescription)")
                 try? await reload()
             }
         }
@@ -116,7 +37,7 @@ extension NativeAppModel {
         field: NativeArticleGroupField
     ) {
         guard field != .updatedMonth, field != .none else {
-            errorMessage = field == .updatedMonth ? "更新时间分组不可通过拖动修改。" : nil
+            errorMessage = field == .updatedMonth ? NativeLocalization.text("更新时间分组不可通过拖动修改。") : nil
             return
         }
         Task {
@@ -133,7 +54,7 @@ extension NativeAppModel {
                     } else if label == NativeArticleStatus.draft.label || label == NativeArticleStatus.draft.rawValue {
                         status = .draft
                     } else {
-                        throw NativeStoreError.fileSystem("不支持的文章状态：\(label)")
+                        throw NativeStoreError.fileSystem(NativeLocalization.text("不支持的文章状态：\(label)"))
                     }
                 case .category:
                     category = label == "未分类" ? "Notes" : label
@@ -186,42 +107,15 @@ extension NativeAppModel {
                     properties: stored.properties
                 ))
                 await replaceArticleSummaries(try await store.listArticles())
-                try await refreshSelectedSmartCollection()
                 if selectedArticle?.slug == updated.slug { selectedArticle = updated }
                 try await reloadKnowledgeGraph()
                 scheduleBackup()
                 errorMessage = nil
             } catch {
-                errorMessage = "移动看板卡片失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text("移动看板卡片失败：\(error.localizedDescription)")
                 try? await reload()
             }
         }
-    }
-
-    func deleteSmartCollection(_ collection: NativeSmartCollection) async {
-        do {
-            try await store.deleteSmartCollection(id: collection.id)
-            if selectedSmartCollectionID == collection.id {
-                selectedSmartCollectionID = nil
-                selectedSmartCollectionViewID = nil
-                clearSmartCollectionArticleSummaries()
-            }
-            smartCollections = try await store.listSmartCollections()
-            scheduleBackup()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func refreshSelectedSmartCollection() async throws {
-        guard let collection = selectedSmartCollection else {
-            clearSmartCollectionArticleSummaries()
-            return
-        }
-        let summaries = try await store.listArticles(in: collection)
-        guard collection == selectedSmartCollection else { return }
-        await replaceSmartCollectionArticleSummaries(summaries)
     }
 
     func isBookmarked(_ target: NativeBookmarkTarget) -> Bool {
@@ -288,7 +182,7 @@ extension NativeAppModel {
             selectSlug(slug)
         case let .heading(slug, heading, anchorID):
             guard let summary = articleSummary(for: slug) else {
-                errorMessage = "收藏的文章已不存在。"
+                errorMessage = NativeLocalization.text("收藏的文章已不存在。")
                 return
             }
             Task {

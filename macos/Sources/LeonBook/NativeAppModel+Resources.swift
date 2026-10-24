@@ -47,22 +47,22 @@ extension NativeAppModel {
             return
         }
         guard NativeArticleDirectoryPolicy.depth(of: parentPath) < NativeArticleDirectoryPolicy.maximumDepth else {
-            errorMessage = "目录最多支持 5 级。"
+            errorMessage = NativeLocalization.text("目录最多支持 5 级。")
             return
         }
         let field = NSTextField()
-        field.placeholderString = "文件夹名称"
+        field.placeholderString = NativeLocalization.text("文件夹名称")
         field.frame = NSRect(x: 0, y: 0, width: 340, height: 24)
         let alert = NSAlert()
-        alert.messageText = parentPath.isEmpty ? "新建文件夹" : "在“\(parentPath)”中新建文件夹"
-        alert.addButton(withTitle: "新建")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = parentPath.isEmpty ? NativeLocalization.text("新建文件夹") : NativeLocalization.text("在“\(parentPath)”中新建文件夹")
+        alert.addButton(withTitle: NativeLocalization.text("新建"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.accessoryView = field
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         guard !name.contains("/"), !name.contains("\\") else {
-            errorMessage = "文件夹名称不能包含路径分隔符。"
+            errorMessage = NativeLocalization.text("文件夹名称不能包含路径分隔符。")
             return
         }
         let destination = joinedWorkspacePath(parentPath, name)
@@ -86,21 +86,21 @@ extension NativeAppModel {
             return
         }
         let field = NSTextField(string: resource.name)
-        field.placeholderString = resource.kind == .folder ? "文件夹名称" : "文件名"
+        field.placeholderString = resource.kind == .folder ? NativeLocalization.text("文件夹名称") : NativeLocalization.text("文件名")
         field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
         let alert = NSAlert()
-        alert.messageText = resource.kind == .folder ? "重命名文件夹" : "重命名文件"
+        alert.messageText = resource.kind == .folder ? NativeLocalization.text("重命名文件夹") : NativeLocalization.text("重命名文件")
         alert.informativeText = resource.kind == .article
-            ? "只修改 Markdown 文件名；文章标题与稳定 slug 保持不变，路径双链会自动更新。"
-            : "输入新名称，不需要填写完整路径。"
-        alert.addButton(withTitle: "重命名")
-        alert.addButton(withTitle: "取消")
+            ? NativeLocalization.text("只修改 Markdown 文件名；文章标题与稳定 slug 保持不变，路径双链会自动更新。")
+            : NativeLocalization.text("输入新名称，不需要填写完整路径。")
+        alert.addButton(withTitle: NativeLocalization.text("重命名"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.accessoryView = field
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         var nextName = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextName.isEmpty else { return }
         guard !nextName.contains("/"), !nextName.contains("\\") else {
-            errorMessage = "名称不能包含路径分隔符；如需移动，请使用“移动…”。"
+            errorMessage = NativeLocalization.text("名称不能包含路径分隔符；如需移动，请使用“移动…”。")
             return
         }
         let sourceExtension = URL(fileURLWithPath: sourcePath).pathExtension
@@ -121,7 +121,7 @@ extension NativeAppModel {
     func promptToMoveWorkspaceResources(_ resources: [NativeWorkspaceResourceNode]) {
         let eligible = topLevelMutableWorkspaceResources(resources)
         guard !eligible.isEmpty else {
-            errorMessage = "所选项目没有可移动的 Markdown 源文件。应用管理的媒体会继续跟随所属文章。"
+            errorMessage = NativeLocalization.text("所选项目没有可移动的 Markdown 源文件。应用管理的媒体会继续跟随所属文章。")
             return
         }
         guard !isMarkdownSourceReadOnly else {
@@ -143,10 +143,10 @@ extension NativeAppModel {
         popup.addItems(withTitles: candidates.map { $0.isEmpty ? "资料库根目录" : $0 })
         popup.frame = NSRect(x: 0, y: 0, width: 380, height: 26)
         let alert = NSAlert()
-        alert.messageText = eligible.count == 1 ? "移动“\(eligible[0].name)”" : "移动 \(eligible.count) 个项目"
-        alert.informativeText = "选择目标文件夹；文件名、文章 slug、评论和版本历史保持不变。"
-        alert.addButton(withTitle: "移动")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = eligible.count == 1 ? NativeLocalization.text("移动“\(eligible[0].name)”") : NativeLocalization.text("移动 \(eligible.count) 个项目")
+        alert.informativeText = NativeLocalization.text("选择目标文件夹；文件名、文章 slug、评论和版本历史保持不变。")
+        alert.addButton(withTitle: NativeLocalization.text("移动"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.accessoryView = popup
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         moveWorkspaceResources(eligible, toFolder: candidates[popup.indexOfSelectedItem])
@@ -179,13 +179,13 @@ extension NativeAppModel {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = eligible.count == 1
-            ? "将“\(eligible[0].name)”移到废纸篓？"
-            : "将 \(eligible.count) 个项目移到废纸篓？"
+            ? NativeLocalization.text("将“\(eligible[0].name)”移到废纸篓？")
+            : NativeLocalization.text("将 \(eligible.count) 个项目移到废纸篓？")
         alert.informativeText = articleCount > 0
-            ? "其中包含 \(articleCount) 篇文章。文章会同时进入 LeonBook 回收站；普通附件和文件夹可从 macOS 废纸篓恢复。"
-            : "普通附件和文件夹可从 macOS 废纸篓恢复。"
-        alert.addButton(withTitle: "移到废纸篓")
-        alert.addButton(withTitle: "取消")
+            ? NativeLocalization.text("其中包含 \(articleCount) 篇文章。文章会同时进入 LeonBook 回收站；普通附件和文件夹可从 macOS 废纸篓恢复。")
+            : NativeLocalization.text("普通附件和文件夹可从 macOS 废纸篓恢复。")
+        alert.addButton(withTitle: NativeLocalization.text("移到废纸篓"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
@@ -247,7 +247,7 @@ extension NativeAppModel {
         if let pendingNewArticleFolderPath,
            !workspaceFolderPaths.contains(pendingNewArticleFolderPath) {
             self.pendingNewArticleFolderPath = NativeArticleDirectoryPolicy.defaultFolderPath
-            if editor.isNew { editorAutosaveStatus = "目标目录已移除，将在“未分类”目录保存" }
+            if editor.isNew { editorAutosaveStatus = NativeLocalization.text("目标目录已移除，将在“未分类”目录保存") }
         }
         articleTabs.removeAll(where: { !liveSlugs.contains($0.slug) })
         recentArticleSlugs.removeAll(where: { !liveSlugs.contains($0) })

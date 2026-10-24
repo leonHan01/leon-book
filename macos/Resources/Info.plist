@@ -30,6 +30,29 @@
     </array>
     <key>CFBundleIconFile</key>
     <string>Notes.icns</string>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.leonbook.dashboard-module</string>
+            <key>UTTypeDescription</key>
+            <string>LeonBook Homepage Module</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.leon-book.photos</string>
+            <key>UTTypeDescription</key>
+            <string>LeonBook Photo Selection</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

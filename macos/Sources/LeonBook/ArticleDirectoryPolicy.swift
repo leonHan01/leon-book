@@ -12,10 +12,10 @@ enum NativeArticleDirectoryPolicy {
     static func validatedFolderPath(_ path: String, allowsRoot: Bool = false) throws -> String {
         let path = try MarkdownArticleSource.validatedRelativeDirectoryPath(path)
         guard allowsRoot || !path.isEmpty else {
-            throw NativeStoreError.fileSystem("文章必须放在目录下，请选择所属目录。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("文章必须放在目录下，请选择所属目录。"))
         }
         guard depth(of: path) <= maximumDepth else {
-            throw NativeStoreError.fileSystem("目录最多支持 5 级，无法使用“\(path)”。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("目录最多支持 5 级，无法使用“\(path)”。"))
         }
         return path
     }

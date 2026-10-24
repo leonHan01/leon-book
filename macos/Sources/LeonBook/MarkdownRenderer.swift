@@ -358,6 +358,8 @@ enum MarkdownTableAlignment {
 }
 
 private struct MarkdownBlockView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let block: MarkdownBlock
     let articleLinks: NativeArticleLinkCollection
     let onOpenArticle: (NativeArticleLinkDestination) -> Void
@@ -436,7 +438,7 @@ private struct MarkdownBlockView: View {
                     }
                 }
                 .padding(14)
-                .background(typography.theme.codeBackground(system: colorScheme), in: RoundedRectangle(cornerRadius: 8))
+                .background(typography.theme.codeBackground(system: colorScheme, palette: appPalette), in: RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(Color.secondary.opacity(0.2))
@@ -566,7 +568,7 @@ private struct MarkdownCalloutView: View {
     }
 
     private var label: some View {
-        Label(callout.title, systemImage: icon)
+        Label(callout.title, nativeIcon: icon)
             .font(.headline)
             .foregroundStyle(tint)
     }
@@ -597,7 +599,7 @@ private struct MarkdownListView: View {
                             Button {
                                 onToggleTask?(item.sourceLine, !taskState)
                             } label: {
-                                Image(systemName: taskState ? "checkmark.square.fill" : "square")
+                                NativeIcon.image(taskState ? "checkmark.square.fill" : "square")
                                     .foregroundStyle(taskState ? Color.accentColor : .secondary)
                             }
                             .buttonStyle(.plain)

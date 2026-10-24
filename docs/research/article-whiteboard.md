@@ -2,6 +2,8 @@
 
 核查日期：2026-10-23（Asia/Shanghai）。范围：官方文档、官方仓库、许可证和发布记录；本次仅调研与代码阅读，没有安装依赖、启动应用或游戏，也没有验证 WKWebView 实机性能。下文的集成结构是项目建议，不代表已经实现。
 
+后续接入进展：文章内离线 Excalidraw 已实现，并通过隐藏 WKWebView 的字体、图片导出与保存重开检查。本文保留调研时的判断；实际用法、构建与存储约定见 [画板接入说明](../../macos/Whiteboard/README.md)。
+
 ## 结论
 
 **优先选择 Excalidraw，先做“文章静态预览 + 点击进入独立画板编辑器 + 可再次编辑”的单人离线版本。** 它提供完整画板交互、React 嵌入组件、JSON 源数据和 PNG/SVG 导出，核心与 npm 包采用 MIT 许可证。SwiftUI 应用可以在构建阶段把组件及资源打包为静态网页，再由 WKWebView 加载；用户机器不需要安装 Node。最后一点是根据其浏览器组件形态作出的工程判断，仍须验证本项目的资源加载方式。[Excalidraw 安装](https://docs.excalidraw.com/docs/@excalidraw/excalidraw/installation)、[集成](https://docs.excalidraw.com/docs/@excalidraw/excalidraw/integration)、[许可证](https://github.com/excalidraw/excalidraw/blob/master/LICENSE)

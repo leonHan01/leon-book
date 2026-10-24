@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct SmartCollectionBoardView: View {
+struct ArticleLibraryBoardView: View {
     @ObservedObject var model: NativeAppModel
     let articles: [NativeArticleSummary]
     let groupBy: NativeArticleGroupField
@@ -38,12 +38,12 @@ struct SmartCollectionBoardView: View {
                         } label: {
                             Label(
                                 LocalizedStringKey(field.label),
-                                systemImage: effectiveGroupBy == field ? "checkmark" : "rectangle.3.group"
+                                nativeIcon: effectiveGroupBy == field ? "checkmark" : "rectangle.3.group"
                             )
                         }
                     }
                 } label: {
-                    Label(LocalizedStringKey(effectiveGroupBy.label), systemImage: "rectangle.3.group")
+                    Label(LocalizedStringKey(effectiveGroupBy.label), nativeIcon: "rectangle.3.group")
                 }
                 Text("分组；拖动卡片即可修改对应字段。")
                     .foregroundStyle(.secondary)
@@ -85,7 +85,7 @@ private struct BoardLaneColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(lane.label).font(.headline)
+                Text(groupBy == .status ? NativeLocalization.string(lane.label, language: NativeLocalization.currentLanguage) : lane.label).font(.headline)
                 Text("\(lane.articles.count)")
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 7)
@@ -95,11 +95,11 @@ private struct BoardLaneColumn: View {
                 Button {
                     model.newArticle(inBoardGroup: lane.label, field: groupBy)
                 } label: {
-                    Image(systemName: "plus")
+                    NativeIcon.image("plus")
                 }
                 .buttonStyle(.plain)
                 .disabled(model.isMarkdownSourceReadOnly)
-                .help("在“\(lane.label)”中新建页面")
+                .help(NativeLocalization.text("在“\(lane.label)”中新建页面"))
             }
 
             LazyVStack(spacing: 10) {
@@ -133,6 +133,8 @@ private struct BoardLaneColumn: View {
 }
 
 private struct BoardArticleCard: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     let article: NativeArticleSummary
 
@@ -150,7 +152,7 @@ private struct BoardArticleCard: View {
                         .lineLimit(2)
                 }
                 HStack {
-                    Label(article.category, systemImage: "folder")
+                    Label(article.category, nativeIcon: "folder")
                     Spacer()
                     Text(article.updatedAt.nativeDateLabel)
                 }
@@ -159,26 +161,31 @@ private struct BoardArticleCard: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.14)) }
         }
         .buttonStyle(.plain)
     }
 }
 
-struct SmartCollectionCalendarView: View {
+struct ArticleLibraryCalendarView: View {
+    @Environment(\.locale) private var locale
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     let articles: [NativeArticleSummary]
-    let collection: NativeSmartCollection?
     @AppStorage("articleLibraryCalendarDateProperty") private var allArticlesDatePropertyKey = ""
     @State private var displayedMonth = Calendar.current.date(
         from: Calendar.current.dateComponents([.year, .month], from: Date())
     ) ?? Date()
 
-    private let calendar = Calendar.current
+    private var calendar: Calendar {
+        var value = Calendar.current
+        value.locale = locale
+        return value
+    }
 
     private var datePropertyKey: String? {
-        if let collection { return collection.calendarDatePropertyKey }
         let value = allArticlesDatePropertyKey.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : value
     }
@@ -190,9 +197,6 @@ struct SmartCollectionCalendarView: View {
                   !keys.contains(where: { $0.caseInsensitiveCompare(key) == .orderedSame }) else { return }
             keys.append(key)
         }
-        collection?.columns
-            .filter { $0.source == .property && $0.propertyKind == .date }
-            .forEach { append($0.key) }
         for article in articles {
             for (key, value) in article.properties where value.kind == .date { append(key) }
         }
@@ -205,8 +209,14 @@ struct SmartCollectionCalendarView: View {
         return articles.filter { articleDate(for: $0) == nil }
     }
 
+    private var weekdaySymbols: [String] {
+        let symbols = calendar.veryShortWeekdaySymbols
+        let start = calendar.firstWeekday - 1
+        return Array(symbols[start...] + symbols[..<start])
+    }
+
     private var monthTitle: String {
-        displayedMonth.formatted(.dateTime.year().month(.wide))
+        displayedMonth.formatted(.dateTime.year().month(.wide).locale(locale))
     }
 
     private var days: [CalendarDay] {
@@ -232,27 +242,27 @@ struct SmartCollectionCalendarView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
+                    Button { shiftMonth(-1) } label: { NativeIcon.image("chevron.left") }
                     Button("今天") {
                         displayedMonth = calendar.date(
                             from: calendar.dateComponents([.year, .month], from: Date())
                         ) ?? Date()
                     }
-                    Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
+                    Button { shiftMonth(1) } label: { NativeIcon.image("chevron.right") }
                     Text(monthTitle).font(.title3.weight(.semibold))
                     Spacer()
                     Menu {
                         Button {
                             setDateProperty(nil)
                         } label: {
-                            Label("更新时间", systemImage: datePropertyKey == nil ? "checkmark" : "clock")
+                            Label("更新时间", nativeIcon: datePropertyKey == nil ? "checkmark" : "clock")
                         }
                         if !availableDatePropertyKeys.isEmpty { Divider() }
                         ForEach(availableDatePropertyKeys, id: \.self) { key in
                             Button {
                                 setDateProperty(key)
                             } label: {
-                                Label(key, systemImage: datePropertyKey == key ? "checkmark" : "calendar")
+                                Label(key, nativeIcon: datePropertyKey == key ? "checkmark" : "calendar")
                             }
                         }
                     } label: {
@@ -263,7 +273,7 @@ struct SmartCollectionCalendarView: View {
                                 Text("更新时间")
                             }
                         } icon: {
-                            Image(systemName: "calendar.badge.clock")
+                            NativeIcon.image("calendar.badge.clock")
                         }
                     }
                     .help("选择日历使用的日期属性")
@@ -271,7 +281,7 @@ struct SmartCollectionCalendarView: View {
 
                 if datePropertyKey != nil {
                     HStack(spacing: 8) {
-                        Label("未排期 \(unscheduledArticles.count)", systemImage: "tray")
+                        Label(NativeLocalization.text("未排期 \(unscheduledArticles.count)"), nativeIcon: "tray", iconSize: 12)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         ScrollView(.horizontal) {
@@ -309,7 +319,7 @@ struct SmartCollectionCalendarView: View {
                 }
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 7), spacing: 8) {
-                    ForEach(calendar.veryShortWeekdaySymbols, id: \.self) { weekday in
+                    ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, weekday in
                         Text(weekday)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
@@ -319,7 +329,7 @@ struct SmartCollectionCalendarView: View {
                     ForEach(days) { day in
                         VStack(alignment: .leading, spacing: 5) {
                             HStack {
-                                Text(day.date.formatted(.dateTime.day()))
+                                Text(day.date.formatted(.dateTime.day().locale(locale)))
                                     .font(.caption.weight(calendar.isDateInToday(day.date) ? .bold : .regular))
                                     .foregroundStyle(day.isInDisplayedMonth ? .primary : .tertiary)
                                 Spacer()
@@ -329,7 +339,7 @@ struct SmartCollectionCalendarView: View {
                                         propertyKey: datePropertyKey
                                     )
                                 } label: {
-                                    Image(systemName: "plus")
+                                    NativeIcon.image("plus")
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(model.isMarkdownSourceReadOnly)
@@ -347,7 +357,7 @@ struct SmartCollectionCalendarView: View {
                                     .draggable(article.slug)
                             }
                             if day.articles.count > 4 {
-                                Text("另有 \(day.articles.count - 4) 篇")
+                                Text(NativeLocalization.text("另有 \(day.articles.count - 4) 篇"))
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -356,7 +366,7 @@ struct SmartCollectionCalendarView: View {
                         .padding(7)
                         .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
                         .background(
-                            day.isInDisplayedMonth ? NativeTheme.surface : Color.secondary.opacity(0.025),
+                            day.isInDisplayedMonth ? appPalette.surface : Color.secondary.opacity(0.025),
                             in: RoundedRectangle(cornerRadius: 9)
                         )
                         .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(Color.secondary.opacity(0.12)) }
@@ -392,11 +402,7 @@ struct SmartCollectionCalendarView: View {
     }
 
     private func setDateProperty(_ key: String?) {
-        if collection == nil {
-            allArticlesDatePropertyKey = key ?? ""
-        } else {
-            model.setSmartCollectionCalendarDateProperty(key)
-        }
+        allArticlesDatePropertyKey = key ?? ""
     }
 
     private func shiftMonth(_ amount: Int) {

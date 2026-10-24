@@ -20,9 +20,11 @@ enum NativeMarkdownLiveStyler {
         _ appearance: NativeBodyEditorAppearance,
         typography: NativeReadingTypography,
         to textView: NSTextView,
-        editedRange: NSRange?
+        editedRange: NSRange?,
+        palette: NativeAppPalette? = nil
     ) {
         guard !textView.hasMarkedText(), let storage = textView.textStorage else { return }
+        let palette = palette ?? NativeTheme.current
         let targetRange = stylingRange(in: storage.string, editedRange: editedRange)
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = typography.lineSpacing
@@ -36,7 +38,7 @@ enum NativeMarkdownLiveStyler {
         storage.beginEditing()
         storage.setAttributes(baseAttributes, range: targetRange)
         textView.typingAttributes = baseAttributes
-        textView.insertionPointColor = .controlAccentColor
+        textView.insertionPointColor = palette.nsColor(.accent)
 
         guard appearance == .livePreview, storage.length > 0 else {
             storage.endEditing()
@@ -50,7 +52,7 @@ enum NativeMarkdownLiveStyler {
 
         apply(inlineCode, group: 1, to: storage, source: source, range: targetRange, attributes: [
             .font: typography.codeFont.nsFont(size: max(11, typography.fontSize - 2)),
-            .backgroundColor: NSColor(NativeTheme.surfaceSecondary),
+            .backgroundColor: NSColor(palette.surfaceSecondary),
         ])
         apply(strongAsterisk, group: 1, to: storage, source: source, range: targetRange, attributes: [
             .font: typography.bodyFont.nsFont(size: typography.fontSize, weight: .bold),
@@ -65,27 +67,27 @@ enum NativeMarkdownLiveStyler {
             ),
         ])
         apply(wikiLink, group: 1, to: storage, source: source, range: targetRange, attributes: [
-            .foregroundColor: NSColor.controlAccentColor,
+            .foregroundColor: palette.nsColor(.accent),
             .underlineStyle: NSUnderlineStyle.single.rawValue,
         ])
         apply(markdownLink, group: 1, to: storage, source: source, range: targetRange, attributes: [
-            .foregroundColor: NSColor(NativeTheme.accent),
+            .foregroundColor: NSColor(palette.accent),
             .underlineStyle: NSUnderlineStyle.single.rawValue,
         ])
         apply(blockQuote, group: 0, to: storage, source: source, range: targetRange, attributes: [
             .foregroundColor: NSColor.secondaryLabelColor,
         ])
         apply(blockQuote, group: 1, to: storage, source: source, range: targetRange, attributes: [
-            .foregroundColor: NSColor.controlAccentColor,
+            .foregroundColor: palette.nsColor(.accent),
             .font: typography.bodyFont.nsFont(size: typography.fontSize, weight: .semibold),
         ])
         apply(listMarker, group: 1, to: storage, source: source, range: targetRange, attributes: [
-            .foregroundColor: NSColor.controlAccentColor,
+            .foregroundColor: palette.nsColor(.accent),
             .font: typography.bodyFont.nsFont(size: typography.fontSize, weight: .semibold),
         ])
         apply(fencedCode, group: 0, to: storage, source: source, range: targetRange, attributes: [
             .font: typography.codeFont.nsFont(size: max(11, typography.fontSize - 3)),
-            .backgroundColor: NSColor(NativeTheme.surfaceSecondary),
+            .backgroundColor: NSColor(palette.surfaceSecondary),
         ])
 
         for match in heading.matches(in: source, range: targetRange) {

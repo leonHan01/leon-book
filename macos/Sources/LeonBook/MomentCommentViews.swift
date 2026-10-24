@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct MomentCommentsView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     let moment: NativeMoment
     let store: LocalBlogStore
@@ -22,7 +24,7 @@ struct MomentCommentsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Label("微博评论", systemImage: "text.bubble")
+                Label("微博评论", nativeIcon: "text.bubble")
                     .font(.headline)
                 Text("\(comments.count)")
                     .foregroundStyle(.secondary)
@@ -67,7 +69,7 @@ struct MomentCommentsView: View {
             composer.padding(20)
         }
         .frame(width: 580, height: 680)
-        .background(NativeTheme.surface)
+        .background(appPalette.surface)
         .interactiveDismissDisabled(isMutating)
         .task {
             await loadComments()
@@ -92,8 +94,7 @@ struct MomentCommentsView: View {
             ProgressView("正在加载评论…")
         } else if comments.isEmpty {
             VStack(spacing: 10) {
-                Image(systemName: "text.bubble")
-                    .font(.system(size: 28))
+                NativeIcon.image("text.bubble", size: 32)
                     .foregroundStyle(.secondary)
                 Text("还没有评论").font(.headline)
                 Text("写下想法，开始这条微博的讨论。")
@@ -127,7 +128,7 @@ struct MomentCommentsView: View {
         VStack(alignment: .leading, spacing: 10) {
             if let replyingTo {
                 HStack {
-                    Label("回复 \(replyingTo.authorName)", systemImage: "arrowshape.turn.up.left")
+                    Label(NativeLocalization.text("回复 \(replyingTo.authorName)"), nativeIcon: "arrowshape.turn.up.left", iconSize: 12)
                         .font(.caption.weight(.medium))
                     Spacer()
                     Button("取消回复") { self.replyingTo = nil }
@@ -144,7 +145,7 @@ struct MomentCommentsView: View {
                 .frame(height: 86)
                 .padding(6)
                 .scrollContentBackground(.hidden)
-                .background(NativeTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
+                .background(appPalette.canvas, in: RoundedRectangle(cornerRadius: 8))
                 .focused($isComposerFocused)
                 .accessibilityLabel("评论内容")
                 .onChange(of: text) { value in
@@ -218,6 +219,8 @@ struct MomentCommentsView: View {
 }
 
 private struct MomentCommentRow: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let comment: NativeMomentComment
     let parent: NativeMomentComment?
     let canDelete: Bool
@@ -238,7 +241,7 @@ private struct MomentCommentRow: View {
                     .foregroundStyle(.secondary)
                 if canDelete {
                     Button(role: .destructive, action: onDelete) {
-                        Image(systemName: "trash")
+                        NativeIcon.image("trash")
                     }
                     .buttonStyle(.plain)
                     .help("删除评论")
@@ -247,7 +250,7 @@ private struct MomentCommentRow: View {
             }
             if let parent {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("回复 \(parent.authorName)", systemImage: "arrowshape.turn.up.left")
+                    Label(NativeLocalization.text("回复 \(parent.authorName)"), nativeIcon: "arrowshape.turn.up.left")
                     Text(parent.text).lineLimit(2)
                 }
                 .font(.caption)
@@ -263,6 +266,6 @@ private struct MomentCommentRow: View {
                 .foregroundStyle(.tint)
         }
         .padding(12)
-        .background(NativeTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
+        .background(appPalette.canvas, in: RoundedRectangle(cornerRadius: 10))
     }
 }

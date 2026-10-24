@@ -1,6 +1,10 @@
 import SwiftUI
 
 public struct ContentView: View {
+    @ObservedObject private var appearancePreferences = NativeAppearancePreferences.shared
+    @Environment(\.colorScheme) private var systemColorScheme
+    private var appPalette: NativeAppPalette { appearancePreferences.palette(system: systemColorScheme) }
+
     @ObservedObject var model: NativeAppModel
     @StateObject private var workspaceLayout: NativeWorkspaceLayoutState
     @StateObject private var readingPreferences: NativeReadingPreferences
@@ -18,60 +22,24 @@ public struct ContentView: View {
         HStack(spacing: 0) {
             NativeWorkspaceRail(model: model, navigation: model.navigation)
 
-            NavigationSplitView {
-                NativeSidebar(model: model, navigation: model.navigation, isPresentingNewUser: $isPresentingNewUser)
-                    .navigationSplitViewColumnWidth(
-                        min: 210,
-                        ideal: CGFloat(workspaceLayout.navigationSidebarWidth),
-                        max: 380
-                    )
-            } detail: {
-                NativeNavigationDetail(
-                    model: model,
-                    navigation: model.navigation,
-                    workspaceLayout: workspaceLayout,
-                    readingPreferences: readingPreferences,
-                    pageStateCache: pageStateCache
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(NativeTheme.canvas)
-            }
-            .navigationSplitViewStyle(.balanced)
+            NativeNavigationWorkspace(
+                model: model,
+                navigation: model.navigation,
+                workspaceLayout: workspaceLayout,
+                readingPreferences: readingPreferences,
+                pageStateCache: pageStateCache,
+                isPresentingNewUser: $isPresentingNewUser
+            )
         }
         .frame(minWidth: 1_080, minHeight: 680)
-        .toolbarBackground(NativeTheme.sidebar, for: .windowToolbar)
+        .toolbarBackground(appPalette.rail, for: .windowToolbar)
         .toolbarBackground(.visible, for: .windowToolbar)
         .disabled(model.isRestoringBackup)
         .environment(\.nativeDeclarativeExtensions, model.declarativeExtensions)
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                NativeWorkspaceTitle(model: model, navigation: model.navigation)
-            }
-            ToolbarItem {
-                Button { model.executeCommand(.newArticle) } label: {
-                    Label("新文章", systemImage: "square.and.pencil")
-                }
-                .help("新文章")
-            }
-            ToolbarItem {
-                Menu {
-                    Button("搜索", systemImage: "magnifyingglass") { model.executeCommand(.globalSearch) }
-                    Button("快速打开", systemImage: "doc.text.magnifyingglass") { model.executeCommand(.quickOpen) }
-                    Button("命令面板", systemImage: "command") { model.executeCommand(.commandPalette) }
-                    Divider()
-                    Button("刷新", systemImage: "arrow.clockwise") { model.executeCommand(.reload) }
-                        .disabled(model.isLoading)
-                    Button("设置", systemImage: "gearshape") { model.section = .settings }
-                } label: {
-                    Label("工作区操作", systemImage: "ellipsis")
-                }
-                .help("工作区操作")
-            }
-        }
         .overlay(alignment: .bottom) {
             if let error = model.errorMessage {
                 HStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill")
+                    NativeIcon.image("exclamationmark.triangle.fill")
                     Text(error).lineLimit(2)
                     Spacer()
                     if model.needsWorkDirectorySelection {
@@ -136,7 +104,7 @@ public struct ContentView: View {
                 }
             } catch {
                 guard model.currentUser.id == userID else { return }
-                model.errorMessage = ".leonbook 布局同步失败：\(error.localizedDescription)"
+                model.errorMessage = NativeLocalization.text(".leonbook 布局同步失败：\(error.localizedDescription)")
             }
         }
     }
@@ -152,7 +120,7 @@ public struct ContentView: View {
                 try await activeStore.writePortableUIState(state)
             } catch {
                 guard model.currentUser.id == userID else { return }
-                model.errorMessage = ".leonbook 布局写入失败：\(error.localizedDescription)"
+                model.errorMessage = NativeLocalization.text(".leonbook 布局写入失败：\(error.localizedDescription)")
             }
         }
     }
@@ -166,6 +134,8 @@ public struct ContentView: View {
 }
 
 private struct ArticleSourceConflictSheet: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     let conflict: NativeArticleSourceConflict
 
@@ -173,7 +143,7 @@ private struct ArticleSourceConflictSheet: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Markdown 修改冲突").font(.title2.weight(.semibold))
-                Text("外部文件 \(conflict.external.sourceRelativePath) 在编辑期间发生变化。比较后再决定，不会自动覆盖任何版本。")
+                Text(NativeLocalization.text("外部文件 \(conflict.external.sourceRelativePath) 在编辑期间发生变化。比较后再决定，不会自动覆盖任何版本。"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -217,7 +187,7 @@ private struct ArticleSourceConflictSheet: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .padding(12)
             }
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 8))
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -233,13 +203,15 @@ struct SidebarNavigationButtonStyle: ButtonStyle {
 }
 
 private struct SidebarNavigationButtonBody: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let configuration: ButtonStyle.Configuration
     let isSelected: Bool
     @State private var isHovered = false
 
     var body: some View {
         configuration.label
-            .foregroundStyle(isSelected ? NativeTheme.deepBlue : NativeTheme.textPrimary)
+            .foregroundStyle(isSelected ? appPalette.deepBlue : appPalette.textPrimary)
             .padding(.horizontal, 7)
             .padding(.vertical, 5)
             .background(backgroundColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -251,12 +223,62 @@ private struct SidebarNavigationButtonBody: View {
 
     private var backgroundColor: Color {
         if configuration.isPressed {
-            return NativeTheme.selection
+            return appPalette.selection
         }
         if isSelected {
-            return NativeTheme.selection
+            return appPalette.selection
         }
-        return isHovered ? NativeTheme.surfaceSecondary : .clear
+        return isHovered ? appPalette.surfaceSecondary : .clear
+    }
+}
+
+private struct NativeNavigationWorkspace: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
+    let model: NativeAppModel
+    @ObservedObject var navigation: NativeNavigationState
+    @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
+    @ObservedObject var readingPreferences: NativeReadingPreferences
+    @ObservedObject var pageStateCache: NativeNavigationPageStateCache
+    @Binding var isPresentingNewUser: Bool
+
+    var body: some View {
+        if navigation.section.hasNavigationSidebar {
+            NavigationSplitView {
+                NativeSidebar(model: model, navigation: model.navigation, isPresentingNewUser: $isPresentingNewUser)
+                    .navigationSplitViewColumnWidth(
+                        min: 210,
+                        ideal: CGFloat(workspaceLayout.navigationSidebarWidth),
+                        max: 380
+                    )
+            } detail: {
+                detail
+            }
+            .navigationSplitViewStyle(.balanced)
+        } else {
+            VStack(spacing: 0) {
+                NativeWorkspaceHeader(
+                    model: model,
+                    isPresentingNewUser: $isPresentingNewUser,
+                    showsWorkspaceStatus: true
+                )
+                .background(appPalette.sidebar)
+                Divider()
+                detail
+            }
+        }
+    }
+
+    private var detail: some View {
+        NativeNavigationDetail(
+            model: model,
+            navigation: navigation,
+            workspaceLayout: workspaceLayout,
+            readingPreferences: readingPreferences,
+            pageStateCache: pageStateCache
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(appPalette.canvas)
     }
 }
 
@@ -269,10 +291,12 @@ private struct NativeNavigationDetail: View {
 
     var body: some View {
         switch navigation.section {
-        case .dashboard: DashboardView(model: model)
+        case .dashboard: DashboardView(model: model).id(model.workspaceGeneration)
         case .articles: ArticleListView(model: model)
         case .graph: ArticleGraphView(model: model, pageState: pageStateCache.graph)
         case .canvas: InfiniteCanvasView(model: model)
+        case .photos: NativePhotoLibraryView(model: model).id(model.workspaceGeneration)
+        case .mediaLibrary: NativeMediaLibraryView(model: model).id(model.workspaceGeneration)
         case .moments:
             MomentFeedView(
                 model: model,
@@ -341,104 +365,9 @@ private struct NewUserSheet: View {
     }
 }
 
-private struct DashboardView: View {
-    @ObservedObject var model: NativeAppModel
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("概览")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(NativeTheme.textSecondary)
-                    Text("你的本地写作空间")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(NativeTheme.textPrimary)
-                }
-
-                newArticleCard
-
-                HStack(spacing: 0) {
-                    StatCard(title: "全部文章", value: "\(model.articles.count)")
-                    Divider().frame(height: 32)
-                    StatCard(title: "已发布", value: "\(model.publishedArticleCount)")
-                    Divider().frame(height: 32)
-                    StatCard(title: "草稿", value: "\(model.draftArticleCount)")
-                    Divider().frame(height: 32)
-                    StatCard(title: "微博", value: "\(model.totalMomentCount)")
-                }
-
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Text("最近编辑")
-                            .font(.system(size: 14, weight: .semibold))
-                        Spacer()
-                        Button { model.showAllArticles() } label: {
-                            HStack(spacing: 5) {
-                                Text("查看全部")
-                                Image(systemName: "arrow.right").font(.system(size: 10))
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(NativeTheme.textSecondary)
-                    }
-
-                    if model.articles.isEmpty {
-                        EmptyState(title: "还没有文章", message: "从一篇新笔记开始。", actionTitle: "写第一篇") { model.newArticle() }
-                    } else {
-                        LazyVStack(spacing: 2) {
-                            ForEach(Array(model.articles.prefix(5))) { article in
-                                ArticleRow(article: article) { model.selectSlug(article.slug) }
-                            }
-                        }
-                    }
-                }
-
-                Divider()
-                ActivityHeatmapView(activity: model.activity)
-            }
-            .frame(maxWidth: 820, alignment: .leading)
-            .padding(.horizontal, 40)
-            .padding(.vertical, 48)
-            .frame(maxWidth: .infinity, alignment: .top)
-        }
-        .background(NativeTheme.canvas)
-    }
-
-    private var newArticleCard: some View {
-        Button { model.executeCommand(.newArticle) } label: {
-            VStack(alignment: .leading, spacing: 28) {
-                Text("从一篇新笔记开始。")
-                    .font(.system(size: 15))
-                    .foregroundStyle(NativeTheme.textSecondary)
-                HStack {
-                    Label("新文章", systemImage: "plus")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(NativeTheme.textPrimary)
-                    Spacer()
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(NativeTheme.buttonBlue, in: Circle())
-                }
-            }
-            .padding(20)
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 18))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18).strokeBorder(NativeTheme.border)
-            }
-            .shadow(color: NativeTheme.shadow.opacity(0.025), radius: 12, y: 4)
-            .contentShape(RoundedRectangle(cornerRadius: 18))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("新文章")
-    }
-}
-
-private struct ActivityHeatmapView: View {
+struct ActivityHeatmapView: View {
     let activity: [NativeActivityDay]
+    var showsTitle = true
 
     private let cellSize: CGFloat = 12
     private let cellSpacing: CGFloat = 3
@@ -472,14 +401,16 @@ private struct ActivityHeatmapView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("创作活动")
-                        .font(.system(size: 14, weight: .semibold))
+                    if showsTitle {
+                        Text("创作活动")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
                     Text("发布文章、编辑文章或上传图片时留下记录")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text("过去一年 \(total) 次活动")
+                Text(NativeLocalization.text("过去一年 \(total) 次活动"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -495,8 +426,8 @@ private struct ActivityHeatmapView: View {
                                         .fill(color(for: day.count))
                                         .frame(width: cellSize, height: cellSize)
                                         .opacity(day.tracked ? 1 : 0)
-                                        .help(day.tracked ? Text("\(day.date)：\(day.count) 次创作活动") : Text(""))
-                                        .accessibilityLabel(day.tracked ? Text("\(day.date)，\(day.count) 次创作活动") : Text(""))
+                                        .help(day.tracked ? Text(NativeLocalization.text("\(day.date)：\(day.count) 次创作活动")) : Text(""))
+                                        .accessibilityLabel(day.tracked ? Text(NativeLocalization.text("\(day.date)，\(day.count) 次创作活动")) : Text(""))
                                 }
                             }
                         }
@@ -569,7 +500,9 @@ private struct HeatmapDay: Identifiable {
     var id: String { date }
 }
 
-private struct StatCard: View {
+struct StatCard: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let title: String
     let value: String
 
@@ -577,11 +510,11 @@ private struct StatCard: View {
         VStack(alignment: .leading, spacing: 7) {
             Text(LocalizedStringKey(title))
                 .font(.system(size: 11))
-                .foregroundStyle(NativeTheme.textSecondary)
+                .foregroundStyle(appPalette.textSecondary)
             Text(value)
                 .font(.system(size: 24, weight: .medium))
                 .monospacedDigit()
-                .foregroundStyle(NativeTheme.textPrimary)
+                .foregroundStyle(appPalette.textPrimary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18)
@@ -593,7 +526,7 @@ struct ArticleListView: View {
     @ObservedObject var model: NativeAppModel
 
     var body: some View {
-        SmartArticleLibraryView(model: model)
+        ArticleLibraryView(model: model)
     }
 }
 
@@ -603,7 +536,7 @@ private struct ArticleTagFilterBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("标签筛选", systemImage: "tag")
+            Label("标签筛选", nativeIcon: "tag", iconSize: 12)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
 
@@ -615,7 +548,7 @@ private struct ArticleTagFilterBar: View {
                             model.toggleArticleTagFilter(tagFilter.tag)
                         } label: {
                             HStack(spacing: 5) {
-                                Image(systemName: isSelected ? "checkmark.circle.fill" : "tag")
+                                NativeIcon.image(isSelected ? "checkmark.circle.fill" : "tag")
                                 Text("#\(tagFilter.tag)")
                                 Text("\(tagFilter.count)")
                                     .foregroundStyle(isSelected ? .primary : .secondary)
@@ -629,7 +562,7 @@ private struct ArticleTagFilterBar: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        .help("筛选标签 #\(tagFilter.tag)：\(tagFilter.count) 篇文章")
+                        .help(NativeLocalization.text("筛选标签 #\(tagFilter.tag)：\(tagFilter.count) 篇文章"))
                     }
                 }
             }
@@ -639,7 +572,9 @@ private struct ArticleTagFilterBar: View {
     }
 }
 
-private struct ArticleRow: View {
+struct ArticleRow: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let article: NativeArticleSummary
     let action: () -> Void
     @State private var isHovered = false
@@ -648,11 +583,11 @@ private struct ArticleRow: View {
         Button(action: action) {
             HStack(spacing: 14) {
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(NativeTheme.surfaceSecondary)
+                    .fill(appPalette.surfaceSecondary)
                     .frame(width: 36, height: 40)
                     .overlay {
-                        Image(systemName: article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis")
-                            .foregroundStyle(NativeTheme.textSecondary)
+                        NativeIcon.image(article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis")
+                            .foregroundStyle(appPalette.textSecondary)
                     }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(article.title).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary).lineLimit(1)
@@ -670,15 +605,15 @@ private struct ArticleRow: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(LocalizedStringKey(article.status.label)).font(.caption.weight(.medium))
-                        .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
-                    Label("\(article.pageViews) PV", systemImage: "eye")
+                        .foregroundStyle(article.status == .published ? appPalette.accent : appPalette.textSecondary)
+                    Label("\(article.pageViews) PV", nativeIcon: "eye", iconSize: 12)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text(article.updatedAt.nativeDateLabel).font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(12)
-            .background(isHovered ? NativeTheme.surfaceSecondary : .clear, in: RoundedRectangle(cornerRadius: 10))
+            .background(isHovered ? appPalette.surfaceSecondary : .clear, in: RoundedRectangle(cornerRadius: 10))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -694,7 +629,7 @@ struct EmptyState: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "doc.text.magnifyingglass").font(.system(size: 34)).foregroundStyle(.secondary)
+            NativeIcon.image("doc.text.magnifyingglass", size: 32).foregroundStyle(.secondary)
             Text(LocalizedStringKey(title)).font(.headline)
             Text(LocalizedStringKey(message)).font(.callout).foregroundStyle(.secondary)
             Button(action: action) {

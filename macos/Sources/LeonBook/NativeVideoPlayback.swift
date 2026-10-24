@@ -216,6 +216,7 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
     @Published private(set) var duration = 0.0
 
     let mediaID: String
+    let isAudio: Bool
     private var fileURL: URL?
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeControlObservation: NSKeyValueObservation?
@@ -223,16 +224,19 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
     private var didReachEndObserver: NSObjectProtocol?
     private var loadGeneration = 0
 
-    init(mediaID: String) {
+    init(mediaID: String, isAudio: Bool = false) {
         self.mediaID = mediaID
+        self.isAudio = isAudio
     }
+
+    private var mediaTypeLabel: String { isAudio ? NativeLocalization.text("音频") : NativeLocalization.text("视频") }
 
     var resumeLabel: String? {
         guard let seconds = NativeVideoPlaybackCoordinator.shared.resumePosition(
             for: mediaID,
             duration: duration
         ) else { return nil }
-        return "从 \(Self.timeLabel(seconds)) 继续"
+        return NativeLocalization.text("从 \(Self.timeLabel(seconds)) 继续")
     }
 
     var progressLabel: String {
@@ -242,22 +246,29 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
 
     func resolve(using store: LocalBlogStore) async {
         releasePlayer(nextPhase: .resolving)
+        let generation = loadGeneration
         poster = nil
-        guard let url = await store.mediaURL(for: mediaID),
-              FileManager.default.fileExists(atPath: url.path) else {
-            phase = .failed("视频文件不存在")
+        fileURL = nil
+        currentSeconds = 0
+        duration = 0
+        let url = await store.mediaURL(for: mediaID)
+        guard !Task.isCancelled, generation == loadGeneration else { return }
+        guard let url, FileManager.default.fileExists(atPath: url.path) else {
+            phase = .failed(NativeLocalization.text("\(mediaTypeLabel)文件不存在"))
             return
         }
         fileURL = url
-        let result = await NativeVideoThumbnailPipeline.shared.thumbnail(for: url)
-        guard !Task.isCancelled else { return }
-        poster = result.image
+        if !isAudio {
+            let result = await NativeVideoThumbnailPipeline.shared.thumbnail(for: url)
+            guard !Task.isCancelled, generation == loadGeneration else { return }
+            poster = result.image
+        }
         phase = .poster
     }
 
     func play() async {
         guard let fileURL else {
-            phase = .failed("视频文件不存在")
+            phase = .failed(NativeLocalization.text("\(mediaTypeLabel)文件不存在"))
             return
         }
         loadGeneration += 1
@@ -269,7 +280,7 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
             let assetDuration = try await asset.load(.duration)
             guard !Task.isCancelled, generation == loadGeneration else { return }
             guard isPlayable else {
-                phase = .failed("不支持此视频格式或文件已损坏")
+                phase = .failed(NativeLocalization.text("不支持此\(mediaTypeLabel)格式或文件已损坏"))
                 return
             }
             let seconds = assetDuration.seconds
@@ -296,7 +307,7 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
         let label = Self.timeLabel(currentSeconds)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString("视频《\(name)》@ \(label)", forType: .string)
+        pasteboard.setString("\(mediaTypeLabel)《\(name)》@ \(label)", forType: .string)
     }
 
     static func timeLabel(_ seconds: Double) -> String {
@@ -372,13 +383,13 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
                     startPlayback(player)
                 }
             } else {
-                phase = .failed("播放器初始化失败")
+                phase = .failed(NativeLocalization.text("播放器初始化失败"))
             }
         case .failed:
-            phase = .failed(item.error?.localizedDescription ?? "视频解码失败")
+            phase = .failed(item.error?.localizedDescription ?? NativeLocalization.text("\(mediaTypeLabel)解码失败"))
             releasePlayer(nextPhase: phase)
         @unknown default:
-            phase = .failed("未知的视频播放错误")
+            phase = .failed(NativeLocalization.text("未知的\(mediaTypeLabel)播放错误"))
             releasePlayer(nextPhase: phase)
         }
     }

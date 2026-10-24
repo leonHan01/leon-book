@@ -15,64 +15,75 @@ struct EditorBlockTemplate: Codable, Hashable, Identifiable {
 enum EditorBlockTemplateCatalog {
     private static let defaultsKey = "leonBook.editor.blockTemplates.v1"
 
-    static let builtIn: [EditorBlockTemplate] = [
-        EditorBlockTemplate(
-            id: "builtin-meeting",
-            name: "会议记录",
-            body: """
-            ## 会议信息
+    static var builtIn: [EditorBlockTemplate] { builtIn(language: NativeLocalization.currentLanguage) }
 
-            - 时间
-              - 待填写
-            - 参与者
-              - 待填写
+    static func builtIn(language: NativeAppLanguage) -> [EditorBlockTemplate] {
+        let templates: [EditorBlockTemplate] = [
+            EditorBlockTemplate(
+                id: "builtin-meeting",
+                name: "会议记录",
+                body: """
+                ## 会议信息
 
-            ## 议题
+                - 时间
+                  - 待填写
+                - 参与者
+                  - 待填写
 
-            - 讨论事项
+                ## 议题
 
-            ## 行动项
+                - 讨论事项
 
-            - [ ] 后续任务
-            """
-        ),
-        EditorBlockTemplate(
-            id: "builtin-reading",
-            name: "读书笔记",
-            body: """
-            ## 核心观点
+                ## 行动项
 
-            > 写下最重要的观点
+                - [ ] 后续任务
+                """
+            ),
+            EditorBlockTemplate(
+                id: "builtin-reading",
+                name: "读书笔记",
+                body: """
+                ## 核心观点
 
-            ## 摘录
+                > 写下最重要的观点
 
-            - 关键摘录
+                ## 摘录
 
-            ## 我的思考
+                - 关键摘录
 
-            写下理解、质疑与连接。
-            """
-        ),
-        EditorBlockTemplate(
-            id: "builtin-review",
-            name: "周复盘",
-            body: """
-            ## 本周完成
+                ## 我的思考
 
-            - [x] 已完成事项
+                写下理解、质疑与连接。
+                """
+            ),
+            EditorBlockTemplate(
+                id: "builtin-review",
+                name: "周复盘",
+                body: """
+                ## 本周完成
 
-            ## 下周计划
+                - [x] 已完成事项
 
-            - [ ] 下一步行动
+                ## 下周计划
 
-            ## 数据回顾
+                - [ ] 下一步行动
 
-            | 指标 | 结果 |
-            | --- | --- |
-            | 进度 | 待填写 |
-            """
-        ),
-    ]
+                ## 数据回顾
+
+                | 指标 | 结果 |
+                | --- | --- |
+                | 进度 | 待填写 |
+                """
+            ),
+        ]
+        guard language == .english else { return templates }
+        return templates.map { template in
+            var value = template
+            value.name = NativeLocalization.string(template.name, language: language)
+            value.body = NativeLocalization.string(template.body, language: language)
+            return value
+        }
+    }
 
     static func loadCustom(defaults: UserDefaults = .standard) -> [EditorBlockTemplate] {
         guard let data = defaults.data(forKey: defaultsKey),

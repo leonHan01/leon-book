@@ -42,7 +42,6 @@ public struct NativeCommandID: RawRepresentable, Hashable, Codable, Identifiable
     public static let insertTable = Self(rawValue: "editor.insert.table")
     public static let insertWikiLink = Self(rawValue: "editor.insert.wiki-link")
     public static let insertEmbed = Self(rawValue: "editor.insert.embed")
-    public static let insertBase = Self(rawValue: "editor.insert.base")
 }
 
 public enum NativeCommandSurface: String, Codable, Hashable, Sendable {
@@ -687,16 +686,6 @@ private extension NativeCommandRegistry {
             availability: .articleEditor,
             surfaces: [.palette, .menu, .editorSlash],
             textInsertion: .init(text: "![[]]", cursorOffset: 3)
-        ),
-        .init(
-            id: .insertBase,
-            title: "嵌入智能集合",
-            detail: "插入 ![[集合名称.base]]",
-            keywords: "base collection database",
-            systemImage: "tablecells.badge.ellipsis",
-            availability: .articleEditor,
-            surfaces: [.palette, .menu, .editorSlash],
-            textInsertion: .init(text: "![[集合名称.base]]")
         ),
     ]
 }

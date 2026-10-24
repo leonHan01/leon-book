@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import LeonBookModuleKit
 
 public struct NativeBackupPolicy: Codable, Equatable, Sendable {
     public static let standard = NativeBackupPolicy()
@@ -213,7 +214,7 @@ public enum LocalBackupManager {
                     reusedFileCount += 1
                     checksum = try sha256(of: targetURL)
                     guard checksum == sourceChecksum else {
-                        throw NativeBackupError.fileSystem("备份复用文件校验失败：\(sourceFile.relativePath)")
+                        throw NativeBackupError.fileSystem(ModuleLocalization.text("备份复用文件校验失败：\(sourceFile.relativePath)"))
                     }
                 } else {
                     if cloneFile(at: sourceFile.url, to: targetURL) {
@@ -227,7 +228,7 @@ public enum LocalBackupManager {
 
                 guard checksum == sourceChecksum,
                       Int64(try targetURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? -1) == sourceFile.sizeBytes else {
-                    throw NativeBackupError.fileSystem("备份期间源文件发生变化，请重试：\(sourceFile.relativePath)")
+                    throw NativeBackupError.fileSystem(ModuleLocalization.text("备份期间源文件发生变化，请重试：\(sourceFile.relativePath)"))
                 }
                 records.append(NativeBackupFileRecord(
                     relativePath: sourceFile.relativePath,
@@ -261,7 +262,7 @@ public enum LocalBackupManager {
                 removedSnapshots.append(contentsOf: try enforceRetention(in: destinationURL, policy: policy))
             }
             guard let snapshot = try listSnapshots(in: destinationURL).first(where: { $0.url == finalURL }) else {
-                throw NativeBackupError.fileSystem("备份完成，但无法重新读取快照清单")
+                throw NativeBackupError.fileSystem(ModuleLocalization.text("备份完成，但无法重新读取快照清单"))
             }
             return NativeBackupCreationResult(
                 snapshot: snapshot,
@@ -273,7 +274,7 @@ public enum LocalBackupManager {
         } catch {
             try? fileManager.removeItem(at: temporaryURL)
             if let error = error as? NativeBackupError { throw error }
-            throw NativeBackupError.fileSystem("备份失败：\(error.localizedDescription)")
+            throw NativeBackupError.fileSystem(ModuleLocalization.text("备份失败：\(error.localizedDescription)"))
         }
     }
 
@@ -374,7 +375,7 @@ public enum LocalBackupManager {
             let estimated = formatter.string(fromByteCount: estimatedAdditionalBytes)
             let minimum = formatter.string(fromByteCount: minimumFreeSpaceBytes)
             throw NativeBackupError.fileSystem(
-                "备份会使目标磁盘剩余空间低于 \(minimum)（当前可用 \(available)，预计新增 \(estimated)）"
+                ModuleLocalization.text("备份会使目标磁盘剩余空间低于 \(minimum)（当前可用 \(available)，预计新增 \(estimated)）")
             )
         }
     }
@@ -385,14 +386,14 @@ public enum LocalBackupManager {
         do {
             manifest = try readManifest(at: snapshotURL)
         } catch {
-            throw NativeBackupError.fileSystem("快照校验失败：无法读取备份清单")
+            throw NativeBackupError.fileSystem(ModuleLocalization.text("快照校验失败：无法读取备份清单"))
         }
         let info = self.snapshot(from: manifest, at: snapshotURL, manifestReadable: true)
         let actualFiles = try files(in: snapshotURL, excludingManifest: true)
 
         guard manifest.formatVersion >= currentFormatVersion, !manifest.files.isEmpty else {
             guard actualFiles.contains(where: { $0.relativePath == "leon-book.sqlite" }) else {
-                throw NativeBackupError.fileSystem("快照校验失败：旧格式快照缺少 leon-book.sqlite")
+                throw NativeBackupError.fileSystem(ModuleLocalization.text("快照校验失败：旧格式快照缺少 leon-book.sqlite"))
             }
             return NativeBackupValidationResult(
                 snapshot: info,
@@ -405,7 +406,7 @@ public enum LocalBackupManager {
         let expectedPaths = Set(manifest.files.map(\.relativePath))
         guard expectedPaths.count == manifest.files.count,
               Set(actualByPath.keys) == expectedPaths else {
-            throw NativeBackupError.fileSystem("快照校验失败：文件列表与备份清单不一致")
+            throw NativeBackupError.fileSystem(ModuleLocalization.text("快照校验失败：文件列表与备份清单不一致"))
         }
 
         for record in manifest.files {
@@ -413,7 +414,7 @@ public enum LocalBackupManager {
                   let file = actualByPath[record.relativePath],
                   file.sizeBytes == record.sizeBytes,
                   try sha256(of: file.url) == record.sha256 else {
-                throw NativeBackupError.fileSystem("快照校验失败：\(record.relativePath) 已损坏或被修改")
+                throw NativeBackupError.fileSystem(ModuleLocalization.text("快照校验失败：\(record.relativePath) 已损坏或被修改"))
             }
         }
         return NativeBackupValidationResult(
@@ -437,7 +438,7 @@ public enum LocalBackupManager {
         let destinationURL = destination.standardizedFileURL.resolvingSymlinksInPath()
         guard !isSameOrDescendant(snapshotURL, of: destinationURL),
               !isSameOrDescendant(destinationURL, of: snapshotURL) else {
-            throw NativeBackupError.fileSystem("恢复来源与数据目录不能相互包含")
+            throw NativeBackupError.fileSystem(ModuleLocalization.text("恢复来源与数据目录不能相互包含"))
         }
 
         let parentURL = destinationURL.deletingLastPathComponent()
@@ -485,7 +486,7 @@ public enum LocalBackupManager {
                 try? fileManager.moveItem(at: previousURL, to: destinationURL)
             }
             if let error = error as? NativeBackupError { throw error }
-            throw NativeBackupError.fileSystem("恢复失败，原数据已保留：\(error.localizedDescription)")
+            throw NativeBackupError.fileSystem(ModuleLocalization.text("恢复失败，原数据已保留：\(error.localizedDescription)"))
         }
     }
 }
@@ -582,13 +583,13 @@ private extension LocalBackupManager {
                     .contentModificationDateKey,
                 ])
                 guard values.isSymbolicLink != true else {
-                    throw NativeBackupError.fileSystem("备份不跟随符号链接：\(child.lastPathComponent)")
+                    throw NativeBackupError.fileSystem(ModuleLocalization.text("备份不跟随符号链接：\(child.lastPathComponent)"))
                 }
                 let relativePath = relativeDirectory.isEmpty
                     ? child.lastPathComponent
                     : "\(relativeDirectory)/\(child.lastPathComponent)"
                 guard isSafeRelativePath(relativePath) else {
-                    throw NativeBackupError.fileSystem("备份中发现不安全路径：\(relativePath)")
+                    throw NativeBackupError.fileSystem(ModuleLocalization.text("备份中发现不安全路径：\(relativePath)"))
                 }
                 if values.isDirectory == true {
                     try visit(child, relativeDirectory: relativePath)

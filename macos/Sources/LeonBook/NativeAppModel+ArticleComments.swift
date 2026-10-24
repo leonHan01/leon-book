@@ -76,7 +76,7 @@ extension NativeAppModel {
                 scheduleBackup()
                 errorMessage = nil
             } catch {
-                errorMessage = "转换双链失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text("转换双链失败：\(error.localizedDescription)")
             }
         }
     }

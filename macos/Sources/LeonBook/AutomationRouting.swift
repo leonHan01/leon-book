@@ -29,13 +29,13 @@ public enum NativeAutomationURLError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .unsupportedScheme:
-            return "只支持 leonbook:// 自动化链接。"
+            return NativeLocalization.text("只支持 leonbook:// 自动化链接。")
         case let .unknownAction(action):
-            return "不支持 leonbook://\(action) 自动化操作。"
+            return NativeLocalization.text("不支持 leonbook://\(action) 自动化操作。")
         case let .missingParameter(name):
-            return "自动化链接缺少参数“\(name)”。"
+            return NativeLocalization.text("自动化链接缺少参数“\(name)”。")
         case let .parameterTooLong(name):
-            return "自动化链接参数“\(name)”过长。"
+            return NativeLocalization.text("自动化链接参数“\(name)”过长。")
         }
     }
 }

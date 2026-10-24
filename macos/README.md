@@ -8,11 +8,33 @@ Articles, drafts, settings, images, and videos are stored locally. SQLite is the
 
 Article edits are written to a recovery snapshot after 3 seconds of inactivity. Continuous editing creates a history point every 5 minutes, retained for 30 days by default. Version history is available from both the reader and writing workspace, with side-by-side body diffs and restore-to-editor. Autosave never overwrites published content directly; the explicit Save Draft and Publish actions remain the formal save boundary.
 
+## Editable homepage
+
+Choose **Edit Homepage** to change the welcome title and introduction, then **Add Module** to combine Markdown text, images, audio (including MP3), video, article content, to-do lists, quick writing, statistics, recent articles, and activity. Drag a module's header onto another module and release when it highlights, or use the arrows to reorder. Downward drops place the module after the target, and upward drops place it before the target. Each module's menu offers width settings, content-driven height, duplicate, and remove.
+
+Resize with the right edge (width), bottom edge (height), or bottom-right corner (both). Width snaps to a 12-column grid and height to 24-point steps; live guides and a size badge show alignment. Modules wrap in reading order without overlapping. Width is at least 3 columns and roughly 240 points when space permits; height can be set from 144 to 1,920 points. Small windows temporarily stack modules without changing their saved widths. Press Esc during a resize to restore its starting size. The module editor also provides size steppers and **Fit Height to Content**. Long content scrolls inside a fixed-height module; images and video adapt to the available size. Save Homepage persists dimensions, while Cancel discards them. Existing full/half-width layouts remain compatible.
+
+A translucent thumbnail of the module follows the pointer while dragging. It keeps the heading and visible content, cropping long modules to their top section so the destination stays visible. The preview captures the existing card without reloading articles or creating extra media players.
+
+Use the pencil button to configure a module, apply its changes, then **Save Homepage** to persist the layout. Cancel discards layout changes; navigating within the window keeps unfinished edits. Article modules show the latest saved body, and to-do modules share the existing task list. Audio and video require a play action, and players are released when leaving the page.
+
+Homepage settings live in each user's SQLite workspace with cross-window refresh and revision conflict protection, and are included in complete workspace backups. Files are copied to `media/dashboard/`; removing a module retains its underlying article, task, or media file.
+
+## Media Library
+
+The sidebar shows independent **Media Groups**. Choose **New Media Group** to create a group, right-click a group to rename or delete it, and use **Move to Group** on a card to organize its media. Article, moment, and Q&A media initially appear in **Default Group** without inheriting article folders. Imports and Finder drops go into the current group; importing from **All Media** uses Default Group. Deleting a group returns its media to Default Group without moving or deleting files or changing article references. Groups are saved per workspace and included in complete workspace backups.
+
+Each video and audio file supports an introduction. Choose **Add Introduction / Edit Introduction** beneath a card or in the playback panel, then save your text. Cards show a two-line preview, the player shows the full scrollable text, and search matches both names and introductions. Introductions support multiple lines, editing, and clearing; they are stored in the current workspace and included in its backups.
+
+Open **Media Library** from the navigation rail to browse videos and audio in the current workspace, including supported article, moment, and Q&A attachments. Filter by video or audio, search names, sort by date or name, and click a card for native playback. Videos include seeking, volume, fullscreen, and picture-in-picture controls; audio includes playback and seeking controls.
+
+Use **Import Media** for multiple files or drop them from Finder. Supported containers are MP4, MOV, and M4V video, and MP3, M4A, AAC, WAV, AIFF, and CAF audio; imports validate that the system can play the file's codec. Files are copied into `media/media-library/` with their original display names, leaving source files intact, and are included in workspace backups. Closing playback pauses and releases the player, and reopening can resume saved progress. Cards load video posters on demand without allocating players.
+
 ## Search and quick navigation
 
 The toolbar search button and `⌘⇧F` open unified full-text search across article titles, categories, tags, typed properties, excerpts, bodies, and moment text. A SQLite FTS5 index follows saves, edits, property renames, trash moves, and restores automatically and produces contextual result snippets. Filters can be combined with `tag:`, `status:draft|published`, `[property:value]`, `type:article|moment`, `date:YYYY-MM-DD`, `after:YYYY-MM-DD`, and `before:YYYY-MM-DD`; brackets preserve spaces in property names and values.
 
-Press `⌘O` to search and open an article quickly. Press `⌘P` for a fuzzy command palette with recent and pinned commands. **Settings → Commands & Hotkeys** records, removes, or restores per-command shortcuts. Menus, URL-scheme actions, and App Intents ultimately invoke the same command registry. Type `/` at the start of an editor line to insert headings, tasks, callouts, code, tables, links, embeds, or smart collections.
+Press `⌘O` to search and open an article quickly. Press `⌘P` for a fuzzy command palette with recent and pinned commands. **Settings → Commands & Hotkeys** records, removes, or restores per-command shortcuts. Menus, URL-scheme actions, and App Intents ultimately invoke the same command registry. Type `/` at the start of an editor line to insert headings, tasks, callouts, code, tables, links, or embeds.
 
 ## TODO list
 
@@ -20,13 +42,13 @@ Open **Workspace → To-do** in the sidebar. Type a task and press Return to add
 
 Filter by open, today, overdue, all, or completed tasks, and search titles and notes. Tasks are stored in the current user's SQLite workspace, included in full workspace backups, and refreshed across windows with revision conflict checks. **Settings → First-party Modules** controls the module; the command palette offers **Go to To-do** and **New To-do**.
 
-## Smart collections and bookmarks
+## Article views and bookmarks
 
-Smart collections are saved virtual queries over the current user's SQLite workspace. Filtering and sorting compile into parameterized SQL, so only matching article summaries are decoded instead of loading every body into memory first. A collection can combine article status, category, tags, title or body text, YAML/Properties values, update or publish dates, word count, and page views with all/any logic. Up to three sort keys, one grouping field, and list, table, cards, board, or calendar layouts are stored with each collection. Board grouping can be switched inline and cards can move between status/category/tag lanes; each lane can also create a page with its group value prefilled. Calendar date sources can be switched inline, each day can create a predated page, and undated pages stay in an unscheduled tray that also accepts cards to clear their date. Properties include text, list, number, date, checkbox, tags, select, status, relation, and rollup values; table and editor controls reuse existing options, select related pages, and configure rollups without hand-writing a formula string. Selecting a collection never moves or duplicates an article.
+The article library supports list, table, cards, board, and calendar layouts. Board grouping can be switched between status, category, and tags; dragging a card updates its group field, and each lane can create an article with its group value prefilled. The calendar uses update dates or a selected date property, supports creating a page for a day, and keeps undated pages in an unscheduled tray. Article properties and bookmarks remain available independently of the selected layout.
 
 The sidebar organizes articles under directories, up to five levels deep. Articles are leaves, including `index.md` and files beside a same-named directory. New articles select a destination directory and default to `未分类` (Uncategorized). Folder creation, article saves, and resource moves validate the depth of the entire destination subtree. Existing external source paths remain intact: root articles appear under Uncategorized, and deeper content is displayed in the fifth directory. Reader and editor breadcrumbs can create another article in the same directory.
 
-Bookmarks are separate shortcuts in the sidebar. Articles, individual Markdown headings, full-text searches, and the global article graph can be added or removed from their source view and reopened directly.
+Bookmarks are shortcuts in the sidebar. Articles, individual Markdown headings, full-text searches, and the global article graph can be added or removed from their source view and reopened directly.
 
 ## Article outline and links
 
@@ -117,7 +139,13 @@ Requirements: macOS 13 or later and Swift 5.10 or later. From the project root, 
 ./scripts/leonblog restart
 ```
 
-`restart` gracefully quits the running app, waits for it to exit, rebuilds it, and launches the new version. The built app is located at `macos/dist/leon-book.app` and uses ad-hoc signing for local use.
+`restart` gracefully quits the running app, waits for it to exit, and relaunches it. Like `open`, it only compiles, packages, and signs when sources, resources, or build scripts have changed, or a required executable/resource bundle is missing. Use `build` to force a build. The built app is located at `macos/dist/leon-book.app` and uses ad-hoc signing for local use.
+
+`restart` uses Debug incremental compilation by default to shorten the edit/build loop. The first Debug build populates a separate configuration cache and can still take time. Use `restart --release` for the optimized runtime, or `build` to produce Release without launching. `open` and `start` reuse the installed configuration; all four commands accept `--debug` and `--release`, or the `LEON_BOOK_BUILD_CONFIGURATION` environment variable. Build output reports compilation and packaging/signing time separately.
+
+Debug also selects the `native` engine when available, with a cache independent of normal Release builds. On the current Swift 6.4 toolchain, adding the same comment to one Swift file took 21.24 seconds to rebuild the GUI using `swiftbuild`, versus 4.07 seconds for the GUI and 0.77 seconds for the CLI using `native`, with no concurrent source edits. A subsequent incremental build through the packaging script took 6.43 seconds including signing and verification; application quit/launch time is excluded. These are warm-cache samples, not fixed latency guarantees.
+
+The current toolchain deprecates `native`; automatic selection falls back to the default engine if it is unavailable. Use `LEON_BOOK_BUILD_SYSTEM=default ./scripts/leonblog restart` to select the toolchain default explicitly, or set `native` / `swiftbuild` directly. See the [SwiftPM build engine migration](https://forums.swift.org/t/swiftpm-development-update-default-build-system-change/85548). Each packaging invocation uses a private staging directory and keeps the installed app until the staged signature verifies; only final installation is serialized across engines. Editor and canvas resources prefer the app's own bundle, verified by a windowless Foundation probe with no build-cache access.
 
 To run the SwiftPM executable directly:
 

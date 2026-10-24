@@ -9,21 +9,28 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: transparent; color: var(--text); font: var(--size)/1.75 -apple-system, BlinkMacSystemFont, sans-serif; }
 body:not(.readonly) { color-scheme: light; min-height: 100vh; background: #fff; --surface: #fff; --text: #303238; --muted: #72737a; --line: #e9e9eb; --accent: #3976cf; --soft: #f5f5f6; --block-hover: #e5f1ff; }
-#toolbar { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface); font: 12px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
+#toolbar { position: sticky; top: 0; z-index: 3; display: flex; justify-content: flex-end; padding: 0 28px 6px; background: var(--surface); font: 12px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
 button, select, input { font: inherit; color: inherit; }
 button { border: 0; border-radius: 6px; background: transparent; padding: 4px 9px; cursor: pointer; }
 button:hover, button:focus-visible { background: var(--soft); outline: 2px solid var(--accent); outline-offset: -2px; }
-#toolbar button { min-width: 30px; min-height: 28px; font-size: 13px; }
-#toolbar .hint { margin-left: auto; font-size: 12px; color: var(--muted); }
+#toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 32px; min-height: 30px; font-size: 13px; }
+#tools-toggle { min-height: 30px; padding: 5px 8px; color: var(--muted); }
+#toolbar svg { flex: 0 0 18px; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#tools-toggle[aria-expanded=true] { background: var(--soft); color: var(--text); }
+#toolbar-panel { position: absolute; top: 34px; right: 28px; width: 248px; max-width: calc(100vw - 32px); max-height: calc(100vh - 48px); overflow-y: auto; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 24px #00000012; }
+#toolbar-panel[hidden] { display: none; }
+.toolbar-group { display: flex; flex-wrap: wrap; gap: 4px; }
+.toolbar-group + .toolbar-group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.toolbar-group .group-title { flex-basis: 100%; margin-bottom: 2px; color: var(--muted); font-size: 11px; }
 #language { max-width: 130px; font-size: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--soft); padding: 4px; }
-#document { padding: 22px 20px 120px; min-height: 280px; outline: none; overflow-wrap: anywhere; }
+#document { padding: 10px 28px 120px; min-height: 280px; outline: none; overflow-wrap: anywhere; }
 #document > *, #document :is(td, th) > * { position: relative; margin: 0 0 14px; min-height: 1.75em; outline: none; }
 #document :is(td, th) > :last-child { margin-bottom: 0; }
 #document[contenteditable=true] > *:focus-within { border-radius: 4px; }
 #document[contenteditable=true] > * { border-radius: 6px; }
 #document[contenteditable=true] > *:hover { background-color: var(--block-hover); border-radius: 6px; outline: 4px solid var(--block-hover); }
 #document[contenteditable=true] :is(th, td):hover { background-color: var(--block-hover); }
-#document > p:only-child:has(>br:only-child)::before { content: '输入文字，或输入 / 添加内容块'; color: var(--muted); pointer-events: none; position: absolute; }
+#document > p:only-child:has(>br:only-child)::before { content: var(--editor-placeholder); color: var(--muted); pointer-events: none; position: absolute; }
 #document h1 { font-size: 1.8em; line-height: 1.4; font-weight: 720; margin-top: 20px; }
 #document h2 { font-size: 1.4em; line-height: 1.5; margin-top: 16px; }
 #document h3 { font-size: 1.15em; margin-top: 12px; }
@@ -126,18 +133,28 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
 </head>
 <body>
 <div id="toolbar" role="toolbar" aria-label="富文本格式">
+  <button id="tools-toggle" type="button" aria-label="编辑工具" aria-expanded="false" aria-controls="toolbar-panel" title="编辑工具">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h4m4 0h10M3 17h10m4 0h4"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg><span>工具</span>
+  </button>
+  <div id="toolbar-panel" role="group" aria-label="编辑工具" hidden>
+  <div class="toolbar-group"><span class="group-title">文字格式</span>
   <button data-command="bold" title="加粗 ⌘B"><b>B</b></button>
   <button data-command="italic" title="斜体 ⌘I"><i>I</i></button>
   <button data-command="underline" title="下划线 ⌘U"><u>U</u></button>
   <button data-command="strikeThrough" title="删除线"><s>S</s></button>
-  <button data-command="highlight" title="高亮文字">▰</button>
-  <button data-command="link" title="添加链接">↗</button>
-  <button data-command="undo" title="撤销 ⌘Z">↶</button>
-  <button data-command="redo" title="重做 ⇧⌘Z">↷</button>
-  <button data-command="whiteboard" title="插入 Excalidraw 画板">画板</button>
-  <button data-command="audio" title="选择 MP3，或将 MP3 文件拖入正文" aria-label="插入音频">插入音频</button>
+  <button data-command="highlight" title="高亮文字" aria-label="高亮文字"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16 4 4L20 8l-4-4ZM3 21h7"/></svg></button>
+  <button data-command="link" title="添加链接" aria-label="添加链接"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
+  </div>
+  <div class="toolbar-group"><span class="group-title">插入内容</span>
+  <button data-command="whiteboard" title="插入 Excalidraw 画板" aria-label="画板"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="14" rx="2"/><path d="M12 17v4M7 21h10M7 12l3-4 3 3 4-4"/></svg><span class="tool-label">画板</span></button>
+  <button data-command="audio" title="选择 MP3，或将 MP3 文件拖入正文" aria-label="插入音频"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13M9 9l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="17" cy="16" rx="3" ry="2"/></svg><span class="tool-label">插入音频</span></button>
+  </div>
+  <div class="toolbar-group"><span class="group-title">撤销与重做</span>
+  <button data-command="undo" title="撤销 ⌘Z" aria-label="撤销"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h10a5 5 0 0 1 0 10h-3M4 10l5-5M4 10l5 5"/></svg></button>
+  <button data-command="redo" title="重做 ⇧⌘Z" aria-label="重做"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 10H10a5 5 0 0 0 0 10h3M20 10l-5-5M20 10l-5 5"/></svg></button>
+  </div>
   <select id="language" aria-label="代码语言" hidden><option>text</option><option>javascript</option><option>typescript</option><option>swift</option><option>python</option><option>html</option><option>css</option><option>json</option><option>sql</option><option>bash</option></select>
-  <span class="hint">/ 添加块 · 回车分段 · ⇧回车换行</span>
+  </div>
 </div>
 <article id="document" contenteditable="false" spellcheck="false" aria-label="文章富文本编辑器"></article>
 <div id="commands" role="listbox" aria-label="快捷操作" hidden></div>
@@ -165,6 +182,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
 <script>
 (() => {
   'use strict';
+  const t = (...args) => window.LeonL10n.text(...args);
+  window.LeonL10n.bindChrome(document);
   const root = document.getElementById('document'), menu = document.getElementById('commands');
   const language = document.getElementById('language');
   const selectionToolbar = document.getElementById('selection-toolbar'), colorPanel = document.getElementById('selection-colors');
@@ -594,17 +613,17 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (!restoreFormatRange()) return;
     if (!colorPanel.hidden && colorMode === mode) { closeColorPanel(); return; }
     closeHeadingPanel(); closeColorPanel(); colorMode = mode;
-    const title = document.createElement('div'); title.className = 'palette-title'; title.textContent = mode === 'foreColor' ? '文字颜色' : '背景高亮';
+    const title = document.createElement('div'); title.className = 'palette-title'; title.textContent = mode === 'foreColor' ? t('文字颜色') : t('背景高亮');
     const grid = document.createElement('div'); grid.className = 'palette-grid'; grid.setAttribute('role', 'radiogroup'); grid.setAttribute('aria-label', title.textContent);
     const current = safeColor(document.queryCommandValue(mode));
     for (const item of formatColors) {
       const value = mode === 'foreColor' ? item.color : item.background;
       const button = document.createElement('button'); button.type = 'button'; button.className = 'color-swatch'; button.dataset.colorValue = value;
-      button.title = item.name; button.setAttribute('aria-label', item.name); button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', String(safeColor(value) === current));
+      button.title = t(item.name); button.setAttribute('aria-label', t(item.name)); button.setAttribute('role', 'radio'); button.setAttribute('aria-checked', String(safeColor(value) === current));
       button.style.backgroundColor = mode === 'foreColor' ? '#f8fafc' : value;
       button.style.color = mode === 'foreColor' ? value : '#39485d'; button.textContent = 'A'; grid.append(button);
     }
-    const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'reset-color'; reset.dataset.colorValue = mode === 'foreColor' ? '#252827' : 'transparent'; reset.textContent = '恢复默认';
+    const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'reset-color'; reset.dataset.colorValue = mode === 'foreColor' ? '#252827' : 'transparent'; reset.textContent = t('恢复默认');
     colorPanel.replaceChildren(title, grid, reset); colorPanel.hidden = false;
     selectionToolbar.querySelector(`[data-format="${mode}"]`).setAttribute('aria-expanded', 'true'); positionColorPanel();
   }
@@ -699,12 +718,12 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     for (const board of root.querySelectorAll('figure[data-type=whiteboard]')) {
       if (board.contentEditable !== 'false') board.contentEditable = 'false';
       if (board.tabIndex !== 0) board.tabIndex = 0;
-      board.title = editable ? '双击编辑画板，或选中后使用画板操作' : 'Excalidraw 画板';
+      board.title = editable ? t('双击编辑画板，或选中后使用画板操作') : t('Excalidraw 画板');
     }
     for (const figure of root.querySelectorAll('figure[data-type=audio]')) {
       if (figure.contentEditable !== 'false') figure.contentEditable = 'false';
       if (figure.tabIndex !== 0) figure.tabIndex = 0;
-      figure.title = editable ? '点击播放；选中音频块后按 Delete 删除' : '音频';
+      figure.title = editable ? t('点击播放；选中音频块后按 Delete 删除') : t('音频');
     }
     for (const img of root.querySelectorAll('img,audio')) {
       const src = img.dataset.originalSrc || img.getAttribute('src');
@@ -798,34 +817,34 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       if (menu.querySelector('[aria-selected=true]')?.dataset.commandId !== matches[menuIndex]?.id) selectMenuItem(menuIndex, true);
       scheduleMenuPosition(); return;
     }
-    matches = commands.filter(command => `${command.id} ${command.label} ${command.aliases}`.toLowerCase().includes(needle));
+    matches = commands.filter(command => `${command.id} ${t(command.label)} ${command.label} ${command.aliases}`.toLowerCase().includes(needle));
     slashBlock = block; menuQuery = needle; menuIndex = Math.max(0, Math.min(menuIndex, matches.length - 1));
     const header = document.createElement('div'); header.className = 'command-header';
-    const heading = document.createElement('strong'); heading.textContent = needle ? '搜索结果' : '添加内容块';
-    const count = document.createElement('span'); count.className = 'command-count'; count.textContent = matches.length + ' 项'; header.append(heading, count);
+    const heading = document.createElement('strong'); heading.textContent = needle ? t('搜索结果') : t('添加内容块');
+    const count = document.createElement('span'); count.className = 'command-count'; count.textContent = matches.length + t(' 项'); header.append(heading, count);
     const list = document.createElement('div'); list.className = 'command-list';
     let previousGroup = '';
     for (const [index, command] of matches.entries()) {
-      const group = ['text', 'code', 'callout'].includes(command.id) ? '常用内容'
-        : ['h1', 'h2', 'h3', 'h4'].includes(command.id) ? '标题' : '列表与结构';
+      const group = ['text', 'code', 'callout'].includes(command.id) ? t('常用内容')
+        : ['h1', 'h2', 'h3', 'h4'].includes(command.id) ? t('标题') : t('列表与结构');
       if (group !== previousGroup) {
-        const title = document.createElement('div'); title.className = 'command-group'; title.textContent = group; title.setAttribute('aria-hidden', 'true'); list.append(title); previousGroup = group;
+        const title = document.createElement('div'); title.className = 'command-group'; title.textContent = t(group); title.setAttribute('aria-hidden', 'true'); list.append(title); previousGroup = group;
       }
       const button = document.createElement('button'); button.role = 'option'; button.tabIndex = -1; button.id = 'command-option-' + command.id; button.dataset.commandId = command.id;
       const icon = document.createElement('span'); icon.className = 'icon'; icon.setAttribute('aria-hidden', 'true');
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', '0 0 20 20'); svg.innerHTML = commandIcons[command.id]; icon.append(svg);
-      const label = document.createElement('span'); label.className = 'label'; label.textContent = command.label;
-      const detail = document.createElement('small'); detail.textContent = command.detail; label.append(detail);
+      const label = document.createElement('span'); label.className = 'label'; label.textContent = t(command.label);
+      const detail = document.createElement('small'); detail.textContent = t(command.detail); label.append(detail);
       const key = document.createElement('span'); key.className = 'command-alias'; key.textContent = '/' + command.id;
       const enter = document.createElement('span'); enter.className = 'command-enter'; enter.textContent = '↵'; enter.setAttribute('aria-hidden', 'true');
       button.append(icon, label, key, enter);
       button.addEventListener('pointerenter', () => selectMenuItem(index));
       button.addEventListener('mousedown', event => { event.preventDefault(); execute(command.id); }); list.append(button);
     }
-    if (!matches.length) { const empty = document.createElement('div'); empty.className = 'command-empty'; empty.textContent = '没有匹配的内容块，试试其他关键词'; list.append(empty); }
+    if (!matches.length) { const empty = document.createElement('div'); empty.className = 'command-empty'; empty.textContent = t('没有匹配的内容块，试试其他关键词'); list.append(empty); }
     const footer = document.createElement('div'); footer.className = 'command-footer'; footer.setAttribute('aria-hidden', 'true');
     footer.innerHTML = '<span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 插入</span><span><kbd>esc</kbd> 关闭</span>';
-    menu.replaceChildren(header, list, footer); menu.hidden = false;
+    menu.replaceChildren(header, list, footer); window.LeonL10n.bindChrome(menu); menu.hidden = false;
     root.setAttribute('aria-controls', 'commands'); root.setAttribute('aria-expanded', 'true');
     positionMenu(); selectMenuItem(menuIndex, true);
   }
@@ -934,7 +953,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (!pending || !editable || composing || pending.documentID !== documentID || !root.contains(pending.block)
         || !root.contains(pending.range.startContainer) || !root.contains(pending.range.endContainer)) return false;
     const images = sources.filter(source => /^data:image\/(png|jpeg|gif|webp);base64,/i.test(source)).map(source => {
-      const image = document.createElement('img'); image.src = source; image.alt = '粘贴的图片'; return image;
+      const image = document.createElement('img'); image.src = source; image.alt = t('粘贴的图片'); return image;
     });
     if (!images.length) return false;
     const current = insertionRange(), range = pending.range;
@@ -1002,8 +1021,28 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       else if (!selectingWithPointer) scheduleReaderSelection();
     }
   });
-  document.getElementById('toolbar').addEventListener('mousedown', event => {
-    const button = event.target.closest('button'); if (!button) return; event.preventDefault();
+  const toolbar = document.getElementById('toolbar');
+  const toolsToggle = document.getElementById('tools-toggle');
+  const toolsPanel = document.getElementById('toolbar-panel');
+  let toolsSelection = null, toolsDocumentID = null;
+  function restoreToolsSelection() {
+    if (toolsDocumentID === documentID && toolsSelection) restoreSelection(toolsSelection);
+  }
+  function closeTools(restore = false) {
+    if (restore) restoreToolsSelection();
+    toolsPanel.hidden = true; toolsToggle.setAttribute('aria-expanded', 'false');
+    toolsSelection = null; toolsDocumentID = null;
+  }
+  toolsToggle.addEventListener('click', () => {
+    if (!editable || composing) return;
+    if (!toolsPanel.hidden) { closeTools(true); return; }
+    toolsSelection = captureSelection(); toolsDocumentID = documentID;
+    hideSelectionToolbar(false); closeMenu();
+    toolsPanel.hidden = false; toolsToggle.setAttribute('aria-expanded', 'true');
+  });
+  function runToolbarAction(button) {
+    if (!button?.dataset.command || button.disabled || !editable || composing) return;
+    restoreToolsSelection(); closeTools();
     const action = button.dataset.command;
     if (action === 'whiteboard') { whiteboards.create(blockAtSelection() || root.lastElementChild, false); return; }
     if (action === 'audio') { audioBlocks.create(blockAtSelection() || root.lastElementChild); return; }
@@ -1012,18 +1051,38 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (action === 'link') { send({ type: 'requestLink' }); return; }
     if (action === 'highlight') document.execCommand('hiliteColor', false, '#f2ce5e');
     else document.execCommand(action, false); notify();
+  }
+  toolbar.addEventListener('mousedown', event => {
+    const button = event.target.closest('button'); if (!button) return;
+    event.preventDefault();
+    if (button !== toolsToggle) runToolbarAction(button);
   });
-  document.getElementById('toolbar').addEventListener('click', event => {
-    if (event.detail === 0 && event.target.closest('[data-command=audio]')) audioBlocks.create(blockAtSelection() || root.lastElementChild);
+  toolbar.addEventListener('click', event => {
+    if (event.detail === 0) runToolbarAction(event.target.closest('button'));
   });
-  language.addEventListener('change', () => { const block = blockAtSelection(); if (block?.tagName === 'PRE') { checkpoint(); block.dataset.language = language.value; notify(); } });
+  document.addEventListener('pointerdown', event => {
+    if (!toolbar.contains(event.target)) closeTools();
+  });
+  toolbar.addEventListener('focusout', () => {
+    setTimeout(() => { if (!toolbar.contains(document.activeElement)) closeTools(); }, 0);
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !toolsPanel.hidden) { event.preventDefault(); closeTools(true); }
+  });
+  language.addEventListener('change', () => {
+    const value = language.value;
+    restoreToolsSelection();
+    const block = blockAtSelection();
+    if (block?.tagName === 'PRE') { checkpoint(); block.dataset.language = value; notify(); }
+    closeTools();
+  });
   function load(body, id, canEdit, size) {
     if (composing) { pendingLoad = [body, id, canEdit, size]; return false; }
     const changed = documentID !== id || serialize() !== body;
     if (documentID !== id) lastHeight = -1;
     documentID = id; editable = canEdit; document.body.classList.toggle('readonly', !editable);
     root.contentEditable = String(editable); document.documentElement.style.setProperty('--size', size + 'px');
-    if (changed || !editable) { selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); whiteboards.reset(); audioBlocks.reset(); }
+    if (changed || !editable) { closeTools(); selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); whiteboards.reset(); audioBlocks.reset(); }
     if (changed) {
       const parsed = new DOMParser().parseFromString(body, 'text/html');
       root.innerHTML = cleanHTML(parsed.querySelector('article')?.innerHTML || '<p><br></p>');
@@ -1051,6 +1110,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   window.addEventListener('resize', frameTask(() => { resize(); positionMenu(); positionSelectionToolbar(); }));
   window.addEventListener('scroll', frameTask(() => { positionMenu(); positionSelectionToolbar(); }), { passive: true });
   window.addEventListener('blur', () => { selectingWithPointer = false; scheduleReaderSelection.cancel(); hideSelectionToolbar(); });
+  window.addEventListener('leonlanguagechange', () => { closeMenu(); colorPanel.hidden = headingPanel.hidden = true; });
   send({ type: 'ready' });
 })();
 </script>

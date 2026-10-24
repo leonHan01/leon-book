@@ -225,7 +225,7 @@ struct NativePortableSidecarRepository {
         guard values.isRegularFile == true,
               values.isSymbolicLink != true,
               (values.fileSize ?? 0) <= Self.maximumFileSize else {
-            throw NativeStoreError.fileSystem(".leonbook/\(filename) 不是可读取的普通文件或体积过大")
+            throw NativeStoreError.fileSystem(NativeLocalization.text(".leonbook/\(filename) 不是可读取的普通文件或体积过大"))
         }
         do {
             let envelope = try JSONDecoder().decode(
@@ -234,7 +234,7 @@ struct NativePortableSidecarRepository {
             )
             guard envelope.formatVersion <= Self.currentFormatVersion else {
                 throw NativeStoreError.fileSystem(
-                    ".leonbook/\(filename) 来自更高版本的 LeonBook（格式 \(envelope.formatVersion)）"
+                    NativeLocalization.text(".leonbook/\(filename) 来自更高版本的 LeonBook（格式 \(envelope.formatVersion)）")
                 )
             }
             return envelope.value
@@ -242,7 +242,7 @@ struct NativePortableSidecarRepository {
             throw error
         } catch {
             throw NativeStoreError.fileSystem(
-                "无法解析 .leonbook/\(filename)：\(error.localizedDescription)"
+                NativeLocalization.text("无法解析 .leonbook/\(filename)：\(error.localizedDescription)")
             )
         }
     }
@@ -266,7 +266,7 @@ struct NativePortableSidecarRepository {
             )
         } catch {
             throw NativeStoreError.fileSystem(
-                "无法写入 .leonbook/\(filename)：\(error.localizedDescription)"
+                NativeLocalization.text("无法写入 .leonbook/\(filename)：\(error.localizedDescription)")
             )
         }
     }
@@ -290,7 +290,7 @@ struct NativePortableSidecarRepository {
             )
         } catch {
             throw NativeStoreError.fileSystem(
-                "无法写入 .leonbook/manifest.json：\(error.localizedDescription)"
+                NativeLocalization.text("无法写入 .leonbook/manifest.json：\(error.localizedDescription)")
             )
         }
     }
@@ -299,7 +299,7 @@ struct NativePortableSidecarRepository {
         let root = markdownRootURL.standardizedFileURL.resolvingSymlinksInPath()
         let candidate = directoryURL.standardizedFileURL
         guard candidate.path.hasPrefix(root.path + "/") else {
-            throw NativeStoreError.fileSystem(".leonbook 目录超出 Markdown 工作区")
+            throw NativeStoreError.fileSystem(NativeLocalization.text(".leonbook 目录超出 Markdown 工作区"))
         }
         if FileManager.default.fileExists(atPath: candidate.path) {
             try validateExistingDirectoryIfNeeded()
@@ -312,7 +312,7 @@ struct NativePortableSidecarRepository {
             throw error
         } catch {
             throw NativeStoreError.fileSystem(
-                "无法创建 .leonbook 目录：\(error.localizedDescription)"
+                NativeLocalization.text("无法创建 .leonbook 目录：\(error.localizedDescription)")
             )
         }
     }
@@ -328,7 +328,7 @@ struct NativePortableSidecarRepository {
         guard values.isDirectory == true,
               values.isSymbolicLink != true,
               resolved.path.hasPrefix(root.path + "/") else {
-            throw NativeStoreError.fileSystem(".leonbook 必须是 Markdown 工作区内的普通目录")
+            throw NativeStoreError.fileSystem(NativeLocalization.text(".leonbook 必须是 Markdown 工作区内的普通目录"))
         }
     }
 }

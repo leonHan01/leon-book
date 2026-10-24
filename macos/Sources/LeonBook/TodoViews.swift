@@ -2,6 +2,8 @@ import SwiftUI
 import LeonBookTodoModule
 
 struct TodoListView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @State private var composer: TodoComposerContext?
     @FocusState private var quickEntryFocused: Bool
@@ -25,18 +27,18 @@ struct TodoListView: View {
                 }
                 if let deleted = model.todoSession.lastDeleted {
                     HStack(spacing: 10) {
-                        Image(systemName: "trash").foregroundStyle(.secondary)
-                        Text("已删除：\(deleted.title)").lineLimit(1)
+                        NativeIcon.image("trash").foregroundStyle(.secondary)
+                        Text(NativeLocalization.text("已删除：\(deleted.title)")).lineLimit(1)
                         Spacer()
                         Button("撤销删除") { Task { _ = await model.undoTodoDeletion() } }
                             .disabled(!model.canWriteTodos)
-                        Button { model.todoSession.lastDeleted = nil } label: { Image(systemName: "xmark") }
+                        Button { model.todoSession.lastDeleted = nil } label: { NativeIcon.image("xmark") }
                             .buttonStyle(.plain).help("关闭")
                     }
-                    .font(.callout).padding(14).background(NativeTheme.surface)
+                    .font(.callout).padding(14).background(appPalette.surface)
                 }
             }
-            .background(NativeTheme.canvas)
+            .background(appPalette.canvas)
         }
         .sheet(item: $composer) { context in
             TodoEditorSheet(model: model, context: context)
@@ -53,32 +55,32 @@ struct TodoListView: View {
     private func header(_ projection: TodoListProjection) -> some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("TODO LIST").font(.system(size: 10, weight: .semibold)).tracking(2).foregroundStyle(NativeTheme.textSecondary)
-                Text("待办").font(.system(size: 28, weight: .bold)).foregroundStyle(NativeTheme.deepBlue)
+                Text("TODO LIST").font(.system(size: 10, weight: .semibold)).tracking(2).foregroundStyle(appPalette.textSecondary)
+                Text("待办").font(.system(size: 28, weight: .bold)).foregroundStyle(appPalette.deepBlue)
                 Text("安排任务，记录每一次完成。") .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
             if model.todoSession.isLoading || model.isSavingTodo { ProgressView().controlSize(.small) }
             VStack(alignment: .trailing, spacing: 7) {
-                Text("已完成 \(projection.completedCount) / \(projection.openCount + projection.completedCount)")
+                Text(NativeLocalization.text("已完成 \(projection.completedCount) / \(projection.openCount + projection.completedCount)"))
                     .font(.caption).foregroundStyle(.secondary)
                 ProgressView(value: Double(projection.completedCount), total: Double(max(1, projection.openCount + projection.completedCount)))
-                    .frame(width: 140).tint(NativeTheme.blue)
+                    .frame(width: 140).tint(appPalette.blue)
             }
             Button {
                 composer = TodoComposerContext(item: nil, draft: .init(title: model.todoSession.quickTitle), workspace: model.workspaceGeneration)
-            } label: { Label("新建待办", systemImage: "plus") }
+            } label: { Label("新建待办", nativeIcon: "plus") }
                 .nativePrimaryButton().disabled(!model.canWriteTodos)
         }
         .padding(.horizontal, 26).padding(.vertical, 22)
-        .background(NativeTheme.surface)
+        .background(appPalette.surface)
         .overlay(alignment: .bottom) { Divider() }
     }
 
     private func summary(_ projection: TodoListProjection) -> some View {
         HStack(spacing: 12) {
-            stat("待完成", count: projection.openCount, icon: "circle.dotted", color: NativeTheme.blue, filter: .open)
-            stat("今天到期", count: projection.todayCount, icon: "calendar", color: NativeTheme.blue, filter: .today)
+            stat("待完成", count: projection.openCount, icon: "circle.dotted", color: appPalette.blue, filter: .open)
+            stat("今天到期", count: projection.todayCount, icon: "calendar", color: appPalette.blue, filter: .today)
             stat("已逾期", count: projection.overdueCount, icon: "clock.badge.exclamationmark", color: .orange, filter: .overdue)
             stat("已完成", count: projection.completedCount, icon: "checkmark.circle", color: .green, filter: .completed)
         }
@@ -88,22 +90,22 @@ struct TodoListView: View {
         Button { model.todoSession.filter = filter } label: {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Image(systemName: icon).foregroundStyle(color)
+                    NativeIcon.image(icon).foregroundStyle(color)
                     Spacer()
                     Text(LocalizedStringKey(title)).font(.caption).foregroundStyle(.secondary)
                 }
-                Text("\(count)").font(.system(size: 25, weight: .semibold)).foregroundStyle(NativeTheme.textPrimary)
+                Text("\(count)").font(.system(size: 25, weight: .semibold)).foregroundStyle(appPalette.textPrimary)
             }
             .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.todoSession.filter == filter ? NativeTheme.blue.opacity(0.55) : NativeTheme.border, lineWidth: 1))
+            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.todoSession.filter == filter ? appPalette.blue.opacity(0.55) : appPalette.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
     private var quickEntry: some View {
         HStack(spacing: 12) {
-            Image(systemName: "plus.circle").font(.title3).foregroundStyle(NativeTheme.blue)
+            NativeIcon.image("plus.circle", size: 18).foregroundStyle(appPalette.blue)
             TextField("添加待办，按回车保存", text: $model.todoSession.quickTitle)
                 .textFieldStyle(.plain).focused($quickEntryFocused)
                 .onSubmit { addQuickTodo() }
@@ -111,8 +113,8 @@ struct TodoListView: View {
                 .nativePrimaryButton()
                 .disabled(!model.canWriteTodos || model.todoSession.quickTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .padding(14).background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(quickEntryFocused ? NativeTheme.blue.opacity(0.65) : NativeTheme.border, lineWidth: 1))
+        .padding(14).background(appPalette.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(quickEntryFocused ? appPalette.blue.opacity(0.65) : appPalette.border, lineWidth: 1))
     }
 
     private func addQuickTodo() {
@@ -130,15 +132,15 @@ struct TodoListView: View {
             .pickerStyle(.segmented).frame(maxWidth: 440)
             Spacer(minLength: 10)
             HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                NativeIcon.image("magnifyingglass").foregroundStyle(.secondary)
                 TextField("搜索待办或备注", text: $model.todoSession.search).textFieldStyle(.plain)
                 if !model.todoSession.search.isEmpty {
-                    Button { model.todoSession.search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    Button { model.todoSession.search = "" } label: { NativeIcon.image("xmark.circle.fill").foregroundStyle(.secondary) }
                         .buttonStyle(.plain).help("清除搜索")
                 }
             }
             .padding(8).frame(maxWidth: 250)
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 7))
+            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 7))
         }
     }
 
@@ -147,20 +149,20 @@ struct TodoListView: View {
         if !model.todoSession.hasLoaded {
             VStack(spacing: 12) {
                 if let error = model.todoSession.loadError {
-                    Image(systemName: "exclamationmark.circle").font(.largeTitle).foregroundStyle(.secondary)
+                    NativeIcon.image("exclamationmark.circle", size: 32).foregroundStyle(.secondary)
                     Text(error).font(.callout).foregroundStyle(.secondary)
                     Button("重新加载") { Task { try? await model.reloadTodos() } }
                 } else { ProgressView("正在加载待办…") }
             }.frame(maxWidth: .infinity).padding(55)
         } else if projection.items.isEmpty {
             VStack(spacing: 14) {
-                Image(systemName: "checklist").font(.system(size: 34, weight: .light)).foregroundStyle(NativeTheme.blue.opacity(0.65))
+                NativeIcon.image("checklist", size: 32).foregroundStyle(appPalette.blue.opacity(0.65))
                 Text(LocalizedStringKey(model.todoSession.items.isEmpty ? "开始第一项待办" : "没有匹配的待办")).font(.headline)
                 Text(LocalizedStringKey(model.todoSession.items.isEmpty ? "在上方输入任务，按回车添加。" : "试试其他筛选条件或搜索关键词。"))
                     .font(.callout).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity).padding(.vertical, 65)
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 12))
         } else {
             LazyVStack(spacing: 0) {
                 ForEach(projection.items) { item in
@@ -171,13 +173,15 @@ struct TodoListView: View {
                     if item.id != projection.items.last?.id { Divider().padding(.leading, 54) }
                 }
             }
-            .padding(6).background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(NativeTheme.border.opacity(0.7), lineWidth: 1))
+            .padding(6).background(appPalette.surface, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(appPalette.border.opacity(0.7), lineWidth: 1))
         }
     }
 }
 
 private struct TodoItemRow: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let item: TodoItem
     let today: String
     let isEnabled: Bool
@@ -189,41 +193,40 @@ private struct TodoItemRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 13) {
             Button(action: onToggle) {
-                Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 21, weight: .light))
-                    .foregroundStyle(item.isCompleted ? NativeTheme.blue : NativeTheme.textSecondary.opacity(0.7))
+                NativeIcon.image(item.isCompleted ? "checkmark.circle.fill" : "circle", size: 24)
+                    .foregroundStyle(item.isCompleted ? appPalette.blue : appPalette.textSecondary.opacity(0.7))
             }
             .buttonStyle(.plain).disabled(!isEnabled)
             .accessibilityLabel(LocalizedStringKey(item.isCompleted ? "标记未完成" : "标记完成"))
             Button(action: onEdit) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(item.title).font(.system(size: 14, weight: .medium))
-                        .strikethrough(item.isCompleted).foregroundStyle(item.isCompleted ? NativeTheme.textSecondary : NativeTheme.textPrimary)
+                        .strikethrough(item.isCompleted).foregroundStyle(item.isCompleted ? appPalette.textSecondary : appPalette.textPrimary)
                         .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                     if !item.notes.isEmpty { Text(item.notes).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                 }
             }
             .buttonStyle(.plain).disabled(!isEnabled)
             if let day = item.dueDay {
-                Label(LocalizedStringKey(day == today ? "今天" : day), systemImage: "calendar")
+                Label(LocalizedStringKey(day == today ? "今天" : day), nativeIcon: "calendar", iconSize: 12)
                     .font(.caption).monospacedDigit()
-                    .foregroundStyle(item.isOverdue(today: today) ? Color.orange : NativeTheme.textSecondary)
+                    .foregroundStyle(item.isOverdue(today: today) ? Color.orange : appPalette.textSecondary)
                     .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(item.isOverdue(today: today) ? Color.orange.opacity(0.09) : NativeTheme.surfaceSecondary, in: Capsule())
+                    .background(item.isOverdue(today: today) ? Color.orange.opacity(0.09) : appPalette.surfaceSecondary, in: Capsule())
             }
-            Image(systemName: "flag.fill").font(.caption)
-                .foregroundStyle(item.priority == .high ? Color.red.opacity(0.8) : item.priority == .normal ? NativeTheme.blue : NativeTheme.textSecondary.opacity(0.45))
+            NativeIcon.image("flag.fill", size: 12)
+                .foregroundStyle(item.priority == .high ? Color.red.opacity(0.8) : item.priority == .normal ? appPalette.blue : appPalette.textSecondary.opacity(0.45))
                 .help(LocalizedStringKey(item.priority.label)).accessibilityLabel(LocalizedStringKey(item.priority.label))
             Menu {
                 Button("编辑待办", action: onEdit)
                 Button(LocalizedStringKey(item.isCompleted ? "标记未完成" : "标记完成"), action: onToggle)
                 Divider()
                 Button("删除待办", role: .destructive, action: onDelete)
-            } label: { Image(systemName: "ellipsis") }
+            } label: { NativeIcon.image("ellipsis") }
             .menuStyle(.borderlessButton).frame(width: 22).disabled(!isEnabled).help("待办操作")
         }
         .padding(.horizontal, 13).padding(.vertical, 15)
-        .background(isHovered ? NativeTheme.lightBlue.opacity(0.55) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        .background(isHovered ? appPalette.lightBlue.opacity(0.55) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
         .onHover { isHovered = $0 }
         .contextMenu {
             Button("编辑待办", action: onEdit).disabled(!isEnabled)
@@ -240,6 +243,8 @@ private struct TodoComposerContext: Identifiable {
 }
 
 private struct TodoEditorSheet: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     let context: TodoComposerContext
     @Environment(\.dismiss) private var dismiss
@@ -270,8 +275,8 @@ private struct TodoEditorSheet: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text("备注").font(.callout).foregroundStyle(.secondary)
                 TextEditor(text: $draft.notes).font(.body).padding(5)
-                    .frame(height: 125).background(NativeTheme.surface)
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(NativeTheme.border, lineWidth: 1))
+                    .frame(height: 125).background(appPalette.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(appPalette.border, lineWidth: 1))
             }
             if let validationMessage { Text(validationMessage).font(.callout).foregroundStyle(.red) }
             HStack {
@@ -288,7 +293,7 @@ private struct TodoEditorSheet: View {
     }
 
     private func save() {
-        guard context.workspace == model.workspaceGeneration else { validationMessage = "工作区已切换，请重新打开待办。"; return }
+        guard context.workspace == model.workspaceGeneration else { validationMessage = NativeLocalization.text("工作区已切换，请重新打开待办。"); return }
         do { _ = try draft.validated() } catch { validationMessage = error.localizedDescription; return }
         Task {
             if await model.saveTodoDraft(draft, editing: context.item) {

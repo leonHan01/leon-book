@@ -98,7 +98,7 @@ enum WorkspaceStorageLifecycle {
         defer { lock.unlock() }
         guard !suspendedRoots.values.contains(where: { overlaps($0, root) }),
               !asyncWrites.values.contains(where: { overlaps($0, root) }) else {
-            throw NativeStoreError.fileSystem("资料库仍有恢复、导入或媒体写入操作，请完成后重试。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("资料库仍有恢复、导入或媒体写入操作，请完成后重试。"))
         }
         let id = UUID()
         suspendedRoots[id] = root
@@ -110,7 +110,7 @@ enum WorkspaceStorageLifecycle {
         guard !suspendedRoots.isEmpty else { return }
         let root = root.standardizedFileURL.resolvingSymlinksInPath()
         guard !suspendedRoots.values.contains(where: { contains($0, root) }) else {
-            throw NativeStoreError.fileSystem("资料库正在恢复，请稍后重试。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("资料库正在恢复，请稍后重试。"))
         }
     }
 

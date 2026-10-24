@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 import WebKit
 
@@ -12,6 +13,7 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
     private var dirty = false
     private var saving = false
     private var finished = false
+    private var languageObserver: AnyCancellable?
 
     init(scene: String, onSave: @escaping (String, String) async throws -> Void, onClose: @escaping () -> Void) {
         self.scene = scene
@@ -20,7 +22,7 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
         let configuration = Self.configuration()
         webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 760), configuration: configuration)
         let panel = NSPanel(contentRect: webView.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        panel.title = "文章画板 · Excalidraw"
+        panel.title = NativeLocalization.text("文章画板 · Excalidraw")
         panel.minSize = NSSize(width: 700, height: 500)
         panel.isReleasedWhenClosed = false
         panel.contentView = webView
@@ -29,12 +31,18 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
         configuration.userContentController.add(self, name: "whiteboard")
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        languageObserver = NativeLanguagePreferences.shared.$language.removeDuplicates().sink { [weak self] language in
+            guard let self else { return }
+            window?.title = NativeLocalization.string("文章画板 · Excalidraw", language: language)
+            NativeWebLocalization.apply(language, to: webView)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     static func configuration() -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
+        NativeWebLocalization.install(on: configuration, language: NativeLocalization.currentLanguage)
         configuration.websiteDataStore = .nonPersistent()
         configuration.setURLSchemeHandler(ArticleWhiteboardResources(), forURLScheme: "leonboard")
         return configuration
@@ -52,6 +60,7 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
               let payload = message.body as? [String: Any], let type = payload["type"] as? String else { return }
         switch type {
         case "ready":
+            NativeWebLocalization.apply(NativeLocalization.currentLanguage, to: webView)
             webView.callAsyncJavaScript("window.LeonWhiteboard.load(scene)", arguments: ["scene": scene], in: nil, in: .page) { [weak self] result in
                 if case .failure(let error) = result { self?.showError(error.localizedDescription) }
             }
@@ -80,10 +89,10 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
         guard !saving else { return }
         if dirty, let window {
             let alert = NSAlert()
-            alert.messageText = "放弃画板修改？"
-            alert.informativeText = "尚未保存到文章的修改将被丢弃。"
-            alert.addButton(withTitle: "继续编辑")
-            alert.addButton(withTitle: "放弃修改")
+            alert.messageText = NativeLocalization.text("放弃画板修改？")
+            alert.informativeText = NativeLocalization.text("尚未保存到文章的修改将被丢弃。")
+            alert.addButton(withTitle: NativeLocalization.text("继续编辑"))
+            alert.addButton(withTitle: NativeLocalization.text("放弃修改"))
             alert.beginSheetModal(for: window) { [weak self] response in
                 if response == .alertSecondButtonReturn { self?.finish() }
             }
@@ -93,6 +102,7 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
     func finish() {
         guard !finished else { return }
         finished = true
+        languageObserver = nil
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "whiteboard")
         webView.stopLoading()
         webView.navigationDelegate = nil
@@ -115,7 +125,7 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         guard let window else { return }
         let alert = NSAlert()
-        alert.messageText = "无法加载画板"
+        alert.messageText = NativeLocalization.text("无法加载画板")
         alert.informativeText = error.localizedDescription
         alert.beginSheetModal(for: window) { [weak self] _ in self?.finish() }
     }
@@ -138,7 +148,7 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
 final class ArticleWhiteboardResources: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url, url.host == "app",
-              let root = Bundle.module.url(forResource: "Whiteboard", withExtension: nil) else {
+              let root = Bundle.leonBookResources.url(forResource: "Whiteboard", withExtension: nil) else {
             task.didFailWithError(URLError(.fileDoesNotExist)); return
         }
         let file = root.appendingPathComponent(url.path).standardizedFileURL.resolvingSymlinksInPath()

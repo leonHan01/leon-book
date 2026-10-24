@@ -23,6 +23,7 @@ let package = Package(
         ),
         .target(
             name: "LeonBookExtensionKit",
+            dependencies: ["LeonBookModuleKit"],
             path: "Sources/LeonBookExtensionKit"
         ),
         .target(

@@ -2,182 +2,171 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`leon-book` 是一款原生 macOS 写作应用，用于管理文章、草稿、图片、视频、动态和创作活动。
+一款用于写作、记录灵感和整理个人内容的原生 macOS 工作台。将文章、本地微博、问答、待办、图片和音视频放在同一个工作空间，并按自己的习惯布置首页。
 
-应用使用 SwiftUI 构建，数据直接保存到本地文件系统，不依赖外部浏览器、Node.js 服务或 HTTP API。
+应用基于 **SwiftUI、AppKit、WebKit 和 SQLite** 构建。核心写作与资料管理功能支持离线使用，运行时无需 Node.js 服务、外部浏览器或本地 HTTP 服务。文章和媒体保存在你选择的数据目录中。
 
-## 软件截图
+[快速开始](#快速开始) · [主要功能](#主要功能) · [数据与备份](#数据与备份) · [自动化接入](#自动化接入) · [开发说明](#开发说明)
 
-以下截图来自独立的“产品演示”工作区，其中加入了 mock 文章、双链、微博和问答数据。
+## 快速开始
 
-### 工作区概览
+构建要求：**macOS 13+**、**Swift 5.10+** 和 macOS SDK。提供相应工具链的 Command Line Tools 即可，无需安装完整 Xcode。
 
-![LeonBook 工作区概览，展示已发布文章、草稿、微博和创作活动](docs/screenshots/leonbook-dashboard.jpg)
-
-### 文章阅读与双链
-
-![LeonBook 文章阅读页，展示任务内容、大纲、反向链接和出链](docs/screenshots/leonbook-article.jpg)
-
-### 知识关系图
-
-![LeonBook 知识关系图，展示四篇 mock 文章之间的引用关系](docs/screenshots/leonbook-graph.jpg)
-
-### 微博动态
-
-![LeonBook 微博时间线，展示标签和 mock 产品动态](docs/screenshots/leonbook-moments.jpg)
-
-### 问答
-
-![LeonBook 问答详情，展示 Markdown 与 SQLite 架构问题及回答](docs/screenshots/leonbook-qna.jpg)
-
-## 功能
-
-- 无限画布：将文章、微博、便签、网页与素材放在同一空间，支持缩放、拖动、分组、连线、撤销重做、本地自动保存和 `.canvas` 导入导出
-- 阅读、编辑和发布文章
-- 通过 `/画板` 插入离线 Excalidraw 画板，保存为文章预览，双击可继续编辑
-- 文章编辑停止 3 秒后自动保存恢复快照，支持版本差异和一键恢复
-- SQLite FTS5 全文搜索文章、类型化属性、摘要、正文和微博，支持 `[属性名:值]` 筛选、`⌘O` 快速打开，以及带模糊匹配、最近使用、固定命令和可配置快捷键的 `⌘P` 命令面板
-- 保存由 SQLite 直接筛选和排序的智能集合，可组合状态、分类、属性、时间和数值条件，支持多级排序、分组及列表、表格、卡片视图
-- 收藏文章、正文标题、搜索条件和全局图谱，并从侧栏快速打开
-- 阅读页右侧文章面板集中显示大纲、反向链接、出链、可一键转换的未链接提及和局部关系图，并支持悬停预览
-- 全局图谱支持搜索、状态与孤立节点过滤、缩放和按连接度进行节点裁剪；节点可拖动，并可按引用方向查找和高亮两篇文章间的最短路径
-- 正文保存时增量更新双链与提及索引；关系面板只查询当前文章的候选关系，全局图谱复用索引而不重新扫描全部正文
-- 双链可按标题、slug 或 aliases 解析；`[[文章#标题]]` 跳到标题，`[[文章#^block-id]]` 精确定位段落或列表项，并可在输入 `#^` 后按 ID 和正文预览补全块链接
-- 通过 `leonbook://` URL 或 macOS 快捷指令/App Intents 自动新建文章、打开文章、搜索和查看今日动态
-- 阅读工作区支持独立前进/后退历史、最近文章、固定标签页以及 `⌘+点击` 新标签打开；正文宽度、字体、字号、行距、段距、主题和代码字体可按用户调整
-- 阅读正文支持拖选或双击划词评论，评论、引用与回复集中显示在右侧栏
-- 微博支持本地评论、回复和评论数量展示；删除评论会一并删除其回复，微博从回收站恢复时保留评论
-- 写作区支持文本、列表、数字、日期、复选框和标签属性及全工作区统一重命名；右栏可切换设置、Properties、大纲和链接；“写作/阅读/审稿”作为内置模板，也可另存任意命名工作区并保存标签页、侧栏宽度和分栏状态
-- 每个 macOS 窗口拥有独立的当前文章、标签页以及前进/后退导航状态
-- 主导航只挂载当前页面，以轻量状态缓存代替预热并常驻完整视图树
-- 搜索、知识图谱、发布、备份和采集是独立 SwiftPM 第一方模块，可在“设置 → 第一方模块”中分别启停；命令、事件和权限统一通过 ModuleKit
-- 支持从当前用户工作区的 `extensions/` 加载版本化 JSON 声明式扩展，开放命令、模板变量、文本/JSON 导入器、围栏渲染器和 Base 公式函数，但不加载动态库或执行扩展脚本
-- 可将普通 Markdown 文件夹或 Obsidian Vault 作为工作区，选择“复制导入 / 只读挂载 / 直接编辑”，并持续监听挂载目录
-- 可选将评论、版本历史、收藏、任务布局和阅读偏好写入 Vault 内版本化的 `.leonbook/` sidecar，配合 iCloud Drive、Dropbox、Syncthing 等整目录文件同步在设备间合并
-- 在文章正文中直接内嵌远程 HTTP(S) 网页
-- 阅读与预览支持用 PDFKit 内嵌 PDF、播放 Vault 音频，并渲染 `$$…$$` / LaTeX 围栏及 Mermaid 图表
-- 本地保存草稿，支持多用户独立工作空间
-- 管理图片和视频素材
-- 发布图文动态并浏览时间线
-- 查看最近编辑记录和年度创作活动
-- 支持离线使用，用户完全掌控本地数据
-
-## 系统要求
-
-- macOS 13 或更高版本
-- Swift 5.10 或更高版本
-
-本地构建和检查不要求安装完整的 Xcode。
-
-## 使用命令
-
-在项目根目录执行以下命令：
+在项目根目录执行：
 
 ```bash
 ./scripts/leonblog open
 ```
 
-当应用不存在或版本过期时，`open` 会先构建应用，然后打开 `leon-book`。其他可用命令如下：
+脚本会在应用缺失或过期时先构建，再打开应用。首次构建使用 Debug，之后沿用已安装版本的构建模式。生成的应用位于 `macos/dist/leon-book.app`，使用适合本机运行的临时签名。
+
+如需指定数据目录：
 
 ```bash
-./scripts/leonblog start   # open 的别名
-./scripts/leonblog restart # 关闭当前应用，重新构建后启动
-./scripts/leonblog build   # 构建 macOS 应用
-./scripts/leonblog test    # 运行原生检查
-./scripts/leonblog help    # 显示命令帮助
+LEON_BOOK_WORKDIR="$HOME/Documents/LeonBookData" ./scripts/leonblog open
 ```
 
-构建后的应用位于：
+未指定时，应用优先使用上次记住的目录，再使用仓库当前默认路径 `/Volumes/T7Shield/myblog`。如果目录不存在，应用会提示选择。每个本地用户拥有独立的工作空间。
+
+## 主要功能
+
+| 功能 | 可以做什么 |
+| --- | --- |
+| 自定义首页 | 组合文字、图片、音频、视频、文章、待办、统计、最近编辑和创作活动；拖动模块排序、调整尺寸并保存布局。 |
+| 文章写作 | 编辑 HTML 富文本，使用标题、列表、表格、代码框、高亮框和附件；通过 `/` 快捷插入，保存草稿、比较版本并恢复编辑快照。 |
+| 文章资料库 | 使用最多五级目录组织文章，在列表、表格、卡片、看板和日历之间切换，配合分类、标签与类型化属性整理内容。 |
+| 搜索与关联 | 使用 SQLite FTS5 搜索文章和微博，通过大纲、反向链接、出链和知识图谱浏览内容，收藏文章、标题与搜索条件。 |
+| 画板与无限画布 | 在文章中插入离线 Excalidraw 画板；也可将文章、微博、便签、网页和文件放入无限画布，分组、连线，并导入导出 `.canvas`。 |
+| 微博与问答 | 记录本地图文动态，添加评论和回复，整理问题及其回答。 |
+| 图片与相册 | 创建相册，从 Finder 拖入或批量导入图片，多选、搜索与排序，并通过缩放和键盘切换浏览大图。 |
+| 影音库 | 独立分组管理视频和音频，添加介绍、搜索内容，使用原生控件播放并记忆播放进度。 |
+| 待办 | 设置优先级、截止日期和备注，按未完成、今天、逾期或已完成筛选，也可将待办清单放到首页。 |
+| 工作空间 | 切换本地用户，在不同窗口中独立导航，并保存命名的阅读或写作布局。 |
+
+文章“发布”和微博发布都作用于本地资料库，不会向互联网平台发送内容。内嵌远程网页需要网络连接。
+
+### 写作与快捷操作
+
+在段落开头输入 `/`，可使用 `/h1`、`/code`、`/callout`、`/task`、`/table`、`/whiteboard` 等命令。画板保存为可编辑的场景文件，并在文章中显示预览；双击预览可继续绘制。
+
+停止输入 3 秒后会自动保存恢复快照，版本历史支持比较与恢复。“保存草稿”和“发布”仍是正式保存文章的操作。
+
+| 快捷键 | 操作 |
+| --- | --- |
+| `⌘O` | 快速查找并打开文章 |
+| `⌘P` | 打开命令面板 |
+| `⇧⌘F` | 打开全文搜索 |
+
+命令面板支持最近使用和固定命令，可在“设置 → 命令与快捷键”中调整快捷键。搜索支持 `tag:写作`、`status:draft`、`type:article`、`[属性名:值]` 等筛选条件。
+
+## 软件截图
+
+以下为仓库内的产品演示截图，使用独立工作区中的示例数据，展示写作、内容关联和时间线等界面；布局可能与当前版本不同。
+
+![LeonBook 工作区概览](docs/screenshots/leonbook-dashboard.jpg)
+
+<details>
+<summary>查看文章阅读、知识图谱、微博和问答</summary>
+
+![文章阅读页，包含大纲和双链](docs/screenshots/leonbook-article.jpg)
+
+![文章知识关系图](docs/screenshots/leonbook-graph.jpg)
+
+![本地微博时间线](docs/screenshots/leonbook-moments.jpg)
+
+![问答详情](docs/screenshots/leonbook-qna.jpg)
+
+</details>
+
+## 应用管理命令
+
+以下命令均在项目根目录执行：
+
+| 命令 | 行为 |
+| --- | --- |
+| `./scripts/leonblog open` | 按需构建并打开应用；`start` 是它的别名 |
+| `./scripts/leonblog restart` | 正常退出当前应用，按需构建并重启，默认使用 Debug |
+| `./scripts/leonblog restart --release` | 使用优化后的 Release 构建重启 |
+| `./scripts/leonblog build` | 构建并打包 Release，不启动应用 |
+| `./scripts/leonblog test` | 运行原生测试与检查 |
+| `./scripts/leonblog coverage` | 运行单元测试并生成覆盖率报告 |
+| `./scripts/leonblog help` | 查看命令帮助 |
+
+`open`、`start`、`restart`、`build` 均支持 `--debug` 和 `--release`。Debug 在可用时采用 native 构建引擎，缓存与常规 Release 构建分开；自动选择时若该引擎不可用，会回退到工具链默认引擎。可设置 `LEON_BOOK_BUILD_SYSTEM=default` 显式使用工具链默认引擎。每种构建配置首次使用时需要建立缓存。
+
+## 数据与备份
+
+应用按以下顺序选择数据根目录：
+
+1. 环境变量 `LEON_BOOK_WORKDIR`。
+2. 应用记住的上次选择目录。
+3. 仓库当前默认路径 `/Volumes/T7Shield/myblog`。
+
+典型的数据目录结构如下：
 
 ```text
-macos/dist/leon-book.app
-```
-
-## 本地数据
-
-默认数据目录为：
-
-```text
-/Volumes/T7Shield/myblog/
-├── leon-book.sqlite    # 用户和设置的主 SQLite 数据库
-├── users.json          # 可读的兼容性导出
-├── active-user.json    # 可读的兼容性导出
+data-root/
+├── leon-book.sqlite          # 本地用户与当前用户设置
+├── users.json                # 兼容性导出
+├── active-user.json          # 兼容性导出
 └── workspaces/
-    └── <user-id>/      # 每位用户独立的工作空间
-        ├── leon-book.sqlite # 文章、动态和活动记录数据库
-        ├── articles/   # 文章 JSON、Markdown 和索引；可含可选 .leonbook/ sidecar
-        ├── drafts/     # 草稿恢复副本
-        ├── media/      # 图片和视频原文件
-        ├── moments/    # 动态数据和时间线索引
-        └── activity/   # 创作活动记录
+    └── <user-id>/
+        ├── leon-book.sqlite  # 内容索引及结构化记录
+        ├── articles/         # HTML 文章及兼容性文件
+        ├── drafts/           # 草稿恢复副本
+        ├── media/            # 图片、音频、视频与画板素材
+        ├── canvases/         # 已保存的 .canvas 文档
+        ├── moments/          # 微博导出及时间线索引
+        ├── activity/         # 创作活动记录
+        ├── trash/            # 回收站内容
+        └── extensions/       # 可选的声明式扩展包
 ```
 
-应用按以下顺序选择数据目录：
+当前文章编辑使用 **HTML 富文本**，正式内容保存为 `.html` 文件。SQLite 保存文章索引，以及评论、版本历史、收藏、待办、首页布局、相册和影音分组等记录。这些结构化记录也是用户数据的一部分，只备份 `articles/` 无法保留完整工作空间。媒体仍以普通本地文件保存。
 
-1. `LEON_BOOK_WORKDIR`
-2. `/Volumes/T7Shield/myblog/`
+旧 Markdown 内容保留兼容读取和单向转换路径。Markdown/Obsidian 导入与挂载入口已退出常规设置流程；已有挂载工作区可通过“设置 → 文章格式 → 切回应用内资料库”返回。自动化 API 也可接收 Markdown，并在输入时转换为 HTML。
 
-默认数据目录为 `/Volumes/T7Shield/myblog/`。如果该目录不可用，首次进入应用时会要求选择一个工作目录；之后会记住你的选择。如需使用其他目录，也可以设置环境变量：
+### 备份
+
+在“设置 → 备份”中选择独立目录。发生数据变化后，默认最多每小时生成一个自动快照，保留 90 天、最多 60 个，并要求至少剩余 10 GB 可用空间。以上策略均可调整，也可手动备份。
+
+快照包含数据根目录及其中的用户工作空间。未变化的文件优先使用 APFS 克隆，或复用、复制上一快照中的文件。应用提供快照校验与整个资料库恢复，恢复前会先创建安全快照。备份目录必须位于当前数据目录之外；旧工作区挂载的外部文章目录需单独备份。备份为本地未加密文件，不会自动上传。
+
+## 自动化接入
+
+CLI 通过 JSON 命令和 JSON Lines 接口向外部工具及 AI 助手提供内容操作能力：
 
 ```bash
-LEON_BOOK_WORKDIR=/Volumes/T7Shield/myblog ./scripts/leonblog open
+./scripts/leonblog api capabilities
+./scripts/leonblog api articles.list --json '{"limit":20}'
+./scripts/leonblog api --stdio
 ```
 
-首次初始化多用户结构时，根目录中已有的文章、草稿、媒体、动态和活动记录会自动迁移到默认的 `leon` 工作空间。卸载应用不会删除本地数据，请像备份普通文件一样备份该目录。
+应用运行时，CLI 连接其本地 Unix Socket；应用关闭时，直接使用同一套存储逻辑。`--root` 指向包含 `workspaces/` 的数据根目录，`--user` 可指定本地用户。首次调用可能需要编译 CLI。
 
-### 设置独立备份路径
+应用还支持 `leonbook://new`、`leonbook://open?slug=example`、`leonbook://search?q=example`、`leonbook://today`，并提供对应的 macOS 快捷指令/App Intents。
 
-打开应用的“设置 → 备份”，选择另一块磁盘或其他独立目录。数据变化会被合并处理，默认最多每小时自动生成一个带时间戳的逻辑完整快照；也可以随时手动备份。未变化文件优先使用 APFS Clone-on-Write，无法克隆时复用上一快照或复制，因此图片、视频不会在每次备份时无条件完整复制。快照包含用户配置、SQLite 数据库、工作区内文章、草稿、动态、活动记录、回收站和媒体文件；`.leon-book.lock` 锁文件不会被复制。外部挂载的 Markdown 目录不会重复复制进 LeonBook 快照，应按普通文件夹单独备份。
-
-默认策略保留 90 天、最多 60 个快照，并要求备份卷至少保留 10 GB 可用空间；这些参数可在设置中调整。创建前会显示源数据大小、预计新增占用和磁盘余量。快照列表支持在 Finder 中浏览、SHA-256 校验，以及恢复整个数据目录；恢复前会先创建当前工作区的安全快照，并用暂存目录原子替换，失败时回滚原数据。
-
-备份路径不能放在数据目录内部，否则应用会拒绝保存设置以避免递归复制。备份文件保持本地明文格式；如内容敏感，请把备份目录放在启用 FileVault 的 APFS 磁盘、加密移动硬盘或受控权限的目录中。应用不会自动上传备份到云端。
-
-文章 Markdown（含 YAML Properties）和 `media/` 下的普通媒体文件是资料库的权威数据源；SQLite 保存可由这些文件重新扫描得到的文章索引，并承载本机正在使用的评论、版本、收藏等结构化数据。启用可移植 sidecar 后，这些不可重建状态会同时写入 Markdown 根目录的 `.leonbook/`，新设备导入后仍以 SQLite 提供本地查询。首次启动时，已有 JSON 数据会自动迁移；之后通过 macOS FSEvents 合并处理 Markdown 与 sidecar 的新增、修改、移动和删除，并每 15 分钟执行一次低频完整校验。
-
-在“设置 → Markdown 工作区 / Obsidian Vault”中有三种方式：
-
-- **复制导入**：只读取所选目录，把确认后的文章和附件复制到当前用户工作空间；之后与原目录互不影响，已有相同 slug 的文章会被跳过。
-- **只读挂载**：直接把普通目录或 Vault 作为 Markdown 权威数据源并持续监听；LeonBook 可以阅读、搜索和建立关系索引，但统一阻止保存、移动、删除、重构及批量属性写入。
-- **直接编辑**：与只读挂载使用相同的目录监听和索引机制，但允许 LeonBook 通过原子写入直接更新原 Markdown。SQLite 与应用媒体仍留在 LeonBook 用户工作空间；可选择把评论、版本、收藏和布局额外写入挂载目录的 `.leonbook/`。
-
-### 可移植 `.leonbook/` sidecar
-
-在“设置 → Markdown 工作区 / Obsidian Vault”中按当前 Markdown 根目录单独启用。LeonBook 会维护以下普通 JSON 文件：
-
-```text
-.leonbook/
-├── manifest.json   # 格式版本和文件清单
-├── comments.json   # 评论、回复及删除墓碑
-├── history.json    # 使用跨设备同步 ID 的版本历史
-├── bookmarks.json  # 收藏及删除墓碑
-└── layouts.json    # 任务布局和阅读偏好
-```
-
-sidecar 是 SQLite 之外的可移植事实记录：导入时按稳定 ID 合并，删除通过墓碑传播，历史记录按同步 ID 去重；SQLite 继续作为每台设备上的快速本地索引。LeonBook 监听这些文件，因此文件同步工具完成下载后会自动导入；本机变更会原子写回。只读挂载可以导入已有 sidecar，但不会创建或修改它。停用功能不会删除目录。
-
-此阶段不绑定任何云厂商，也不上传账号数据：iCloud Drive、Dropbox、Syncthing 等只负责同步整个 Markdown 目录。sidecar 是明文 JSON，不具备 Obsidian Sync 一类的端到端加密、远端版本历史或冲突副本管理能力；敏感资料应使用加密磁盘或可信的加密同步层。应用管理的 `media/` 仍需随 LeonBook 工作区单独同步或备份。
-
-智能集合以标准 Obsidian `.base` YAML 保存，可直接导入不含 LeonBook 私有字段的 Base；支持递归 `and/or/not`、全局与 view 级筛选、公式、汇总和多个命名视图。LeonBook 写回已识别配置时会保留未知的顶层、Property 和 view 字段；SQLite 中的集合记录只是 `.base` 的可重建缓存。
+方法发现、输入格式、并发规则与 Python 示例见 [AI 自动化接入](docs/AI_AUTOMATION.md)。
 
 ## 开发说明
 
-macOS 原生源码、资源和检查脚本位于 [`macos/`](macos/)。更多构建、调试和数据目录说明见 [`macos/README.md`](macos/README.md)。
-
-Swift Package 以 `LeonBookModuleKit` 作为第一方模块 seam，并将搜索、知识图谱、发布、备份和采集分别放入独立 target。每个模块声明稳定 ID、所需权限、完整命令元数据和可发布事件；`LeonBook` target 只负责 SwiftUI/SQLite/文件系统 adapter、命令 handler 与启停状态持久化。停用模块后，其命令会从命令面板消失，直接入口也会经过同一权限判定；正在进行备份恢复或采集写入时会延迟停用，扫描等只读任务则会安全取消。`LocalBlogStore` 的搜索/图谱 adapter 与数据库 schema 已拆为独立文件，避免功能继续堆回核心 Store。
-
-`LeonBookExtensionKit` 是与第一方模块分开的声明式扩展 seam。每个扩展包只有一个 `extension.json`，经路径、大小、ID、冲突和可执行内容校验后才会进入统一注册表；宿主 adapter 只允许插入 Markdown、创建未保存草稿、读取系统文件面板中明确选中的小型文本/JSON 文件、用原生 SwiftUI 样式呈现自定义围栏，以及在现有纯 Base 公式解释器中展开函数。设置页可以逐个启停、重新加载和查看拒绝原因。完整格式与五类示例见 [`macos/Examples/DeclarativeExtension/extension.json`](macos/Examples/DeclarativeExtension/extension.json)。
-
-如需直接运行 SwiftPM 可执行文件：
-
-```bash
-swift run --package-path macos LeonBook
+```text
+scripts/leonblog                    # 应用管理与自动化命令入口
+macos/Package.swift                # SwiftPM 产品与 target 定义
+macos/Sources/LeonBookApp/          # 应用入口与 App Intents
+macos/Sources/LeonBook/             # 界面、编辑器、存储及宿主适配
+macos/Sources/LeonBookCLI/          # JSON CLI 与 JSON Lines 通信
+macos/Sources/LeonBookModuleKit/    # 第一方模块契约
+macos/Sources/LeonBook*Module/      # 搜索、图谱、发布、备份、采集和待办
+macos/Sources/LeonBookExtensionKit/ # 声明式扩展契约
+macos/Whiteboard/                   # Excalidraw 资源构建源码
+macos/Tests/                       # 原生、模块与自动化测试
+macos/Checks/                      # 应用及存储专项检查
+macos/scripts/                     # 构建、测试、覆盖率与性能脚本
 ```
 
-## 设计原则
+第一方模块可在设置中独立启停。声明式扩展通过版本化的 `extension.json` 提供命令、模板变量、文本/JSON 导入器和围栏渲染器，格式见 [扩展示例](macos/Examples/DeclarativeExtension/extension.json)。
 
-`leon-book` 优先保证本地可用、数据透明和界面响应。文章和媒体都以普通本地文件保存，用户可以使用 Finder、备份工具或版本控制工具管理自己的内容。
+常规 Swift 构建直接使用仓库内的画板资源，无需 Node.js；仅在重新构建这些资源时需要 Node.js/npm，操作见 [画板开发说明](macos/Whiteboard/README.md)。
 
-## 外部 AI 自动化
-
-通过 `./scripts/leonblog api capabilities` 发现 CLI / JSON Lines 能力，直接创建、编辑、发布文章和本地微博，管理评论、问答、待办、素材、集合与备份。运行中的 App 提供同一用户的本地 Socket 接口；App 关闭时可离线调用。完整参数和 Python 示例见 [AI 自动化接入](docs/AI_AUTOMATION.md)。
+进一步阅读：[macOS 开发与使用说明](macos/README.zh-CN.md) · [性能说明](macos/PERFORMANCE.md) · [AI 自动化接入](docs/AI_AUTOMATION.md)。

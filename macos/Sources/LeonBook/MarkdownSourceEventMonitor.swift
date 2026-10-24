@@ -64,7 +64,7 @@ final class MarkdownSourceEventMonitor: @unchecked Sendable {
             flags
         ) else {
             self.handler = nil
-            throw NativeStoreError.fileSystem("无法创建 Markdown 目录事件监听器")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法创建 Markdown 目录事件监听器"))
         }
         stream = nextStream
         FSEventStreamSetDispatchQueue(nextStream, queue)
@@ -73,7 +73,7 @@ final class MarkdownSourceEventMonitor: @unchecked Sendable {
             FSEventStreamRelease(nextStream)
             stream = nil
             self.handler = nil
-            throw NativeStoreError.fileSystem("无法启动 Markdown 目录事件监听器")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法启动 Markdown 目录事件监听器"))
         }
     }
 

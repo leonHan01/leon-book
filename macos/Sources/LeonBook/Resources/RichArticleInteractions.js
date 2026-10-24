@@ -1,12 +1,13 @@
 function createArticleInteractions(api) {
+  const t = (...args) => window.LeonL10n.text(...args);
   const { root, canEdit, checkpoint, notify, focusBlock, captureSelection, restoreSelection, execute, send, uuid, closeMenu, frameTask } = api;
   function panel(id, html, label) {
     const element = document.createElement('div'); element.id = id; element.className = 'editor-popover'; element.hidden = true;
-    element.setAttribute('role', 'toolbar'); element.setAttribute('aria-label', label); element.innerHTML = html; document.body.append(element); return element;
+    element.setAttribute('role', 'toolbar'); element.setAttribute('aria-label', label); element.innerHTML = html; document.body.append(element); window.LeonL10n.bindChrome(element); return element;
   }
   const picker = panel('table-picker', '<div class="tool-label">插入表格 · <span class="size-label">2 × 2</span></div><div class="table-grid"></div><div class="table-dimensions"><input type="number" min="1" max="30" value="2" aria-label="行数">行<input type="number" min="1" max="12" value="2" aria-label="列数">列<button class="insert-table">插入</button></div>', '选择表格行列数');
   picker.setAttribute('role', 'dialog');
-  const tableTools = panel('table-tools', '<div class="tool-label"></div><div class="tool-actions"><button data-table="row-before" title="上方插入行">↑ 加行</button><button data-table="row-after" title="下方插入行">↓ 加行</button><button data-table="row-delete" class="danger">删行</button><button data-table="column-before" title="左侧插入列">← 加列</button><button data-table="column-after" title="右侧插入列">→ 加列</button><button data-table="column-delete" class="danger">删列</button></div>', '表格操作');
+  const tableTools = panel('table-tools', '<div class="tool-label"></div><div class="tool-actions"><button data-table="row-before" title="上方插入行"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-6 6 6-6 6 6"/></svg>加行</button><button data-table="row-after" title="下方插入行"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16m-6-6 6 6 6-6"/></svg>加行</button><button data-table="row-delete" class="danger">删行</button><button data-table="column-before" title="左侧插入列"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12H4m6-6-6 6 6 6"/></svg>加列</button><button data-table="column-after" title="右侧插入列"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg>加列</button><button data-table="column-delete" class="danger">删列</button></div>', '表格操作');
   const imageTools = panel('image-tools', '<output></output><button data-image="preview">放大</button><button data-image="caption">说明</button><button data-image="replace">替换</button><button data-image="delete" class="danger">删除</button>', '图片操作');
   const grip = document.createElement('div'); grip.id = 'column-grip'; grip.hidden = true; grip.setAttribute('role', 'separator'); grip.setAttribute('aria-label', '拖动调整列宽'); document.body.append(grip);
   function quickAdd(id, label) {
@@ -17,10 +18,11 @@ function createArticleInteractions(api) {
   }
   const rowAdd = quickAdd('table-add-row', '在表格底部添加一行'), columnAdd = quickAdd('table-add-column', '在此处添加一列');
   const frame = document.createElement('div'); frame.id = 'image-frame'; frame.className = 'editor-overlay'; frame.hidden = true; frame.innerHTML = '<span class="image-resize" data-side="-1" role="separator" aria-label="拖动调整图片宽度"></span><span class="image-resize" data-side="1" role="separator" aria-label="拖动调整图片宽度"></span>'; document.body.append(frame);
-  const preview = document.createElement('div'); preview.id = 'image-preview'; preview.className = 'editor-overlay'; preview.hidden = true; preview.setAttribute('role', 'dialog'); preview.setAttribute('aria-label', '图片预览'); preview.setAttribute('aria-modal', 'true'); preview.innerHTML = '<button title="关闭预览" aria-label="关闭预览">×</button><img alt="">'; document.body.append(preview);
+  const preview = document.createElement('div'); preview.id = 'image-preview'; preview.className = 'editor-overlay'; preview.hidden = true; preview.setAttribute('role', 'dialog'); preview.setAttribute('aria-label', '图片预览'); preview.setAttribute('aria-modal', 'true'); preview.innerHTML = '<button title="关闭预览" aria-label="关闭预览"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button><img alt="">'; document.body.append(preview);
   const progress = document.createElement('div'); progress.id = 'image-progress'; progress.hidden = true; progress.setAttribute('role', 'status'); document.body.append(progress);
   let activeCell = null, quickRowTable = null, quickColumnCell = null, selectedImage = null, insertion = null, drag = null, tableTimer, progressTimer, pickerRows = 2, pickerColumns = 2, previewFocus = null;
   const replacements = new Map();
+  for (const chrome of [grip, rowAdd, columnAdd, frame, preview]) window.LeonL10n.bindChrome(chrome);
   function place(element, rect, gap = 7) {
     const minimum = Math.max(8, document.getElementById('toolbar').getBoundingClientRect().bottom + 5);
     const top = rect.top - element.offsetHeight - gap;
@@ -103,7 +105,7 @@ function createArticleInteractions(api) {
   function showTable(cell) {
     if (!canEdit() || !owns(cell) || !getSelection().isCollapsed || selectedImage) { tableTools.hidden = true; hideQuickAdds(); return; }
     clearTimeout(tableTimer); activeCell = cell; const table = cell.closest('table');
-    tableTools.querySelector('.tool-label').textContent = `表格 · 第 ${cell.parentElement.rowIndex + 1} 行，第 ${cell.cellIndex + 1} 列`;
+    tableTools.querySelector('.tool-label').textContent = t('表格 · 第 %@ 行，第 %@ 列', cell.parentElement.rowIndex + 1, cell.cellIndex + 1);
     tableTools.hidden = false; place(tableTools, table.getBoundingClientRect(), 16); showQuickAdds(cell);
   }
   rowAdd.addEventListener('click', () => {
@@ -130,7 +132,7 @@ function createArticleInteractions(api) {
   }
   for (let row = 1; row <= 6; row++) for (let column = 1; column <= 8; column++) {
     const button = document.createElement('button'); button.dataset.row = row; button.dataset.column = column;
-    button.setAttribute('aria-label', `${row} 行 ${column} 列`); button.title = `${row} 行 ${column} 列`;
+    button.setAttribute('aria-label', t('%@ 行 %@ 列', row, column)); button.title = t('%@ 行 %@ 列', row, column);
     button.addEventListener('pointerenter', () => { pickerRows = row; pickerColumns = column; drawPicker(); });
     button.addEventListener('click', () => { pickerRows = row; pickerColumns = column; insertTable(); }); picker.querySelector('.table-grid').append(button);
   }
@@ -195,7 +197,7 @@ function createArticleInteractions(api) {
   });
   preview.addEventListener('click', event => { if (event.target === preview || event.target.closest('button')) closePreview(); });
   function imageProgress(count, failed = false) {
-    clearTimeout(progressTimer); progress.hidden = !count && !failed; progress.textContent = failed ? '图片未能粘贴，请重试' : '正在处理图片…';
+    clearTimeout(progressTimer); progress.hidden = !count && !failed; progress.textContent = failed ? t('图片未能粘贴，请重试') : t('正在处理图片…');
     if (failed) progressTimer = setTimeout(() => { progress.hidden = true; }, 2500);
   }
   function beginDrag(event, data) { hoverTable.cancel(); checkpoint(); drag = data; hideQuickAdds(); event.preventDefault(); try { event.target.setPointerCapture(event.pointerId); } catch {} }
@@ -244,7 +246,7 @@ function createArticleInteractions(api) {
       quickColumnCell = index < siblings.length - 1 && Math.abs(event.clientX - rect.right) < 14 ? cell
         : index > 0 && Math.abs(event.clientX - rect.left) < 14 ? siblings[index - 1] : null;
       if (quickColumnCell) {
-        const label = `在第 ${quickColumnCell.cellIndex + 1}、${quickColumnCell.cellIndex + 2} 列之间添加一列`;
+        const label = t('在第 %@、%@ 列之间添加一列', quickColumnCell.cellIndex + 1, quickColumnCell.cellIndex + 2);
         columnAdd.title = label; columnAdd.setAttribute('aria-label', label);
       }
       positionQuickAdds();

@@ -1,10 +1,13 @@
 function createArticleAudio({ root, canEdit, documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu }) {
+  const t = (...args) => window.LeonL10n.text(...args);
   const pending = new Map();
+  window.addEventListener('leonlanguagechange', () => updateButton());
   const button = document.querySelector('#toolbar [data-command=audio]');
   const selector = 'figure[data-type=audio]';
   function updateButton() {
     button.disabled = pending.size > 0;
-    button.textContent = pending.size ? '正在导入音频…' : '插入音频';
+    const label = button.querySelector('.tool-label') || button;
+    label.textContent = pending.size ? t('正在导入音频…') : t('插入音频');
   }
   function remember(block, replace = false, before = false) {
     if (!canEdit() || !block || !root.contains(block) || pending.size) return null;
@@ -38,7 +41,7 @@ function createArticleAudio({ root, canEdit, documentID, send, uuid, checkpoint,
       figure.dataset.type = 'audio'; figure.dataset.blockId = uuid();
       const player = document.createElement('audio');
       player.setAttribute('src', source); player.controls = true; player.preload = 'none';
-      const caption = document.createElement('figcaption'); caption.textContent = title || '音频';
+      const caption = document.createElement('figcaption'); caption.textContent = title || t('音频');
       figure.append(player, caption); fragment.append(figure);
     }
     const paragraph = document.createElement('p'); paragraph.innerHTML = '<br>'; fragment.append(paragraph);

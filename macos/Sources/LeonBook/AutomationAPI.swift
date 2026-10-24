@@ -135,7 +135,6 @@ enum AutomationCatalog {
             "NativeMomentTextRun": try .encoded(NativeMomentTextRun(text: "Hello", bold: true, color: nil)),
             "NativeArticleCommentSelection": try .encoded(NativeArticleCommentSelection(quote: "Quoted text", anchorID: "heading-id")),
             "NativeArticlePropertyValue": try .encoded(["owner": NativeArticlePropertyValue.text("leon"), "score": .number(3), "done": .checkbox(false), "tags": .tags(["AI"])]),
-            "NativeSmartCollection": try .encoded(NativeSmartCollection(id: "example-collection", name: "Published", rules: [.init(field: .status, comparison: .equals, value: "published")], createdAt: timestamp, updatedAt: timestamp)),
             "NativeBookmark": try .encoded(NativeBookmark(id: "example-bookmark", title: "An article", target: .article(slug: "example"), createdAt: timestamp)),
         ])
     }
@@ -193,10 +192,6 @@ enum AutomationCatalog {
         .init("resources.move", "Move source files or folders.", true, ["from": "string!", "to": "string!"]),
         .init("resources.trash", "Move source files/folders to trash.", true, ["paths": "string[]!"]),
         .init("media.upload", "Copy a local media file into this user's workspace.", true, ["path": "absolute path!", "kind": "image|video|audio|file!", "slug": "string"]),
-        .init("collections.list", "List smart collection definitions."),
-        .init("collections.save", "Create or replace a smart collection.", true, ["collection": "NativeSmartCollection!"]),
-        .init("collections.query", "Read articles matching a saved collection.", false, ["id": "string!"]),
-        .init("collections.delete", "Delete a collection definition.", true, ["id": "string!"]),
         .init("bookmarks.list", "List bookmarks."),
         .init("bookmarks.save", "Create or replace a bookmark.", true, ["bookmark": "NativeBookmark!"]),
         .init("bookmarks.delete", "Delete a bookmark.", true, ["id": "string!"]),

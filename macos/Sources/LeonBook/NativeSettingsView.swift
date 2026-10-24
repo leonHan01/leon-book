@@ -3,6 +3,9 @@ import LeonBookBackupModule
 import SwiftUI
 
 public struct NativeSettingsView: View {
+    @ObservedObject var appearancePreferences = NativeAppearancePreferences.shared
+    private var appPalette: NativeAppPalette { appearancePreferences.palette(system: systemColorScheme) }
+
     @ObservedObject var model: NativeAppModel
     @ObservedObject var readingPreferences: NativeReadingPreferences
     @ObservedObject var languagePreferences: NativeLanguagePreferences
@@ -26,16 +29,18 @@ public struct NativeSettingsView: View {
     init(
         model: NativeAppModel,
         readingPreferences: NativeReadingPreferences,
-        languagePreferences: NativeLanguagePreferences
+        languagePreferences: NativeLanguagePreferences,
+        appearancePreferences: NativeAppearancePreferences? = nil
     ) {
         self.model = model
         self.readingPreferences = readingPreferences
         self.languagePreferences = languagePreferences
+        self.appearancePreferences = appearancePreferences ?? .shared
     }
 
     public var body: some View {
         Form {
-            Section("通用") {
+            Section(NativeLocalization.text("通用")) {
                 Picker("语言", selection: $languagePreferences.language) {
                     ForEach(NativeAppLanguage.allCases) { language in
                         Text(language.displayName).tag(language)
@@ -46,23 +51,36 @@ public struct NativeSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("用户与工作空间") {
-                LabeledContent("当前用户") { Text(model.currentUser.name) }
-                LabeledContent("用户数量") { Text("\(model.users.count) 位") }
+            Section(NativeLocalization.text("外观与配色")) {
+                Picker("外观", selection: $appearancePreferences.appearance) {
+                    ForEach(NativeAppAppearance.allCases) { appearance in
+                        Text(LocalizedStringKey(appearance.title)).tag(appearance)
+                    }
+                }
+                .pickerStyle(.segmented)
+                NativeThemePicker(selection: $appearancePreferences.theme, colorScheme: appPalette.colorScheme)
+                Text("配色会立即应用到整个应用，并自动保留。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section(NativeLocalization.text("用户与工作空间")) {
+                LabeledContent(NativeLocalization.text("当前用户")) { Text(model.currentUser.name) }
+                LabeledContent(NativeLocalization.text("用户数量")) { Text(NativeLocalization.text("\(model.users.count) 位")) }
                 Text("用户之间的数据完全隔离；切换用户不会共享文章、草稿、媒体或创作活动。")
                     .foregroundStyle(.secondary)
             }
 
-            Section("本地文件") {
-                LabeledContent("状态") {
-                    Label(LocalizedStringKey(model.storageReady ? "已连接" : "未连接"), systemImage: model.storageReady ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundStyle(model.storageReady ? NativeTheme.accent : Color.red)
+            Section(NativeLocalization.text("本地文件")) {
+                LabeledContent(NativeLocalization.text("状态")) {
+                    Label(LocalizedStringKey(model.storageReady ? "已连接" : "未连接"), nativeIcon: model.storageReady ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(model.storageReady ? appPalette.accent : Color.red)
                 }
-                LabeledContent("存储方式") { Text("SQLite + 本地文件") }
-                LabeledContent("数据目录") { Text(model.dataDirectoryPath).textSelection(.enabled) }
+                LabeledContent(NativeLocalization.text("存储方式")) { Text("SQLite + 本地文件") }
+                LabeledContent(NativeLocalization.text("数据目录")) { Text(model.dataDirectoryPath).textSelection(.enabled) }
             }
 
-            Section("数据") {
+            Section(NativeLocalization.text("数据")) {
                 Text("文章 Markdown/YAML 和媒体文件是权威数据源；SQLite 保存文章索引及评论、版本、收藏等结构化数据。所有内容均保存在本机，不会启动 Node.js、监听端口或上传到云端。")
                     .foregroundStyle(.secondary)
                 Button("在 Finder 中打开项目目录") {
@@ -71,7 +89,7 @@ public struct NativeSettingsView: View {
                 Button("重新加载文章") { model.executeCommand(.reload) }
             }
 
-            Section("阅读与编辑排版") {
+            Section(NativeLocalization.text("阅读与编辑排版")) {
                 Picker("正文字体", selection: $readingPreferences.profile.bodyFont) {
                     ForEach(NativeReadingFontFamily.allCases) { font in
                         Text(LocalizedStringKey(font.title)).tag(font)
@@ -136,7 +154,7 @@ public struct NativeSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)
                 .background(
-                    readingPreferences.profile.theme.background(system: systemColorScheme),
+                    readingPreferences.profile.theme.background(system: systemColorScheme, palette: appPalette),
                     in: RoundedRectangle(cornerRadius: 10)
                 )
                 .environment(
@@ -147,11 +165,11 @@ public struct NativeSettingsView: View {
                 Button("恢复默认排版") { readingPreferences.reset() }
             }
 
-            Section("命令与快捷键") {
+            Section(NativeLocalization.text("命令与快捷键")) {
                 NativeCommandSettingsPanel(model: model)
             }
 
-            Section("第一方模块") {
+            Section(NativeLocalization.text("第一方模块")) {
                 ForEach(model.firstPartyModules) { module in
                     Toggle(isOn: Binding(
                         get: { model.isFirstPartyModuleEnabled(module.id) },
@@ -165,17 +183,17 @@ public struct NativeSettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                         } icon: {
-                            Image(systemName: module.systemImage)
+                            NativeIcon.image(module.systemImage)
                         }
                     }
-                    Text("权限：\(model.firstPartyPermissionLabels(module))")
+                    Text(NativeLocalization.text("权限：\(model.firstPartyPermissionLabels(module))"))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
 
                 if let event = model.latestFirstPartyModuleEvent,
                    let module = model.firstPartyModules.first(where: { $0.id == event.moduleID }) {
-                    LabeledContent("最近事件") {
+                    LabeledContent(NativeLocalization.text("最近事件")) {
                         Text("\(module.name) · \(event.name)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -186,12 +204,12 @@ public struct NativeSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("声明式扩展") {
+            Section(NativeLocalization.text("声明式扩展")) {
                 NativeDeclarativeExtensionSettingsPanel(model: model)
             }
 
-            Section("文章格式") {
-                Label("HTML 富文本", systemImage: "textformat")
+            Section(NativeLocalization.text("文章格式")) {
+                Label("HTML 富文本", nativeIcon: "textformat")
                 Text("正文按段落保存为富文本块，可直接编辑文字样式、代码框、高亮框、列表和表格。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -199,13 +217,13 @@ public struct NativeSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if model.activeMarkdownWorkspaceMode.isMounted {
-                    LabeledContent("原目录", value: model.markdownSourceDirectoryPath)
+                    LabeledContent(NativeLocalization.text("原目录"), value: model.markdownSourceDirectoryPath)
                     Button("切回应用内资料库") { model.useNativeArticleLibrary() }
                 }
             }
 
-            Section("备份") {
-                LabeledContent("备份目录") {
+            Section(NativeLocalization.text("备份")) {
+                LabeledContent(NativeLocalization.text("备份目录")) {
                     Group {
                         if model.backupDirectoryPath.isEmpty {
                             Text("未设置")
@@ -215,14 +233,14 @@ public struct NativeSettingsView: View {
                     }
                         .textSelection(.enabled)
                 }
-                LabeledContent("状态") {
+                LabeledContent(NativeLocalization.text("状态")) {
                     HStack(spacing: 8) {
                         if model.isBackingUp { ProgressView().controlSize(.small) }
                         Text(LocalizedStringKey(model.backupStatus))
                     }
                 }
                 if !model.lastBackupPath.isEmpty {
-                    LabeledContent("最新快照") {
+                    LabeledContent(NativeLocalization.text("最新快照")) {
                         Text(model.lastBackupPath).textSelection(.enabled)
                     }
                 }
@@ -237,8 +255,8 @@ public struct NativeSettingsView: View {
                                 ),
                                 in: 1...24
                             ) {
-                                LabeledContent("最短自动备份间隔") {
-                                    Text("\(model.backupAutomaticIntervalHours) 小时")
+                                LabeledContent(NativeLocalization.text("最短自动备份间隔")) {
+                                    Text(NativeLocalization.text("\(model.backupAutomaticIntervalHours) 小时"))
                                 }
                             }
                             Stepper(
@@ -249,8 +267,8 @@ public struct NativeSettingsView: View {
                                 in: 7...365,
                                 step: 7
                             ) {
-                                LabeledContent("最长保留时间") {
-                                    Text("\(model.backupRetentionDays) 天")
+                                LabeledContent(NativeLocalization.text("最长保留时间")) {
+                                    Text(NativeLocalization.text("\(model.backupRetentionDays) 天"))
                                 }
                             }
                             Stepper(
@@ -261,8 +279,8 @@ public struct NativeSettingsView: View {
                                 in: 10...200,
                                 step: 5
                             ) {
-                                LabeledContent("最多快照") {
-                                    Text("\(model.backupMaximumSnapshotCount) 个")
+                                LabeledContent(NativeLocalization.text("最多快照")) {
+                                    Text(NativeLocalization.text("\(model.backupMaximumSnapshotCount) 个"))
                                 }
                             }
                             Stepper(
@@ -272,7 +290,7 @@ public struct NativeSettingsView: View {
                                 ),
                                 in: 1...100
                             ) {
-                                LabeledContent("备份后最低剩余空间") {
+                                LabeledContent(NativeLocalization.text("备份后最低剩余空间")) {
                                     Text("\(model.backupMinimumFreeSpaceGB) GB")
                                 }
                             }
@@ -281,18 +299,18 @@ public struct NativeSettingsView: View {
                     }
 
                     if let estimate = model.backupStorageEstimate {
-                        LabeledContent("数据规模") {
+                        LabeledContent(NativeLocalization.text("数据规模")) {
                             Text(backupByteLabel(estimate.sourceSizeBytes))
                         }
-                        LabeledContent("下次预计新增") {
+                        LabeledContent(NativeLocalization.text("下次预计新增")) {
                             Text(backupByteLabel(estimate.estimatedAdditionalBytes))
                         }
                         if let available = estimate.availableBytes {
-                            LabeledContent("备份盘可用") {
+                            LabeledContent(NativeLocalization.text("备份盘可用")) {
                                 Text(backupByteLabel(available))
                             }
                             let remaining = max(0, available - estimate.estimatedAdditionalBytes)
-                            LabeledContent("预计备份后剩余") {
+                            LabeledContent(NativeLocalization.text("预计备份后剩余")) {
                                 Text(backupByteLabel(remaining))
                                     .foregroundStyle(
                                         remaining < model.backupPolicy.minimumFreeSpaceBytes ? .red : .primary
@@ -300,7 +318,7 @@ public struct NativeSettingsView: View {
                             }
                         }
                         if estimate.reusableFileCount > 0 {
-                            Text("下次快照预计复用 \(estimate.reusableFileCount) 个未变化文件。")
+                            Text(NativeLocalization.text("下次快照预计复用 \(estimate.reusableFileCount) 个未变化文件。"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -333,14 +351,14 @@ public struct NativeSettingsView: View {
                                 }
                             }
                             if model.backupSnapshots.count > 12 {
-                                Text("其余 \(model.backupSnapshots.count - 12) 个快照可在备份目录中查看。")
+                                Text(NativeLocalization.text("其余 \(model.backupSnapshots.count - 12) 个快照可在备份目录中查看。"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         }
                         .padding(.top, 8)
                     }
-                    LabeledContent("校验状态") {
+                    LabeledContent(NativeLocalization.text("校验状态")) {
                         HStack(spacing: 8) {
                             if model.isValidatingBackup { ProgressView().controlSize(.small) }
                             Text(LocalizedStringKey(model.backupValidationStatus))
@@ -367,7 +385,7 @@ public struct NativeSettingsView: View {
         .disabled(model.isRestoringBackup)
         .frame(maxWidth: 720)
         .padding(24)
-        .nativeAppTheme()
+        .nativeAppTheme(preferences: appearancePreferences)
         .task { readingPreferences.prepare(for: model.currentUser.id) }
         .onChange(of: model.currentUser.id) { readingPreferences.prepare(for: $0) }
     }
@@ -393,7 +411,7 @@ public struct NativeSettingsView: View {
     @ViewBuilder
     private func markdownSourceConfirmationTitle(_ preview: NativeObsidianImportPreview) -> some View {
         switch model.selectedMarkdownWorkspaceMode {
-        case .copyImport: Text("确认复制 \(preview.importableCount) 篇")
+        case .copyImport: Text(NativeLocalization.text("确认复制 \(preview.importableCount) 篇"))
         case .readOnlyMount: Text("只读挂载此文件夹")
         case .directEdit: Text("直接编辑此文件夹")
         }
@@ -450,7 +468,7 @@ private struct NativeCommandSettingsPanel: View {
             }
 
             HStack {
-                Text("共 \(definitions.count) 个命令")
+                Text(NativeLocalization.text("共 \(definitions.count) 个命令"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -480,7 +498,7 @@ private struct NativeCommandShortcutRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                Image(systemName: definition.systemImage)
+                NativeIcon.image(definition.systemImage)
                     .frame(width: 22)
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
@@ -494,7 +512,7 @@ private struct NativeCommandShortcutRow: View {
                     Button {
                         preferences.togglePinned(definition.id)
                     } label: {
-                        Image(systemName: preferences.isPinned(definition.id) ? "pin.fill" : "pin")
+                        NativeIcon.image(preferences.isPinned(definition.id) ? "pin.fill" : "pin")
                     }
                     .buttonStyle(.borderless)
                     .help(Text(LocalizedStringKey(preferences.isPinned(definition.id) ? "取消固定命令" : "固定到命令面板顶部")))
@@ -503,7 +521,7 @@ private struct NativeCommandShortcutRow: View {
                     conflictMessage = nil
                     if let conflict = preferences.setShortcut(captured, for: definition.id),
                        let conflictDefinition = registry.definition(for: conflict) {
-                        conflictMessage = "与“\(conflictDefinition.title)”冲突，未保存。"
+                        conflictMessage = NativeLocalization.text("与“\(conflictDefinition.title)”冲突，未保存。")
                     }
                 }
                 if isCustomized {
@@ -515,7 +533,7 @@ private struct NativeCommandShortcutRow: View {
                 }
             }
             if let conflictMessage {
-                Label(conflictMessage, systemImage: "exclamationmark.triangle.fill")
+                Label(conflictMessage, nativeIcon: "exclamationmark.triangle.fill", iconSize: 12)
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.leading, 32)
@@ -631,10 +649,10 @@ private struct BackupSnapshotRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: snapshot.isManifestReadable ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.exclamationmark")
+            NativeIcon.image(snapshot.isManifestReadable ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.exclamationmark")
                 .foregroundStyle(snapshot.isManifestReadable ? .green : .orange)
             VStack(alignment: .leading, spacing: 3) {
-                Text(snapshot.createdAt.formatted(date: .abbreviated, time: .shortened))
+                Text(snapshot.createdAt.formatted(.dateTime.year().month(.abbreviated).day().hour().minute().locale(NativeLocalization.currentLanguage.locale)))
                     .font(.callout.weight(.medium))
                 HStack(spacing: 8) {
                     Text(snapshot.url.lastPathComponent)
@@ -642,7 +660,7 @@ private struct BackupSnapshotRow: View {
                         Text("· \(backupByteLabel(snapshot.logicalSizeBytes))")
                     }
                     if snapshot.reusedFileCount > 0 {
-                        Text("· 复用 \(snapshot.reusedFileCount) 个文件")
+                        Text(NativeLocalization.text("· 复用 \(snapshot.reusedFileCount) 个文件"))
                     }
                 }
                 .font(.caption)

@@ -247,7 +247,7 @@ enum RichArticleFile {
               let data = Data(base64Encoded: String(source[range])),
               let start = source.range(of: RichArticleDocument.opening),
               let end = source.range(of: "</article>", options: .backwards), start.lowerBound < end.upperBound else {
-            throw NativeStoreError.fileSystem("HTML 文章格式无效：\(relativePath)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("HTML 文章格式无效：\(relativePath)"))
         }
         let metadata = try JSONDecoder().decode(Metadata.self, from: data)
         return MarkdownArticleSourceRecord(

@@ -182,13 +182,6 @@ public actor AutomationService {
             let kind: String = try p.required("kind")
             guard ["image", "video", "audio", "file"].contains(kind) else { throw AutomationFailure("invalid_params", "kind must be image, video, audio or file") }
             return try .encoded(await store.uploadMedia(fileURL: absoluteURL(p.required("path")), kind: kind, slug: p.optional("slug")))
-        case "collections.list": return try .encoded(await store.listSmartCollections())
-        case "collections.save": return try .encoded(await store.saveSmartCollection(p.required("collection")))
-        case "collections.query":
-            let id: String = try p.required("id")
-            guard let collection = try await store.listSmartCollections().first(where: { $0.id == id }) else { throw NativeStoreError.notFound }
-            return try .encoded(await store.listArticles(in: collection))
-        case "collections.delete": try await store.deleteSmartCollection(id: p.required("id"))
         case "bookmarks.list": return try .encoded(await store.listBookmarks())
         case "bookmarks.save": return try .encoded(await store.saveBookmark(p.required("bookmark")))
         case "bookmarks.delete": try await store.deleteBookmark(id: p.required("id"))

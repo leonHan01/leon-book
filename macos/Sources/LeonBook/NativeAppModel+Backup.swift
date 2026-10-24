@@ -13,7 +13,7 @@ extension NativeAppModel {
                 try await sourceStore.verifyCompatibilityExports()
             } catch {
                 guard !Task.isCancelled else { return }
-                self?.errorMessage = "兼容导出校验失败：\(error.localizedDescription)"
+                self?.errorMessage = NativeLocalization.text("兼容导出校验失败：\(error.localizedDescription)")
             }
         }
     }
@@ -35,9 +35,9 @@ extension NativeAppModel {
         ) else { return }
         guard !isBackingUp, !isRestoringBackup else { return }
         let panel = NSOpenPanel()
-        panel.title = "选择备份目录"
-        panel.message = "应用会在此目录中创建带时间戳的完整快照。请优先选择另一块磁盘或启用 FileVault 的磁盘。"
-        panel.prompt = "使用此目录"
+        panel.title = NativeLocalization.text("选择备份目录")
+        panel.message = NativeLocalization.text("应用会在此目录中创建带时间戳的完整快照。请优先选择另一块磁盘或启用 FileVault 的磁盘。")
+        panel.prompt = NativeLocalization.text("使用此目录")
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -54,7 +54,7 @@ extension NativeAppModel {
             )
             LocalBlogStore.rememberBackupDirectory(url)
             backupDirectoryPath = url.standardizedFileURL.path
-            backupStatus = "正在创建首次备份…"
+            backupStatus = NativeLocalization.text("正在创建首次备份…")
             backupSnapshots = []
             backupStorageEstimate = nil
             backupNow()
@@ -74,10 +74,10 @@ extension NativeAppModel {
         LocalBlogStore.clearBackupDirectory()
         backupDirectoryPath = ""
         lastBackupPath = ""
-        backupStatus = "未设置备份目录"
+        backupStatus = NativeLocalization.text("未设置备份目录")
         backupSnapshots = []
         backupStorageEstimate = nil
-        backupValidationStatus = "尚未校验快照"
+        backupValidationStatus = NativeLocalization.text("尚未校验快照")
     }
 
     func openBackupDirectory() {
@@ -125,7 +125,7 @@ extension NativeAppModel {
         let delay = max(30, intervalDelay)
         if intervalDelay > 30, !isBackingUp {
             let nextDate = Date().addingTimeInterval(delay)
-            backupStatus = "变更已合并，下次自动备份：\(nextDate.formatted(date: .omitted, time: .shortened))"
+            backupStatus = NativeLocalization.text("变更已合并，下次自动备份：\(nextDate.formatted(.dateTime.hour().minute().locale(NativeLocalization.currentLanguage.locale)))")
         }
         backupTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -144,9 +144,9 @@ extension NativeAppModel {
         ) else { return false }
         guard storageReady, !backupDirectoryPath.isEmpty else { return false }
         guard !isBackingUp, !isRestoringBackup else { return false }
-        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isPublishingMoment,
+        guard !isLoading, !isSwitchingWorkspace, !isSaving, !isSavingDashboard, !isPublishingMoment,
               !isSavingMomentComment, !isUploadingMedia else {
-            backupStatus = "等待当前操作完成后备份…"
+            backupStatus = NativeLocalization.text("等待当前操作完成后备份…")
             scheduleBackup()
             return false
         }
@@ -155,7 +155,7 @@ extension NativeAppModel {
         let destinationURL = URL(fileURLWithPath: backupDirectoryPath, isDirectory: true)
         let policy = backupPolicy
         isBackingUp = true
-        backupStatus = manual ? "正在创建手动备份…" : "正在创建增量备份…"
+        backupStatus = manual ? NativeLocalization.text("正在创建手动备份…") : NativeLocalization.text("正在创建增量备份…")
         recordFirstPartyModuleEvent(
             moduleID: BackupFirstPartyModule.id,
             name: "backup.requested",
@@ -174,9 +174,9 @@ extension NativeAppModel {
                 )
             }.value
             lastBackupPath = result.snapshot.url.path
-            let reused = result.reusedFileCount > 0 ? "，复用 \(result.reusedFileCount) 个文件" : ""
-            let cleaned = result.removedSnapshotCount > 0 ? "，清理 \(result.removedSnapshotCount) 个过期快照" : ""
-            backupStatus = "备份完成：\(result.snapshot.url.lastPathComponent)\(reused)\(cleaned)"
+            let reused = result.reusedFileCount > 0 ? NativeLocalization.text("，复用 \(result.reusedFileCount) 个文件") : ""
+            let cleaned = result.removedSnapshotCount > 0 ? NativeLocalization.text("，清理 \(result.removedSnapshotCount) 个过期快照") : ""
+            backupStatus = NativeLocalization.text("备份完成：\(result.snapshot.url.lastPathComponent)\(reused)\(cleaned)")
             await refreshBackupOverview()
             errorMessage = nil
             recordFirstPartyModuleEvent(
@@ -186,8 +186,8 @@ extension NativeAppModel {
             )
             return true
         } catch {
-            backupStatus = "备份失败"
-            errorMessage = "\(manual ? "手动" : "自动")备份失败：\(error.localizedDescription)"
+            backupStatus = NativeLocalization.text("备份失败")
+            errorMessage = NativeLocalization.text("\(NativeLocalization.string(manual ? "手动" : "自动", language: NativeLocalization.currentLanguage))备份失败：\(error.localizedDescription)")
             recordFirstPartyModuleEvent(
                 moduleID: BackupFirstPartyModule.id,
                 name: "backup.failed",
@@ -270,7 +270,7 @@ extension NativeAppModel {
             backupStorageEstimate = overview.estimate
             lastBackupPath = overview.snapshots.first?.url.path ?? ""
         } catch {
-            backupValidationStatus = "无法读取快照：\(error.localizedDescription)"
+            backupValidationStatus = NativeLocalization.text("无法读取快照：\(error.localizedDescription)")
         }
     }
 
@@ -286,18 +286,18 @@ extension NativeAppModel {
         ) else { return }
         guard !isValidatingBackup, !isRestoringBackup else { return }
         isValidatingBackup = true
-        backupValidationStatus = "正在校验 \(snapshot.url.lastPathComponent)…"
+        backupValidationStatus = NativeLocalization.text("正在校验 \(snapshot.url.lastPathComponent)…")
         Task {
             defer { isValidatingBackup = false }
             do {
                 let result = try await Task.detached(priority: .utility) {
                     try LocalBackupManager.validateSnapshot(at: snapshot.url)
                 }.value
-                let checksumLabel = result.verifiedChecksums ? "SHA-256 完整校验" : "旧格式结构校验"
-                backupValidationStatus = "校验通过：\(result.checkedFileCount) 个文件，\(checksumLabel)"
+                let checksumLabel = result.verifiedChecksums ? NativeLocalization.text("SHA-256 完整校验") : NativeLocalization.text("旧格式结构校验")
+                backupValidationStatus = NativeLocalization.text("校验通过：\(result.checkedFileCount) 个文件，\(checksumLabel)")
                 errorMessage = nil
             } catch {
-                backupValidationStatus = "校验失败"
+                backupValidationStatus = NativeLocalization.text("校验失败")
                 errorMessage = error.localizedDescription
             }
         }
@@ -317,10 +317,10 @@ extension NativeAppModel {
               !isUploadingMedia else { return }
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = "恢复整个资料库？"
-        alert.informativeText = "将先为当前数据创建一个安全快照，再用 \(snapshot.url.lastPathComponent) 替换所有用户、文章、微博、媒体和设置。恢复前会校验所选快照；新版快照会执行 SHA-256 完整校验。"
-        alert.addButton(withTitle: "校验并恢复")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = NativeLocalization.text("恢复整个资料库？")
+        alert.informativeText = NativeLocalization.text("将先为当前数据创建一个安全快照，再用 \(snapshot.url.lastPathComponent) 替换所有用户、文章、微博、媒体和设置。恢复前会校验所选快照；新版快照会执行 SHA-256 完整校验。")
+        alert.addButton(withTitle: NativeLocalization.text("校验并恢复"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         // Lock module lifecycle before yielding to the restore task. A restore
         // cannot be cancelled safely after it starts replacing workspace data.
@@ -345,7 +345,7 @@ extension NativeAppModel {
         var suspension: WorkspaceStorageLifecycle.Suspension?
         var restoreError: Error?
         var didRestore = false
-        backupStatus = "恢复前正在创建当前数据的安全快照…"
+        backupStatus = NativeLocalization.text("恢复前正在创建当前数据的安全快照…")
 
         do {
             for model in affected { try await model.preserveEditorBeforeRestore() }
@@ -361,7 +361,7 @@ extension NativeAppModel {
                 )
             }.value
             lastBackupPath = safetySnapshot.snapshot.url.path
-            backupStatus = "正在校验并恢复资料库…"
+            backupStatus = NativeLocalization.text("正在校验并恢复资料库…")
             try await Task.detached(priority: .userInitiated) {
                 try LocalBackupManager.restoreSnapshot(
                     at: snapshot.url,
@@ -390,15 +390,15 @@ extension NativeAppModel {
                 model.errorMessage = restoreError?.localizedDescription
             } catch {
                 model.storageReady = false
-                model.errorMessage = "无法重新连接资料库：\(error.localizedDescription)"
+                model.errorMessage = NativeLocalization.text("无法重新连接资料库：\(error.localizedDescription)")
             }
             model.isBackingUp = false
             model.isRestoringBackup = false
             model.isLoading = false
             model.backupStatus = didRestore
-                ? "恢复完成：\(snapshot.url.lastPathComponent)；恢复前数据已保存为安全快照"
-                : "恢复失败：\(restoreError?.localizedDescription ?? "未知错误")"
-            if didRestore { model.backupValidationStatus = "恢复时已通过快照校验" }
+                ? NativeLocalization.text("恢复完成：\(snapshot.url.lastPathComponent)；恢复前数据已保存为安全快照")
+                : NativeLocalization.text("恢复失败：\(restoreError?.localizedDescription ?? NativeLocalization.text("未知错误"))")
+            if didRestore { model.backupValidationStatus = NativeLocalization.text("恢复时已通过快照校验") }
             model.startTrashCleanupLoop()
             model.consumeAutomationInbox()
         }

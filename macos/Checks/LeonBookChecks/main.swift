@@ -61,11 +61,6 @@ expect(FileManager.default.fileExists(atPath: sourcePath("MarkdownSourceEventMon
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeFrontmatterDocument.swift")), "Markdown frontmatter semantics should be shared")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeMediaUpload.swift")), "media upload lifecycle should be centralized")
 expect(FileManager.default.fileExists(atPath: sourcePath("ObsidianVaultImporter.swift")), "Obsidian Vault importer should exist")
-expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionModels.swift")), "smart collection models should exist")
-expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionSQL.swift")), "smart collection SQL compiler should exist")
-expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionSemantics.swift")), "shared smart collection semantics should exist")
-expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionViews.swift")), "smart collection views should exist")
-expect(FileManager.default.fileExists(atPath: sourcePath("SmartCollectionBoardCalendarViews.swift")), "board and calendar collection views should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticlePageHierarchy.swift")), "article page hierarchy should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticlePageTemplates.swift")), "whole-page templates should be isolated from the editor view")
 expect(FileManager.default.fileExists(atPath: sourcePath("ArticleLinkIdentityIndex.swift")), "article link identity index should exist")
@@ -81,7 +76,6 @@ expect(FileManager.default.fileExists(atPath: sourcePath("NavigationPageState.sw
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Article.swift")), "article app-model module should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+ArticleNavigation.swift")), "article navigation should be split from article mutations")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+ArticleComments.swift")), "article comments should be split from article mutations")
-expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+SmartCollections.swift")), "smart collection model actions should be split from article mutations")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Backup.swift")), "backup app-model module should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Import.swift")), "import app-model module should exist")
 expect(FileManager.default.fileExists(atPath: sourcePath("NativeAppModel+Search.swift")), "search app-model module should exist")
@@ -375,7 +369,6 @@ if let extensionKit = try? String(
     expect(extensionKit.contains("case insertText"), "extensions should support bounded text-insertion commands")
     expect(extensionKit.contains("case json"), "extensions should support declarative JSON importers")
     expect(extensionKit.contains("case callout"), "extensions should support native renderer styles")
-    expect(extensionKit.contains("baseFunctions"), "extensions should expose pure Base functions")
     expect(extensionKit.contains("<script"), "extension validation should reject script templates")
     expect(!extensionKit.contains("dlopen("), "extension runtime must not load dynamic libraries")
     expect(!extensionKit.contains("Process("), "extension runtime must not launch subprocesses")
@@ -384,7 +377,8 @@ if let extensionKit = try? String(
 }
 
 if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift"), encoding: .utf8) {
-    expect(contentView.contains("ActivityHeatmapView(activity: model.activity)"), "dashboard should display the activity heatmap")
+    let dashboardContent = (try? String(contentsOfFile: sourcePath("DashboardModuleContent.swift"), encoding: .utf8)) ?? ""
+    expect(dashboardContent.contains("ActivityHeatmapView(activity: model.activity"), "dashboard should display the activity heatmap")
     expect(contentView.contains("过去一年"), "activity heatmap should label its one-year range")
     expect(contentView.contains("pageState: pageStateCache.moments"), "ContentView should restore lightweight moment page state")
     expect(contentView.contains("case .trash: TrashView(model: model)"), "ContentView should show the recycle bin")
@@ -394,14 +388,13 @@ if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift")
     expect(sidebar.contains("新建用户…"), "sidebar should support creating users")
     expect(sidebar.contains("model.selectUser(user)"), "sidebar should allow switching user-isolated workspaces")
     expect(contentView.contains("ArticleTagFilterBar"), "article list should expose hashtag filters")
-    expect(contentView.contains("SmartArticleLibraryView(model: model)"), "article library should use smart collection views")
-    expect(sidebar.contains("Section(\"智能集合\")"), "sidebar should list saved smart collections")
+    expect(contentView.contains("ArticleLibraryView(model: model)"), "article library should use its independent views")
     expect(sidebar.contains("Section(\"收藏\")"), "sidebar should list saved bookmarks")
     expect(contentView.contains(".onOpenURL(perform: model.handleAutomationURL)"), "main window should receive leonbook URLs")
-    let smartCollectionView = try? String(contentsOfFile: sourcePath("SmartCollectionViews.swift"), encoding: .utf8)
+    let articleLibraryView = try? String(contentsOfFile: sourcePath("ArticleLibraryViews.swift"), encoding: .utf8)
     expect(
         contentView.contains("搜索标题、摘要、正文或标签")
-            || smartCollectionView?.contains("搜索标题、摘要、正文或标签") == true,
+            || articleLibraryView?.contains("搜索标题、摘要、正文或标签") == true,
         "article list should describe its full-text search scope"
     )
     expect(contentView.contains("article.pageViews"), "article list rows should display page views")
@@ -575,47 +568,10 @@ if var localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift
     expect(localStore.contains("func permanentlyDeleteTrash"), "LocalBlogStore should permanently delete recycle bin items")
     expect(localStore.contains("purgeExpiredTrash"), "LocalBlogStore should purge expired recycle bin items")
     expect(localStore.contains("NativeArticleTag.normalized(article.tags)"), "article tags should normalize hashtag input before persistence")
-    expect(localStore.contains("CREATE TABLE IF NOT EXISTS smart_collections"), "SQLite should persist smart collections")
     expect(localStore.contains("CREATE TABLE IF NOT EXISTS bookmarks"), "SQLite should persist bookmarks")
-    expect(localStore.contains("public func listArticles(in collection:"), "store should evaluate smart collection queries")
-    expect(localStore.contains("NativeSmartCollectionSQLCompiler.compile(collection)"), "smart collections should filter and sort in SQLite")
-    expect(localStore.contains("public func saveSmartCollection"), "store should save smart collection configuration")
     expect(localStore.contains("public func saveBookmark"), "store should save bookmark targets")
 } else {
     failures.append("native local store should be readable")
-}
-
-if let collectionSQL = try? String(contentsOfFile: sourcePath("SmartCollectionSQL.swift"), encoding: .utf8) {
-    expect(collectionSQL.contains("struct NativeSmartCollectionSQLQuery"), "smart collection SQL should expose one compiled query boundary")
-    expect(collectionSQL.contains("article_tags AS candidate"), "smart collection SQL should query indexed tags without decoding all articles")
-    expect(collectionSQL.contains("article_properties AS candidate"), "smart collection SQL should query indexed typed properties")
-    expect(collectionSQL.contains("dateOperation(rule.comparison)) ?"), "smart collection date filters should compare normalized ISO instants with indexes")
-} else {
-    failures.append("smart collection SQL compiler should be readable")
-}
-
-if let smartCollections = try? String(contentsOfFile: sourcePath("SmartCollectionViews.swift"), encoding: .utf8) {
-    expect(smartCollections.contains("case .list: listLayout"), "smart collections should expose list layout")
-    expect(smartCollections.contains("case .table: tableLayout"), "smart collections should expose table layout")
-    expect(smartCollections.contains("case .cards: cardLayout"), "smart collections should expose cards layout")
-    expect(smartCollections.contains("最多三层排序"), "smart collection editor should explain multi-sort")
-    expect(smartCollections.contains("属性筛选"), "smart collection editor should expose article properties")
-    expect(smartCollections.contains("private struct SmartCollectionTableGroup"), "large smart-collection tables should isolate each lazy row group")
-    expect(smartCollections.contains("LazyVStack(alignment: .leading, spacing: 0)"), "smart-collection table rows should be created lazily")
-} else {
-    failures.append("smart collection views should be readable")
-}
-
-if let formulaEngine = try? String(
-    contentsOfFile: sourcePath("SmartCollectionFormulaEngine.swift"),
-    encoding: .utf8
-) {
-    expect(formulaEngine.contains("NativeFormulaTokenCache"), "smart-collection formulas should reuse parsed tokens")
-    expect(formulaEngine.contains("NativeFormulaDateFormatterCache"), "date formulas should reuse bounded formatters")
-    expect(formulaEngine.contains("NativeBaseDateParserCache"), "formula dates should reuse parsed values")
-    expect(!formulaEngine.contains("let values = articles.map"), "smart-collection summaries should aggregate without a full value array")
-} else {
-    failures.append("smart collection formula engine should be readable")
 }
 
 if let nativeModels = try? String(contentsOfFile: sourcePath("NativeModels.swift"), encoding: .utf8) {
@@ -660,7 +616,7 @@ if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
         "NativeAppModel+Article.swift",
         "NativeAppModel+ArticleNavigation.swift",
         "NativeAppModel+ArticleComments.swift",
-        "NativeAppModel+SmartCollections.swift",
+        "NativeAppModel+ArticleLibrary.swift",
         "NativeAppModel+Backup.swift",
         "NativeAppModel+Import.swift",
         "NativeAppModel+Search.swift",
@@ -817,26 +773,6 @@ if let sqlite = try? String(contentsOfFile: sourcePath("SQLiteDatabase.swift"), 
     failures.append("SQLite adapter should be readable")
 }
 
-if let smartCollectionSQL = try? String(
-    contentsOfFile: sourcePath("SmartCollectionSQL.swift"),
-    encoding: .utf8
-) {
-    expect(
-        smartCollectionSQL.contains("article_tags AS candidate"),
-        "smart collection tag rules should use the normalized tag index"
-    )
-    expect(
-        smartCollectionSQL.contains("article_properties AS candidate"),
-        "smart collection property rules should use the normalized property index"
-    )
-    expect(
-        !smartCollectionSQL.contains("julianday(\\(expression))"),
-        "smart collection ISO timestamp comparisons should remain indexable"
-    )
-} else {
-    failures.append("smart collection SQL compiler should be readable")
-}
-
 if let sourceMonitor = try? String(
     contentsOfFile: sourcePath("MarkdownSourceEventMonitor.swift"),
     encoding: .utf8
@@ -905,7 +841,7 @@ if var momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("tagSuggestions"), "Moments should filter existing tags into suggestions")
     expect(momentViews.contains("availableMomentTagFilters"), "Moment tags should be shown as a filter tile collection")
     expect(momentViews.contains("@AppStorage(\"momentFeedLayout\")"), "Moment feed layout selection should persist")
-    expect(momentViews.contains("Label(\"沉浸浏览\", systemImage: \"play.rectangle.fill\")"), "Moment feed should expose immersive browsing")
+    expect(momentViews.contains("Label(\"沉浸浏览\", nativeIcon: \"play.rectangle.fill\")"), "Moment feed should expose immersive browsing")
     expect(momentViews.contains("MomentImmersiveBrowserView"), "Moments should support a slide-like immersive browser")
     expect(momentViews.contains(".sheet(isPresented: $isPresentingImmersiveBrowser)"), "Immersive moment browsing should cover the feed")
     expect(momentViews.contains("available.width * 0.96"), "Immersive moment browsing should use the available screen space")
@@ -972,6 +908,17 @@ if let richTextEditor = try? String(contentsOfFile: sourcePath("MomentRichTextEd
     expect(richTextEditor.contains("completeTagSuggestion"), "Moment editor should insert a selected tag suggestion")
 } else {
     failures.append("native rich text moment editor should be readable")
+}
+
+if let articleLibrary = try? String(contentsOfFile: sourcePath("ArticleLibraryViews.swift"), encoding: .utf8) {
+    expect(articleLibrary.contains("case .list: listLayout"), "article library should expose list layout")
+    expect(articleLibrary.contains("case .table: tableLayout"), "article library should expose table layout")
+    expect(articleLibrary.contains("case .cards: cardLayout"), "article library should expose cards layout")
+    expect(articleLibrary.contains("case .board:"), "article library should expose board layout")
+    expect(articleLibrary.contains("case .calendar:"), "article library should expose calendar layout")
+    expect(articleLibrary.contains("LazyVStack(alignment: .leading, spacing: 0)"), "article table rows should be created lazily")
+} else {
+    failures.append("article library views should be readable")
 }
 
 if failures.isEmpty {

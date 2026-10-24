@@ -48,10 +48,10 @@ struct TrashView: View {
     private func confirmPermanentDelete(_ item: NativeTrashItem) {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "彻底删除“\(item.title)”？"
-        alert.informativeText = "内容和关联的本地媒体会立即永久删除，无法恢复。"
-        alert.addButton(withTitle: "永久删除")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = NativeLocalization.text("彻底删除“\(item.title)”？")
+        alert.informativeText = NativeLocalization.text("内容和关联的本地媒体会立即永久删除，无法恢复。")
+        alert.addButton(withTitle: NativeLocalization.text("永久删除"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         model.permanentlyDeleteTrash(item)
@@ -60,10 +60,10 @@ struct TrashView: View {
     private func confirmEmptyTrash() {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "清空回收站？"
-        alert.informativeText = "回收站中的所有文章、微博和关联媒体都会立即永久删除，无法恢复。"
-        alert.addButton(withTitle: "清空回收站")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = NativeLocalization.text("清空回收站？")
+        alert.informativeText = NativeLocalization.text("回收站中的所有文章、微博和关联媒体都会立即永久删除，无法恢复。")
+        alert.addButton(withTitle: NativeLocalization.text("清空回收站"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         model.emptyTrash()
@@ -71,6 +71,8 @@ struct TrashView: View {
 }
 
 private struct TrashRow: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let item: NativeTrashItem
     let onRestore: () -> Void
     let onPermanentDelete: () -> Void
@@ -78,11 +80,11 @@ private struct TrashRow: View {
     var body: some View {
         HStack(spacing: 14) {
             RoundedRectangle(cornerRadius: 9)
-                .fill(NativeTheme.surfaceSecondary)
+                .fill(appPalette.surfaceSecondary)
                 .frame(width: 44, height: 44)
                 .overlay {
-                    Image(systemName: item.kind.systemImage)
-                        .foregroundStyle(NativeTheme.textSecondary)
+                    NativeIcon.image(item.kind.systemImage)
+                        .foregroundStyle(appPalette.textSecondary)
                 }
 
             VStack(alignment: .leading, spacing: 5) {
@@ -91,7 +93,7 @@ private struct TrashRow: View {
                         .font(.headline)
                     Text(LocalizedStringKey(item.kind.label))
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(NativeTheme.textSecondary)
+                        .foregroundStyle(appPalette.textSecondary)
                 }
                 Group {
                     if item.preview.isEmpty {
@@ -103,7 +105,7 @@ private struct TrashRow: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                Text("删除于 \(item.deletedAt.nativeDateLabel) · 将于 \(item.expiresAt.nativeDateLabel) 自动永久删除")
+                Text(NativeLocalization.text("删除于 \(item.deletedAt.nativeDateLabel) · 将于 \(item.expiresAt.nativeDateLabel) 自动永久删除"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

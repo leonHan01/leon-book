@@ -7,10 +7,9 @@ import WebKit
 
 private enum ArticleEditorLayout {
     static let contentInset: CGFloat = 20
-    static let titleVerticalInset: CGFloat = 24
-    static let canvas = NativeTheme.canvas
-    static let surface = NativeTheme.surface
-    static let sidebar = NativeTheme.sidebar
+    static let titleVerticalInset: CGFloat = 20
+    static let writingInset: CGFloat = 28
+    static let writingWidth: CGFloat = 860
 }
 
 enum NativeBodyEditorAppearance {
@@ -76,6 +75,8 @@ final class EditorSlashCommandController: ObservableObject {
 }
 
 struct NativeBodyEditor: NSViewRepresentable {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @Binding var text: String
     @Binding var selectedRange: NSRange
     let isEditable: Bool
@@ -104,7 +105,7 @@ struct NativeBodyEditor: NSViewRepresentable {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.autoresizingMask = [.width]
-        textView.backgroundColor = NSColor(NativeTheme.surface)
+        textView.backgroundColor = NSColor(appPalette.surface)
         textView.delegate = context.coordinator
         textView.font = typography.bodyFont.nsFont(size: typography.fontSize)
         textView.isHorizontallyResizable = false
@@ -136,6 +137,7 @@ struct NativeBodyEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? NSTextView else { return }
         textView.isEditable = isEditable
+        textView.backgroundColor = NSColor(appPalette.surface)
         linkController.attach(to: textView)
         slashController.attach(to: textView)
         slashController.onExecute = onRunCommand
@@ -154,7 +156,8 @@ struct NativeBodyEditor: NSViewRepresentable {
         }
         if textChanged
             || context.coordinator.lastAppearance != appearance
-            || context.coordinator.lastTypography != typography {
+            || context.coordinator.lastTypography != typography
+            || context.coordinator.lastPalette != appPalette {
             context.coordinator.applyStyling(to: textView, immediately: true, editedRange: nil)
         }
     }
@@ -168,6 +171,7 @@ struct NativeBodyEditor: NSViewRepresentable {
         var parent: NativeBodyEditor
         fileprivate var lastAppearance: NativeBodyEditorAppearance?
         fileprivate var lastTypography: NativeReadingTypography?
+        fileprivate var lastPalette: NativeAppPalette?
         private var styleWorkItem: DispatchWorkItem?
         private var pendingStylingRange: NSRange?
 
@@ -252,10 +256,12 @@ struct NativeBodyEditor: NSViewRepresentable {
                     appearance,
                     typography: self.parent.typography,
                     to: textView,
-                    editedRange: range
+                    editedRange: range,
+                    palette: self.parent.appPalette
                 )
                 self.lastAppearance = appearance
                 self.lastTypography = self.parent.typography
+                self.lastPalette = self.parent.appPalette
             }
             styleWorkItem = workItem
             if immediately {
@@ -383,6 +389,8 @@ private final class PastingTextView: NSTextView {
 }
 
 private struct MarkdownPreview: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let analysis: EditorDocumentAnalysis
     let store: LocalBlogStore
     let articleLinks: [NativeArticleSummary]
@@ -391,7 +399,7 @@ private struct MarkdownPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("实时预览", systemImage: "eye")
+                Label("实时预览", nativeIcon: "eye")
                     .font(.headline)
                 Spacer()
                 Text("随输入更新")
@@ -402,8 +410,7 @@ private struct MarkdownPreview: View {
             ScrollView {
                 if analysis.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     VStack(spacing: 10) {
-                        Image(systemName: "text.document")
-                            .font(.title2)
+                        NativeIcon.image("text.document", size: 24)
                             .foregroundStyle(.secondary)
                         Text("开始输入 Markdown")
                             .font(.headline)
@@ -423,7 +430,7 @@ private struct MarkdownPreview: View {
                 }
             }
             .padding(16)
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
         }
         .padding(ArticleEditorLayout.contentInset)
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -431,6 +438,8 @@ private struct MarkdownPreview: View {
 }
 
 struct ArticleEditorView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @ObservedObject private var editorSession: NativeEditorSessionState
     @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
@@ -485,16 +494,17 @@ struct ArticleEditorView: View {
 
                         writingSection
                     }
+                    .frame(maxWidth: ArticleEditorLayout.writingWidth, maxHeight: .infinity, alignment: .topLeading)
                     .frame(
                         width: showsSidebar ? max(0, proxy.size.width - settingsWidth - dividerWidth) : proxy.size.width,
-                        alignment: .leading
+                        alignment: .top
                     )
 
                     if showsSidebar {
                         Rectangle()
-                            .fill(ArticleEditorLayout.sidebar)
+                            .fill(appPalette.sidebar)
                             .frame(width: dividerWidth)
-                            .overlay { NativeTheme.border.frame(width: 1) }
+                            .overlay { appPalette.border.frame(width: 1) }
                             .contentShape(Rectangle())
                             .onHover { hovering in
                                 if hovering { NSCursor.resizeLeftRight.push() }
@@ -518,12 +528,12 @@ struct ArticleEditorView: View {
                         editorInspectorSidebar
                         .disabled(model.isMarkdownSourceReadOnly)
                         .frame(width: settingsWidth)
-                        .background(ArticleEditorLayout.sidebar)
+                        .background(appPalette.sidebar)
                     }
                 }
             }
         }
-        .background(ArticleEditorLayout.canvas)
+        .background(appPalette.canvas)
         .environment(\.colorScheme, .light)
         .environment(\.nativeReadingTypography, readingPreferences.typography)
         .onChange(of: model.editor) { _ in
@@ -562,16 +572,16 @@ struct ArticleEditorView: View {
 
     private var editorHeader: some View {
         HStack(spacing: 12) {
-            Image(systemName: "square.and.pencil")
-                .foregroundStyle(.tint)
+            ArticleActionIcon(kind: .writing)
+                .foregroundStyle(appPalette.accent)
 
             Text(LocalizedStringKey(model.editor.status.label))
                 .font(.caption.weight(.medium))
-                .foregroundStyle(model.editor.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
+                .foregroundStyle(model.editor.status == .published ? appPalette.accent : appPalette.textSecondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(
-                    model.editor.status == .published ? NativeTheme.lightBlue : NativeTheme.surfaceSecondary,
+                    model.editor.status == .published ? appPalette.lightBlue : appPalette.surfaceSecondary,
                     in: Capsule()
                 )
 
@@ -580,8 +590,8 @@ struct ArticleEditorView: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Image(systemName: "checkmark.circle")
-                        .foregroundStyle(.secondary)
+                    ArticleActionIcon(kind: .saved, size: 14)
+                        .foregroundStyle(appPalette.textSecondary)
                 }
                 editorAutosaveStatusText
                     .font(.caption)
@@ -591,7 +601,7 @@ struct ArticleEditorView: View {
             .help("编辑内容停止变化 3 秒后自动保存恢复快照")
 
             if model.isMarkdownSourceReadOnly {
-                Label("只读挂载", systemImage: "lock.fill")
+                Label("只读挂载", nativeIcon: "lock.fill", iconSize: 12)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.orange)
                     .help("可阅读和监听外部修改，不能在 LeonBook 中写回")
@@ -599,115 +609,136 @@ struct ArticleEditorView: View {
 
             Spacer()
 
-            NativeWorkspaceLayoutMenu(model: model, workspaceLayout: workspaceLayout)
-                .labelStyle(.iconOnly)
-                .menuIndicator(.hidden)
-                .fixedSize()
-
-            Button {
-                workspaceLayout.isEditorSidebarVisible.toggle()
-            } label: {
-                Label(
-                    LocalizedStringKey(workspaceLayout.isEditorSidebarVisible ? "隐藏右栏" : "显示右栏"),
-                    systemImage: "sidebar.right"
-                )
-            }
-            .labelStyle(.iconOnly)
-            .disabled(editorMode == .focus)
-            .help(Text(LocalizedStringKey(editorMode == .focus ? "专注写作模式会隐藏右侧面板" : "显示或隐藏编辑右侧面板")))
-
-            Menu {
-                Section("编辑视图") {
-                    modeMenuButton(.blocks, shortcut: "1")
-                    modeMenuButton(.focus, shortcut: "2")
-                }
+            HStack(spacing: 4) {
+                NativeWorkspaceLayoutMenu(model: model, workspaceLayout: workspaceLayout, usesArticleActionIcon: true)
+                    .labelStyle(.iconOnly)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .tint(appPalette.textSecondary)
+                    .fixedSize()
 
                 Button {
-                    model.executeCommand(.saveDraft)
+                    workspaceLayout.isEditorSidebarVisible.toggle()
                 } label: {
-                    Label(LocalizedStringKey(model.isSaving ? "保存中…" : "保存草稿"), systemImage: "tray.and.arrow.down")
+                    ArticleActionIcon(kind: .inspector)
+                        .foregroundStyle(workspaceLayout.isEditorSidebarVisible ? appPalette.accent : appPalette.textSecondary)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
                 }
-                .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
-
-                Button {
-                    model.refreshArticleHistory()
-                    isPresentingHistory = true
-                } label: {
-                    Label("版本历史", systemImage: "clock.arrow.circlepath")
-                }
-
-                Menu("内容重构") {
-                    Button("提取选区为新文章…", systemImage: "scissors") {
-                        model.promptToExtractArticleSelection(model.editorBodySelection)
-                    }
-                    .disabled(model.editor.isNew || model.editorBodySelection.length == 0)
-
-                    Button("按二级标题拆分…", systemImage: "square.split.2x1") {
-                        model.promptToSplitArticleByLevel2Headings()
-                    }
-                    .disabled(model.editor.isNew)
-
-                    Button("合并到其他文章…", systemImage: "arrow.triangle.merge") {
-                        model.promptToMergeEditedArticle()
-                    }
-                    .disabled(model.editor.isNew || model.articles.count < 2)
-                }
-                .disabled(model.isMarkdownSourceReadOnly)
-
-                ArticlePageTemplateActions(model: model, library: pageTemplateLibrary)
-                    .disabled(model.isMarkdownSourceReadOnly)
+                .buttonStyle(NativeChromeIconButtonStyle(isSelected: workspaceLayout.isEditorSidebarVisible))
+                .accessibilityLabel(Text(LocalizedStringKey(workspaceLayout.isEditorSidebarVisible ? "隐藏右栏" : "显示右栏")))
+                .accessibilityAddTraits(workspaceLayout.isEditorSidebarVisible ? .isSelected : [])
+                .opacity(editorMode == .focus ? 0.4 : 1)
+                .disabled(editorMode == .focus)
+                .help(Text(LocalizedStringKey(editorMode == .focus ? "专注写作模式会隐藏右侧面板" : "显示或隐藏编辑右侧面板")))
 
                 Menu {
-                    Button("添加封面") {
-                        model.chooseAndUpload(kind: .image, forArticle: model.editor.slug, banner: true)
+                    Section(NativeLocalization.text("编辑视图")) {
+                        modeMenuButton(.blocks, shortcut: "1")
+                        modeMenuButton(.focus, shortcut: "2")
                     }
-                    Button("添加图片") {
-                        model.chooseAndUpload(kind: .image, forArticle: model.editor.slug)
+
+                    Button {
+                        model.executeCommand(.saveDraft)
+                    } label: {
+                        Label(LocalizedStringKey(model.isSaving ? "保存中…" : "保存草稿"), nativeIcon: "tray.and.arrow.down")
                     }
-                    Button("添加视频") {
-                        model.chooseAndUpload(kind: .video, forArticle: model.editor.slug)
+                    .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
+
+                    Button {
+                        model.refreshArticleHistory()
+                        isPresentingHistory = true
+                    } label: {
+                        Label("版本历史", nativeIcon: "clock.arrow.circlepath")
                     }
+
+                    Menu("内容重构") {
+                        Button("提取选区为新文章…", nativeIcon: "scissors") {
+                            model.promptToExtractArticleSelection(model.editorBodySelection)
+                        }
+                        .disabled(model.editor.isNew || model.editorBodySelection.length == 0)
+
+                        Button("按二级标题拆分…", nativeIcon: "square.split.2x1") {
+                            model.promptToSplitArticleByLevel2Headings()
+                        }
+                        .disabled(model.editor.isNew)
+
+                        Button("合并到其他文章…", nativeIcon: "arrow.triangle.merge") {
+                            model.promptToMergeEditedArticle()
+                        }
+                        .disabled(model.editor.isNew || model.articles.count < 2)
+                    }
+                    .disabled(model.isMarkdownSourceReadOnly)
+
+                    ArticlePageTemplateActions(model: model, library: pageTemplateLibrary)
+                        .disabled(model.isMarkdownSourceReadOnly)
+
+                    Menu {
+                        Button("添加封面") {
+                            model.chooseAndUpload(kind: .image, forArticle: model.editor.slug, banner: true)
+                        }
+                        Button("添加图片") {
+                            model.chooseAndUpload(kind: .image, forArticle: model.editor.slug)
+                        }
+                        Button("添加视频") {
+                            model.chooseAndUpload(kind: .video, forArticle: model.editor.slug)
+                        }
+                    } label: {
+                        Label("添加素材", nativeIcon: "paperclip")
+                    }
+                    .disabled(model.isMarkdownSourceReadOnly)
                 } label: {
-                    Label("添加素材", systemImage: "paperclip")
+                    Label {
+                        Text("页面操作")
+                    } icon: {
+                        ArticleActionIcon.menuImage(kind: .more)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                    }
                 }
-                .disabled(model.isMarkdownSourceReadOnly)
-            } label: {
-                Label("页面操作", systemImage: "ellipsis.circle")
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .tint(appPalette.textSecondary)
+                .fixedSize()
+                .help("切换编辑视图、保存草稿或打开更多页面操作")
             }
-            .labelStyle(.iconOnly)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("切换编辑视图、保存草稿或打开更多页面操作")
 
             Button {
                 model.executeCommand(.publishArticle)
             } label: {
-                Label("发布", systemImage: "paperplane.fill")
+                Label {
+                    Text("发布")
+                        .font(.system(size: 12, weight: .medium))
+                } icon: {
+                    ArticleActionIcon(kind: .publish)
+                }
+                .padding(.horizontal, 4)
             }
             .nativePrimaryButton()
             .disabled(model.isSaving || model.isMarkdownSourceReadOnly)
         }
         .controlSize(.regular)
         .padding(.horizontal, ArticleEditorLayout.contentInset)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
     }
 
     private func modeMenuButton(_ mode: ArticleEditorMode, shortcut: KeyEquivalent) -> some View {
         Button {
             workspaceLayout.editorMode = mode
         } label: {
-            Label(LocalizedStringKey(mode.title), systemImage: editorMode == mode ? "checkmark" : mode.systemImage)
+            Label(LocalizedStringKey(mode.title), nativeIcon: editorMode == mode ? "checkmark" : mode.systemImage)
         }
         .keyboardShortcut(shortcut, modifiers: [.command, .option])
     }
 
     private var titleSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
                 ArticlePathBreadcrumb(
                     sourceRelativePath: model.editor.isNew ? nil : model.selectedArticle?.sourceRelativePath,
                     draftFolderPath: model.pendingNewArticleFolderPath,
-                    showsCreateArticle: !model.editor.isNew && !model.isMarkdownSourceReadOnly,
+                    showsCreateArticle: false,
                     onSelectRoot: { model.showAllArticles() },
                     onSelectFolder: { model.showArticleFolder($0) },
                     onCreateArticle: { model.newArticle(inFolder: $0) }
@@ -718,89 +749,30 @@ struct ArticleEditorView: View {
                 }
             }
 
-            TextField("给这篇文章起个标题", text: $editorSession.draft.title)
-                .font(.system(size: 32, weight: .semibold))
+            TextField("无标题", text: $editorSession.draft.title)
+                .font(.system(size: 30, weight: .semibold))
                 .textFieldStyle(.plain)
-
-            if model.editor.isNew {
-                Picker("所属目录", selection: Binding(
-                    get: { model.pendingNewArticleFolderPath ?? NativeArticleDirectoryPolicy.defaultFolderPath },
-                    set: { model.pendingNewArticleFolderPath = $0 }
-                )) {
-                    ForEach(model.articleCreationFolderPaths, id: \.self) { path in
-                        Text(path).tag(path)
-                    }
-                }
-                .frame(maxWidth: 360, alignment: .leading)
-                .help("文章必须归属目录，目录最多 5 级。")
-            }
-
-            Divider()
-
-            TextField("写一句摘要，让读者快速了解这篇文章（可选）", text: $editorSession.draft.excerpt, axis: .vertical)
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .textFieldStyle(.plain)
-                .lineLimit(2...4)
+                .accessibilityLabel("文章标题")
         }
-        .padding(.horizontal, ArticleEditorLayout.contentInset)
+        .padding(.horizontal, ArticleEditorLayout.writingInset)
     }
 
     private var writingSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Label {
-                        HStack(spacing: 0) {
-                            Text("正文")
-                            if editorMode != .blocks {
-                                Text(" · ")
-                                Text(LocalizedStringKey(editorMode.title))
-                            }
-                        }
-                    } icon: {
-                        Image(systemName: "text.alignleft")
-                    }
-                        .font(.headline)
-                    Spacer()
-
-                    HStack(spacing: 12) {
-                        Label("\(wordCount) 字", systemImage: "character.cursor.ibeam")
-                        Label("约 \(readingMinutes) 分钟", systemImage: "clock")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-
+        RichArticleEditor(
+            html: $editorSession.draft.body,
+            documentID: model.editor.recoveryID,
+            isEditable: !model.isMarkdownSourceReadOnly,
+            fontSize: readingPreferences.typography.fontSize,
+            store: model.store,
+            sourceRelativePath: model.editor.isNew ? nil : model.selectedArticle?.sourceRelativePath,
+            onImportAudio: { try await model.importEditorAudio(from: $0) },
+            onAudioInserted: { model.registerEditorAudio($0) },
+            onOpenLink: { url in
+                if url.scheme == "leonbook" { model.handleAutomationURL(url) }
+                else { NSWorkspace.shared.open(url) }
             }
-            .padding(.horizontal, ArticleEditorLayout.contentInset)
-            .padding(.vertical, 10)
-
-            Divider()
-
-            RichArticleEditor(
-                html: $editorSession.draft.body,
-                documentID: model.editor.recoveryID,
-                isEditable: !model.isMarkdownSourceReadOnly,
-                fontSize: readingPreferences.typography.fontSize,
-                store: model.store,
-                sourceRelativePath: model.editor.isNew ? nil : model.selectedArticle?.sourceRelativePath,
-                onImportAudio: { try await model.importEditorAudio(from: $0) },
-                onAudioInserted: { model.registerEditorAudio($0) },
-                onOpenLink: { url in
-                    if url.scheme == "leonbook" { model.handleAutomationURL(url) }
-                    else { NSWorkspace.shared.open(url) }
-                }
-            )
-            .frame(minHeight: 440)
-
-
-        }
-        .background(ArticleEditorLayout.surface, in: RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(.quaternary)
-        }
+        )
+        .frame(minHeight: 280, maxHeight: .infinity)
     }
 
     private func editorPane(appearance: NativeBodyEditorAppearance) -> some View {
@@ -808,14 +780,14 @@ struct ArticleEditorView: View {
             HStack(spacing: 8) {
                 Label(
                     LocalizedStringKey(appearance == .livePreview ? "行内实时预览" : "Markdown 源码"),
-                    systemImage: appearance == .livePreview ? "textformat" : "pencil.line"
+                    nativeIcon: appearance == .livePreview ? "textformat" : "pencil.line", iconSize: 14
                 )
                     .font(.subheadline.weight(.medium))
                 Spacer()
                 Button {
                     insertHTMLComponentTemplate()
                 } label: {
-                    Label("HTML 组件", systemImage: "chevron.left.forwardslash.chevron.right")
+                    Label("HTML 组件", nativeIcon: "chevron.left.forwardslash.chevron.right")
                 }
                 .buttonStyle(.borderless)
                 .help("插入可直接渲染的 HTML 组件")
@@ -841,7 +813,7 @@ struct ArticleEditorView: View {
             )
             .id(model.editor.recoveryID)
             .padding(10)
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(.quaternary)
@@ -889,8 +861,12 @@ struct ArticleEditorView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Label("编辑面板", systemImage: "sidebar.right")
-                        .font(.headline)
+                    Label {
+                        Text("编辑面板")
+                    } icon: {
+                        ArticleActionIcon(kind: .inspector, size: 16)
+                    }
+                    .font(.headline)
                     Spacer()
                     Text(LocalizedStringKey(workspaceLayout.editorSidebarPane.title))
                         .font(.caption)
@@ -899,7 +875,7 @@ struct ArticleEditorView: View {
 
                 Picker("编辑面板", selection: $workspaceLayout.editorSidebarPane) {
                     ForEach(NativeEditorSidebarPane.allCases) { pane in
-                        Label(LocalizedStringKey(pane.title), systemImage: pane.systemImage)
+                        Label(LocalizedStringKey(pane.title), nativeIcon: pane.systemImage)
                             .tag(pane)
                     }
                 }
@@ -932,33 +908,32 @@ struct ArticleEditorView: View {
 
     private var editorSettingsSidebar: some View {
         VStack(alignment: .leading, spacing: 16) {
-            EditorCard(title: "发布状态", systemImage: "paperplane") {
-                HStack(spacing: 10) {
-                    Image(systemName: model.editor.status == .published ? "checkmark.circle.fill" : "pencil.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(model.editor.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(LocalizedStringKey(model.editor.status == .published ? "已发布" : "草稿"))
-                            .font(.subheadline.weight(.semibold))
-                        if let updatedAt = model.editor.updatedAt {
-                            Text("最近保存：\(updatedAt.nativeDateLabel)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("尚未保存")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+            EditorCard(title: "文章信息", icon: .document) {
+                if model.editor.isNew {
+                    Picker("所属目录", selection: Binding(
+                        get: { model.pendingNewArticleFolderPath ?? NativeArticleDirectoryPolicy.defaultFolderPath },
+                        set: { model.pendingNewArticleFolderPath = $0 }
+                    )) {
+                        ForEach(model.articleCreationFolderPaths, id: \.self) { path in
+                            Text(path).tag(path)
                         }
                     }
+                    .help("文章必须归属目录，目录最多 5 级。")
                 }
 
-                Text("保存草稿后可以继续编辑，发布后文章会出现在博客中。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                TextField("摘要（可选）", text: $editorSession.draft.excerpt, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(3...6)
+                    .accessibilityLabel("摘要（可选）")
+
+                if let updatedAt = model.editor.updatedAt {
+                    Text(NativeLocalization.text("最近保存：\(updatedAt.nativeDateLabel)"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            EditorCard(title: "分类与标签", systemImage: "tag") {
+            EditorCard(title: "分类与标签", icon: .tag) {
                 VStack(alignment: .leading, spacing: 10) {
                     TextField("分类", text: $editorSession.draft.category)
                         .textFieldStyle(.roundedBorder)
@@ -985,12 +960,12 @@ struct ArticleEditorView: View {
                 }
             }
 
-            EditorCard(title: "封面图", systemImage: "photo") {
+            EditorCard(title: "封面图", icon: .image) {
                 if let banner = model.editor.banner {
                     HStack(spacing: 10) {
                         NativeImageView(url: banner.url, alt: banner.alt, store: model.store)
                             .frame(width: 64, height: 52)
-                            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 8))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
 
                         VStack(alignment: .leading, spacing: 3) {
@@ -1009,8 +984,8 @@ struct ArticleEditorView: View {
                         model.chooseAndUpload(kind: .image, forArticle: model.editor.slug, banner: true)
                     } label: {
                         VStack(spacing: 6) {
-                            Image(systemName: "photo.badge.plus")
-                                .font(.title3)
+                            ArticleActionIcon(kind: .image, size: 22)
+                                .foregroundStyle(appPalette.textSecondary)
                             Text("添加一张封面图")
                                 .font(.caption.weight(.medium))
                             Text("推荐横向图片")
@@ -1019,7 +994,7 @@ struct ArticleEditorView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                        .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
                         .overlay {
                             RoundedRectangle(cornerRadius: 10)
                                 .strokeBorder(.quaternary, style: StrokeStyle(lineWidth: 1, dash: [5]))
@@ -1038,7 +1013,7 @@ struct ArticleEditorView: View {
                 }
             }
 
-            EditorCard(title: "附件", systemImage: "paperclip") {
+            EditorCard(title: "附件", icon: .attachment) {
                 if model.editor.media.isEmpty {
                     Text("还没有图片、视频、音频或文件附件")
                         .font(.caption)
@@ -1080,9 +1055,11 @@ struct ArticleEditorView: View {
                 }
             }
 
-            EditorCard(title: "文章概览", systemImage: "chart.bar") {
+            EditorCard(title: "文章概览", icon: .statistics) {
                 HStack {
                     EditorMetric(value: "\(wordCount)", label: "字")
+                    Divider().frame(height: 26)
+                    EditorMetric(value: "\(readingMinutes)", label: "分钟")
                     Divider().frame(height: 26)
                     EditorMetric(value: "\(model.editor.media.count)", label: "个附件")
                 }
@@ -1095,10 +1072,10 @@ struct ArticleEditorView: View {
         let status = model.editorAutosaveStatus
         if status.hasPrefix("已自动保存：") {
             let detail = localizedAutosaveDate(String(status.dropFirst("已自动保存：".count)))
-            Text("已自动保存：\(detail)")
+            Text(NativeLocalization.text("已自动保存：\(detail)"))
         } else if status.hasPrefix("已恢复自动保存：") {
             let detail = localizedAutosaveDate(String(status.dropFirst("已恢复自动保存：".count)))
-            Text("已恢复自动保存：\(detail)")
+            Text(NativeLocalization.text("已恢复自动保存：\(detail)"))
         } else {
             Text(LocalizedStringKey(status))
         }
@@ -1133,7 +1110,7 @@ struct ArticleEditorView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 18)
-                    .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                    .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
             }
 
             ForEach($propertyRows) { $row in
@@ -1143,7 +1120,7 @@ struct ArticleEditorView: View {
                             .textFieldStyle(.roundedBorder)
                         Picker("类型", selection: $row.kind) {
                             ForEach(NativeArticlePropertyKind.allCases) { kind in
-                                Label(LocalizedStringKey(kind.label), systemImage: kind.systemImage).tag(kind)
+                                Label(LocalizedStringKey(kind.label), nativeIcon: kind.systemImage).tag(kind)
                             }
                         }
                         .labelsHidden()
@@ -1155,7 +1132,7 @@ struct ArticleEditorView: View {
                                 propertyRenameRequest = EditorPropertyRenameRequest(oldKey: key)
                             }
                         } label: {
-                            Image(systemName: "arrow.triangle.2.circlepath")
+                            NativeIcon.image("arrow.triangle.2.circlepath")
                         }
                         .buttonStyle(.borderless)
                         .disabled(!NativeArticleProperties.isValidKey(row.key) || model.isRenamingArticleProperty)
@@ -1163,7 +1140,7 @@ struct ArticleEditorView: View {
                         Button(role: .destructive) {
                             propertyRows.removeAll(where: { $0.id == row.id })
                         } label: {
-                            Image(systemName: "trash")
+                            NativeIcon.image("trash")
                         }
                         .buttonStyle(.borderless)
                         .help("删除属性")
@@ -1175,13 +1152,13 @@ struct ArticleEditorView: View {
                         sourceSlug: model.editor.slug
                     )
                     if !row.typedValue.isValid {
-                        Label("值与所选类型不匹配", systemImage: "exclamationmark.triangle.fill")
+                        Label("值与所选类型不匹配", nativeIcon: "exclamationmark.triangle.fill", iconSize: 12)
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
                 }
                 .padding(10)
-                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary)
                 }
@@ -1217,7 +1194,7 @@ struct ArticleEditorView: View {
             Button {
                 propertyRows.append(EditorPropertyRow())
             } label: {
-                Label("添加属性", systemImage: "plus")
+                Label("添加属性", nativeIcon: "plus")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
@@ -1240,7 +1217,7 @@ struct ArticleEditorView: View {
             } else {
                 ForEach(editorOutline) { item in
                     HStack(spacing: 8) {
-                        Image(systemName: "textformat.size")
+                        NativeIcon.image("textformat.size")
                             .foregroundStyle(.secondary)
                         Text(item.title)
                             .lineLimit(2)
@@ -1268,7 +1245,7 @@ struct ArticleEditorView: View {
                             model.openArticleLink(link.destination)
                         } label: {
                             HStack(spacing: 8) {
-                                Image(systemName: link.destination.resolvedSlug == nil ? "doc.badge.plus" : "doc.text")
+                                NativeIcon.image(link.destination.resolvedSlug == nil ? "doc.badge.plus" : "doc.text")
                                     .foregroundStyle(link.destination.resolvedSlug == nil ? .orange : .secondary)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(link.reference.label)
@@ -1518,13 +1495,12 @@ private struct EditorSlashCommandMenu: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Label(LocalizedStringKey(query.isEmpty ? "插入内容" : "匹配的插入命令"), systemImage: "command")
+                Label(LocalizedStringKey(query.isEmpty ? "插入内容" : "匹配的插入命令"), nativeIcon: "command", iconSize: 12)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
+                    NativeIcon.image("xmark", size: 12)
                         .foregroundStyle(.secondary)
                         .frame(width: 22, height: 22)
                         .contentShape(Circle())
@@ -1536,7 +1512,7 @@ private struct EditorSlashCommandMenu: View {
             ForEach(commands) { command in
                 Button { onSelect(command) } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: command.systemImage)
+                        NativeIcon.image(command.systemImage)
                             .frame(width: 20)
                             .foregroundStyle(.tint)
                         VStack(alignment: .leading, spacing: 1) {
@@ -1572,14 +1548,13 @@ private struct ArticleLinkSuggestionMenu: View {
             HStack {
                 Label(
                     LocalizedStringKey(query.isEmpty ? "关联到文章" : "匹配的文章"),
-                    systemImage: "link"
+                    nativeIcon: "link", iconSize: 12
                 )
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
+                    NativeIcon.image("xmark", size: 12)
                         .foregroundStyle(.secondary)
                         .frame(width: 22, height: 22)
                         .contentShape(Circle())
@@ -1593,7 +1568,7 @@ private struct ArticleLinkSuggestionMenu: View {
                     onSelect(article)
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: article.systemImage)
+                        NativeIcon.image(article.systemImage)
                             .foregroundStyle(.tint)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(article.title)
@@ -1630,20 +1605,44 @@ private struct ArticleLinkSuggestionMenu: View {
 }
 
 private struct EditorCard<Content: View>: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
+    private enum Icon {
+        case line(ArticleActionIcon.Kind)
+        case system(String)
+    }
+
     let title: LocalizedStringKey
-    let systemImage: String
+    private let icon: Icon
     let content: Content
 
     init(title: LocalizedStringKey, systemImage: String, @ViewBuilder content: () -> Content) {
         self.title = title
-        self.systemImage = systemImage
+        self.icon = .system(systemImage)
+        self.content = content()
+    }
+
+    init(title: LocalizedStringKey, icon: ArticleActionIcon.Kind, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = .line(icon)
         self.content = content()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: systemImage)
-                .font(.subheadline.weight(.semibold))
+            Label {
+                Text(title)
+            } icon: {
+                Group {
+                    switch icon {
+                    case .line(let kind): ArticleActionIcon(kind: kind, size: 16)
+                    case .system(let name): NativeIcon.image(name)
+                    }
+                }
+                .foregroundStyle(appPalette.textSecondary)
+                .frame(width: 20, height: 20)
+            }
+            .font(.subheadline.weight(.semibold))
 
             content
         }

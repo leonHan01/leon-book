@@ -78,7 +78,6 @@ final class NativeEditorSessionState: ObservableObject {
 struct NativeMarkdownRefreshPlan: Equatable {
     let reloadsArticleList: Bool
     let reloadsSelectedArticle: Bool
-    let reloadsSelectedSmartCollection: Bool
     let reloadsKnowledgeGraph: Bool
     let reloadsTrash: Bool
     let reloadsMoments: Bool
@@ -90,7 +89,6 @@ struct NativeMarkdownRefreshPlan: Equatable {
         let affectedSlugs = Set(result.affectedArticleSlugs)
         reloadsArticleList = changed
         reloadsSelectedArticle = selectedArticleSlug.map(affectedSlugs.contains) ?? false
-        reloadsSelectedSmartCollection = changed
         reloadsKnowledgeGraph = changed
         reloadsTrash = result.deletedCount > 0
         reloadsMoments = false
@@ -134,7 +132,6 @@ struct NativeArticleFolderFilter: Identifiable, Hashable {
 
 enum NativeProjectionKind: Hashable, Sendable {
     case articleLibrary
-    case smartCollection
     case momentFacets
 }
 

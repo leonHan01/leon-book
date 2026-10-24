@@ -53,8 +53,8 @@ public enum FirstPartyBackupLocationError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case let .missingSource(path): return "源数据目录不存在：\(path)"
-        case .destinationInsideSource: return "备份目录不能位于源数据目录内部，请选择另一块磁盘或其他目录。"
+        case let .missingSource(path): return ModuleLocalization.text("源数据目录不存在：\(path)")
+        case .destinationInsideSource: return ModuleLocalization.text("备份目录不能位于源数据目录内部，请选择另一块磁盘或其他目录。")
         }
     }
 }

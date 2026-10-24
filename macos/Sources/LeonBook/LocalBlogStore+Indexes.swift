@@ -61,7 +61,7 @@ extension LocalBlogStore {
         var legacyMoments: [(id: String, text: String)] = []
         try database.query("SELECT id, text FROM moments WHERE tags_json IS NULL") { row in
             guard let id = row.text(at: 0), let text = row.text(at: 1) else {
-                throw NativeStoreError.fileSystem("SQLite：微博记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：微博记录不完整"))
             }
             legacyMoments.append((id, text))
         }
@@ -92,7 +92,7 @@ extension LocalBlogStore {
             "SELECT slug, body FROM articles WHERE deleted_at IS NULL ORDER BY slug"
         ) { row in
             guard let slug = row.text(at: 0), let body = row.text(at: 1) else {
-                throw NativeStoreError.fileSystem("SQLite：文章派生索引迁移记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：文章派生索引迁移记录不完整"))
             }
             documents.append((slug, body))
         }

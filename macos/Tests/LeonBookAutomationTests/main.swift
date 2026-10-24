@@ -54,6 +54,10 @@ struct AutomationTests {
 
     static func articles(_ service: AutomationService, _ root: URL) async throws {
         _ = try await call(service, "capabilities")
+        try expect(!AutomationCatalog.operations.contains { $0.method.hasPrefix("collections.") }, "retired collections must not be advertised")
+        for method in ["collections.list", "collections.save", "collections.query", "collections.delete"] {
+            try await expectError(service, method, [:], "method_not_found")
+        }
         try expect(!FileManager.default.fileExists(atPath: root.path), "discovery must not initialize a library")
         try await expectError(service, "unknown", [:], "method_not_found")
         try await expectError(service, "articles.create", ["title": .string("missing body")], "invalid_params")

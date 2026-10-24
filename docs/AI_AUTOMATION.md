@@ -25,10 +25,10 @@ App 正在运行时，CLI 连接它的本地接口；App 关闭时，CLI 直接�
 `./scripts/leonblog build` 同时把 CLI 打包为：
 
 ```text
-macos/dist/leon-book.app/Contents/MacOS/leonbook
+macos/dist/leon-book.app/Contents/MacOS/LeonBookCLI
 ```
 
-可以直接调用这个可执行文件，或把它放入 PATH 的符号链接中。保留整个 `.app` 包，因为 CLI 共享包中的资源。
+可以直接调用这个可执行文件，或把它放入 PATH 的符号链接中。保留整个 `.app` 包，因为 CLI 共享包中的资源。包内 GUI 为 `LeonBook`，CLI 使用 `LeonBookCLI`，避免在不区分文件名大小写的 macOS 磁盘上互相覆盖。
 
 ## 参数与返回值
 
@@ -138,7 +138,6 @@ post = call("moments.create", text="新文章已完成 #创作")
 | 待办 | `todos.list/get/create/update/complete/delete/restore` |
 | 搜索与活动 | `search`、`activity.list` |
 | 目录和素材 | `resources.list/move/trash`、`folders.create`、`media.upload` |
-| 智能集合 | `collections.list/save/query/delete` |
 | 收藏 | `bookmarks.list/save/delete` |
 | 回收站 | `trash.list/restore/delete/empty` |
 | 备份 | `backup.create/list/validate` |

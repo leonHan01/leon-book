@@ -36,7 +36,7 @@ extension NativeAppModel {
                 id: NativeCommandID(rawValue: registration.commandID),
                 title: registration.command.title,
                 detail: registration.command.description.isEmpty
-                    ? "由 \(registration.extensionName) 提供"
+                    ? NativeLocalization.text("由 \(registration.extensionName) 提供")
                     : registration.command.description,
                 keywords: "\(registration.command.keywords) \(registration.extensionName) extension 扩展",
                 systemImage: registration.command.icon,
@@ -51,7 +51,7 @@ extension NativeAppModel {
                 id: NativeCommandID(rawValue: registration.commandID),
                 title: registration.importer.title,
                 detail: registration.importer.description.isEmpty
-                    ? "使用 \(registration.extensionName) 导入文件"
+                    ? NativeLocalization.text("使用 \(registration.extensionName) 导入文件")
                     : registration.importer.description,
                 keywords: "import 导入 \(registration.importer.fileExtensions.joined(separator: " ")) \(registration.extensionName)",
                 systemImage: "square.and.arrow.down",
@@ -67,17 +67,15 @@ extension NativeAppModel {
             + declarativeExtensions.templateVariables.count
             + declarativeExtensions.importers.count
             + declarativeExtensions.renderers.count
-            + declarativeExtensions.baseFunctions.count
     }
 
     func declarativeExtensionCapabilities(_ package: DeclarativeExtensionPackage) -> String {
         var labels: [String] = []
-        if !package.manifest.commands.isEmpty { labels.append("命令 \(package.manifest.commands.count)") }
-        if !package.manifest.templateVariables.isEmpty { labels.append("模板变量 \(package.manifest.templateVariables.count)") }
-        if !package.manifest.importers.isEmpty { labels.append("导入器 \(package.manifest.importers.count)") }
-        if !package.manifest.renderers.isEmpty { labels.append("渲染器 \(package.manifest.renderers.count)") }
-        if !package.manifest.baseFunctions.isEmpty { labels.append("Base 函数 \(package.manifest.baseFunctions.count)") }
-        return labels.isEmpty ? "未声明扩展点" : labels.joined(separator: " · ")
+        if !package.manifest.commands.isEmpty { labels.append(NativeLocalization.text("命令 \(package.manifest.commands.count)")) }
+        if !package.manifest.templateVariables.isEmpty { labels.append(NativeLocalization.text("模板变量 \(package.manifest.templateVariables.count)")) }
+        if !package.manifest.importers.isEmpty { labels.append(NativeLocalization.text("导入器 \(package.manifest.importers.count)")) }
+        if !package.manifest.renderers.isEmpty { labels.append(NativeLocalization.text("渲染器 \(package.manifest.renderers.count)")) }
+        return labels.isEmpty ? NativeLocalization.text("未声明扩展点") : labels.joined(separator: " · ")
     }
 
     func reloadDeclarativeExtensions() {
@@ -94,12 +92,12 @@ extension NativeAppModel {
             let invalidCount = declarativeExtensions.diagnostics.filter { $0.severity == .error }.count
             let enabledCount = declarativeExtensions.activePackages.count
             declarativeExtensionStatus = invalidCount == 0
-                ? "已启用 \(enabledCount) 个扩展，共 \(declarativeExtensionContributionCount) 个扩展点"
-                : "已启用 \(enabledCount) 个扩展，\(invalidCount) 个扩展包未通过校验"
+                ? NativeLocalization.text("已启用 \(enabledCount) 个扩展，共 \(declarativeExtensionContributionCount) 个扩展点")
+                : NativeLocalization.text("已启用 \(enabledCount) 个扩展，\(invalidCount) 个扩展包未通过校验")
             commandPreferences.updateRegistry(commandRegistry)
         } catch {
             declarativeExtensions = .empty
-            declarativeExtensionStatus = "扩展目录读取失败：\(error.localizedDescription)"
+            declarativeExtensionStatus = NativeLocalization.text("扩展目录读取失败：\(error.localizedDescription)")
             commandPreferences.updateRegistry(commandRegistry)
         }
     }
@@ -109,7 +107,7 @@ extension NativeAppModel {
         guard runtime.setEnabled(enabled, extensionID: extensionID) else { return }
         declarativeExtensions = runtime
         persistDeclarativeExtensionState()
-        let state = enabled ? "已启用" : "已停用"
+        let state = enabled ? NativeLocalization.text("已启用") : NativeLocalization.text("已停用")
         declarativeExtensionStatus = "\(state) \(runtime.packages.first(where: { $0.id == extensionID })?.manifest.name ?? extensionID)"
         commandPreferences.updateRegistry(commandRegistry)
     }
@@ -122,7 +120,7 @@ extension NativeAppModel {
             )
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: declarativeExtensionDirectoryURL.path)
         } catch {
-            errorMessage = "无法打开扩展目录：\(error.localizedDescription)"
+            errorMessage = NativeLocalization.text("无法打开扩展目录：\(error.localizedDescription)")
         }
     }
 
@@ -156,7 +154,7 @@ extension NativeAppModel {
                 NativeCommandTextInsertion(text: rendered, cursorOffset: action.cursorOffset),
                 invocation: invocation
             )
-            editorAutosaveStatus = "已执行扩展命令，等待自动保存…"
+            editorAutosaveStatus = NativeLocalization.text("已执行扩展命令，等待自动保存…")
             scheduleEditorAutosave()
         case .newNote:
             let title: String
@@ -200,7 +198,7 @@ extension NativeAppModel {
             pendingNewArticleFolderPath = normalizedFolder.isEmpty ? nil : normalizedFolder
             editor.title = title
             editor.body = body
-            editorAutosaveStatus = "已由 \(registration.extensionName) 创建草稿，等待保存…"
+            editorAutosaveStatus = NativeLocalization.text("已由 \(registration.extensionName) 创建草稿，等待保存…")
             scheduleEditorAutosave()
         }
     }
@@ -208,8 +206,8 @@ extension NativeAppModel {
     private func executeDeclarativeImporter(_ registration: DeclarativeExtensionImporterRegistration) {
         let panel = NSOpenPanel()
         panel.title = registration.importer.title
-        panel.message = "扩展只能读取你在此处明确选择的文件，最多 \(registration.importer.maximumBytes) 字节。"
-        panel.prompt = "导入为草稿"
+        panel.message = NativeLocalization.text("扩展只能读取你在此处明确选择的文件，最多 \(registration.importer.maximumBytes) 字节。")
+        panel.prompt = NativeLocalization.text("导入为草稿")
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -231,7 +229,7 @@ extension NativeAppModel {
                 context: declarativeTemplateContext()
             )
             guard document.unresolvedVariables.isEmpty else {
-                errorMessage = "“\(registration.importer.title)”缺少模板变量：\(document.unresolvedVariables.joined(separator: "、"))"
+                errorMessage = NativeLocalization.text("“\(registration.importer.title)”缺少模板变量：\(document.unresolvedVariables.joined(separator: "、"))")
                 return
             }
             guard validateDeclarativeFolder(document.folder, source: registration.importer.title) else { return }
@@ -243,10 +241,10 @@ extension NativeAppModel {
             pendingNewArticleFolderPath = normalizedFolder.isEmpty ? nil : normalizedFolder
             editor.title = document.title
             editor.body = document.body
-            editorAutosaveStatus = "已导入 \(fileURL.lastPathComponent)，等待保存…"
+            editorAutosaveStatus = NativeLocalization.text("已导入 \(fileURL.lastPathComponent)，等待保存…")
             scheduleEditorAutosave()
         } catch {
-            errorMessage = "扩展导入失败：\(error.localizedDescription)"
+            errorMessage = NativeLocalization.text("扩展导入失败：\(error.localizedDescription)")
         }
     }
 
@@ -270,7 +268,7 @@ extension NativeAppModel {
     ) -> String? {
         let result = declarativeExtensions.renderTemplate(template, context: context)
         guard result.unresolvedVariables.isEmpty else {
-            errorMessage = "“\(source)”缺少模板变量：\(result.unresolvedVariables.joined(separator: "、"))"
+            errorMessage = NativeLocalization.text("“\(source)”缺少模板变量：\(result.unresolvedVariables.joined(separator: "、"))")
             return nil
         }
         return result.value
@@ -280,7 +278,7 @@ extension NativeAppModel {
         guard let folder else { return true }
         let trimmed = folder.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty || DeclarativeExtensionSecurity.isSafeRelativePath(trimmed) else {
-            errorMessage = "“\(source)”生成了不安全的目标文件夹。"
+            errorMessage = NativeLocalization.text("“\(source)”生成了不安全的目标文件夹。")
             return false
         }
         return true
@@ -303,7 +301,7 @@ extension NativeAppModel {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(state).write(to: declarativeExtensionStateURL, options: .atomic)
         } catch {
-            errorMessage = "扩展启停状态保存失败：\(error.localizedDescription)"
+            errorMessage = NativeLocalization.text("扩展启停状态保存失败：\(error.localizedDescription)")
         }
     }
 }

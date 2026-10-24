@@ -4,12 +4,11 @@ import SwiftUI
 
 private let momentFeedMaximumWidth: CGFloat = 1_360
 
-private enum MomentVisualStyle {
-    static let accent = NativeTheme.accent
-    static let cardBackground = NativeTheme.surface
-}
+
 
 struct MomentFeedView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @ObservedObject var pageState: NativeMomentFeedPageState
     @Environment(\.locale) private var locale
@@ -40,22 +39,21 @@ struct MomentFeedView: View {
                             RoundedRectangle(cornerRadius: 15, style: .continuous)
                                 .fill(
                                     LinearGradient(
-                                        colors: [NativeTheme.brandBlue, NativeTheme.blue],
+                                        colors: [appPalette.brandBlue, appPalette.blue],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     )
                                 )
-                            Image(systemName: "quote.bubble.fill")
-                                .font(.system(size: 22, weight: .semibold))
+                            NativeIcon.image("quote.bubble.fill", size: 24)
                                 .foregroundStyle(.white)
                         }
                         .frame(width: 52, height: 52)
-                        .shadow(color: MomentVisualStyle.accent.opacity(0.22), radius: 10, y: 5)
+                        .shadow(color: appPalette.accent.opacity(0.22), radius: 10, y: 5)
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text("微博")
                                 .font(.system(size: 31, weight: .bold, design: .rounded))
-                                .foregroundStyle(NativeTheme.deepBlue)
+                                .foregroundStyle(appPalette.deepBlue)
                             Text("记下灵感、日常和稍纵即逝的想法")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
@@ -63,12 +61,12 @@ struct MomentFeedView: View {
 
                         Spacer()
 
-                        Label("仅存本机", systemImage: "lock.fill")
+                        Label("仅存本机", nativeIcon: "lock.fill", iconSize: 12)
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 11)
                             .padding(.vertical, 7)
-                            .background(NativeTheme.surfaceSecondary, in: Capsule())
+                            .background(appPalette.surfaceSecondary, in: Capsule())
                     }
 
                     MomentComposerSection(model: model)
@@ -81,9 +79,9 @@ struct MomentFeedView: View {
                             .font(.title2.weight(.bold))
                         Group {
                             if model.isFilteringMoments {
-                                Text("已加载 \(model.moments.count) / \(model.filteredMomentCount) 条")
+                                Text(NativeLocalization.text("已加载 \(model.moments.count) / \(model.filteredMomentCount) 条"))
                             } else {
-                                Text("\(model.totalMomentCount) 条")
+                                Text(NativeLocalization.text("\(model.totalMomentCount) 条"))
                             }
                         }
                         .font(.subheadline.monospacedDigit())
@@ -94,7 +92,7 @@ struct MomentFeedView: View {
                         Button {
                             isPresentingImmersiveBrowser = true
                         } label: {
-                            Label("沉浸浏览", systemImage: "play.rectangle.fill")
+                            Label("沉浸浏览", nativeIcon: "play.rectangle.fill")
                         }
                         .nativePrimaryButton()
                         .disabled(model.filteredMoments.isEmpty)
@@ -117,24 +115,24 @@ struct MomentFeedView: View {
                                     momentFeedLayoutRawValue = layout.rawValue
                                 } label: {
                                     if momentFeedLayout == layout {
-                                        Label(LocalizedStringKey(layout.title), systemImage: "checkmark")
+                                        Label(LocalizedStringKey(layout.title), nativeIcon: "checkmark")
                                     } else {
-                                        Label(LocalizedStringKey(layout.title), systemImage: layout.systemImage)
+                                        Label(LocalizedStringKey(layout.title), nativeIcon: layout.systemImage)
                                     }
                                 }
                             }
                         } label: {
-                            Label(LocalizedStringKey(momentFeedLayout.title), systemImage: momentFeedLayout.systemImage)
+                            Label(LocalizedStringKey(momentFeedLayout.title), nativeIcon: momentFeedLayout.systemImage)
                         }
                         .help("切换微博的单列或多列瀑布流布局")
-                        .accessibilityLabel("微博布局：\(NativeLocalization.string(momentFeedLayout.title, language: NativeLocalization.currentLanguage))")
+                        .accessibilityLabel(NativeLocalization.text("微博布局：\(NativeLocalization.string(momentFeedLayout.title, language: NativeLocalization.currentLanguage))"))
 
                         Menu {
                             Button {
                                 model.selectMomentDateFilter(.all)
                             } label: {
                                 if model.momentDateFilter == .all {
-                                    Label("全部时间", systemImage: "checkmark")
+                                    Label("全部时间", nativeIcon: "checkmark")
                                 } else {
                                     Text("全部时间")
                                 }
@@ -143,7 +141,7 @@ struct MomentFeedView: View {
                                 model.selectMomentDateFilter(.today)
                             } label: {
                                 if model.momentDateFilter == .today {
-                                    Label("今天", systemImage: "checkmark")
+                                    Label("今天", nativeIcon: "checkmark")
                                 } else {
                                     Text("今天")
                                 }
@@ -152,7 +150,7 @@ struct MomentFeedView: View {
                                 model.selectMomentDateFilter(.thisWeek)
                             } label: {
                                 if model.momentDateFilter == .thisWeek {
-                                    Label("本周", systemImage: "checkmark")
+                                    Label("本周", nativeIcon: "checkmark")
                                 } else {
                                     Text("本周")
                                 }
@@ -167,7 +165,7 @@ struct MomentFeedView: View {
                                             model.selectMomentDateFilter(filter)
                                         } label: {
                                             if model.momentDateFilter == filter {
-                                                Label(monthLabel(month), systemImage: "checkmark")
+                                                Label(monthLabel(month), nativeIcon: "checkmark")
                                             } else {
                                                 Text(monthLabel(month))
                                             }
@@ -181,7 +179,7 @@ struct MomentFeedView: View {
                                             model.selectMomentDateFilter(filter)
                                         } label: {
                                             if model.momentDateFilter == filter {
-                                                Label(yearLabel(year), systemImage: "checkmark")
+                                                Label(yearLabel(year), nativeIcon: "checkmark")
                                             } else {
                                                 Text(yearLabel(year))
                                             }
@@ -190,7 +188,7 @@ struct MomentFeedView: View {
                                 }
                             }
                         } label: {
-                            Label(dateFilterLabel(model.momentDateFilter), systemImage: "calendar")
+                            Label(dateFilterLabel(model.momentDateFilter), nativeIcon: "calendar")
                         }
                         .help("按今天、本周、月份或年份回顾微博")
 
@@ -199,11 +197,11 @@ struct MomentFeedView: View {
                         } label: {
                             Label(
                                 LocalizedStringKey(model.showsOnlyFavoriteMoments ? "已筛选收藏" : "仅看收藏"),
-                                systemImage: model.showsOnlyFavoriteMoments ? "heart.fill" : "heart"
+                                nativeIcon: model.showsOnlyFavoriteMoments ? "heart.fill" : "heart"
                             )
                         }
                         .buttonStyle(.bordered)
-                        .tint(model.showsOnlyFavoriteMoments ? NativeTheme.accent : NativeTheme.textSecondary)
+                        .tint(model.showsOnlyFavoriteMoments ? appPalette.accent : appPalette.textSecondary)
                         .help("仅显示已收藏的微博")
 
                         if model.isFilteringMoments {
@@ -219,7 +217,7 @@ struct MomentFeedView: View {
 
                     if !availableMomentTagFilters.isEmpty {
                         HStack(spacing: 12) {
-                            Label("标签", systemImage: "tag")
+                            Label("标签", nativeIcon: "tag", iconSize: 14)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.secondary)
 
@@ -231,23 +229,23 @@ struct MomentFeedView: View {
                                             model.toggleMomentTagFilter(tagFilter.tag)
                                         } label: {
                                             HStack(spacing: 6) {
-                                                Image(systemName: isSelected ? "checkmark" : "number")
+                                                NativeIcon.image(isSelected ? "checkmark" : "number")
                                                 Text(tagFilter.tag)
                                                 Text("\(tagFilter.count)")
                                                     .foregroundStyle(isSelected ? Color.white.opacity(0.78) : Color.secondary)
                                             }
                                             .font(.caption.weight(.medium))
-                                            .foregroundStyle(isSelected ? Color.white : NativeTheme.textPrimary)
+                                            .foregroundStyle(isSelected ? Color.white : appPalette.textPrimary)
                                             .padding(.horizontal, 11)
                                             .padding(.vertical, 7)
                                             .background(
-                                                isSelected ? NativeTheme.brandBlue : NativeTheme.surface,
+                                                isSelected ? appPalette.brandBlue : appPalette.surface,
                                                 in: Capsule()
                                             )
                                         }
                                         .buttonStyle(.plain)
-                                        .help("筛选标签 #\(tagFilter.tag)：\(tagFilter.count) 条微博")
-                                        .accessibilityLabel("标签 #\(tagFilter.tag)，\(tagFilter.count) 条微博")
+                                        .help(NativeLocalization.text("筛选标签 #\(tagFilter.tag)：\(tagFilter.count) 条微博"))
+                                        .accessibilityLabel(NativeLocalization.text("标签 #\(tagFilter.tag)，\(tagFilter.count) 条微博"))
                                         .accessibilityValue(Text(LocalizedStringKey(isSelected ? "已选中" : "未选中")))
                                     }
                                 }
@@ -255,23 +253,22 @@ struct MomentFeedView: View {
                             .scrollIndicators(.hidden)
 
                             if !model.selectedMomentTags.isEmpty {
-                                Text("已选 \(model.selectedMomentTags.count) 个")
+                                Text(NativeLocalization.text("已选 \(model.selectedMomentTags.count) 个"))
                                     .font(.caption.weight(.medium))
-                                    .foregroundStyle(MomentVisualStyle.accent)
+                                    .foregroundStyle(appPalette.accent)
                             }
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
-                        .background(NativeTheme.surfaceSecondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background(appPalette.surfaceSecondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
 
                     if model.filteredMoments.isEmpty {
                         VStack(spacing: 12) {
-                            Image(systemName: model.isFilteringMoments ? "line.3.horizontal.decrease.circle" : "quote.bubble")
-                                .font(.system(size: 34, weight: .light))
-                                .foregroundStyle(MomentVisualStyle.accent)
+                            NativeIcon.image(model.isFilteringMoments ? "line.3.horizontal.decrease.circle" : "quote.bubble", size: 32)
+                                .foregroundStyle(appPalette.accent)
                                 .frame(width: 68, height: 68)
-                                .background(MomentVisualStyle.accent.opacity(0.1), in: Circle())
+                                .background(appPalette.accent.opacity(0.1), in: Circle())
                             Text(LocalizedStringKey(model.isFilteringMoments ? "没有符合筛选条件的微博" : "还没有微博"))
                                 .font(.headline)
                             Group {
@@ -297,17 +294,16 @@ struct MomentFeedView: View {
 
                                             Text("\(group.moments.count)")
                                                 .font(.caption.monospacedDigit().weight(.semibold))
-                                                .foregroundStyle(MomentVisualStyle.accent)
+                                                .foregroundStyle(appPalette.accent)
                                                 .padding(.horizontal, 8)
                                                 .padding(.vertical, 3)
-                                                .background(MomentVisualStyle.accent.opacity(0.1), in: Capsule())
+                                                .background(appPalette.accent.opacity(0.1), in: Capsule())
 
                                             Rectangle()
-                                                .fill(NativeTheme.border)
+                                                .fill(appPalette.border)
                                                 .frame(height: 1)
 
-                                            Image(systemName: pageState.collapsedTimelineDays.contains(group.id) ? "chevron.right" : "chevron.down")
-                                                .font(.caption.weight(.bold))
+                                            NativeIcon.image(pageState.collapsedTimelineDays.contains(group.id) ? "chevron.right" : "chevron.down", size: 12)
                                                 .foregroundStyle(.secondary)
                                                 .frame(width: 26, height: 26)
                                                 .background(Color.primary.opacity(0.05), in: Circle())
@@ -315,11 +311,11 @@ struct MomentFeedView: View {
                                         .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
-                                    .help(pageState.collapsedTimelineDays.contains(group.id) ? Text("展开 \(timelineLabel(group)) 的微博") : Text("折叠 \(timelineLabel(group)) 的微博"))
-                                    .accessibilityLabel(pageState.collapsedTimelineDays.contains(group.id) ? Text("展开 \(timelineLabel(group)) 的微博") : Text("折叠 \(timelineLabel(group)) 的微博"))
+                                    .help(pageState.collapsedTimelineDays.contains(group.id) ? Text(NativeLocalization.text("展开 \(timelineLabel(group)) 的微博")) : Text(NativeLocalization.text("折叠 \(timelineLabel(group)) 的微博")))
+                                    .accessibilityLabel(pageState.collapsedTimelineDays.contains(group.id) ? Text(NativeLocalization.text("展开 \(timelineLabel(group)) 的微博")) : Text(NativeLocalization.text("折叠 \(timelineLabel(group)) 的微博")))
 
                                     if pageState.collapsedTimelineDays.contains(group.id) {
-                                        Text("已折叠 \(group.moments.count) 条内容")
+                                        Text(NativeLocalization.text("已折叠 \(group.moments.count) 条内容"))
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                             .padding(.leading, 2)
@@ -348,7 +344,7 @@ struct MomentFeedView: View {
                                                 .controlSize(.small)
                                             Text("正在加载…")
                                         } else {
-                                            Label("加载更多历史微博", systemImage: "arrow.down.circle")
+                                            Label("加载更多历史微博", nativeIcon: "arrow.down.circle")
                                         }
                                     }
                                     .buttonStyle(.bordered)
@@ -370,15 +366,15 @@ struct MomentFeedView: View {
         .background(
             LinearGradient(
                 colors: [
-                    NativeTheme.lightBlue,
-                    NativeTheme.canvas,
-                    NativeTheme.canvas,
+                    appPalette.lightBlue,
+                    appPalette.canvas,
+                    appPalette.canvas,
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         )
-        .tint(MomentVisualStyle.accent)
+        .tint(appPalette.accent)
         .sheet(item: $imageBrowser) { browser in
             MomentImageBrowserView(
                 images: browser.images,
@@ -543,6 +539,8 @@ private enum MomentFeedLayout: String, CaseIterable, Identifiable {
 }
 
 private struct MomentComposerSection: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @State private var isExpanded = false
 
@@ -556,11 +554,10 @@ private struct MomentComposerSection: View {
                 }
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: isEditing ? "pencil" : "square.and.pencil")
-                        .font(.system(size: 15, weight: .semibold))
+                    NativeIcon.image(isEditing ? "pencil" : "square.and.pencil")
                         .foregroundStyle(.white)
                         .frame(width: 34, height: 34)
-                        .background(MomentVisualStyle.accent, in: Circle())
+                        .background(appPalette.accent, in: Circle())
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(LocalizedStringKey(isEditing ? "继续编辑" : "记录此刻"))
@@ -574,10 +571,9 @@ private struct MomentComposerSection: View {
 
                     Text(LocalizedStringKey(isExpanded ? "收起" : "开始创作"))
                         .font(.caption)
-                        .foregroundStyle(isExpanded ? Color.secondary : MomentVisualStyle.accent)
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(isExpanded ? Color.secondary : MomentVisualStyle.accent)
+                        .foregroundStyle(isExpanded ? Color.secondary : appPalette.accent)
+                    NativeIcon.image(isExpanded ? "chevron.up" : "chevron.down", size: 12)
+                        .foregroundStyle(isExpanded ? Color.secondary : appPalette.accent)
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 15)
@@ -595,10 +591,10 @@ private struct MomentComposerSection: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .background(MomentVisualStyle.cardBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(NativeTheme.border)
+                .strokeBorder(appPalette.border)
         }
         .shadow(color: .black.opacity(0.055), radius: 16, y: 7)
         .onAppear {
@@ -616,6 +612,8 @@ private struct MomentComposerSection: View {
 }
 
 private struct MomentComposerView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @StateObject private var richTextController = MomentRichTextController()
 
@@ -639,7 +637,7 @@ private struct MomentComposerView: View {
                 Button {
                     richTextController.toggleBold()
                 } label: {
-                    Image(systemName: "bold")
+                    NativeIcon.image("bold")
                 }
                 .help("加粗选中的文字")
                 .keyboardShortcut("b", modifiers: .command)
@@ -653,12 +651,12 @@ private struct MomentComposerView: View {
                         Button {
                             richTextController.apply(color: color)
                         } label: {
-                            Label(LocalizedStringKey(color.label), systemImage: "circle.fill")
+                            Label(LocalizedStringKey(color.label), nativeIcon: "circle.fill")
                                 .foregroundStyle(color.swiftUIColor)
                         }
                     }
                 } label: {
-                    Label("文字颜色", systemImage: "paintpalette")
+                    Label("文字颜色", nativeIcon: "paintpalette")
                 }
                 .help("修改选中文字的颜色")
 
@@ -668,7 +666,7 @@ private struct MomentComposerView: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(
                         (model.momentDraft.text as NSString).length >= 450
-                            ? MomentVisualStyle.accent : Color.secondary
+                            ? appPalette.accent : Color.secondary
                     )
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
@@ -694,7 +692,7 @@ private struct MomentComposerView: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+                .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 12))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(Color.primary.opacity(0.1))
@@ -716,7 +714,7 @@ private struct MomentComposerView: View {
             } else {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
-                        Label("标签", systemImage: "tag")
+                        Label("标签", nativeIcon: "tag", iconSize: 12)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         ForEach(tags, id: \.self) { tag in
@@ -734,7 +732,7 @@ private struct MomentComposerView: View {
 
             if !model.momentDraft.images.isEmpty {
                 HStack {
-                    Label("已添加媒体", systemImage: "photo.stack")
+                    Label("已添加媒体", nativeIcon: "photo.stack")
                     Spacer()
                     Text("\(model.momentDraft.images.count) / 9")
                         .monospacedDigit()
@@ -749,9 +747,8 @@ private struct MomentComposerView: View {
                                 Group {
                                     if media.isAudio {
                                         VStack(spacing: 8) {
-                                            Image(systemName: "waveform")
-                                                .font(.title)
-                                                .foregroundStyle(MomentVisualStyle.accent)
+                                            NativeIcon.image("waveform", size: 32)
+                                                .foregroundStyle(appPalette.accent)
                                             Text(media.name)
                                                 .font(.caption2)
                                                 .lineLimit(2)
@@ -776,8 +773,7 @@ private struct MomentComposerView: View {
                                 Button {
                                     model.removeMomentMedia(media)
                                 } label: {
-                                    Image(systemName: "xmark")
-                                        .font(.system(size: 10, weight: .bold))
+                                    NativeIcon.image("xmark", size: 12)
                                         .foregroundStyle(.white)
                                         .frame(width: 22, height: 22)
                                         .background(.black.opacity(0.7), in: Circle())
@@ -789,7 +785,7 @@ private struct MomentComposerView: View {
                                 .buttonStyle(.plain)
                                 .padding(6)
                                 .help(Text(LocalizedStringKey(media.isAudio ? "移除音频" : media.isVideo ? "移除视频" : "移除图片")))
-                                .accessibilityLabel(media.isAudio ? Text("移除音频 \(media.name)") : media.isVideo ? Text("移除视频 \(media.name)") : Text("移除图片 \(media.name)"))
+                                .accessibilityLabel(media.isAudio ? Text(NativeLocalization.text("移除音频 \(media.name)")) : media.isVideo ? Text(NativeLocalization.text("移除视频 \(media.name)")) : Text(NativeLocalization.text("移除图片 \(media.name)")))
                             }
                         }
                     }
@@ -803,7 +799,7 @@ private struct MomentComposerView: View {
                 Button {
                     model.chooseMomentImages()
                 } label: {
-                    Label("添加图片", systemImage: "photo.on.rectangle.angled")
+                    Label("添加图片", nativeIcon: "photo.on.rectangle.angled")
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
@@ -811,7 +807,7 @@ private struct MomentComposerView: View {
                 Button {
                     model.chooseMomentVideo()
                 } label: {
-                    Label("添加视频", systemImage: "video.badge.plus")
+                    Label("添加视频", nativeIcon: "video.badge.plus")
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
@@ -819,7 +815,7 @@ private struct MomentComposerView: View {
                 Button {
                     model.chooseMomentAudio()
                 } label: {
-                    Label("添加音频", systemImage: "waveform")
+                    Label("添加音频", nativeIcon: "waveform")
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
@@ -848,7 +844,7 @@ private struct MomentComposerView: View {
                                 ? "正在保存…"
                                 : model.editingMomentID == nil ? "发布" : "保存修改"
                         ),
-                        systemImage: model.editingMomentID == nil ? "paperplane.fill" : "checkmark"
+                        nativeIcon: model.editingMomentID == nil ? "paperplane.fill" : "checkmark"
                     )
                 }
                 .nativePrimaryButton()
@@ -887,14 +883,13 @@ private struct MomentTagSuggestionMenu: View {
             HStack {
                 Label(
                     LocalizedStringKey(query.isEmpty ? "选择已有标签" : "匹配的标签"),
-                    systemImage: "number.circle"
+                    nativeIcon: "number.circle", iconSize: 12
                 )
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.bold))
+                    NativeIcon.image("xmark", size: 12)
                         .foregroundStyle(.secondary)
                         .frame(width: 22, height: 22)
                         .contentShape(Circle())
@@ -908,7 +903,7 @@ private struct MomentTagSuggestionMenu: View {
                     onSelect(tag)
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "tag.fill")
+                        NativeIcon.image("tag.fill")
                             .foregroundStyle(.tint)
                         Text("#\(tag)")
                             .font(.callout.weight(.medium))
@@ -939,6 +934,8 @@ private struct MomentTagSuggestionMenu: View {
 }
 
 private struct MomentCard: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let moment: NativeMoment
     let store: LocalBlogStore
     let onOpenImage: (Int) -> Void
@@ -960,9 +957,8 @@ private struct MomentCard: View {
                 Spacer(minLength: 0)
 
                 Button(action: onToggleFavorite) {
-                    Image(systemName: moment.isFavorite ? "heart.fill" : "heart")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(moment.isFavorite ? NativeTheme.accent : NativeTheme.textSecondary)
+                    NativeIcon.image(moment.isFavorite ? "heart.fill" : "heart", size: 14)
+                        .foregroundStyle(moment.isFavorite ? appPalette.accent : appPalette.textSecondary)
                         .frame(width: 30, height: 30)
                         .background(Color.primary.opacity(0.045), in: Circle())
                         .contentShape(Circle())
@@ -973,21 +969,20 @@ private struct MomentCard: View {
 
                 Menu {
                     Button(action: onEdit) {
-                        Label("编辑微博", systemImage: "pencil")
+                        Label("编辑微博", nativeIcon: "pencil")
                     }
                     Button(action: onToggleFavorite) {
                         Label(
                             LocalizedStringKey(moment.isFavorite ? "取消收藏" : "收藏微博"),
-                            systemImage: moment.isFavorite ? "heart.slash" : "heart"
+                            nativeIcon: moment.isFavorite ? "heart.slash" : "heart"
                         )
                     }
                     Divider()
                     Button(role: .destructive, action: confirmDeletion) {
-                        Label("移入回收站", systemImage: "trash")
+                        Label("移入回收站", nativeIcon: "trash")
                     }
                 } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 14, weight: .semibold))
+                    NativeIcon.image("ellipsis", size: 14)
                         .foregroundStyle(.secondary)
                         .frame(width: 30, height: 30)
                         .background(Color.primary.opacity(0.045), in: Circle())
@@ -1013,13 +1008,13 @@ private struct MomentCard: View {
                             } label: {
                                 Text("#\(tag)")
                                     .font(.caption.weight(.medium))
-                                    .foregroundStyle(MomentVisualStyle.accent)
+                                    .foregroundStyle(appPalette.accent)
                                     .padding(.horizontal, 9)
                                     .padding(.vertical, 5)
-                                    .background(MomentVisualStyle.accent.opacity(0.09), in: Capsule())
+                                    .background(appPalette.accent.opacity(0.09), in: Capsule())
                             }
                             .buttonStyle(.plain)
-                            .help("筛选标签 #\(tag)")
+                            .help(NativeLocalization.text("筛选标签 #\(tag)"))
                         }
                     }
                 }
@@ -1048,22 +1043,22 @@ private struct MomentCard: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: onComment) {
-                    Label("评论 \(moment.commentCount)", systemImage: "text.bubble")
+                    Label(NativeLocalization.text("评论 \(moment.commentCount)"), nativeIcon: "text.bubble", iconSize: 12)
                         .font(.caption.weight(.medium))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(MomentVisualStyle.accent)
+                .foregroundStyle(appPalette.accent)
                 .help("查看和发表微博评论")
             }
         }
         .padding(18)
-        .background(MomentVisualStyle.cardBackground, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 17, style: .continuous)
-                .strokeBorder(isHovered ? NativeTheme.blue.opacity(0.5) : NativeTheme.border)
+                .strokeBorder(isHovered ? appPalette.blue.opacity(0.5) : appPalette.border)
                 .allowsHitTesting(false)
         }
-        .shadow(color: NativeTheme.shadow.opacity(isHovered ? 0.10 : 0.05), radius: isHovered ? 14 : 9, y: 4)
+        .shadow(color: appPalette.shadow.opacity(isHovered ? 0.10 : 0.05), radius: isHovered ? 14 : 9, y: 4)
         .scaleEffect(isHovered ? 1.002 : 1)
         .animation(.easeOut(duration: 0.16), value: isHovered)
         .onHover { isHovered = $0 }
@@ -1085,7 +1080,7 @@ private struct MomentCard: View {
         }
         .accessibilityActions {
             ForEach(moment.tags, id: \.self) { tag in
-                Button("筛选标签 #\(tag)") {
+                Button(NativeLocalization.text("筛选标签 #\(tag)")) {
                     onSelectTag(tag)
                 }
             }
@@ -1105,19 +1100,19 @@ private struct MomentCard: View {
             parts.append(trimmedText)
         }
         if !moment.tags.isEmpty {
-            parts.append("标签 " + moment.tags.map { "#\($0)" }.joined(separator: "、"))
+            parts.append(NativeLocalization.text("标签 ") + moment.tags.map { "#\($0)" }.joined(separator: "、"))
         }
         if !moment.imageAttachments.isEmpty {
-            parts.append("\(moment.imageAttachments.count) 张图片")
+            parts.append(NativeLocalization.text("\(moment.imageAttachments.count) 张图片"))
         }
         if !moment.audioAttachments.isEmpty {
-            parts.append("\(moment.audioAttachments.count) 个音频")
+            parts.append(NativeLocalization.text("\(moment.audioAttachments.count) 个音频"))
         }
         if !moment.videoAttachments.isEmpty {
-            parts.append("\(moment.videoAttachments.count) 个视频")
+            parts.append(NativeLocalization.text("\(moment.videoAttachments.count) 个视频"))
         }
         if moment.isFavorite {
-            parts.append("已收藏")
+            parts.append(NativeLocalization.text("已收藏"))
         }
         return parts.joined(separator: "，")
     }
@@ -1125,10 +1120,10 @@ private struct MomentCard: View {
     private func confirmDeletion() {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "将这条微博移入回收站？"
-        alert.informativeText = "微博和媒体文件会保留 30 天，可在回收站中恢复，之后自动永久删除。"
-        alert.addButton(withTitle: "移入回收站")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = NativeLocalization.text("将这条微博移入回收站？")
+        alert.informativeText = NativeLocalization.text("微博和媒体文件会保留 30 天，可在回收站中恢复，之后自动永久删除。")
+        alert.addButton(withTitle: NativeLocalization.text("移入回收站"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.buttons.first?.hasDestructiveAction = true
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -1237,12 +1232,12 @@ private struct MomentImageGrid: View {
                         }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("放大浏览图片 \(image.name)")
+                .accessibilityLabel(NativeLocalization.text("放大浏览图片 \(image.name)"))
                 .accessibilityHint("点按打开图片浏览器")
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(images.count == 1 ? Text("1 张图片") : Text("\(images.count) 张图片"))
+        .accessibilityLabel(images.count == 1 ? Text("1 张图片") : Text(NativeLocalization.text("\(images.count) 张图片")))
         .accessibilityHint("打开图片浏览器，可在浏览器中逐张查看")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onOpenImage(0) }
@@ -1288,7 +1283,7 @@ private struct MomentImage: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
             } else if failedToLoad {
-                Image(systemName: "photo.badge.exclamationmark")
+                NativeIcon.image("photo.badge.exclamationmark")
                     .foregroundStyle(.secondary)
             } else {
                 ProgressView()
@@ -1326,9 +1321,8 @@ private struct MomentVideoThumbnail: View {
                     .resizable()
                     .scaledToFit()
             }
-            Image(systemName: "play.circle.fill")
-                .font(.system(size: 30))
-                .symbolRenderingMode(.hierarchical)
+            NativeIcon.image("play.circle.fill", size: 32)
+                .symbolRenderingMode(.monochrome)
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
             Text("MP4")
@@ -1348,7 +1342,7 @@ private struct MomentVideoThumbnail: View {
             guard !Task.isCancelled else { return }
             poster = result.image
         }
-        .accessibilityLabel("视频 \(media.name)")
+        .accessibilityLabel(NativeLocalization.text("视频 \(media.name)"))
     }
 }
 
@@ -1405,7 +1399,7 @@ private struct MomentInlineVideoPlayer: View {
             }
 
             HStack(spacing: 8) {
-                Label(media.name, systemImage: "video")
+                Label(media.name, nativeIcon: "video")
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 if playback.phase == .ready {
@@ -1425,7 +1419,7 @@ private struct MomentInlineVideoPlayer: View {
             playback.release()
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("视频 \(media.name)")
+        .accessibilityLabel(NativeLocalization.text("视频 \(media.name)"))
     }
 
     private var posterButton: some View {
@@ -1440,9 +1434,8 @@ private struct MomentInlineVideoPlayer: View {
                 }
                 Color.black.opacity(playback.poster == nil ? 0.04 : 0.18)
                 VStack(spacing: 7) {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 46))
-                        .symbolRenderingMode(.hierarchical)
+                    NativeIcon.image("play.circle.fill", size: 48)
+                        .symbolRenderingMode(.monochrome)
                     Group {
                         if let resumeLabel = playback.resumeLabel {
                             Text(resumeLabel)
@@ -1472,7 +1465,7 @@ private struct MomentInlineVideoPlayer: View {
 
     private func failureView(message: String) -> some View {
         VStack(spacing: 9) {
-            Label("无法播放视频", systemImage: "video.slash")
+            Label("无法播放视频", nativeIcon: "video.slash")
                 .font(.headline)
             Text(message)
                 .font(.caption)
@@ -1488,6 +1481,8 @@ private struct MomentInlineVideoPlayer: View {
 }
 
 private struct MomentInlineAudioPlayer: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let media: NativeMedia
     let store: LocalBlogStore
     @State private var player: AVPlayer?
@@ -1496,7 +1491,7 @@ private struct MomentInlineAudioPlayer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(media.name, systemImage: "waveform")
+            Label(media.name, nativeIcon: "waveform", iconSize: 14)
                 .font(.callout.weight(.medium))
                 .lineLimit(2)
             if let player {
@@ -1509,7 +1504,7 @@ private struct MomentInlineAudioPlayer: View {
                 Button {
                     playbackRequested = true
                 } label: {
-                    Label("播放音频", systemImage: "play.circle.fill")
+                    Label("播放音频", nativeIcon: "play.circle.fill")
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
                 .buttonStyle(.plain)
@@ -1522,7 +1517,7 @@ private struct MomentInlineAudioPlayer: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(MomentVisualStyle.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        .background(appPalette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
         .task(id: playbackRequested) {
             guard playbackRequested else { return }
             defer { playbackRequested = false }
@@ -1582,6 +1577,8 @@ private struct MomentAVPlayerView: NSViewRepresentable {
 }
 
 private struct MomentImmersiveBrowserView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
 
     @Environment(\.dismiss) private var dismiss
@@ -1612,7 +1609,7 @@ private struct MomentImmersiveBrowserView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
-                Label("微博沉浸浏览", systemImage: "play.rectangle.fill")
+                Label("微博沉浸浏览", nativeIcon: "play.rectangle.fill")
                     .font(.headline)
 
                 Text("方向键翻页")
@@ -1626,7 +1623,7 @@ private struct MomentImmersiveBrowserView: View {
                         removeKeyboardMonitor()
                         commentingMoment = selectedMoment
                     } label: {
-                        Label("评论 \(selectedMoment.commentCount)", systemImage: "text.bubble")
+                        Label(NativeLocalization.text("评论 \(selectedMoment.commentCount)"), nativeIcon: "text.bubble")
                     }
                 }
 
@@ -1637,7 +1634,7 @@ private struct MomentImmersiveBrowserView: View {
                 Button {
                     dismiss()
                 } label: {
-                    Label("退出", systemImage: "xmark")
+                    Label("退出", nativeIcon: "xmark")
                 }
                 .keyboardShortcut(.cancelAction)
                 .help("退出沉浸浏览模式（Esc）")
@@ -1650,9 +1647,9 @@ private struct MomentImmersiveBrowserView: View {
             ZStack {
                 LinearGradient(
                     colors: [
-                        NativeTheme.lightBlue,
-                        NativeTheme.canvas,
-                        NativeTheme.surfaceSecondary,
+                        appPalette.lightBlue,
+                        appPalette.canvas,
+                        appPalette.surfaceSecondary,
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -1675,8 +1672,7 @@ private struct MomentImmersiveBrowserView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.985)))
                 } else {
                     VStack(spacing: 12) {
-                        Image(systemName: "rectangle.3.group")
-                            .font(.system(size: 38))
+                        NativeIcon.image("rectangle.3.group", size: 32)
                             .foregroundStyle(.secondary)
                         Text("没有可浏览的微博")
                             .font(.headline)
@@ -1694,7 +1690,7 @@ private struct MomentImmersiveBrowserView: View {
                 Button {
                     showPreviousMoment()
                 } label: {
-                    Label("上一页", systemImage: "chevron.left")
+                    Label("上一页", nativeIcon: "chevron.left")
                         .frame(minWidth: 88)
                 }
                 .buttonStyle(.bordered)
@@ -1708,12 +1704,12 @@ private struct MomentImmersiveBrowserView: View {
                 )
                 .frame(maxWidth: 420)
                 .accessibilityLabel("沉浸浏览进度")
-                .accessibilityValue(moments.isEmpty ? Text("没有微博") : Text("第 \(selectedIndex + 1) 页，共 \(totalMomentCount) 页"))
+                .accessibilityValue(moments.isEmpty ? Text("没有微博") : Text(NativeLocalization.text("第 \(selectedIndex + 1) 页，共 \(totalMomentCount) 页")))
 
                 Button {
                     showNextMoment()
                 } label: {
-                    Label("下一页", systemImage: "chevron.right")
+                    Label("下一页", nativeIcon: "chevron.right")
                         .labelStyle(.titleAndIcon)
                         .frame(minWidth: 88)
                 }
@@ -1726,7 +1722,7 @@ private struct MomentImmersiveBrowserView: View {
             .padding(.vertical, 14)
         }
         .frame(width: browserSize.width, height: browserSize.height)
-        .background(NativeTheme.canvas)
+        .background(appPalette.canvas)
         .onAppear {
             selectedIndex = min(selectedIndex, max(0, moments.count - 1))
             installKeyboardMonitor()
@@ -1808,6 +1804,8 @@ private struct MomentImmersiveBrowserView: View {
 }
 
 private struct MomentImmersiveSlide: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let moment: NativeMoment
     let store: LocalBlogStore
     let onOpenImage: (Int) -> Void
@@ -1820,8 +1818,7 @@ private struct MomentImmersiveSlide: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 HStack(alignment: .center, spacing: 12) {
-                    Image(systemName: "person.crop.circle.fill")
-                        .font(.title2)
+                    NativeIcon.image("person.crop.circle.fill", size: 24)
                         .foregroundStyle(.tint)
 
                     VStack(alignment: .leading, spacing: 3) {
@@ -1835,12 +1832,12 @@ private struct MomentImmersiveSlide: View {
                     Spacer()
 
                     if moment.isFavorite {
-                        Label("已收藏", systemImage: "heart.fill")
+                        Label("已收藏", nativeIcon: "heart.fill", iconSize: 12)
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(NativeTheme.accent)
+                            .foregroundStyle(appPalette.accent)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(NativeTheme.lightBlue, in: Capsule())
+                            .background(appPalette.lightBlue, in: Capsule())
                     }
                 }
 
@@ -1901,7 +1898,7 @@ private struct MomentImmersiveSlide: View {
         }
         .scrollIndicators(.automatic)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("第 \(moment.createdAt.nativeDateLabel) 发布的微博")
+        .accessibilityLabel(NativeLocalization.text("第 \(moment.createdAt.nativeDateLabel) 发布的微博"))
     }
 }
 
@@ -1948,7 +1945,7 @@ private struct MomentImmersiveImageGrid: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("放大浏览第 \(index + 1) 张图片")
+                .accessibilityLabel(NativeLocalization.text("放大浏览第 \(index + 1) 张图片"))
             }
         }
     }
@@ -1989,14 +1986,14 @@ private struct MomentImageBrowserView: View {
                 Button {
                     scale = max(1, scale - 0.5)
                 } label: {
-                    Image(systemName: "minus.magnifyingglass")
+                    NativeIcon.image("minus.magnifyingglass")
                 }
                 .disabled(scale <= 1)
                 .help("缩小")
                 Button {
                     scale = min(4, scale + 0.5)
                 } label: {
-                    Image(systemName: "plus.magnifyingglass")
+                    NativeIcon.image("plus.magnifyingglass")
                 }
                 .disabled(scale >= 4)
                 .help("放大")
@@ -2007,7 +2004,7 @@ private struct MomentImageBrowserView: View {
                 Button {
                     dismiss()
                 } label: {
-                    Image(systemName: "xmark")
+                    NativeIcon.image("xmark")
                 }
                 .help("关闭图片浏览器")
             }
@@ -2020,8 +2017,7 @@ private struct MomentImageBrowserView: View {
                 Button {
                     showPreviousImage()
                 } label: {
-                    Image(systemName: "chevron.left.circle.fill")
-                        .font(.system(size: 30))
+                    NativeIcon.image("chevron.left.circle.fill", size: 32)
                 }
                 .buttonStyle(.plain)
                 .disabled(selectedIndex == 0)
@@ -2033,8 +2029,7 @@ private struct MomentImageBrowserView: View {
                 Button {
                     showNextImage()
                 } label: {
-                    Image(systemName: "chevron.right.circle.fill")
-                        .font(.system(size: 30))
+                    NativeIcon.image("chevron.right.circle.fill", size: 32)
                 }
                 .buttonStyle(.plain)
                 .disabled(selectedIndex == images.count - 1)
@@ -2068,7 +2063,7 @@ private struct MomentImageBrowserView: View {
                                 }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("查看第 \(index + 1) 张图片")
+                        .accessibilityLabel(NativeLocalization.text("查看第 \(index + 1) 张图片"))
                     }
                 }
                 .padding(14)
@@ -2154,8 +2149,7 @@ private struct MomentZoomableImage: View {
                                 height: max(proxy.size.height, proxy.size.height * scale)
                             )
                     } else if failedToLoad {
-                        Image(systemName: "photo.badge.exclamationmark")
-                            .font(.largeTitle)
+                        NativeIcon.image("photo.badge.exclamationmark", size: 32)
                             .foregroundStyle(.secondary)
                     } else {
                         ProgressView()
@@ -2187,7 +2181,7 @@ private struct MomentZoomableImage: View {
             image = decoded.image
             failedToLoad = image == nil
         }
-        .accessibilityLabel("大图浏览：\(media.name)")
+        .accessibilityLabel(NativeLocalization.text("大图浏览：\(media.name)"))
     }
 }
 

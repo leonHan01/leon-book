@@ -51,13 +51,16 @@ struct ArticlePathBreadcrumb: View {
     var body: some View {
         HStack(spacing: 6) {
             Button(action: onSelectRoot) {
-                Label("文章", systemImage: "book.closed")
+                Label {
+                    Text("文章")
+                } icon: {
+                    ArticleActionIcon(kind: .document, size: 14)
+                }
             }
             .buttonStyle(.plain)
 
             ForEach(NativeArticlePageHierarchy.breadcrumbs(folderPath: folderPath)) { breadcrumb in
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
+                NativeIcon.image("chevron.right", size: 12)
                     .foregroundStyle(.tertiary)
                 Button(breadcrumb.title) { onSelectFolder(breadcrumb.folderPath) }
                     .buttonStyle(.plain)
@@ -69,10 +72,16 @@ struct ArticlePathBreadcrumb: View {
                 Button {
                     onCreateArticle(folderPath)
                 } label: {
-                    Label("在此目录新建文章", systemImage: "doc.badge.plus")
+                    HStack(spacing: 6) {
+                        ArticleActionIcon(kind: .newArticle)
+                        Text("在此目录新建文章")
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
-                .help(Text("在 \(folderPath) 下新建文章"))
+                .buttonStyle(NativeChromeIconButtonStyle())
+                .help(Text(NativeLocalization.text("在 \(folderPath) 下新建文章")))
             }
         }
         .font(.caption)

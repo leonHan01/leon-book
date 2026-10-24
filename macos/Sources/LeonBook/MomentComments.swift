@@ -24,7 +24,7 @@ extension LocalBlogStore {
             guard let id = row.text(at: 0), let momentID = row.text(at: 1),
                   let author = row.text(at: 3), let text = row.text(at: 4),
                   let createdAt = row.text(at: 5) else {
-                throw NativeStoreError.fileSystem("SQLite：微博评论记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：微博评论记录不完整"))
             }
             comments.append(NativeMomentComment(
                 id: id, momentID: momentID, parentID: row.text(at: 2),
@@ -113,7 +113,7 @@ extension NativeAppModel {
     func createMomentComment(momentID: String, text: String, parentID: String?) async throws {
         guard storageReady, !isSavingMomentComment, !isBackingUp,
               !isRestoringBackup, !isSwitchingWorkspace else {
-            throw NativeStoreError.fileSystem("请等待当前资料库操作完成后再评论。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("请等待当前资料库操作完成后再评论。"))
         }
         isSavingMomentComment = true
         defer { isSavingMomentComment = false }
@@ -127,7 +127,7 @@ extension NativeAppModel {
         guard storageReady, !isSavingMomentComment, !isBackingUp,
               !isRestoringBackup, !isSwitchingWorkspace,
               comment.authorName == currentUser.name else {
-            throw NativeStoreError.fileSystem("当前无法删除这条评论。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("当前无法删除这条评论。"))
         }
         isSavingMomentComment = true
         defer { isSavingMomentComment = false }

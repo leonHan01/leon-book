@@ -62,7 +62,7 @@ extension LocalBlogStore {
     func synchronizePortableSidecar() throws -> NativePortableSidecarImportResult {
         try prepare()
         guard isPortableSidecarEnabledWithoutPreparing() else {
-            throw NativeStoreError.fileSystem("请先启用 .leonbook 可移植状态")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("请先启用 .leonbook 可移植状态"))
         }
         do {
             let imported = try importPortableSidecarWithoutPreparing()
@@ -154,7 +154,7 @@ extension LocalBlogStore {
         var bookmarks: [NativeBookmark] = []
         try db().query("SELECT bookmark_json FROM bookmarks ORDER BY position, created_at, id") { row in
             guard let raw = row.text(at: 0) else {
-                throw NativeStoreError.fileSystem("SQLite：收藏记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：收藏记录不完整"))
             }
             bookmarks.append(try decode(raw))
         }
@@ -448,7 +448,7 @@ extension LocalBlogStore {
             try encoder.encode(preference).write(to: portableSidecarPreferenceURL, options: .atomic)
         } catch {
             throw NativeStoreError.fileSystem(
-                "无法保存 .leonbook 同步设置：\(error.localizedDescription)"
+                NativeLocalization.text("无法保存 .leonbook 同步设置：\(error.localizedDescription)")
             )
         }
     }

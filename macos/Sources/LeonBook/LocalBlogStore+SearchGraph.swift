@@ -135,7 +135,7 @@ extension LocalBlogStore {
                   let excerpt = row.text(at: 5),
                   let tagsJSON = row.text(at: 6),
                   let updatedAt = row.text(at: 10) else {
-                throw NativeStoreError.fileSystem("SQLite：全文搜索结果不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：全文搜索结果不完整"))
             }
 
             let highlighted = row.text(at: 3) ?? ""
@@ -262,7 +262,7 @@ extension LocalBlogStore {
             in: source.body
         )
         guard replacement.count > 0 else {
-            throw NativeStoreError.fileSystem("未找到可转换的未链接提及")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("未找到可转换的未链接提及"))
         }
         return try saveArticle(NativeSaveArticle(
             banner: source.banner,

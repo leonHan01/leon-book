@@ -151,7 +151,7 @@ public actor UserWorkspaceStore {
     }
 
     private func db() throws -> SQLiteDatabase {
-        guard let database else { throw NativeStoreError.fileSystem("SQLite：用户数据库尚未准备好") }
+        guard let database else { throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：用户数据库尚未准备好")) }
         return database
     }
 
@@ -161,7 +161,7 @@ public actor UserWorkspaceStore {
             guard let id = row.text(at: 0),
                   let name = row.text(at: 1),
                   let createdAt = row.text(at: 2) else {
-                throw NativeStoreError.fileSystem("SQLite：用户记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：用户记录不完整"))
             }
             users.append(NativeUser(id: id, name: name, createdAt: createdAt))
         }
@@ -200,7 +200,7 @@ public actor UserWorkspaceStore {
         do {
             return try JSONDecoder().decode([NativeUser].self, from: Data(contentsOf: usersURL))
         } catch {
-            throw NativeStoreError.fileSystem("无法读取 users.json：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 users.json：\(error.localizedDescription)"))
         }
     }
 
@@ -209,12 +209,17 @@ public actor UserWorkspaceStore {
         do {
             return try JSONDecoder().decode(ActiveUserSelection.self, from: Data(contentsOf: activeUserURL)).userID
         } catch {
-            throw NativeStoreError.fileSystem("无法读取 active-user.json：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 active-user.json：\(error.localizedDescription)"))
         }
     }
 
     private func migrateLegacyWorkspaceIfNeeded() throws {
         let leonWorkspaceURL = try workspaceURL(for: .leon)
+        // An early homepage load in the affected build initialized an empty
+        // content store over the existing user registry. Leave those artifacts
+        // untouched and use the registered workspace only after verifying that
+        // they contain no user content. Real mixed/partial migrations still fail.
+        if try hasOnlyEmptyStartupArtifacts(alongside: leonWorkspaceURL) { return }
         let legacyDirectories = ["articles", "drafts", "media", "moments", "activity"]
         let fileManager = FileManager.default
         let directoriesToMigrate = legacyDirectories.filter {
@@ -226,7 +231,7 @@ public actor UserWorkspaceStore {
                 fileManager.fileExists(atPath: leonWorkspaceURL.appendingPathComponent($0, isDirectory: true).path)
             }
             guard occupiedDestinations.isEmpty else {
-                throw NativeStoreError.fileSystem("检测到未完成的 leon 工作空间迁移，请先检查根目录和 workspaces/leon 中的文件。")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("检测到未完成的 leon 工作空间迁移，请先检查根目录和 workspaces/leon 中的文件。"))
             }
 
             try fileManager.createDirectory(at: leonWorkspaceURL, withIntermediateDirectories: true)
@@ -237,6 +242,70 @@ public actor UserWorkspaceStore {
         }
 
         try migrateLegacyContentDatabaseIfNeeded(into: leonWorkspaceURL)
+    }
+
+    private func hasOnlyEmptyStartupArtifacts(alongside workspace: URL) throws -> Bool {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: databaseURL.path),
+              fileManager.fileExists(atPath: workspace.appendingPathComponent("leon-book.sqlite").path) else { return false }
+        let probe = try SQLiteDatabase(url: databaseURL)
+        defer { probe.close() }
+        var tables: [String] = []
+        // FTS shadow tables contain internal configuration even when the logical
+        // search tables are empty. Check the logical tables, never their storage.
+        try probe.query("PRAGMA main.table_list") { row in
+            guard row.text(at: 0) == "main", let name = row.text(at: 1),
+                  row.text(at: 2) != "shadow", !name.hasPrefix("sqlite_") else { return }
+            tables.append(name)
+        }
+        guard ["users", "app_settings", "articles", "metadata"].allSatisfy(tables.contains),
+              try probe.integer("SELECT COUNT(*) FROM users WHERE id = 'leon'") == 1 else { return false }
+        for table in tables where !["users", "app_settings", "metadata"].contains(table) {
+            let quoted = table.replacingOccurrences(of: "\"", with: "\"\"")
+            guard try probe.integer("SELECT COUNT(*) FROM \"\(quoted)\"") == 0 else { return false }
+        }
+        let bootstrapKeys: Set<String> = [
+            "legacy_migration_v1", "markdown_source_v1", "moment_tags_v1",
+            "article_derived_indexes_v1", "search_acceleration_v1", "media_references_v1",
+            "content_search_v2", "json_export_v1", "json_export_v2",
+        ]
+        var containsOnlyBootstrapFlags = true
+        try probe.query("SELECT key FROM metadata") { row in
+            // Values are schema-version tokens (some are "done", others carry
+            // an index version), not user-authored settings or dashboard data.
+            if !bootstrapKeys.contains(row.text(at: 0) ?? "") {
+                containsOnlyBootstrapFlags = false
+            }
+        }
+        guard containsOnlyBootstrapFlags else { return false }
+        for name in ["articles", "drafts", "media", "moments", "activity", "trash"] {
+            let directory = rootURL.appendingPathComponent(name)
+            guard fileManager.fileExists(atPath: directory.path) else { continue }
+            let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else { return false }
+            for file in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+                let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+                guard attributes.isRegularFile == true, attributes.isSymbolicLink != true else { return false }
+                if file.lastPathComponent.hasPrefix("._") || file.lastPathComponent == ".DS_Store" { continue }
+                let path = "\(name)/\(file.lastPathComponent)"
+                if ["articles/.sidecars-v1", "moments/.sidecars-v1"].contains(path) {
+                    guard attributes.fileSize == 0 else { return false }
+                } else if ["moments/index.json", "activity/events.json", "trash/index.json"].contains(path) {
+                    guard (attributes.fileSize ?? Int.max) <= 16_384,
+                          let json = try? JSONSerialization.jsonObject(with: Data(contentsOf: file)) else { return false }
+                    if path == "trash/index.json" {
+                        guard let entries = json as? [String: [Any]],
+                              Set(entries.keys).isSubset(of: ["articles", "moments"]),
+                              entries.values.allSatisfy(\.isEmpty) else { return false }
+                    } else {
+                        guard let entries = json as? [Any], entries.isEmpty else { return false }
+                    }
+                } else {
+                    return false
+                }
+            }
+        }
+        return true
     }
 
     private func migrateLegacyContentDatabaseIfNeeded(into leonWorkspaceURL: URL) throws {
@@ -256,14 +325,14 @@ public actor UserWorkspaceStore {
         probe.close()
 
         if hasArticles && hasUsers {
-            throw NativeStoreError.fileSystem("根目录数据库同时包含用户表和文章表，请先手动分离后再打开。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("根目录数据库同时包含用户表和文章表，请先手动分离后再打开。"))
         }
         guard hasArticles else { return }
 
         try fileManager.createDirectory(at: leonWorkspaceURL, withIntermediateDirectories: true)
         let destination = leonWorkspaceURL.appendingPathComponent("leon-book.sqlite")
         if fileManager.fileExists(atPath: destination.path) {
-            throw NativeStoreError.fileSystem("workspaces/leon 已有数据库，无法移入根目录中的旧内容库。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("workspaces/leon 已有数据库，无法移入根目录中的旧内容库。"))
         }
         try moveSQLiteDatabase(from: databaseURL, to: destination)
     }
@@ -289,7 +358,7 @@ public actor UserWorkspaceStore {
 
     private func requireValidUserID(_ id: String, source: String) throws {
         guard isValidUserID(id) else {
-            throw NativeStoreError.fileSystem("\(source) 中包含无效的用户 ID")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("\(source) 中包含无效的用户 ID"))
         }
     }
 
@@ -299,7 +368,7 @@ public actor UserWorkspaceStore {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             try encoder.encode(value).write(to: url, options: .atomic)
         } catch {
-            throw NativeStoreError.fileSystem("无法写入 \(url.lastPathComponent)：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法写入 \(url.lastPathComponent)：\(error.localizedDescription)"))
         }
     }
 }

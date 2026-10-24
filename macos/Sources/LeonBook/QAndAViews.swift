@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 
 struct QAndAView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @State private var isPresentingQuestionComposer = false
     @State private var detailQuestionID: String?
@@ -23,7 +25,7 @@ struct QAndAView: View {
                 listContent
             }
         }
-        .background(NativeTheme.canvas)
+        .background(appPalette.canvas)
         .sheet(isPresented: $isPresentingQuestionComposer) {
             QuestionComposerSheet(model: model)
         }
@@ -39,13 +41,13 @@ struct QAndAView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text("\(model.totalQuestionCount) 个问题")
+            Text(NativeLocalization.text("\(model.totalQuestionCount) 个问题"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Button {
                 isPresentingQuestionComposer = true
             } label: {
-                Label("发布问题", systemImage: "plus.bubble.fill")
+                Label("发布问题", nativeIcon: "plus.bubble.fill")
             }
             .nativePrimaryButton()
             .disabled(model.isPublishingQuestion || model.isBackingUp)
@@ -60,7 +62,7 @@ struct QAndAView: View {
             Button {
                 detailQuestionID = nil
             } label: {
-                Label("问题列表", systemImage: "chevron.left")
+                Label("问题列表", nativeIcon: "chevron.left")
             }
             .buttonStyle(.borderless)
             .help("返回问题列表")
@@ -77,14 +79,14 @@ struct QAndAView: View {
             }
             Spacer()
             if let question = model.selectedQuestion {
-                Label("\(question.answerCount) 个回答", systemImage: "text.bubble")
+                Label(NativeLocalization.text("\(question.answerCount) 个回答"), nativeIcon: "text.bubble", iconSize: 14)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
             Button {
                 isPresentingQuestionComposer = true
             } label: {
-                Label("发布问题", systemImage: "plus.bubble")
+                Label("发布问题", nativeIcon: "plus.bubble")
             }
             .disabled(model.isPublishingQuestion || model.isBackingUp)
         }
@@ -106,7 +108,7 @@ struct QAndAView: View {
                         model.selectQuestionTag(nil)
                     } label: {
                         if model.selectedQuestionTag == nil {
-                            Label("全部标签", systemImage: "checkmark")
+                            Label("全部标签", nativeIcon: "checkmark")
                         } else {
                             Text("全部标签")
                         }
@@ -117,14 +119,14 @@ struct QAndAView: View {
                             model.selectQuestionTag(facet.tag)
                         } label: {
                             if facet.tag.caseInsensitiveCompare(model.selectedQuestionTag ?? "") == .orderedSame {
-                                Label("\(facet.tag) · \(facet.count)", systemImage: "checkmark")
+                                Label("\(facet.tag) · \(facet.count)", nativeIcon: "checkmark")
                             } else {
                                 Text("\(facet.tag) · \(facet.count)")
                             }
                         }
                     }
                 } label: {
-                    Label(LocalizedStringKey(model.selectedQuestionTag ?? "全部标签"), systemImage: "tag")
+                    Label(LocalizedStringKey(model.selectedQuestionTag ?? "全部标签"), nativeIcon: "tag")
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -164,8 +166,7 @@ struct QAndAView: View {
     private var listContent: some View {
         if model.questions.isEmpty {
             VStack(spacing: 12) {
-                Image(systemName: model.isFilteringQuestions ? "magnifyingglass" : "questionmark.bubble")
-                    .font(.system(size: 34))
+                NativeIcon.image(model.isFilteringQuestions ? "magnifyingglass" : "questionmark.bubble", size: 32)
                     .foregroundStyle(.secondary)
                 Text(LocalizedStringKey(model.isFilteringQuestions ? "没有找到符合条件的问题" : "还没有问题"))
                     .font(.title3.weight(.semibold))
@@ -189,7 +190,7 @@ struct QAndAView: View {
                     Text(LocalizedStringKey(model.isFilteringQuestions ? "筛选结果" : "全部问题"))
                         .font(.title3.weight(.semibold))
                     Spacer()
-                    Text("\(model.questions.count) 条")
+                    Text(NativeLocalization.text("\(model.questions.count) 条"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -211,11 +212,13 @@ struct QAndAView: View {
             .frame(maxWidth: 920, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .background(NativeTheme.surface.opacity(0.32))
+        .background(appPalette.surface.opacity(0.32))
     }
 }
 
 private struct QuestionListRow: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let question: NativeQuestion
     @State private var isHovered = false
 
@@ -252,13 +255,12 @@ private struct QuestionListRow: View {
                     Text(question.createdAt.nativeDateLabel)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
-                    Label("\(question.answerCount) 个回答", systemImage: "text.bubble")
+                    Label(NativeLocalization.text("\(question.answerCount) 个回答"), nativeIcon: "text.bubble", iconSize: 12)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-            Image(systemName: "chevron.right")
-                .font(.callout.weight(.semibold))
+            NativeIcon.image("chevron.right", size: 14)
                 .foregroundStyle(
                     isHovered ? Color.accentColor : Color(nsColor: .tertiaryLabelColor)
                 )
@@ -266,7 +268,7 @@ private struct QuestionListRow: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            isHovered ? Color.accentColor.opacity(0.07) : NativeTheme.surface,
+            isHovered ? Color.accentColor.opacity(0.07) : appPalette.surface,
             in: RoundedRectangle(cornerRadius: 13, style: .continuous)
         )
         .overlay {
@@ -288,6 +290,8 @@ private enum QuestionAnswerComposerMode: String, CaseIterable, Identifiable {
 }
 
 private struct QuestionDetailView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     let onSelectTag: (String) -> Void
     @StateObject private var answerEditorController = MomentRichTextController()
@@ -328,7 +332,7 @@ private struct QuestionDetailView: View {
                     Button {
                         onSelectTag(tag)
                     } label: {
-                        Label(tag, systemImage: "tag.fill")
+                        Label(tag, nativeIcon: "tag.fill")
                     }
                     .buttonStyle(QuestionTagButtonStyle(
                         isSelected: tag.caseInsensitiveCompare(model.selectedQuestionTag ?? "") == .orderedSame
@@ -344,7 +348,7 @@ private struct QuestionDetailView: View {
 
     private var answersSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("\(model.questionAnswers.count) 个回答")
+            Text(NativeLocalization.text("\(model.questionAnswers.count) 个回答"))
                 .font(.title3.weight(.semibold))
             if model.isLoadingQuestionAnswers {
                 HStack(spacing: 9) {
@@ -363,7 +367,7 @@ private struct QuestionDetailView: View {
                     ForEach(Array(model.questionAnswers.enumerated()), id: \.element.id) { index, answer in
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
-                                Label("回答 \(index + 1)", systemImage: "person.crop.circle")
+                                Label(NativeLocalization.text("回答 \(index + 1)"), nativeIcon: "person.crop.circle", iconSize: 14)
                                     .font(.callout.weight(.medium))
                                 Spacer()
                                 if answer.updatedAt != answer.createdAt {
@@ -380,7 +384,7 @@ private struct QuestionDetailView: View {
                                 } label: {
                                     Label(
                                         LocalizedStringKey(model.editingQuestionAnswerID == answer.id ? "正在编辑" : "编辑"),
-                                        systemImage: "pencil"
+                                        nativeIcon: "pencil"
                                     )
                                 }
                                 .buttonStyle(.borderless)
@@ -408,7 +412,7 @@ private struct QuestionDetailView: View {
                         }
                         .padding(16)
                         .background(
-                            NativeTheme.surface,
+                            appPalette.surface,
                             in: RoundedRectangle(cornerRadius: 12)
                         )
                         .overlay {
@@ -431,13 +435,13 @@ private struct QuestionDetailView: View {
             HStack {
                 Label(
                     LocalizedStringKey(model.editingQuestionAnswerID == nil ? "写回答" : "编辑回答"),
-                    systemImage: model.editingQuestionAnswerID == nil ? "square.and.pencil" : "pencil"
+                    nativeIcon: model.editingQuestionAnswerID == nil ? "square.and.pencil" : "pencil", iconSize: 18
                 )
                 .font(.title3.weight(.semibold))
                 Spacer()
                 Picker("回答模式", selection: $answerComposerMode) {
                     ForEach(QuestionAnswerComposerMode.allCases) { mode in
-                        Label(LocalizedStringKey(mode.title), systemImage: mode.systemImage).tag(mode)
+                        Label(LocalizedStringKey(mode.title), nativeIcon: mode.systemImage).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -462,7 +466,7 @@ private struct QuestionDetailView: View {
                     )
                 }
                 .frame(minHeight: 170)
-                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12))
                 }
@@ -470,8 +474,7 @@ private struct QuestionDetailView: View {
                 Group {
                     if model.questionAnswerDraft.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         VStack(spacing: 8) {
-                            Image(systemName: "text.document")
-                                .font(.title2)
+                            NativeIcon.image("text.document", size: 24)
                             Text("输入 Markdown 后可在这里预览")
                         }
                         .foregroundStyle(.secondary)
@@ -487,7 +490,7 @@ private struct QuestionDetailView: View {
                         .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
                     }
                 }
-                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12))
                 }
@@ -503,7 +506,7 @@ private struct QuestionDetailView: View {
             }
 
             HStack {
-                Label("支持 Markdown；可直接粘贴或拖入图片，最多 9 张", systemImage: "text.badge.checkmark")
+                Label("支持 Markdown；可直接粘贴或拖入图片，最多 9 张", nativeIcon: "text.badge.checkmark", iconSize: 12)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if model.isUploadingMedia {
@@ -534,7 +537,7 @@ private struct QuestionDetailView: View {
                     } else {
                         Label(
                             LocalizedStringKey(model.editingQuestionAnswerID == nil ? "发布回答" : "保存修改"),
-                            systemImage: model.editingQuestionAnswerID == nil ? "paperplane.fill" : "checkmark"
+                            nativeIcon: model.editingQuestionAnswerID == nil ? "paperplane.fill" : "checkmark"
                         )
                     }
                 }
@@ -554,6 +557,8 @@ private struct QuestionDetailView: View {
 }
 
 private struct QuestionComposerSheet: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
@@ -587,7 +592,7 @@ private struct QuestionComposerSheet: View {
                     .scrollContentBackground(.hidden)
                     .padding(7)
                     .frame(minHeight: 150)
-                    .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 9))
+                    .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 9))
                     .overlay { RoundedRectangle(cornerRadius: 9).stroke(Color.primary.opacity(0.12)) }
             }
 
@@ -601,7 +606,7 @@ private struct QuestionComposerSheet: View {
                 if !parsedTags.isEmpty {
                     HStack(spacing: 7) {
                         ForEach(parsedTags, id: \.self) { tag in
-                            Label(tag, systemImage: "tag.fill")
+                            Label(tag, nativeIcon: "tag.fill", iconSize: 12)
                                 .font(.caption)
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 5)
@@ -669,10 +674,10 @@ private struct QuestionAnswerImageGrid: View {
                         Button {
                             onRemove(media)
                         } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title3)
-                                .symbolRenderingMode(.palette)
-                                .foregroundStyle(Color.white, Color.black.opacity(0.65))
+                            NativeIcon.image("xmark", size: NativeIcon.Size.metadata)
+                                .foregroundStyle(.white)
+                                .padding(5)
+                                .background(.black.opacity(0.65), in: Circle())
                         }
                         .buttonStyle(.plain)
                         .padding(7)
@@ -685,6 +690,8 @@ private struct QuestionAnswerImageGrid: View {
 }
 
 private struct QuestionAnswerImage: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let media: NativeMedia
     let store: LocalBlogStore
     @State private var image: NSImage?
@@ -693,14 +700,13 @@ private struct QuestionAnswerImage: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10)
-                .fill(NativeTheme.surface)
+                .fill(appPalette.surface)
             if let image {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
             } else if didFinishLoading {
-                Image(systemName: "photo")
-                    .font(.title2)
+                NativeIcon.image("photo", size: 24)
                     .foregroundStyle(.secondary)
             } else {
                 ProgressView()
@@ -733,6 +739,8 @@ private struct QuestionAnswerImage: View {
 }
 
 private struct QuestionTagButtonStyle: ButtonStyle {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let isSelected: Bool
 
     func makeBody(configuration: Configuration) -> some View {
@@ -742,7 +750,7 @@ private struct QuestionTagButtonStyle: ButtonStyle {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
-                isSelected ? NativeTheme.brandBlue : (configuration.isPressed ? NativeTheme.selection : NativeTheme.lightBlue),
+                isSelected ? appPalette.brandBlue : (configuration.isPressed ? appPalette.selection : appPalette.lightBlue),
                 in: Capsule()
             )
             .opacity(configuration.isPressed ? 0.8 : 1)

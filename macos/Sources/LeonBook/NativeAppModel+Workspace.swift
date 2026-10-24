@@ -26,17 +26,7 @@ extension NativeAppModel {
     private func reloadArticleLibraryState() async throws {
         await replaceArticleSummaries(try await store.listArticles())
         workspaceResources = try await store.listWorkspaceResources()
-        smartCollections = try await store.listSmartCollections()
         bookmarks = try await store.listBookmarks()
-        if let selectedSmartCollectionID,
-           !smartCollections.contains(where: { $0.id == selectedSmartCollectionID }) {
-            self.selectedSmartCollectionID = nil
-            selectedSmartCollectionViewID = nil
-        } else if let definition = selectedSmartCollectionDefinition,
-                  !definition.views.contains(where: { $0.id == selectedSmartCollectionViewID }) {
-            selectedSmartCollectionViewID = definition.views.first?.id
-        }
-        try await refreshSelectedSmartCollection()
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             updateArticleListSearch(searchText, debounce: false)
         }
@@ -44,6 +34,8 @@ extension NativeAppModel {
     }
 
     private func reloadWorkspaceAncillaryState(generation: Int) async throws {
+        guard generation == workspaceGeneration else { return }
+        await reloadDashboard()
         guard generation == workspaceGeneration else { return }
         try await reloadMomentFeed(refreshesFacets: true)
         guard generation == workspaceGeneration else { return }
@@ -92,9 +84,6 @@ extension NativeAppModel {
         }
         await replaceArticleSummaries(summaries)
         workspaceResources = try await store.listWorkspaceResources()
-        if plan.reloadsSelectedSmartCollection {
-            try await refreshSelectedSmartCollection()
-        }
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             updateArticleListSearch(searchText, debounce: false)
         }
@@ -147,7 +136,7 @@ extension NativeAppModel {
             }
         } catch {
             markdownSourceEventMonitor = nil
-            errorMessage = "Markdown 事件监听启动失败，将使用低频校验：\(error.localizedDescription)"
+            errorMessage = NativeLocalization.text("Markdown 事件监听启动失败，将使用低频校验：\(error.localizedDescription)")
         }
         markdownSourceVerificationTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -231,7 +220,7 @@ extension NativeAppModel {
             }
         } catch {
             guard generation == workspaceGeneration else { return }
-            errorMessage = "Markdown 自动同步失败：\(error.localizedDescription)"
+            errorMessage = NativeLocalization.text("Markdown 自动同步失败：\(error.localizedDescription)")
         }
     }
 
@@ -262,7 +251,7 @@ extension NativeAppModel {
             do {
                 try await NativeAutomationServers.start(root: URL(fileURLWithPath: dataRootDirectoryPath, isDirectory: true))
             } catch {
-                errorMessage = "外部自动化接口启动失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text("外部自动化接口启动失败：\(error.localizedDescription)")
             }
         }
         reloadDeclarativeExtensions()
@@ -284,6 +273,11 @@ extension NativeAppModel {
         hasMoreMoments = false
         trashItems = []
         activity = []
+        dashboard = .standard
+        dashboardEditing.draft = nil
+        isDashboardLoaded = false
+        dashboardLoadError = nil
+        isSavingDashboard = false
         selectedArticle = nil
         selectedArticleRelations = .empty
         articleComments = []
@@ -297,7 +291,7 @@ extension NativeAppModel {
         selectedSlug = nil
         editor = NativeEditorDraft()
         pendingNewArticleFolderPath = nil
-        editorAutosaveStatus = "尚未自动保存"
+        editorAutosaveStatus = NativeLocalization.text("尚未自动保存")
         pendingEditorMediaCleanup = []
         editorOriginalArticle = nil
         momentDraft = NativeMomentDraft()
@@ -309,16 +303,12 @@ extension NativeAppModel {
         searchPresentation = nil
         articleSearchMatchSlugs = []
         articleSearchResolvedText = ""
-        smartCollections = []
-        selectedSmartCollectionID = nil
-        selectedSmartCollectionViewID = nil
-        clearSmartCollectionArticleSummaries()
         bookmarks = []
         pendingArticleScrollAnchor = nil
         isSearchingArticles = false
         isSearchingGlobally = false
         obsidianImportPreview = nil
-        obsidianImportStatus = "尚未选择 Vault"
+        obsidianImportStatus = NativeLocalization.text("尚未选择 Vault")
         isScanningObsidianVault = false
         isImportingObsidianVault = false
         selectedArticleTags = []

@@ -1182,6 +1182,8 @@ private final class EditorBlockUndoCoordinator: ObservableObject {
 }
 
 struct ArticleBlockEditor: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @Binding var source: String
     let documentID: String
     let sourceSlug: String?
@@ -1234,10 +1236,10 @@ struct ArticleBlockEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Label("块编辑", systemImage: "square.grid.3x1.folder.badge.plus")
+                Label("块编辑", nativeIcon: "square.grid.3x1.folder.badge.plus", iconSize: 14)
                     .font(.subheadline.weight(.medium))
                 if selectedBlockIDs.count > 1 {
-                    Text("已选择 \(selectedBlockIDs.count) 块 · 拖动手柄可成组搬运")
+                    Text(NativeLocalization.text("已选择 \(selectedBlockIDs.count) 块 · 拖动手柄可成组搬运"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 } else {
@@ -1247,77 +1249,77 @@ struct ArticleBlockEditor: View {
                 }
                 Spacer()
                 Button { undoManager?.undo() } label: {
-                    Image(systemName: "arrow.uturn.backward")
+                    NativeIcon.image("arrow.uturn.backward")
                 }
                 .buttonStyle(.borderless)
                 .help("撤销块操作（⌘Z）")
                 .disabled(undoManager == nil)
 
                 Button { undoManager?.redo() } label: {
-                    Image(systemName: "arrow.uturn.forward")
+                    NativeIcon.image("arrow.uturn.forward")
                 }
                 .buttonStyle(.borderless)
                 .help("重做块操作（⇧⌘Z）")
                 .disabled(undoManager == nil)
 
                 Menu {
-                    Section("内置模板") {
+                    Section(NativeLocalization.text("内置模板")) {
                         ForEach(EditorBlockTemplateCatalog.builtIn) { template in
                             Button(template.name) { insertTemplate(template, after: focusedBlockID) }
                         }
                     }
                     if !customTemplates.isEmpty {
-                        Section("我的模板") {
+                        Section(NativeLocalization.text("我的模板")) {
                             ForEach(customTemplates) { template in
                                 Button(template.name) { insertTemplate(template, after: focusedBlockID) }
                             }
                         }
                     }
                     Divider()
-                    Button("将所选块保存为模板…", systemImage: "square.and.arrow.down") {
+                    Button("将所选块保存为模板…", nativeIcon: "square.and.arrow.down") {
                         saveSelectionAsTemplate()
                     }
                     .disabled(selectedBlockIDs.isEmpty)
                     if !customTemplates.isEmpty {
-                        Menu("删除自定义模板", systemImage: "trash") {
+                        Menu("删除自定义模板", nativeIcon: "trash") {
                             ForEach(customTemplates) { template in
                                 Button(template.name, role: .destructive) { deleteTemplate(template) }
                             }
                         }
                     }
                 } label: {
-                    Label("模板", systemImage: "square.stack.3d.up")
+                    Label("模板", nativeIcon: "square.stack.3d.up")
                 }
                 .menuStyle(.borderlessButton)
                 .disabled(!isEditable)
 
                 Menu {
-                    Button("移动到其他笔记…", systemImage: "arrow.right.doc.on.clipboard") {
+                    Button("移动到其他笔记…", nativeIcon: "arrow.right.doc.on.clipboard") {
                         presentTransfer(.move)
                     }
                     .disabled(sourceSlug == nil)
-                    Button("复制到其他笔记…", systemImage: "doc.on.doc") {
+                    Button("复制到其他笔记…", nativeIcon: "doc.on.doc") {
                         presentTransfer(.copy)
                     }
-                    Button("创建同步块到其他笔记…", systemImage: "arrow.triangle.2.circlepath") {
+                    Button("创建同步块到其他笔记…", nativeIcon: "arrow.triangle.2.circlepath") {
                         presentTransfer(.sync)
                     }
                     .disabled(sourceSlug == nil)
                     if let lastTransferReceipt {
                         Divider()
-                        Button("撤销上次\(lastTransferReceipt.operation.localizedShortTitle)", systemImage: "arrow.uturn.backward.circle") {
+                        Button(NativeLocalization.text("撤销上次\(lastTransferReceipt.operation.localizedShortTitle)"), nativeIcon: "arrow.uturn.backward.circle") {
                             undoLastTransfer(lastTransferReceipt)
                         }
                         .disabled(isUndoingTransfer)
                     }
                 } label: {
-                    Label("跨笔记", systemImage: "rectangle.2.swap")
+                    Label("跨笔记", nativeIcon: "rectangle.2.swap")
                 }
                 .menuStyle(.borderlessButton)
                 .disabled(!isEditable || selectedBlockIDs.isEmpty || articleDestinations.isEmpty)
 
                 Button { insertBlock(after: nil) } label: {
-                    Label("添加块", systemImage: "plus")
+                    Label("添加块", nativeIcon: "plus")
                 }
                 .buttonStyle(.borderless)
                 .disabled(!isEditable)
@@ -1353,7 +1355,7 @@ struct ArticleBlockEditor: View {
                             )
                     }
                     Button { insertBlock(after: blocks.last?.id) } label: {
-                        Label("在末尾添加块", systemImage: "plus")
+                        Label("在末尾添加块", nativeIcon: "plus", iconSize: 14)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
@@ -1367,7 +1369,7 @@ struct ArticleBlockEditor: View {
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary) }
         }
         .onAppear {
@@ -1422,7 +1424,7 @@ struct ArticleBlockEditor: View {
                 HStack(spacing: 1) {
                     if NativeBlockEditorDocument.hasDescendants(block.id, in: blocks) {
                         Button { toggleCollapsed(block.id) } label: {
-                            Image(systemName: block.isCollapsed ? "chevron.right" : "chevron.down")
+                            NativeIcon.image(block.isCollapsed ? "chevron.right" : "chevron.down")
                                 .frame(width: 16, height: 24)
                         }
                         .buttonStyle(.plain)
@@ -1432,14 +1434,13 @@ struct ArticleBlockEditor: View {
                     }
 
                     Button { insertBlock(after: block.id) } label: {
-                        Image(systemName: "plus")
+                        NativeIcon.image("plus")
                             .frame(width: 19, height: 24)
                     }
                     .buttonStyle(.plain)
                     .help("在下方添加块")
 
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 12, weight: .semibold))
+                    NativeIcon.image("line.3.horizontal", size: 12)
                         .foregroundStyle(.secondary)
                         .frame(width: 21, height: 24)
                         .contentShape(Rectangle())
@@ -1468,32 +1469,32 @@ struct ArticleBlockEditor: View {
                     Menu {
                         blockTypeMenu(for: block.id)
                         Divider()
-                        Button("复制块链接", systemImage: "link") { copyBlockLink(block.id) }
-                        Button("复制所选块", systemImage: "doc.on.doc") {
+                        Button("复制块链接", nativeIcon: "link") { copyBlockLink(block.id) }
+                        Button("复制所选块", nativeIcon: "doc.on.doc") {
                             copyBlocks(anchoredAt: block.id, cutsSource: false)
                         }
-                        Button("剪切所选块", systemImage: "scissors") {
+                        Button("剪切所选块", nativeIcon: "scissors") {
                             copyBlocks(anchoredAt: block.id, cutsSource: true)
                         }
-                        Button("粘贴块", systemImage: "doc.on.clipboard") { _ = pasteBlocks(after: block.id) }
+                        Button("粘贴块", nativeIcon: "doc.on.clipboard") { _ = pasteBlocks(after: block.id) }
                             .disabled(NSPasteboard.general.string(forType: .leonBookBlocks) == nil)
-                        Button("创建副本", systemImage: "plus.square.on.square") { duplicate(block.id) }
-                        Button("整块上移", systemImage: "arrow.up") { move(block.id, offset: -1) }
+                        Button("创建副本", nativeIcon: "plus.square.on.square") { duplicate(block.id) }
+                        Button("整块上移", nativeIcon: "arrow.up") { move(block.id, offset: -1) }
                             .disabled(index == 0)
-                        Button("整块下移", systemImage: "arrow.down") { move(block.id, offset: 1) }
+                        Button("整块下移", nativeIcon: "arrow.down") { move(block.id, offset: 1) }
                             .disabled(index == blocks.count - 1)
-                        Button("增加缩进", systemImage: "increase.indent") { changeIndent(block.id, delta: 1) }
-                        Button("减少缩进", systemImage: "decrease.indent") { changeIndent(block.id, delta: -1) }
+                        Button("增加缩进", nativeIcon: "increase.indent") { changeIndent(block.id, delta: 1) }
+                        Button("减少缩进", nativeIcon: "decrease.indent") { changeIndent(block.id, delta: -1) }
                             .disabled(block.depth == 0)
                         if NativeBlockEditorDocument.hasDescendants(block.id, in: blocks) {
-                            Button(LocalizedStringKey(block.isCollapsed ? "展开子块" : "折叠子块"), systemImage: "rectangle.compress.vertical") {
+                            Button(LocalizedStringKey(block.isCollapsed ? "展开子块" : "折叠子块"), nativeIcon: "rectangle.compress.vertical") {
                                 toggleCollapsed(block.id)
                             }
                         }
                         Divider()
-                        Button("删除", systemImage: "trash", role: .destructive) { remove(block.id) }
+                        Button("删除", nativeIcon: "trash", role: .destructive) { remove(block.id) }
                     } label: {
-                        Image(systemName: "ellipsis")
+                        NativeIcon.image("ellipsis")
                             .foregroundStyle(.secondary)
                             .frame(width: 19, height: 24)
                             .contentShape(Rectangle())
@@ -1516,9 +1517,8 @@ struct ArticleBlockEditor: View {
             HStack(alignment: .top, spacing: 8) {
                 if block.kind == .task {
                     Button { toggleTask(block.id) } label: {
-                        Image(systemName: NativeBlockEditorDocument.isCompletedTask(block.markdown)
-                            ? "checkmark.square.fill" : "square")
-                            .font(.system(size: typography.fontSize))
+                        NativeIcon.image(NativeBlockEditorDocument.isCompletedTask(block.markdown)
+                            ? "checkmark.square.fill" : "square", size: typography.fontSize)
                             .foregroundStyle(NativeBlockEditorDocument.isCompletedTask(block.markdown) ? Color.accentColor : Color.secondary)
                     }
                     .buttonStyle(.plain)
@@ -1566,34 +1566,34 @@ struct ArticleBlockEditor: View {
                         blockTypeMenu(for: block.id)
                             .disabled(!isEditable)
                         Divider()
-                        Button("复制块链接", systemImage: "link") { copyBlockLink(block.id) }
+                        Button("复制块链接", nativeIcon: "link") { copyBlockLink(block.id) }
                             .disabled(!isEditable)
-                        Button("复制所选块", systemImage: "doc.on.doc") {
+                        Button("复制所选块", nativeIcon: "doc.on.doc") {
                             copyBlocks(anchoredAt: block.id, cutsSource: false)
                         }
-                        Button("剪切所选块", systemImage: "scissors") {
+                        Button("剪切所选块", nativeIcon: "scissors") {
                             copyBlocks(anchoredAt: block.id, cutsSource: true)
                         }
                         .disabled(!isEditable)
-                        Button("粘贴块", systemImage: "doc.on.clipboard") { _ = pasteBlocks(after: block.id) }
+                        Button("粘贴块", nativeIcon: "doc.on.clipboard") { _ = pasteBlocks(after: block.id) }
                             .disabled(!isEditable || NSPasteboard.general.string(forType: .leonBookBlocks) == nil)
-                        Button("创建副本", systemImage: "plus.square.on.square") { duplicate(block.id) }
+                        Button("创建副本", nativeIcon: "plus.square.on.square") { duplicate(block.id) }
                             .disabled(!isEditable)
-                        Button("整块上移", systemImage: "arrow.up") { move(block.id, offset: -1) }
+                        Button("整块上移", nativeIcon: "arrow.up") { move(block.id, offset: -1) }
                             .disabled(!isEditable || index == 0)
-                        Button("整块下移", systemImage: "arrow.down") { move(block.id, offset: 1) }
+                        Button("整块下移", nativeIcon: "arrow.down") { move(block.id, offset: 1) }
                             .disabled(!isEditable || index == blocks.count - 1)
-                        Button("增加缩进", systemImage: "increase.indent") { changeIndent(block.id, delta: 1) }
+                        Button("增加缩进", nativeIcon: "increase.indent") { changeIndent(block.id, delta: 1) }
                             .disabled(!isEditable || index == 0)
-                        Button("减少缩进", systemImage: "decrease.indent") { changeIndent(block.id, delta: -1) }
+                        Button("减少缩进", nativeIcon: "decrease.indent") { changeIndent(block.id, delta: -1) }
                             .disabled(!isEditable || block.depth == 0)
                         Divider()
-                        Button("删除", systemImage: "trash", role: .destructive) { remove(block.id) }
+                        Button("删除", nativeIcon: "trash", role: .destructive) { remove(block.id) }
                             .disabled(!isEditable)
                     }
 
                     if let reference = NativeBlockEditorDocument.syncedBlockReference(in: block.markdown) {
-                        Label("同步块 · \(reference)", systemImage: "arrow.triangle.2.circlepath")
+                        Label(NativeLocalization.text("同步块 · \(reference)"), nativeIcon: "arrow.triangle.2.circlepath", iconSize: 12)
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.tint)
                             .padding(.horizontal, 8)
@@ -1615,7 +1615,7 @@ struct ArticleBlockEditor: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .padding(8)
-        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 9))
+        .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 9))
         .overlay {
             RoundedRectangle(cornerRadius: 9)
                 .strokeBorder(
@@ -1647,10 +1647,10 @@ struct ArticleBlockEditor: View {
 
     @ViewBuilder
     private func blockTypeMenu(for id: UUID) -> some View {
-        Menu("转换为", systemImage: "arrow.triangle.2.circlepath") {
+        Menu("转换为", nativeIcon: "arrow.triangle.2.circlepath") {
             ForEach(EditorMarkdownBlockKind.allCases) { kind in
                 Button { convert(id, to: kind) } label: {
-                    Label(LocalizedStringKey(kind.title), systemImage: kind.systemImage)
+                    Label(LocalizedStringKey(kind.title), nativeIcon: kind.systemImage)
                 }
             }
         }
@@ -1887,7 +1887,7 @@ struct ArticleBlockEditor: View {
             from: before,
             previousFocusedID: previousFocus,
             previousSelectedIDs: previousSelection,
-            actionName: "粘贴多个块"
+            actionName: NativeLocalization.text("粘贴多个块")
         )
         return true
     }
@@ -1920,7 +1920,7 @@ struct ArticleBlockEditor: View {
             from: before,
             previousFocusedID: previousFocus,
             previousSelectedIDs: previousSelection,
-            actionName: "添加块"
+            actionName: NativeLocalization.text("添加块")
         )
     }
 
@@ -1945,7 +1945,7 @@ struct ArticleBlockEditor: View {
                 from: before,
                 previousFocusedID: previousFocus,
                 previousSelectedIDs: previousSelection,
-                actionName: "退出列表块"
+                actionName: NativeLocalization.text("退出列表块")
             )
             return
         }
@@ -1962,7 +1962,7 @@ struct ArticleBlockEditor: View {
             from: before,
             previousFocusedID: previousFocus,
             previousSelectedIDs: previousSelection,
-            actionName: "拆分块"
+            actionName: NativeLocalization.text("拆分块")
         )
     }
 
@@ -2003,7 +2003,7 @@ struct ArticleBlockEditor: View {
             from: before,
             previousFocusedID: previousFocus,
             previousSelectedIDs: previousSelection,
-            actionName: "合并块"
+            actionName: NativeLocalization.text("合并块")
         )
     }
 
@@ -2025,7 +2025,7 @@ struct ArticleBlockEditor: View {
         let before = blocks
         guard let index = blocks.firstIndex(where: { $0.id == id }) else { return }
         blocks[index].markdown = NativeBlockEditorDocument.togglingTask(blocks[index].markdown)
-        finishStructuralChange(from: before, actionName: "切换待办")
+        finishStructuralChange(from: before, actionName: NativeLocalization.text("切换待办"))
     }
 
     private func slashQuery(for block: EditorMarkdownBlock) -> String? {
@@ -2060,7 +2060,7 @@ struct ArticleBlockEditor: View {
         blocks[index].markdown = NativeBlockEditorDocument.converting("", to: kind)
         focusedBlockID = id
         selectedBlockIDs = [id]
-        finishStructuralChange(from: before, actionName: "转换块")
+        finishStructuralChange(from: before, actionName: NativeLocalization.text("转换块"))
     }
 
     private func applyTemplate(_ template: EditorBlockTemplate, replacing id: UUID) {
@@ -2079,7 +2079,7 @@ struct ArticleBlockEditor: View {
         selectedBlockIDs = Set(inserted.map(\.id))
         selectionAnchorID = inserted.first?.id
         focusedBlockID = inserted.first?.id
-        finishStructuralChange(from: before, actionName: "插入模板“\(template.name)”")
+        finishStructuralChange(from: before, actionName: NativeLocalization.text("插入模板“\(template.name)”"))
     }
 
     private func insertTemplate(_ template: EditorBlockTemplate, after id: UUID?) {
@@ -2104,7 +2104,7 @@ struct ArticleBlockEditor: View {
         selectedBlockIDs = Set(inserted.map(\.id))
         selectionAnchorID = inserted.first?.id
         focusedBlockID = inserted.first?.id
-        finishStructuralChange(from: before, actionName: "插入模板“\(template.name)”")
+        finishStructuralChange(from: before, actionName: NativeLocalization.text("插入模板“\(template.name)”"))
     }
 
     private func saveSelectionAsTemplate() {
@@ -2114,14 +2114,14 @@ struct ArticleBlockEditor: View {
         let selected = blocks.filter { ids.contains($0.id) }
         guard !selected.isEmpty else { return }
         let field = NSTextField(string: "")
-        field.placeholderString = "例如：项目复盘"
+        field.placeholderString = NativeLocalization.text("例如：项目复盘")
         field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
         let alert = NSAlert()
-        alert.messageText = "保存块模板"
-        alert.informativeText = "之后可从模板菜单或输入 /模板名 快速插入。"
+        alert.messageText = NativeLocalization.text("保存块模板")
+        alert.informativeText = NativeLocalization.text("之后可从模板菜单或输入 /模板名 快速插入。")
         alert.accessoryView = field
-        alert.addButton(withTitle: "保存")
-        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: NativeLocalization.text("保存"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
@@ -2266,7 +2266,7 @@ struct ArticleBlockEditor: View {
         guard let index = blocks.firstIndex(where: { $0.id == blockID }) else { return }
         let result = NativeBlockEditorDocument.ensuringBlockID(in: blocks[index].markdown)
         blocks[index].markdown = result.markdown
-        finishStructuralChange(from: before, actionName: "添加块链接")
+        finishStructuralChange(from: before, actionName: NativeLocalization.text("添加块链接"))
         let target = articleReference.trimmingCharacters(in: .whitespacesAndNewlines)
         let reference = target.isEmpty ? "[[#^\(result.id)]]" : "[[\(target)#^\(result.id)]]"
         NSPasteboard.general.clearContents()
@@ -2417,6 +2417,8 @@ private struct EditorBlockTransferRequest: Identifiable {
 }
 
 private struct EditorBlockTransferSheet: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @Environment(\.dismiss) private var dismiss
     let request: EditorBlockTransferRequest
     let articles: [NativeArticleSummary]
@@ -2439,9 +2441,9 @@ private struct EditorBlockTransferSheet: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Label(LocalizedStringKey(request.operation.title), systemImage: request.operation.systemImage)
+                    Label(LocalizedStringKey(request.operation.title), nativeIcon: request.operation.systemImage, iconSize: 24)
                         .font(.title2.weight(.semibold))
-                    Text("已选择 \(request.blockIDs.count) 个内容块")
+                    Text(NativeLocalization.text("已选择 \(request.blockIDs.count) 个内容块"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text(transferExplanation)
@@ -2463,8 +2465,7 @@ private struct EditorBlockTransferSheet: View {
 
             if filteredArticles.isEmpty {
                 VStack(spacing: 10) {
-                    Image(systemName: "doc.text.magnifyingglass")
-                        .font(.title)
+                    NativeIcon.image("doc.text.magnifyingglass", size: 32)
                         .foregroundStyle(.secondary)
                     Text("没有匹配的目标笔记")
                         .font(.headline)
@@ -2480,8 +2481,8 @@ private struct EditorBlockTransferSheet: View {
                         }
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis")
-                                .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
+                            NativeIcon.image(article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis")
+                                .foregroundStyle(article.status == .published ? appPalette.accent : appPalette.textSecondary)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(article.title)
                                     .foregroundStyle(.primary)
@@ -2542,7 +2543,7 @@ private struct EditorBlockSlashMenu: View {
                 ForEach(kinds) { kind in
                     Button { onSelect(kind) } label: {
                         HStack(spacing: 9) {
-                            Image(systemName: kind.systemImage)
+                            NativeIcon.image(kind.systemImage)
                                 .frame(width: 20)
                                 .foregroundStyle(.tint)
                             VStack(alignment: .leading, spacing: 1) {
@@ -2569,7 +2570,7 @@ private struct EditorBlockSlashMenu: View {
                     ForEach(templates) { template in
                         Button { onSelectTemplate(template) } label: {
                             HStack(spacing: 9) {
-                                Image(systemName: "square.stack.3d.up")
+                                NativeIcon.image("square.stack.3d.up")
                                     .frame(width: 20)
                                     .foregroundStyle(.tint)
                                 Text(template.name)

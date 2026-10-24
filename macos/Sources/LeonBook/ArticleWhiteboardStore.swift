@@ -21,13 +21,13 @@ enum ArticleWhiteboardData {
               let elements = object["elements"] as? [[String: Any]], elements.count <= 20_000,
               object["appState"] is [String: Any],
               let files = object["files"] as? [String: Any] else {
-            throw NativeStoreError.fileSystem("画板数据无效或超过 16 MB，无法保存。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("画板数据无效或超过 16 MB，无法保存。"))
         }
         for element in elements where element["type"] as? String == "image" && element["isDeleted"] as? Bool != true {
             guard let id = element["fileId"] as? String,
                   let file = files[id] as? [String: Any],
                   let url = file["dataURL"] as? String, url.hasPrefix("data:image/") else {
-                throw NativeStoreError.fileSystem("画板缺少图片原文件，无法保存。")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("画板缺少图片原文件，无法保存。"))
             }
         }
         return data
@@ -44,7 +44,7 @@ enum ArticleWhiteboardData {
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
               let height = properties[kCGImagePropertyPixelHeight] as? Int,
               (1...4096).contains(width), (1...4096).contains(height) else {
-            throw NativeStoreError.fileSystem("画板预览无效或过大，请缩小画板后重试。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("画板预览无效或过大，请缩小画板后重试。"))
         }
         return data
     }
@@ -52,12 +52,12 @@ enum ArticleWhiteboardData {
     static func filename(for source: String) throws -> String {
         let prefix = "/media/\(directory)/"
         guard source.hasPrefix(prefix), source.hasSuffix(".excalidraw") else {
-            throw NativeStoreError.fileSystem("画板源文件路径无效。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("画板源文件路径无效。"))
         }
         let filename = String(source.dropFirst(prefix.count))
         let hash = filename.dropLast(".excalidraw".count)
         guard hash.count == 64, hash.allSatisfy({ "0123456789abcdef".contains($0) }) else {
-            throw NativeStoreError.fileSystem("画板源文件路径无效。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("画板源文件路径无效。"))
         }
         return filename
     }
@@ -96,7 +96,7 @@ extension LocalBlogStore {
         guard url.resolvingSymlinksInPath().deletingLastPathComponent() == directory,
               let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
               size <= ArticleWhiteboardData.maximumSceneBytes else {
-            throw NativeStoreError.fileSystem("画板源文件无效或过大。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("画板源文件无效或过大。"))
         }
         let scene = try String(contentsOf: url, encoding: .utf8)
         _ = try ArticleWhiteboardData.sceneData(scene)
@@ -107,7 +107,7 @@ extension LocalBlogStore {
         let root = mediaURL.standardizedFileURL.resolvingSymlinksInPath()
         let directory = root.appendingPathComponent(ArticleWhiteboardData.directory, isDirectory: true)
         guard directory.resolvingSymlinksInPath().deletingLastPathComponent() == root else {
-            throw NativeStoreError.fileSystem("画板目录超出当前工作区。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("画板目录超出当前工作区。"))
         }
         if create { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
         return directory

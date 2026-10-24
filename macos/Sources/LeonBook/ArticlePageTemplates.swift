@@ -102,89 +102,108 @@ enum NativeArticlePageTemplateCatalog {
     private static let defaultsKeyPrefix = "leonBook.editor.pageTemplates.v1"
     static let maximumCustomTemplateCount = 50
 
-    static let builtIn: [NativeArticlePageTemplate] = [
-        NativeArticlePageTemplate(
-            id: "builtin-page-meeting",
-            name: "会议记录",
-            systemImage: "person.3",
-            title: "会议记录 · {{date}}",
-            category: "Meetings",
-            excerpt: "记录本次会议的结论与下一步行动。",
-            tags: "#会议",
-            body: """
-            ## 会议信息
+    static var builtIn: [NativeArticlePageTemplate] { builtIn(language: NativeLocalization.currentLanguage) }
 
-            - 时间：{{date}} {{time}}
-            - 参与者：
+    static func builtIn(language: NativeAppLanguage) -> [NativeArticlePageTemplate] {
+        let templates: [NativeArticlePageTemplate] = [
+            NativeArticlePageTemplate(
+                id: "builtin-page-meeting",
+                name: "会议记录",
+                systemImage: "person.3",
+                title: "会议记录 · {{date}}",
+                category: "Meetings",
+                excerpt: "记录本次会议的结论与下一步行动。",
+                tags: "#会议",
+                body: """
+                ## 会议信息
 
-            ## 议题与结论
+                - 时间：{{date}} {{time}}
+                - 参与者：
 
-            - 
+                ## 议题与结论
 
-            ## 行动项
+                - 
 
-            - [ ] 待办事项
-            """,
-            properties: [
-                "日期": .date("{{date}}"),
-                "状态": .status("进行中"),
-            ]
-        ),
-        NativeArticlePageTemplate(
-            id: "builtin-page-project",
-            name: "项目计划",
-            systemImage: "flag.checkered",
-            title: "项目计划 · ",
-            category: "Projects",
-            excerpt: "明确目标、范围、里程碑与风险。",
-            tags: "#项目",
-            body: """
-            ## 目标
+                ## 行动项
 
-            描述希望达成的结果。
+                - [ ] 待办事项
+                """,
+                properties: [
+                    "日期": .date("{{date}}"),
+                    "状态": .status("进行中"),
+                ]
+            ),
+            NativeArticlePageTemplate(
+                id: "builtin-page-project",
+                name: "项目计划",
+                systemImage: "flag.checkered",
+                title: "项目计划 · ",
+                category: "Projects",
+                excerpt: "明确目标、范围、里程碑与风险。",
+                tags: "#项目",
+                body: """
+                ## 目标
 
-            ## 范围
+                描述希望达成的结果。
 
-            - 包含：
-            - 不包含：
+                ## 范围
 
-            ## 里程碑
+                - 包含：
+                - 不包含：
 
-            - [ ] 第一个里程碑
+                ## 里程碑
 
-            ## 风险与依赖
+                - [ ] 第一个里程碑
 
-            - 
-            """,
-            properties: [
-                "状态": .status("规划中"),
-                "目标日期": .date("{{date}}"),
-            ]
-        ),
-        NativeArticlePageTemplate(
-            id: "builtin-page-weekly-review",
-            name: "周复盘",
-            systemImage: "calendar.badge.checkmark",
-            title: "周复盘 · {{date}}",
-            category: "Reviews",
-            excerpt: "回顾本周成果、阻碍与下周重点。",
-            tags: "#复盘",
-            body: """
-            ## 本周完成
+                ## 风险与依赖
 
-            - [x] 
+                - 
+                """,
+                properties: [
+                    "状态": .status("规划中"),
+                    "目标日期": .date("{{date}}"),
+                ]
+            ),
+            NativeArticlePageTemplate(
+                id: "builtin-page-weekly-review",
+                name: "周复盘",
+                systemImage: "calendar.badge.checkmark",
+                title: "周复盘 · {{date}}",
+                category: "Reviews",
+                excerpt: "回顾本周成果、阻碍与下周重点。",
+                tags: "#复盘",
+                body: """
+                ## 本周完成
 
-            ## 阻碍与收获
+                - [x] 
 
-            - 
+                ## 阻碍与收获
 
-            ## 下周重点
+                - 
 
-            - [ ] 
-            """,
-            properties: ["日期": .date("{{date}}")]
-        ),
-    ]
+                ## 下周重点
+
+                - [ ] 
+                """,
+                properties: ["日期": .date("{{date}}")]
+            ),
+        ]
+        guard language == .english else { return templates }
+        return templates.map { template in
+            var value = template
+            value.name = NativeLocalization.string(template.name, language: language)
+            value.title = NativeLocalization.string(template.title, language: language)
+            value.excerpt = NativeLocalization.string(template.excerpt, language: language)
+            value.tags = NativeLocalization.string(template.tags, language: language)
+            value.body = NativeLocalization.string(template.body, language: language)
+            value.properties = Dictionary(uniqueKeysWithValues: template.properties.map { key, property in
+                (NativeLocalization.string(key, language: language), NativeArticlePropertyValue(
+                    kind: property.kind, value: NativeLocalization.string(property.value, language: language)
+                ))
+            })
+            return value
+        }
+    }
 
     static func loadCustom(
         for userID: String,
@@ -299,7 +318,11 @@ struct ArticlePageTemplatePicker: View {
         Menu {
             templateButtons
         } label: {
-            Label("使用模板", systemImage: "doc.on.doc")
+            Label {
+                Text("使用模板")
+            } icon: {
+                ArticleActionIcon.menuImage(kind: .template, size: 16)
+            }
         }
         .menuStyle(.borderlessButton)
         .controlSize(.small)
@@ -308,13 +331,13 @@ struct ArticlePageTemplatePicker: View {
 
     @ViewBuilder
     private var templateButtons: some View {
-        Section("内置模板") {
+        Section(NativeLocalization.text("内置模板")) {
             ForEach(NativeArticlePageTemplateCatalog.builtIn) { template in
                 templateButton(template)
             }
         }
         if !library.customTemplates.isEmpty {
-            Section("我的模板") {
+            Section(NativeLocalization.text("我的模板")) {
                 ForEach(library.customTemplates) { template in
                     templateButton(template)
                 }
@@ -326,7 +349,7 @@ struct ArticlePageTemplatePicker: View {
         Button {
             model.applyArticlePageTemplate(template)
         } label: {
-            Label(template.name, systemImage: template.systemImage)
+            Label(template.name, nativeIcon: template.systemImage)
         }
     }
 }
@@ -336,9 +359,9 @@ struct ArticlePageTemplateActions: View {
     @ObservedObject var library: NativeArticlePageTemplateLibrary
 
     var body: some View {
-        Menu("页面模板", systemImage: "doc.on.doc") {
+        Menu("页面模板", nativeIcon: "doc.on.doc") {
             if model.editor.isNew {
-                Section("应用到新页面") {
+                Section(NativeLocalization.text("应用到新页面")) {
                     ForEach(NativeArticlePageTemplateCatalog.builtIn) { template in
                         Button(template.name) { model.applyArticlePageTemplate(template) }
                     }
@@ -348,17 +371,17 @@ struct ArticlePageTemplateActions: View {
                 }
             }
 
-            Button("将当前页面保存为模板…", systemImage: "square.and.arrow.down") {
+            Button("将当前页面保存为模板…", nativeIcon: "square.and.arrow.down") {
                 saveCurrentPage()
             }
             .disabled(!NativeArticlePageTemplate.canCapture(model.editor))
 
             if !library.customTemplates.isEmpty {
-                Menu("删除自定义模板", systemImage: "trash") {
+                Menu("删除自定义模板", nativeIcon: "trash") {
                     ForEach(library.customTemplates) { template in
                         Button(template.name, role: .destructive) {
                             if !library.delete(template) {
-                                model.errorMessage = "无法删除页面模板。"
+                                model.errorMessage = NativeLocalization.text("无法删除页面模板。")
                             }
                         }
                     }
@@ -369,10 +392,10 @@ struct ArticlePageTemplateActions: View {
 
     private func saveCurrentPage() {
         let alert = NSAlert()
-        alert.messageText = "保存页面模板"
-        alert.informativeText = "模板会保存标题、摘要、正文、分类、标签和页面属性；附件与发布状态不会写入模板。"
-        alert.addButton(withTitle: "保存")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = NativeLocalization.text("保存页面模板")
+        alert.informativeText = NativeLocalization.text("模板会保存标题、摘要、正文、分类、标签和页面属性；附件与发布状态不会写入模板。")
+        alert.addButton(withTitle: NativeLocalization.text("保存"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
 
         let suggestedName = model.editor.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let input = NSTextField(string: suggestedName.isEmpty ? "我的页面模板" : suggestedName)
@@ -381,7 +404,7 @@ struct ArticlePageTemplateActions: View {
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         if !library.save(model.editor, named: input.stringValue) {
-            model.errorMessage = "页面模板名称不能为空，且每个工作区最多保存 50 个模板。"
+            model.errorMessage = NativeLocalization.text("页面模板名称不能为空，且每个工作区最多保存 50 个模板。")
         } else {
             model.errorMessage = nil
         }

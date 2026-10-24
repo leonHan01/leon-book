@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ArticleGraphView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @ObservedObject var pageState: NativeArticleGraphPageState
 
@@ -33,7 +35,7 @@ struct ArticleGraphView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Label("文章关系图", systemImage: "point.3.connected.trianglepath.dotted")
+                        Label("文章关系图", nativeIcon: "point.3.connected.trianglepath.dotted", iconSize: 24)
                             .font(.title2.weight(.semibold))
                         Text("箭头从引用文章指向被引用文章；筛选和节点裁剪在绘制前完成。")
                             .font(.callout)
@@ -48,8 +50,9 @@ struct ArticleGraphView: View {
                     } label: {
                         Label(
                             LocalizedStringKey(model.isBookmarked(.graph) ? "取消收藏" : "收藏图谱"),
-                            systemImage: model.isBookmarked(.graph) ? "bookmark.fill" : "bookmark"
+                            nativeIcon: "bookmark"
                         )
+                        .foregroundStyle(model.isBookmarked(.graph) ? appPalette.accent : appPalette.textPrimary)
                     }
                 }
 
@@ -82,7 +85,7 @@ struct ArticleGraphView: View {
                     Spacer(minLength: 8)
 
                     Button(action: pageState.zoomOut) {
-                        Image(systemName: "minus.magnifyingglass")
+                        NativeIcon.image("minus.magnifyingglass")
                     }
                     .disabled(pageState.zoom <= 0.5)
                     Slider(value: $pageState.zoom, in: 0.5...1.8, step: 0.1)
@@ -92,7 +95,7 @@ struct ArticleGraphView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 42, alignment: .trailing)
                     Button(action: pageState.zoomIn) {
-                        Image(systemName: "plus.magnifyingglass")
+                        NativeIcon.image("plus.magnifyingglass")
                     }
                     .disabled(pageState.zoom >= 1.8)
                     Button("重置", action: pageState.resetView)
@@ -102,14 +105,14 @@ struct ArticleGraphView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        Label("最短路径", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                        Label("最短路径", nativeIcon: "point.topleft.down.to.point.bottomright.curvepath", iconSize: 14)
                             .font(.callout.weight(.medium))
 
                         TextField("起始节点（标题、slug 或别名）", text: pathStartText)
                             .textFieldStyle(.roundedBorder)
                             .frame(minWidth: 180, idealWidth: 230, maxWidth: 280)
 
-                        Image(systemName: "arrow.right")
+                        NativeIcon.image("arrow.right")
                             .foregroundStyle(.secondary)
                             .accessibilityHidden(true)
 
@@ -137,7 +140,7 @@ struct ArticleGraphView: View {
                     if let feedback = pageState.pathFeedback {
                         Text(feedback)
                             .font(.caption)
-                            .foregroundStyle(highlightedPath == nil ? NativeTheme.accent : NativeTheme.textSecondary)
+                            .foregroundStyle(highlightedPath == nil ? appPalette.accent : appPalette.textSecondary)
                             .lineLimit(2)
                             .accessibilityLabel(feedback)
                     } else {
@@ -187,7 +190,7 @@ struct ArticleGraphView: View {
                         )
                         .padding(36)
                 }
-                .background(NativeTheme.canvas)
+                .background(appPalette.canvas)
             }
         }
         .onChange(of: graph) { _ in
@@ -197,9 +200,9 @@ struct ArticleGraphView: View {
 
     private func graphSummary(_ projection: NativeArticleGraphProjection) -> Text {
         let graph = projection.graph
-        var value = Text("\(graph.nodes.count) / \(projection.matchingNodeCount) 篇 · \(graph.edges.count) 条引用")
+        var value = Text(NativeLocalization.text("\(graph.nodes.count) / \(projection.matchingNodeCount) 篇 · \(graph.edges.count) 条引用"))
         if projection.isClipped {
-            value = value + Text(" · 已裁剪 \(projection.clippedNodeCount) 篇")
+            value = value + Text(NativeLocalization.text(" · 已裁剪 \(projection.clippedNodeCount) 篇"))
         }
         return value
     }
@@ -242,7 +245,7 @@ struct ArticleGraphView: View {
         ) else { return }
 
         guard let path = presentation.shortestPath(from: source.slug, to: destination.slug) else {
-            pageState.showPathError("当前可见图谱中不存在从“\(source.title)”到“\(destination.title)”的有向路径。")
+            pageState.showPathError(NativeLocalization.text("当前可见图谱中不存在从“\(source.title)”到“\(destination.title)”的有向路径。"))
             return
         }
 
@@ -250,7 +253,7 @@ struct ArticleGraphView: View {
         pageState.showPath(
             from: source.slug,
             to: destination.slug,
-            feedback: "最短路径：\(route) · \(path.hopCount) 跳"
+            feedback: NativeLocalization.text("最短路径：\(route) · \(path.hopCount) 跳")
         )
     }
 
@@ -284,12 +287,12 @@ struct ArticleGraphView: View {
         query: String
     ) -> NativeArticleSummary? {
         guard !matches.isEmpty else {
-            pageState.showPathError("当前可见图谱中找不到\(role)节点“\(query.trimmingCharacters(in: .whitespacesAndNewlines))”。")
+            pageState.showPathError(NativeLocalization.text("当前可见图谱中找不到\(NativeLocalization.string(role, language: NativeLocalization.currentLanguage))节点“\(query.trimmingCharacters(in: .whitespacesAndNewlines))”。"))
             return nil
         }
         guard matches.count == 1 else {
             let examples = matches.prefix(3).map { "\($0.title)（\($0.slug)）" }.joined(separator: "、")
-            pageState.showPathError("\(role)节点匹配到多个结果：\(examples)。请改用准确的 slug。")
+            pageState.showPathError(NativeLocalization.text("\(NativeLocalization.string(role, language: NativeLocalization.currentLanguage))节点匹配到多个结果：\(examples)。请改用准确的 slug。"))
             return nil
         }
         return matches[0]
@@ -381,7 +384,7 @@ private struct ArticleGraphCanvas: View {
             }
             .coordinateSpace(name: Self.coordinateSpaceName)
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("文章关系图，共 \(graph.nodes.count) 个文章节点和 \(graph.edges.count) 条引用连线")
+            .accessibilityLabel(NativeLocalization.text("文章关系图，共 \(graph.nodes.count) 个文章节点和 \(graph.edges.count) 条引用连线"))
         }
     }
 
@@ -511,17 +514,19 @@ private enum ArticleGraphPathNodeRole {
         }
     }
 
-    var color: Color {
+    func color(in palette: NativeAppPalette) -> Color {
         switch self {
-        case .start: return NativeTheme.accent
-        case .waypoint: return NativeTheme.textSecondary
-        case .destination: return NativeTheme.blue
-        case .startAndDestination: return NativeTheme.deepBlue
+        case .start: return palette.accent
+        case .waypoint: return palette.textSecondary
+        case .destination: return palette.blue
+        case .startAndDestination: return palette.deepBlue
         }
     }
 }
 
 private struct ArticleGraphNode: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let article: NativeArticleSummary
     let pathRole: ArticleGraphPathNodeRole?
     let isDimmed: Bool
@@ -536,7 +541,7 @@ private struct ArticleGraphNode: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text(LocalizedStringKey(pathRole?.label ?? article.status.label))
                     .font(.caption)
-                    .foregroundStyle(pathRole?.color ?? Color.secondary)
+                    .foregroundStyle(pathRole?.color(in: appPalette) ?? Color.secondary)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -549,18 +554,18 @@ private struct ArticleGraphNode: View {
         }
         .buttonStyle(.plain)
         .opacity(isDimmed ? 0.42 : 1)
-        .help("拖动调整位置；单击打开：\(article.title)")
-        .accessibilityLabel("打开文章：\(article.title)，\(NativeLocalization.string(article.status.label, language: NativeLocalization.currentLanguage))")
+        .help(NativeLocalization.text("拖动调整位置；单击打开：\(article.title)"))
+        .accessibilityLabel(NativeLocalization.text("打开文章：\(article.title)，\(NativeLocalization.string(article.status.label, language: NativeLocalization.currentLanguage))"))
     }
 
     private var nodeBackground: Color {
-        if let pathRole { return pathRole.color.opacity(0.18) }
-        return article.status == .published ? NativeTheme.lightBlue : NativeTheme.surfaceSecondary
+        if let pathRole { return pathRole.color(in: appPalette).opacity(0.18) }
+        return article.status == .published ? appPalette.lightBlue : appPalette.surfaceSecondary
     }
 
     private var nodeBorder: Color {
-        if let pathRole { return pathRole.color.opacity(0.9) }
-        return article.status == .published ? NativeTheme.blue.opacity(0.5) : NativeTheme.border
+        if let pathRole { return pathRole.color(in: appPalette).opacity(0.9) }
+        return article.status == .published ? appPalette.blue.opacity(0.5) : appPalette.border
     }
 }
 

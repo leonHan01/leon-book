@@ -140,11 +140,11 @@ public enum FirstPartyModuleCatalogError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case let .duplicateModule(id):
-            return "重复的第一方模块 ID：\(id)"
+            return ModuleLocalization.text("重复的第一方模块 ID：\(id)")
         case let .duplicateCommand(id):
-            return "重复的第一方模块命令 ID：\(id)"
+            return ModuleLocalization.text("重复的第一方模块命令 ID：\(id)")
         case let .undeclaredPermission(module, command, permission):
-            return "模块 \(module) 的命令 \(command) 使用了未声明权限 \(permission)"
+            return ModuleLocalization.text("模块 \(module) 的命令 \(command) 使用了未声明权限 \(permission)")
         }
     }
 }

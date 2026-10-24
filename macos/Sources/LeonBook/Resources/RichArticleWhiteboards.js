@@ -1,12 +1,13 @@
 function createArticleWhiteboards({ root, canEdit, documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, frameTask }) {
+  const t = (...args) => window.LeonL10n.text(...args);
   const pending = new Map();
   let selected = null;
   const selector = 'figure[data-type="whiteboard"][data-whiteboard-source]';
   const validSource = value => /^\/media\/whiteboards\/[a-f0-9]{64}\.excalidraw$/.test(value || '');
   const tools = document.createElement('div'); tools.id = 'whiteboard-tools'; tools.hidden = true;
-  tools.setAttribute('role', 'toolbar'); tools.setAttribute('aria-label', '画板操作');
+  tools.setAttribute('role', 'toolbar'); tools.setAttribute('aria-label', t('画板操作'));
   tools.innerHTML = '<button data-board-action="edit">编辑画板</button><button data-board-action="delete">删除</button>';
-  document.body.append(tools);
+  document.body.append(tools); window.LeonL10n.bindChrome(tools);
   function position() {
     if (!canEdit() || !selected || !root.contains(selected)) { tools.hidden = true; return; }
     const rect = selected.getBoundingClientRect();
@@ -36,12 +37,12 @@ function createArticleWhiteboards({ root, canEdit, documentID, send, uuid, check
     if (request.isNew) {
       figure.dataset.blockId = uuid(); figure.dataset.type = 'whiteboard';
       figure.append(document.createElement('img'));
-      const caption = document.createElement('figcaption'); caption.textContent = 'Excalidraw 画板'; figure.append(caption);
+      const caption = document.createElement('figcaption'); caption.textContent = t('Excalidraw 画板'); figure.append(caption);
       if (request.replace) request.block.replaceWith(figure); else request.block.after(figure);
     }
     figure.dataset.whiteboardSource = source;
     const image = figure.querySelector('img');
-    delete image.dataset.originalSrc; image.src = preview; image.alt = 'Excalidraw 画板';
+    delete image.dataset.originalSrc; image.src = preview; image.alt = t('Excalidraw 画板');
     if (!figure.nextElementSibling) { const paragraph = document.createElement('p'); paragraph.innerHTML = '<br>'; figure.after(paragraph); }
     notify(); selected = figure; position();
     focusBlock(figure.nextElementSibling);

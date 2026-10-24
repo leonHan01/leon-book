@@ -102,7 +102,7 @@ extension NativeAppModel {
             todoSession.hasLoaded = true
             errorMessage = nil
             do { try await reloadTodos() }
-            catch { errorMessage = "待办已保存，刷新列表失败：\(error.localizedDescription)" }
+            catch { errorMessage = NativeLocalization.text("待办已保存，刷新列表失败：\(error.localizedDescription)") }
             guard workspace == workspaceGeneration else { return true }
             recordFirstPartyModuleEvent(moduleID: TodoFirstPartyModule.id, name: event, payload: ["id": item.id])
             scheduleBackup()

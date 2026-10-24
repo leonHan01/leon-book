@@ -3,6 +3,7 @@ import AppKit
 import Combine
 import Foundation
 import LeonBookExtensionKit
+import LeonBookTodoModule
 import SwiftUI
 import WebKit
 @testable import LeonBook
@@ -46,6 +47,25 @@ private func XCTFail(_ message: String) {
 }
 
 final class NativeModelsTests {
+    @MainActor
+    func testNavigationSidebarFollowsTheCurrentSection() {
+        let navigation = NativeNavigationState()
+        let independentSections: [NativeSection] = [.dashboard, .canvas, .photos, .moments, .qAndA, .todos, .graph, .trash, .settings]
+        for section in independentSections {
+            navigation.section = section
+            XCTAssertFalse(navigation.section.showsArticleDirectory, "\(section) must not show article directories")
+            XCTAssertFalse(navigation.section.hasNavigationSidebar, "\(section) must use the full page without an empty article sidebar")
+        }
+        for section in [NativeSection.articles, .reader, .editor] {
+            navigation.section = section
+            XCTAssertTrue(navigation.section.showsArticleDirectory, "\(section) must retain article navigation")
+            XCTAssertTrue(navigation.section.hasNavigationSidebar)
+        }
+        navigation.section = .mediaLibrary
+        XCTAssertFalse(navigation.section.showsArticleDirectory, "media must keep its own directory")
+        XCTAssertTrue(navigation.section.hasNavigationSidebar, "media group editing must remain available")
+    }
+
     @MainActor
     func testLanguagePreferencesPersistAndLocalizationsResolve() {
         let suiteName = "NativeLanguagePreferencesTests.\(UUID().uuidString)"
@@ -110,6 +130,56 @@ final class NativeModelsTests {
                 "missing English editor localization for \(key): \(localized)"
             )
         }
+    }
+
+    func testEnglishLocalizationPreservesSubstitutionsAndTranslatesTemplates() {
+        let title = "中文标题 %@ 100% \"quote\""
+        XCTAssertEqual(NativeLocalization.text("删除“\(title)”？", language: .english), "Delete “\(title)”?")
+        XCTAssertEqual(NativeLocalization.text("删除“\(title)”？", language: .simplifiedChinese), "删除“\(title)”？")
+        XCTAssertEqual(NativeLocalization.text("移动 \(3) 个项目", language: .english), "Move 3 Items")
+        XCTAssertEqual(NativeLocalization.text("已选择 \(0) 张", language: .english), "0 Selected")
+        XCTAssertEqual(NativeLocalization.string("恢复 100%", language: .english), "Reset to 100%")
+
+        for template in NativeArticlePageTemplateCatalog.builtIn(language: .english) {
+            let texts = [template.name, template.title, template.body, template.excerpt, template.tags]
+                + Array(template.properties.keys) + template.properties.values.map(\.value)
+            for text in texts {
+                XCTAssertFalse(text.range(of: "\\p{Han}", options: .regularExpression) != nil, "Untranslated template: \(template.id): \(text)")
+            }
+        }
+        for template in EditorBlockTemplateCatalog.builtIn(language: .english) {
+            XCTAssertFalse((template.name + template.body).range(of: "\\p{Han}", options: .regularExpression) != nil)
+        }
+        let custom = NativeArticlePageTemplate(name: "我的模板", title: title, body: "我的原文")
+        var draft = NativeEditorDraft()
+        custom.apply(to: &draft)
+        XCTAssertEqual(draft.title, title)
+        XCTAssertEqual(draft.body, "我的原文")
+    }
+
+    func testEnglishLocalizationCoversNativeAndWebSurfaces() {
+        let keys = [
+            "文章格式", "HTML 富文本", "好", "应用", "还没有图片、视频、音频或文件附件",
+            "选择要导入相册的图片", "相册名称", "重命名相册", "插入音频", "画板操作",
+            "开始写作，或输入 / 插入内容", "代码语言", "选择画布", "便签内容", "行数",
+            "表格 · 第 %@ 行，第 %@ 列", "正在导入音频…", "画布包含无效的卡片、连线或坐标。",
+        ]
+        for key in keys {
+            let translated = NativeLocalization.string(key, language: .english)
+            XCTAssertFalse(translated.range(of: "\\p{Han}", options: .regularExpression) != nil, "Missing English: \(key)")
+        }
+        let defaults = UserDefaults.standard
+        let key = "leon-book.app-language.v1"
+        let saved = defaults.object(forKey: key)
+        defer {
+            if let saved { defaults.set(saved, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        defaults.set("en", forKey: key)
+        XCTAssertEqual(NativeStoreError.invalidArticle.localizedDescription, "The title and body cannot be empty.")
+        XCTAssertEqual(TodoError.invalidTitle.localizedDescription, "Task titles must contain 1–200 characters.")
+        XCTAssertEqual(DeclarativeExtensionError.unsupportedManifestVersion(99).localizedDescription, "Unsupported manifestVersion 99")
+        XCTAssertTrue(NativeLocalization.catalog(language: .english).count > 1_900)
+        XCTAssertTrue(NativeLocalization.catalog(language: .simplifiedChinese).isEmpty)
     }
 
     @MainActor
@@ -210,6 +280,7 @@ final class NativeModelsTests {
 
     func testCommandRegistryFuzzyMatchingRankingAndAvailability() {
         let registry = NativeCommandRegistry.builtIn
+        XCTAssertFalse(registry.definitions.contains { $0.id.rawValue == "editor.insert.base" })
         let regularContext = NativeCommandContext(storageReady: true)
         let matches = registry.matches("快速文", on: .palette, context: regularContext)
         XCTAssertEqual(matches.first?.id, .quickOpen)
@@ -1188,49 +1259,11 @@ final class NativeModelsTests {
         XCTAssertEqual(Set(docs?.children.compactMap(\.articleSlug) ?? []), Set(["docs", "docs-child"]))
         XCTAssertTrue(NativeWorkspaceResourceTree.folderPaths(in: roots).contains("Project"))
 
-        let layouts: [NativeSmartCollectionLayout] = [.board, .calendar]
+        let layouts: [NativeArticleLibraryLayout] = [.board, .calendar]
         XCTAssertEqual(
-            try JSONDecoder().decode([NativeSmartCollectionLayout].self, from: JSONEncoder().encode(layouts)),
+            try JSONDecoder().decode([NativeArticleLibraryLayout].self, from: JSONEncoder().encode(layouts)),
             layouts
         )
-        let baseDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("leon-book-p0-base-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: baseDirectory) }
-        let calendarView = NativeSmartCollectionView(
-            id: "calendar-view",
-            name: "计划",
-            layout: .calendar,
-            calendarDatePropertyKey: "due",
-            columns: [
-                .system(.title),
-                NativeSmartCollectionColumn(source: .property, key: "due", propertyKind: .date),
-                NativeSmartCollectionColumn(source: .property, key: "project", propertyKind: .relation),
-                NativeSmartCollectionColumn(source: .property, key: "total", propertyKind: .rollup),
-            ]
-        )
-        let calendarCollection = NativeSmartCollection(
-            id: "p0-calendar",
-            name: "计划",
-            calendarDatePropertyKey: "due",
-            layout: .calendar,
-            columns: calendarView.columns,
-            views: [calendarView],
-            activeViewID: calendarView.id
-        )
-        _ = try NativeSmartCollectionFile.write(calendarCollection, in: baseDirectory)
-        let persistedCalendar = try NativeSmartCollectionFile.readAll(in: baseDirectory)[0]
-        XCTAssertEqual(persistedCalendar.layout, .calendar)
-        XCTAssertEqual(persistedCalendar.calendarDatePropertyKey, "due")
-        XCTAssertEqual(
-            persistedCalendar.columns.first(where: { $0.key == "due" })?.propertyKind,
-            .date
-        )
-        XCTAssertEqual(
-            persistedCalendar.columns.first(where: { $0.key == "project" })?.propertyKind,
-            .relation
-        )
-
         let relation = NativeArticlePropertyValue.relation(["Task One", "task-two"])
         XCTAssertEqual(relation.listValues, ["Task One", "task-two"])
         let relationRoundTrip = NativeArticlePropertyValue.fromYAML(relation.yamlValue)
@@ -1311,219 +1344,7 @@ final class NativeModelsTests {
         ))
     }
 
-    func testSmartCollectionCombinesPropertiesDatesAndMultiSort() {
-        let source = [
-            smartCollectionArticle(
-                slug: "older",
-                title: "Alpha",
-                status: .published,
-                category: "Research",
-                updatedAt: "2026-08-10T00:00:00Z",
-                pageViews: 30,
-                properties: ["rating": "5"]
-            ),
-            smartCollectionArticle(
-                slug: "newer",
-                title: "Beta",
-                status: .published,
-                category: "Research",
-                updatedAt: "2026-08-20T00:00:00Z",
-                pageViews: 50,
-                properties: ["rating": "5"]
-            ),
-            smartCollectionArticle(
-                slug: "draft",
-                title: "Gamma",
-                status: .draft,
-                category: "Research",
-                updatedAt: "2026-08-22T00:00:00Z",
-                pageViews: 80,
-                properties: ["rating": "5"]
-            ),
-        ]
-        let collection = NativeSmartCollection(
-            name: "近期研究",
-            rules: [
-                NativeSmartCollectionRule(field: .status, comparison: .equals, value: "published"),
-                NativeSmartCollectionRule(field: .category, comparison: .equals, value: "research"),
-                NativeSmartCollectionRule(field: .property, comparison: .equals, value: "5", propertyKey: "rating"),
-                NativeSmartCollectionRule(field: .updatedAt, comparison: .after, value: "2026-08-01"),
-            ],
-            sorts: [
-                NativeArticleSortDescriptor(field: .pageViews, ascending: false),
-                NativeArticleSortDescriptor(field: .title, ascending: true),
-            ],
-            groupBy: .category,
-            layout: .table
-        )
-
-        let result = NativeSmartCollectionEvaluator.articles(from: source, matching: collection)
-        XCTAssertEqual(result.map(\.slug), ["newer", "older"])
-    }
-
-    func testBaseFormulasCalculatePropertiesDatesAndSummaries() {
-        let now = NativeTimestamp.date(from: "2026-08-24T12:00:00Z")!
-        let first = NativeArticleSummary(
-            banner: nil,
-            category: "Books",
-            excerpt: "",
-            properties: [
-                "price": .number(12.5),
-                "months": .number(4),
-                "due date": .date("2026-08-20"),
-                "finished": .checkbox(true),
-            ],
-            publishedAt: nil,
-            slug: "first",
-            status: .draft,
-            tags: [],
-            title: "第一本",
-            updatedAt: "2026-08-24T00:00:00Z",
-            wordCount: 10
-        )
-        let second = NativeArticleSummary(
-            banner: nil,
-            category: "Books",
-            excerpt: "",
-            properties: [
-                "price": .number(7.5),
-                "months": .number(2),
-                "finished": .checkbox(false),
-            ],
-            publishedAt: nil,
-            slug: "second",
-            status: .draft,
-            tags: [],
-            title: "第二本",
-            updatedAt: "2026-08-23T00:00:00Z",
-            wordCount: 10
-        )
-        let collection = NativeSmartCollection(
-            name: "阅读",
-            columns: [
-                NativeSmartCollectionColumn(source: .formula, key: "cost", title: "总价", summary: .sum),
-                NativeSmartCollectionColumn(source: .formula, key: "overdue", title: "逾期天数"),
-                NativeSmartCollectionColumn(source: .formula, key: "state", title: "状态"),
-            ],
-            formulas: [
-                NativeSmartCollectionFormula(key: "cost", name: "总价", expression: "price * months"),
-                NativeSmartCollectionFormula(key: "overdue", name: "逾期", expression: "today() - prop(\"due date\")"),
-                NativeSmartCollectionFormula(key: "state", name: "状态", expression: "if(formula.overdue > 0, \"late\", \"ok\")"),
-                NativeSmartCollectionFormula(key: "case_cost", name: "大小写", expression: "PRICE * MONTHS"),
-            ]
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.formulaValue("cost", article: first, collection: collection, now: now),
-            .number(50)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.formulaValue("overdue", article: first, collection: collection, now: now),
-            .number(4)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.formulaValue("state", article: first, collection: collection, now: now),
-            .string("late")
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.formulaValue("case_cost", article: first, collection: collection, now: now),
-            .number(50)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.summary(
-                .sum,
-                column: collection.columns[0],
-                articles: [first, second],
-                collection: collection,
-                now: now
-            ),
-            .number(65)
-        )
-
-        let priceColumn = NativeSmartCollectionColumn(source: .property, key: "price", title: "价格")
-        let finishedColumn = NativeSmartCollectionColumn(source: .property, key: "finished", title: "完成")
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.summary(
-                .filled,
-                column: priceColumn,
-                articles: [first, second],
-                collection: collection,
-                now: now
-            ),
-            .number(2)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.summary(
-                .empty,
-                column: priceColumn,
-                articles: [first, second],
-                collection: collection,
-                now: now
-            ),
-            .number(0)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.summary(
-                .unique,
-                column: priceColumn,
-                articles: [first, second],
-                collection: collection,
-                now: now
-            ),
-            .number(2)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.summary(
-                .average,
-                column: priceColumn,
-                articles: [first, second],
-                collection: collection,
-                now: now
-            ),
-            .number(10)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.summary(
-                .minimum,
-                column: priceColumn,
-                articles: [first, second],
-                collection: collection,
-                now: now
-            ),
-            .number(7.5)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.summary(
-                .maximum,
-                column: priceColumn,
-                articles: [first, second],
-                collection: collection,
-                now: now
-            ),
-            .number(12.5)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.summary(
-                .checked,
-                column: finishedColumn,
-                articles: [first, second],
-                collection: collection,
-                now: now
-            ),
-            .number(1)
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.summary(
-                .unchecked,
-                column: finishedColumn,
-                articles: [first, second],
-                collection: collection,
-                now: now
-            ),
-            .number(1)
-        )
-    }
-
-    func testDeclarativeExtensionsExposeFiveSafeCapabilities() throws {
+    func testDeclarativeExtensionsExposeFourSafeCapabilities() throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let packageURL = root.appendingPathComponent("reading-tools", isDirectory: true)
@@ -1562,13 +1383,6 @@ final class NativeModelsTests {
                     bodyTemplate: "{{content}}",
                     style: .card
                 ),
-            ],
-            baseFunctions: [
-                DeclarativeExtensionBaseFunction(
-                    name: "double",
-                    parameters: ["value"],
-                    expression: "value * 2"
-                ),
             ]
         )
         let encoder = JSONEncoder()
@@ -1584,7 +1398,6 @@ final class NativeModelsTests {
         XCTAssertEqual(runtime.commands.count, 1)
         XCTAssertEqual(runtime.importers.count, 1)
         XCTAssertEqual(runtime.renderers.count, 1)
-        XCTAssertEqual(runtime.baseFunctions.count, 1)
 
         let fixedNow = Date(timeIntervalSince1970: 0)
         let renderedCommand = runtime.renderTemplate(
@@ -1610,43 +1423,10 @@ final class NativeModelsTests {
         XCTAssertEqual(block?.body, "Dune")
         XCTAssertEqual(block?.style, .card)
 
-        let article = NativeArticleSummary(
-            banner: nil,
-            category: "Books",
-            excerpt: "",
-            publishedAt: nil,
-            slug: "dune",
-            status: .draft,
-            tags: [],
-            title: "Dune",
-            updatedAt: "2026-08-30T00:00:00Z",
-            wordCount: 21
-        )
-        let collection = NativeSmartCollection(
-            name: "Reading",
-            formulas: [
-                NativeSmartCollectionFormula(
-                    key: "score",
-                    name: "Score",
-                    expression: "double(wordcount)"
-                ),
-            ]
-        )
-        XCTAssertEqual(
-            NativeSmartCollectionFormulaEngine.formulaValue(
-                "score",
-                article: article,
-                collection: collection,
-                baseFunctions: runtime.baseFunctions.map(\.function)
-            ),
-            .number(42)
-        )
-
         XCTAssertTrue(runtime.setEnabled(false, extensionID: "demo.reading-tools"))
         XCTAssertTrue(runtime.commands.isEmpty)
         XCTAssertTrue(runtime.importers.isEmpty)
         XCTAssertTrue(runtime.renderers.isEmpty)
-        XCTAssertTrue(runtime.baseFunctions.isEmpty)
     }
 
     func testDeclarativeExtensionRejectsExecutableTemplates() throws {
@@ -2973,7 +2753,7 @@ final class PerformanceRegressionTests {
     @MainActor
     func testArticleSelectionCacheRejectsStaleAndCrossWorkspaceEntries() {
         let cache = NativeArticleSelectionCache(countLimit: 4, totalCostLimit: 1_024 * 1_024)
-        let first = smartCollectionArticle(
+        let first = projectionArticle(
             slug: "cached-article",
             title: "Cached",
             status: .published,
@@ -2987,7 +2767,7 @@ final class PerformanceRegressionTests {
         XCTAssertEqual(cache.article(matching: first.summary, workspaceGeneration: 7), first)
         XCTAssertNil(cache.article(matching: first.summary, workspaceGeneration: 8))
 
-        let updated = smartCollectionArticle(
+        let updated = projectionArticle(
             slug: first.slug,
             title: first.title,
             status: first.status,
@@ -3056,7 +2836,6 @@ final class PerformanceRegressionTests {
 
         XCTAssertTrue(updatePlan.reloadsArticleList)
         XCTAssertTrue(updatePlan.reloadsSelectedArticle)
-        XCTAssertTrue(updatePlan.reloadsSelectedSmartCollection)
         XCTAssertTrue(updatePlan.reloadsKnowledgeGraph)
         XCTAssertFalse(updatePlan.reloadsTrash)
         XCTAssertFalse(updatePlan.reloadsMoments)
@@ -3408,53 +3187,6 @@ final class PerformanceRegressionTests {
     }
 
     @MainActor
-    func testPageViewIncrementReevaluatesSelectedSmartCollection() async throws {
-        let root = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let previousWorkDirectory = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"]
-        setenv("LEON_BOOK_WORKDIR", root.path, 1)
-        defer {
-            if let previousWorkDirectory {
-                setenv("LEON_BOOK_WORKDIR", previousWorkDirectory, 1)
-            } else {
-                unsetenv("LEON_BOOK_WORKDIR")
-            }
-        }
-
-        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
-        let saved = try await model.store.saveArticle(article(
-            slug: "page-view-threshold",
-            status: .published,
-            expectedUpdatedAt: nil,
-            body: "threshold",
-            title: "Threshold"
-        ))
-        let collection = try await model.store.saveSmartCollection(NativeSmartCollection(
-            name: "Unread",
-            rules: [NativeSmartCollectionRule(
-                field: .pageViews,
-                comparison: .lessThan,
-                value: "1"
-            )],
-            sorts: [NativeArticleSortDescriptor(field: .pageViews, ascending: true)]
-        ))
-        await model.replaceArticleSummaries(try await model.store.listArticles())
-        model.smartCollections = [collection]
-        model.selectedSmartCollectionID = collection.id
-        try await model.refreshSelectedSmartCollection()
-        XCTAssertEqual(model.smartCollectionArticles.map(\.slug), [saved.slug])
-
-        let displayed = try await model.displayArticle(
-            model.smartCollectionArticles[0],
-            disposition: .currentTab,
-            recordsPageView: true
-        )
-
-        XCTAssertTrue(displayed)
-        XCTAssertEqual(model.smartCollectionArticles, [])
-    }
-
-    @MainActor
     func testCalendarChangeRebuildsCachedMomentFacets() async {
         let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false)
         let records = [NativeMomentFacetRecord(
@@ -3649,109 +3381,6 @@ final class PerformanceRegressionTests {
             backgroundLocalSearch.elapsed * 1_000,
             legacyResolvedSearch.elapsed * 1_000 / Double(iterations),
             projectedResolvedSearch.elapsed * 1_000 / Double(iterations)
-        ))
-    }
-
-    func testLargeSmartCollectionFormulaSummaryBenchmark() {
-        let articleCount = 10_000
-        let now = NativeTimestamp.date(from: "2026-08-30T12:00:00Z")!
-        let articles = (0..<articleCount).map { index in
-            NativeArticleSummary(
-                banner: nil,
-                category: "Benchmark",
-                excerpt: "",
-                pageViews: index,
-                properties: [
-                    "price": .number(Double((index % 100) + 1)),
-                    "months": .number(Double((index % 12) + 1)),
-                    "tax": .number(1.25),
-                    "divisor": .number(2),
-                    "due": .date("2026-08-30"),
-                    "unused-a": .text("a"),
-                    "unused-b": .text("b"),
-                    "unused-c": .text("c"),
-                    "unused-d": .text("d"),
-                ],
-                publishedAt: nil,
-                slug: "formula-\(index)",
-                status: .published,
-                tags: [],
-                title: "Formula \(index)",
-                updatedAt: "2026-08-30T00:00:00Z",
-                wordCount: 10
-            )
-        }
-        let column = NativeSmartCollectionColumn(
-            source: .formula,
-            key: "weighted",
-            title: "加权价格",
-            summary: .sum
-        )
-        let collection = NativeSmartCollection(
-            name: "公式基准",
-            columns: [column],
-            formulas: [
-                NativeSmartCollectionFormula(
-                    key: "weighted",
-                    name: "加权价格",
-                    expression: "round((price * months + tax) / divisor, 2)"
-                ),
-                NativeSmartCollectionFormula(
-                    key: "date_label",
-                    name: "日期标签",
-                    expression: "formatDate(due, \"yyyy/MM/dd\")"
-                ),
-            ]
-        )
-
-        var best = TimeInterval.greatestFiniteMagnitude
-        var result = NativeBaseValue.empty
-        for _ in 0..<4 {
-            let start = ProcessInfo.processInfo.systemUptime
-            result = NativeSmartCollectionFormulaEngine.summary(
-                .sum,
-                column: column,
-                articles: articles,
-                collection: collection,
-                now: now
-            )
-            best = min(best, ProcessInfo.processInfo.systemUptime - start)
-        }
-
-        XCTAssertTrue(result.numberValue != nil, "formula benchmark should produce a numeric sum")
-        XCTAssertTrue(
-            best < 0.08,
-            "10k formula summary exceeded the 80 ms render budget: \(best * 1_000) ms"
-        )
-        let dateColumn = NativeSmartCollectionColumn(
-            source: .formula,
-            key: "date_label",
-            title: "日期标签",
-            summary: .filled
-        )
-        var dateBest = TimeInterval.greatestFiniteMagnitude
-        var dateResult = NativeBaseValue.empty
-        for _ in 0..<4 {
-            let start = ProcessInfo.processInfo.systemUptime
-            dateResult = NativeSmartCollectionFormulaEngine.summary(
-                .filled,
-                column: dateColumn,
-                articles: articles,
-                collection: collection,
-                now: now
-            )
-            dateBest = min(dateBest, ProcessInfo.processInfo.systemUptime - start)
-        }
-        XCTAssertEqual(dateResult, .number(Double(articleCount)))
-        XCTAssertTrue(
-            dateBest < 0.12,
-            "10k date formula summary exceeded the 120 ms render budget: \(dateBest * 1_000) ms"
-        )
-        print(String(
-            format: "PERF formula_articles=%d summary_ms=%.3f date_summary_ms=%.3f",
-            articleCount,
-            best * 1_000,
-            dateBest * 1_000
         ))
     }
 
@@ -5191,7 +4820,7 @@ final class LocalBlogStoreTests {
         XCTAssertTrue(storedURL.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
     }
 
-    func testSmartCollectionsAndBookmarksPersistInSQLite() async throws {
+    func testArticlePropertiesAndBookmarksPersistInSQLite() async throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = LocalBlogStore(rootURL: root)
@@ -5199,54 +4828,15 @@ final class LocalBlogStoreTests {
             slug: "saved-note",
             status: .published,
             expectedUpdatedAt: nil,
-            body: "collection body",
+            body: "bookmark body",
             title: "收藏文章"
         ))
-        let collection = NativeSmartCollection(
-            id: "published-base",
-            name: "已发布",
-            rules: [NativeSmartCollectionRule(field: .status, comparison: .equals, value: "published")],
-            layout: .cards,
-            columns: [
-                .system(.title, width: 240),
-                NativeSmartCollectionColumn(
-                    source: .property,
-                    key: "rating",
-                    title: "评分",
-                    width: 110,
-                    propertyKind: .number,
-                    summary: .average
-                ),
-                NativeSmartCollectionColumn(source: .formula, key: "double_rating", title: "双倍评分"),
-            ],
-            formulas: [
-                NativeSmartCollectionFormula(
-                    key: "double_rating",
-                    name: "双倍评分",
-                    expression: "rating * 2"
-                ),
-            ]
-        )
-        let savedCollection = try await store.saveSmartCollection(collection)
-        XCTAssertEqual(try await store.listSmartCollections(), [savedCollection])
-        XCTAssertEqual(try await store.listArticles(in: savedCollection).map(\.slug), ["saved-note"])
-        let baseURL = root.appendingPathComponent("bases/published-base.base")
-        let baseSource = try String(contentsOf: baseURL, encoding: .utf8)
-        XCTAssertTrue(baseSource.contains("formulas:"))
-        XCTAssertTrue(baseSource.contains("double_rating"))
-        XCTAssertTrue(baseSource.contains("summaries:"))
-        XCTAssertTrue(baseSource.contains("leonBookColumnWidths:"))
-        let externallyEditedBase = baseSource
-            .replacingOccurrences(of: "double_rating: 'rating * 2'", with: "double_rating: 'rating * 3'")
-            .replacingOccurrences(of: "note.rating: 110", with: "note.rating: 180")
-        try Data(externallyEditedBase.utf8).write(to: baseURL, options: .atomic)
-        let externallyReloaded = try await store.listSmartCollections().first
-        XCTAssertEqual(externallyReloaded?.formulas.first?.expression, "rating * 3")
-        XCTAssertEqual(
-            externallyReloaded?.columns.first(where: { $0.key == "rating" })?.width,
-            180
-        )
-
+        let basesURL = root.appendingPathComponent("bases", isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: basesURL.path))
+        try FileManager.default.createDirectory(at: basesURL, withIntermediateDirectories: true)
+        let legacyURL = basesURL.appendingPathComponent("legacy.base")
+        let legacySource = "filters: [unparsed legacy content\n"
+        try Data(legacySource.utf8).write(to: legacyURL)
         let propertyUpdated = try await store.setArticleProperty(
             slug: savedArticle.slug,
             expectedUpdatedAt: savedArticle.updatedAt,
@@ -5254,10 +4844,6 @@ final class LocalBlogStoreTests {
             value: .number(4.5)
         )
         XCTAssertEqual(propertyUpdated.properties["rating"], .number(4.5))
-        XCTAssertEqual(
-            try await store.listArticles(in: savedCollection).first?.properties["rating"],
-            .number(4.5)
-        )
         let markdown = try String(
             contentsOf: root.appendingPathComponent("articles/未分类/saved-note.md"),
             encoding: .utf8
@@ -5278,241 +4864,12 @@ final class LocalBlogStoreTests {
 
         try await store.deleteBookmark(id: bookmarks[1].id)
         XCTAssertEqual(try await store.listBookmarks().count, 3)
-        try await store.deleteSmartCollection(id: savedCollection.id)
-        XCTAssertTrue(try await store.listSmartCollections().isEmpty)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: baseURL.path))
-    }
-
-    func testSmartCollectionSQLMatchesTheInMemoryEvaluator() async throws {
-        let root = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = LocalBlogStore(rootURL: root)
-
-        func payload(
-            slug: String,
-            title: String,
-            body: String,
-            status: NativeArticleStatus,
-            tags: [String],
-            properties: [String: NativeArticlePropertyValue]
-        ) -> NativeSaveArticle {
-            NativeSaveArticle(
-                banner: nil,
-                body: body,
-                category: status == .published ? "Engineering" : "Notes",
-                excerpt: "摘要 \(body)",
-                media: [],
-                slug: slug,
-                status: status,
-                tags: tags,
-                title: title,
-                expectedUpdatedAt: nil,
-                properties: properties
-            )
-        }
-
-        var articles = [
-            try await store.saveArticle(payload(
-                slug: "alpha",
-                title: "Alpha",
-                body: "SQLite roadmap and query plan",
-                status: .published,
-                tags: ["Swift", "Database"],
-                properties: [
-                    "topics": .list(["SQLite", "FTS"]),
-                    "featured": .checkbox(true),
-                ]
-            )),
-            try await store.saveArticle(payload(
-                slug: "beta",
-                title: "Beta",
-                body: "Small release note",
-                status: .published,
-                tags: ["Release"],
-                properties: ["topics": .list(["Shipping"])]
-            )),
-            try await store.saveArticle(payload(
-                slug: "gamma",
-                title: "Gamma",
-                body: "UI roadmap draft",
-                status: .draft,
-                tags: ["Swift"],
-                properties: ["topics": .list(["Design"])]
-            )),
-        ]
-        articles[0] = try await store.incrementArticlePageViews(slug: articles[0].slug)
-        articles[0] = try await store.incrementArticlePageViews(slug: articles[0].slug)
-        articles[1] = try await store.incrementArticlePageViews(slug: articles[1].slug)
-
-        let collections = [
-            NativeSmartCollection(
-                name: "全部条件",
-                rules: [
-                    NativeSmartCollectionRule(field: .content, comparison: .contains, value: "ROADMAP"),
-                    NativeSmartCollectionRule(field: .tag, comparison: .equals, value: "swift"),
-                    NativeSmartCollectionRule(
-                        field: .property,
-                        comparison: .contains,
-                        value: "sql",
-                        propertyKey: "TOPICS"
-                    ),
-                    NativeSmartCollectionRule(field: .wordCount, comparison: .greaterThan, value: "5"),
-                ],
-                sorts: [
-                    NativeArticleSortDescriptor(field: .pageViews, ascending: false),
-                    NativeArticleSortDescriptor(field: .title, ascending: true),
-                ]
-            ),
-            NativeSmartCollection(
-                name: "任一条件",
-                matchMode: .any,
-                rules: [
-                    NativeSmartCollectionRule(field: .title, comparison: .equals, value: "beta"),
-                    NativeSmartCollectionRule(
-                        field: .property,
-                        comparison: .equals,
-                        value: "true",
-                        propertyKey: "featured"
-                    ),
-                ],
-                sorts: [NativeArticleSortDescriptor(field: .title, ascending: true)]
-            ),
-            NativeSmartCollection(
-                name: "日期与数值",
-                rules: [
-                    NativeSmartCollectionRule(field: .publishedAt, comparison: .isNotEmpty, value: ""),
-                    NativeSmartCollectionRule(field: .updatedAt, comparison: .after, value: "2020-01-01"),
-                    NativeSmartCollectionRule(field: .pageViews, comparison: .greaterThan, value: "0"),
-                ],
-                sorts: [
-                    NativeArticleSortDescriptor(field: .pageViews, ascending: false),
-                    NativeArticleSortDescriptor(field: .wordCount, ascending: true),
-                ]
-            ),
-            NativeSmartCollection(
-                name: "缺少属性",
-                rules: [
-                    NativeSmartCollectionRule(
-                        field: .property,
-                        comparison: .isEmpty,
-                        value: "",
-                        propertyKey: "featured"
-                    ),
-                ],
-                sorts: [NativeArticleSortDescriptor(field: .title, ascending: true)]
-            ),
-        ]
-
-        for collection in collections {
-            let expected = NativeSmartCollectionEvaluator
-                .articles(from: articles, matching: collection)
-                .map(\.slug)
-            XCTAssertEqual(
-                try await store.listArticles(in: collection).map(\.slug),
-                expected,
-                "SQLite collection query should preserve evaluator semantics for \(collection.name)"
-            )
-        }
-    }
-
-    func testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields() async throws {
-        let root = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = LocalBlogStore(rootURL: root)
-
-        func payload(
-            slug: String,
-            status: NativeArticleStatus,
-            category: String
-        ) -> NativeSaveArticle {
-            NativeSaveArticle(
-                banner: nil,
-                body: "\(slug) body",
-                category: category,
-                excerpt: "",
-                media: [],
-                slug: slug,
-                status: status,
-                tags: ["Swift"],
-                title: slug.capitalized,
-                expectedUpdatedAt: nil,
-                properties: ["rating": .number(status == .published ? 5 : 3)]
-            )
-        }
-
-        _ = try await store.saveArticle(payload(slug: "published-note", status: .published, category: "Guide"))
-        _ = try await store.saveArticle(payload(slug: "draft-note", status: .draft, category: "Notes"))
-        let bases = root.appendingPathComponent("bases", isDirectory: true)
-        try FileManager.default.createDirectory(at: bases, withIntermediateDirectories: true)
-        let baseURL = bases.appendingPathComponent("standard.base")
-        let source = """
-        filters:
-          and:
-            - 'file.hasTag("Swift")'
-            - or:
-                - 'note.status == "published"'
-                - not:
-                    - 'note.category == "Archived"'
-        formulas:
-          doubled: 'note.rating * 2'
-        properties:
-          note.rating:
-            displayName: Rating
-            icon: star
-        customTopLevel:
-          plugin: enabled
-        views:
-          - type: table
-            name: Published
-            limit: 10
-            filters:
-              and:
-                - 'note.status == "published"'
-            order:
-              - file.name
-              - note.rating
-              - formula.doubled
-            summaries:
-              note.rating: Median
-            pluginViewState:
-              color: blue
-          - type: cards
-            name: Drafts
-            filters:
-              and:
-                - 'note.status == "draft"'
-            order:
-              - file.name
-        """
-        try Data(source.utf8).write(to: baseURL, options: .atomic)
-
-        let imported = try await store.listSmartCollections()
-        XCTAssertEqual(imported.count, 1)
-        guard var collection = imported.first else { return XCTFail("standard Base should load") }
-        XCTAssertEqual(collection.id, "standard")
-        XCTAssertEqual(collection.views.map(\.name), ["Published", "Drafts"])
-        XCTAssertEqual(collection.formulas.first?.expression, "note.rating * 2")
-        XCTAssertEqual(collection.columns.first(where: { $0.key == "rating" })?.title, "Rating")
-
-        let published = collection.materialized(viewID: collection.views[0].id)
-        XCTAssertEqual(try await store.listArticles(in: published).map(\.slug), ["published-note"])
-        let drafts = collection.materialized(viewID: collection.views[1].id)
-        XCTAssertEqual(try await store.listArticles(in: drafts).map(\.slug), ["draft-note"])
-
-        collection = published
-        collection.layout = .cards
-        _ = try await store.saveSmartCollection(collection)
-        let rewritten = try String(contentsOf: baseURL, encoding: .utf8)
-        XCTAssertTrue(rewritten.contains("customTopLevel:"))
-        XCTAssertTrue(rewritten.contains("plugin: enabled"))
-        XCTAssertTrue(rewritten.contains("icon: star"))
-        XCTAssertTrue(rewritten.contains("pluginViewState:"))
-        XCTAssertTrue(rewritten.contains("color: blue"))
-        XCTAssertTrue(rewritten.contains("note.rating: Median"))
-        XCTAssertFalse(rewritten.contains("leonBookConfig"))
-        let reloaded = try await store.listSmartCollections().first
-        XCTAssertEqual(reloaded?.views.count, 2)
-        XCTAssertEqual(reloaded?.views.first?.layout, .cards)
+        await store.closeForRestore()
+        let reopened = LocalBlogStore(rootURL: root)
+        XCTAssertEqual(try await reopened.listBookmarks().count, 3)
+        XCTAssertEqual(try await reopened.getArticle(slug: savedArticle.slug).properties["rating"], .number(4.5))
+        XCTAssertEqual(try String(contentsOf: legacyURL, encoding: .utf8), legacySource)
+        await reopened.closeForRestore()
     }
 
     func testTwoWindowStoresCanShareOneWorkspaceInTheSameProcess() async throws {
@@ -7568,6 +6925,7 @@ final class RichArticleTests {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let configuration = WKWebViewConfiguration()
+        NativeWebLocalization.install(on: configuration, language: NativeLocalization.currentLanguage)
         configuration.websiteDataStore = .nonPersistent()
         if let messageHandler { configuration.userContentController.add(messageHandler, name: "richArticle") }
         if let mediaStore {
@@ -7621,6 +6979,34 @@ private func makeTemporaryDirectory() throws -> URL {
 struct LeonBookUnitTests {
     static func main() async {
         var tests: [(String, () async throws -> Void)] = [
+            ("DashboardTests.testGridSnappingWrappingAndLegacyDimensions", { try DashboardTests().testGridSnappingWrappingAndLegacyDimensions() }),
+            ("DashboardTests.testNativeResizeHandlesSnapReflowAndCancel", { try await DashboardTests().testNativeResizeHandlesSnapReflowAndCancel() }),
+            ("DashboardTests.testDraggingModuleDownwardReordersDraft", { try await DashboardTests().testDraggingModuleDownwardReordersDraft() }),
+            ("DashboardTests.testNativeModuleDropsReorderAndPreserveEditingBoundaries", { try await DashboardTests().testNativeModuleDropsReorderAndPreserveEditingBoundaries() }),
+            ("DashboardTests.testLayoutPersistenceIsolationAndConflicts", { try await DashboardTests().testLayoutPersistenceIsolationAndConflicts() }),
+            ("DashboardTests.testHomepageWaitsForWorkspaceConnectionBeforeLoading", { try await DashboardTests().testHomepageWaitsForWorkspaceConnectionBeforeLoading() }),
+            ("DashboardTests.testRegistryRecoversEmptyHomepageScaffoldingWithoutMovingFiles", { try await DashboardTests().testRegistryRecoversEmptyHomepageScaffoldingWithoutMovingFiles() }),
+            ("DashboardTests.testInvalidConfigurationsPreserveSavedContent", { try await DashboardTests().testInvalidConfigurationsPreserveSavedContent() }),
+            ("DashboardTests.testMediaImportsSurviveSourceRemovalAndCleanup", { try await DashboardTests().testMediaImportsSurviveSourceRemovalAndCleanup() }),
+            ("DashboardTests.testEditingSessionAndSavedView", { try await DashboardTests().testEditingSessionAndSavedView() }),
+            ("MediaLibraryTests.testMediaGroupsMigrateExistingLibrary", { try await MediaLibraryTests().testMediaGroupsMigrateExistingLibrary() }),
+            ("MediaLibraryTests.testMediaGroupsKeepArticleAttachmentsAndPersistIndependently", { try await MediaLibraryTests().testMediaGroupsKeepArticleAttachmentsAndPersistIndependently() }),
+            ("MediaLibraryTests.testMediaGroupsRejectInvalidChangesAtomically", { try await MediaLibraryTests().testMediaGroupsRejectInvalidChangesAtomically() }),
+            ("MediaLibraryTests.testMediaGroupsShareSelectionRefreshAndResetForWorkspace", { try await MediaLibraryTests().testMediaGroupsShareSelectionRefreshAndResetForWorkspace() }),
+            ("MediaLibraryTests.testImportsPersistNamesAndSurviveAttachmentCleanup", { try await MediaLibraryTests().testImportsPersistNamesAndSurviveAttachmentCleanup() }),
+            ("MediaLibraryTests.testRejectsInvalidBatchesAndScansExistingAttachments", { try await MediaLibraryTests().testRejectsInvalidBatchesAndScansExistingAttachments() }),
+            ("MediaLibraryTests.testFilteringAndNaturalStableSort", { try MediaLibraryTests().testFilteringAndNaturalStableSort() }),
+            ("MediaLibraryTests.testIntroductionMigrationPersistenceAndClearing", { try await MediaLibraryTests().testIntroductionMigrationPersistenceAndClearing() }),
+            ("MediaLibraryTests.testIntroductionEditingRefreshesCardsAndKeepsAttachmentIdentity", { try await MediaLibraryTests().testIntroductionEditingRefreshesCardsAndKeepsAttachmentIdentity() }),
+            ("MediaLibraryTests.testAudioPlaybackLifecycleAndLibraryRefresh", { try await MediaLibraryTests().testAudioPlaybackLifecycleAndLibraryRefresh() }),
+            ("MediaLibraryTests.testVideoPosterPlaybackAndRelease", { try await MediaLibraryTests().testVideoPosterPlaybackAndRelease() }),
+            ("PhotoLibraryTests.testAlbumsPersistMoveAtomicallyAndKeepPhotos", { try await PhotoLibraryTests().testAlbumsPersistMoveAtomicallyAndKeepPhotos() }),
+            ("PhotoLibraryTests.testExistingAttachmentsStayLinkedAndImportRollsBack", { try await PhotoLibraryTests().testExistingAttachmentsStayLinkedAndImportRollsBack() }),
+            ("PhotoLibraryTests.testPhotoFilteringAndStableSort", { try PhotoLibraryTests().testPhotoFilteringAndStableSort() }),
+            ("PhotoLibraryTests.testMultiPhotoDropsAndWorkspaceIsolation", { try await PhotoLibraryTests().testMultiPhotoDropsAndWorkspaceIsolation() }),
+            ("AppearanceTests.testPreferencesPersistAndRecoverUnknownValues", { try AppearanceTests().testPreferencesPersistAndRecoverUnknownValues() }),
+            ("AppearanceTests.testPaletteTextAndButtonsRemainReadable", { try AppearanceTests().testPaletteTextAndButtonsRemainReadable() }),
+            ("AppearanceTests.testLiveThemeSwitchPreservesEditorSelectionAndUndo", { try await AppearanceTests().testLiveThemeSwitchPreservesEditorSelectionAndUndo() }),
             ("InfiniteCanvasTests.testCanvasStorageValidationIsolationAndRecovery", { try await InfiniteCanvasTests().testCanvasStorageValidationIsolationAndRecovery() }),
             ("InfiniteCanvasTests.testCanvasWriterOrdersEditsAndPreservesConflictCopies", { try await InfiniteCanvasTests().testCanvasWriterOrdersEditsAndPreservesConflictCopies() }),
             ("InfiniteCanvasTests.testCanvasResourcesStayInsideWorkspace", { try await InfiniteCanvasTests().testCanvasResourcesStayInsideWorkspace() }),
@@ -7689,8 +7075,11 @@ struct LeonBookUnitTests {
             ("DataIntegrityTests.testFailedSaveRestoresExactMarkdownAndDoesNotCreateNewFile", { try await DataIntegrityTests().testFailedSaveRestoresExactMarkdownAndDoesNotCreateNewFile() }),
             ("DataIntegrityTests.testReadOnlySwitchAppliesToAlreadyOpenStores", { try await DataIntegrityTests().testReadOnlySwitchAppliesToAlreadyOpenStores() }),
             ("DataIntegrityTests.testBackupDetectsSameSizeContentWithPreservedTimestamp", { try DataIntegrityTests().testBackupDetectsSameSizeContentWithPreservedTimestamp() }),
+            ("NativeModelsTests.testNavigationSidebarFollowsTheCurrentSection", { await MainActor.run { NativeModelsTests().testNavigationSidebarFollowsTheCurrentSection() } }),
             ("NativeModelsTests.testLanguagePreferencesPersistAndLocalizationsResolve", { await MainActor.run { NativeModelsTests().testLanguagePreferencesPersistAndLocalizationsResolve() } }),
             ("NativeModelsTests.testEnglishCatalogCoversEditorSurface", { NativeModelsTests().testEnglishCatalogCoversEditorSurface() }),
+            ("NativeModelsTests.testEnglishLocalizationPreservesSubstitutionsAndTranslatesTemplates", { NativeModelsTests().testEnglishLocalizationPreservesSubstitutionsAndTranslatesTemplates() }),
+            ("NativeModelsTests.testEnglishLocalizationCoversNativeAndWebSurfaces", { NativeModelsTests().testEnglishLocalizationCoversNativeAndWebSurfaces() }),
             ("NativeModelsTests.testVideoPlaybackFormatsAndPersistsResumePositions", { NativeModelsTests().testVideoPlaybackFormatsAndPersistsResumePositions() }),
             ("NativeModelsTests.testWritingMetricsAndTimestampRoundTrip", { NativeModelsTests().testWritingMetricsAndTimestampRoundTrip() }),
             ("NativeModelsTests.testAutomationURLsParseActionsAndEncodedParameters", { try NativeModelsTests().testAutomationURLsParseActionsAndEncodedParameters() }),
@@ -7726,9 +7115,7 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testWorkspaceResourceTreeHidesJSONFiles", { NativeModelsTests().testWorkspaceResourceTreeHidesJSONFiles() }),
             ("NativeModelsTests.testP0PageHierarchyDatabaseLayoutsRelationsAndRollups", { try NativeModelsTests().testP0PageHierarchyDatabaseLayoutsRelationsAndRollups() }),
             ("NativeModelsTests.testDatabaseViewQuickCreatePrefillsDraftFields", { NativeModelsTests().testDatabaseViewQuickCreatePrefillsDraftFields() }),
-            ("NativeModelsTests.testSmartCollectionCombinesPropertiesDatesAndMultiSort", { NativeModelsTests().testSmartCollectionCombinesPropertiesDatesAndMultiSort() }),
-            ("NativeModelsTests.testBaseFormulasCalculatePropertiesDatesAndSummaries", { NativeModelsTests().testBaseFormulasCalculatePropertiesDatesAndSummaries() }),
-            ("NativeModelsTests.testDeclarativeExtensionsExposeFiveSafeCapabilities", { try NativeModelsTests().testDeclarativeExtensionsExposeFiveSafeCapabilities() }),
+            ("NativeModelsTests.testDeclarativeExtensionsExposeFourSafeCapabilities", { try NativeModelsTests().testDeclarativeExtensionsExposeFourSafeCapabilities() }),
             ("NativeModelsTests.testDeclarativeExtensionRejectsExecutableTemplates", { try NativeModelsTests().testDeclarativeExtensionRejectsExecutableTemplates() }),
             ("NativeModelsTests.testArticleGraphProjectionFiltersOrphansAndClipsByDegree", { NativeModelsTests().testArticleGraphProjectionFiltersOrphansAndClipsByDegree() }),
             ("NativeModelsTests.testArticleGraphLayoutAppliesAndClampsManualNodePositions", { NativeModelsTests().testArticleGraphLayoutAppliesAndClampsManualNodePositions() }),
@@ -7753,7 +7140,6 @@ struct LeonBookUnitTests {
             ("PerformanceRegressionTests.testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency", { try await PerformanceRegressionTests().testSharedImagePipelineCoalescesRequestsAndCapsDecodeConcurrency() }),
             ("PerformanceRegressionTests.testLibraryAndMomentProjectionsCacheDerivedStateWithoutChangingFilters", { PerformanceRegressionTests().testLibraryAndMomentProjectionsCacheDerivedStateWithoutChangingFilters() }),
             ("PerformanceRegressionTests.testArticleProjectionRebuildPreservesConcurrentPageViewUpdate", { await PerformanceRegressionTests().testArticleProjectionRebuildPreservesConcurrentPageViewUpdate() }),
-            ("PerformanceRegressionTests.testPageViewIncrementReevaluatesSelectedSmartCollection", { try await PerformanceRegressionTests().testPageViewIncrementReevaluatesSelectedSmartCollection() }),
             ("PerformanceRegressionTests.testCalendarChangeRebuildsCachedMomentFacets", { await PerformanceRegressionTests().testCalendarChangeRebuildsCachedMomentFacets() }),
             ("PerformanceRegressionTests.testPairedPerformanceSamplingAlternatesOrder", { PerformanceRegressionTests().testPairedPerformanceSamplingAlternatesOrder() }),
             ("LocalBlogStoreTests.testMomentLifecycleNormalizesInputFiltersAndRecordsActivity", { try await LocalBlogStoreTests().testMomentLifecycleNormalizesInputFiltersAndRecordsActivity() }),
@@ -7782,9 +7168,7 @@ struct LeonBookUnitTests {
             ("LocalBlogStoreTests.testArticleCommentsPersistQuotesRepliesAndCascadeDeletion", { try await LocalBlogStoreTests().testArticleCommentsPersistQuotesRepliesAndCascadeDeletion() }),
             ("LocalBlogStoreTests.testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments", { try await LocalBlogStoreTests().testMediaURLNormalizesLocalhostAndRejectsUnsafeSegments() }),
             ("LocalBlogStoreTests.testShortSearchAndMediaReferenceIndexStayIncremental", { try await LocalBlogStoreTests().testShortSearchAndMediaReferenceIndexStayIncremental() }),
-            ("LocalBlogStoreTests.testSmartCollectionsAndBookmarksPersistInSQLite", { try await LocalBlogStoreTests().testSmartCollectionsAndBookmarksPersistInSQLite() }),
-            ("LocalBlogStoreTests.testSmartCollectionSQLMatchesTheInMemoryEvaluator", { try await LocalBlogStoreTests().testSmartCollectionSQLMatchesTheInMemoryEvaluator() }),
-            ("LocalBlogStoreTests.testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields", { try await LocalBlogStoreTests().testStandardObsidianBaseImportsMultipleViewsAndPreservesUnknownFields() }),
+            ("LocalBlogStoreTests.testArticlePropertiesAndBookmarksPersistInSQLite", { try await LocalBlogStoreTests().testArticlePropertiesAndBookmarksPersistInSQLite() }),
             ("LocalBlogStoreTests.testTwoWindowStoresCanShareOneWorkspaceInTheSameProcess", { try await LocalBlogStoreTests().testTwoWindowStoresCanShareOneWorkspaceInTheSameProcess() }),
             ("LocalBlogStoreTests.testArticleRefactorsPersistMarkdownAndRepairIncomingLinks", { try await LocalBlogStoreTests().testArticleRefactorsPersistMarkdownAndRepairIncomingLinks() }),
             ("LocalBlogStoreTests.testReadOnlyMarkdownMountIndexesExternalChangesWithoutWritingVault", { try await LocalBlogStoreTests().testReadOnlyMarkdownMountIndexesExternalChangesWithoutWritingVault() }),
@@ -7823,10 +7207,6 @@ struct LeonBookUnitTests {
             tests.append((
                 "PerformanceRegressionTests.testLargeArticleLibraryProjectionBenchmark",
                 { PerformanceRegressionTests().testLargeArticleLibraryProjectionBenchmark() }
-            ))
-            tests.append((
-                "PerformanceRegressionTests.testLargeSmartCollectionFormulaSummaryBenchmark",
-                { PerformanceRegressionTests().testLargeSmartCollectionFormulaSummaryBenchmark() }
             ))
             tests.append((
                 "PerformanceRegressionTests.testMomentTimestampReuseBenchmark",
@@ -7923,7 +7303,7 @@ private func revisionSnapshot(body: String) -> NativeArticleRevisionSnapshot {
     )
 }
 
-private func smartCollectionArticle(
+private func projectionArticle(
     slug: String,
     title: String,
     status: NativeArticleStatus,

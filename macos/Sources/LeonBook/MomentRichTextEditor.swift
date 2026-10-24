@@ -124,6 +124,8 @@ final class MomentRichTextController: ObservableObject {
 }
 
 struct MomentRichTextEditor: NSViewRepresentable {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @Binding var text: String
     @Binding var textRuns: [NativeMomentTextRun]
     let controller: MomentRichTextController
@@ -144,7 +146,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
         let textView = MomentTextView()
         textView.allowsUndo = true
         textView.autoresizingMask = [.width]
-        textView.backgroundColor = NSColor(NativeTheme.surface)
+        textView.backgroundColor = NSColor(appPalette.surface)
         textView.delegate = context.coordinator
         textView.font = .systemFont(ofSize: 16, weight: .regular)
         textView.isHorizontallyResizable = false
@@ -172,6 +174,8 @@ struct MomentRichTextEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? MomentTextView else { return }
         controller.attach(to: textView)
+        textView.backgroundColor = NSColor(appPalette.surface)
+        textView.insertionPointColor = appPalette.nsColor(.accent)
 
         let currentRuns = MomentTextRuns.runs(from: textView.attributedString())
         guard textView.string != text || currentRuns != textRuns else { return }

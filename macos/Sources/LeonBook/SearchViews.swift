@@ -32,8 +32,7 @@ private struct NativeSearchResultsView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
-                    Image(systemName: articlesOnly ? "doc.text.magnifyingglass" : "magnifyingglass")
-                        .font(.title3)
+                    NativeIcon.image(articlesOnly ? "doc.text.magnifyingglass" : "magnifyingglass", size: 18)
                         .foregroundStyle(.secondary)
                     TextField(LocalizedStringKey(prompt), text: $query)
                         .textFieldStyle(.plain)
@@ -46,7 +45,7 @@ private struct NativeSearchResultsView: View {
                         Button {
                             query = ""
                         } label: {
-                            Image(systemName: "xmark.circle.fill")
+                            NativeIcon.image("xmark.circle.fill")
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
@@ -69,8 +68,7 @@ private struct NativeSearchResultsView: View {
 
             if model.globalSearchResults.isEmpty && !model.isSearchingGlobally {
                 VStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 32))
+                    NativeIcon.image("magnifyingglass", size: 32)
                         .foregroundStyle(.secondary)
                     Text(LocalizedStringKey(query.isEmpty ? "没有可打开的内容" : "没有搜索结果"))
                         .font(.headline)
@@ -105,7 +103,7 @@ private struct NativeSearchResultsView: View {
                     } label: {
                         Label(
                             LocalizedStringKey(model.isBookmarked(target) ? "取消收藏搜索" : "收藏搜索"),
-                            systemImage: model.isBookmarked(target) ? "bookmark.fill" : "bookmark"
+                            nativeIcon: model.isBookmarked(target) ? "bookmark.fill" : "bookmark"
                         )
                     }
                     .buttonStyle(.borderless)
@@ -157,14 +155,15 @@ private struct NativeSearchResultsView: View {
 }
 
 private struct NativeSearchResultRow: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let result: NativeGlobalSearchResult
     let hidesType: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: result.documentType.systemImage)
-                .font(.title3)
-                .foregroundStyle(result.documentType == .article ? NativeTheme.accent : NativeTheme.blue)
+            NativeIcon.image(result.documentType.systemImage, size: 18)
+                .foregroundStyle(result.documentType == .article ? appPalette.accent : appPalette.blue)
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 6) {
@@ -199,7 +198,7 @@ private struct NativeSearchResultRow: View {
 
                 HStack(spacing: 8) {
                     if let category = result.category {
-                        Label(category, systemImage: "folder")
+                        Label(category, nativeIcon: "folder")
                     }
                     ForEach(Array(result.tags.prefix(4)), id: \.self) { tag in
                         Text("#\(tag)")
@@ -215,7 +214,7 @@ private struct NativeSearchResultRow: View {
 
     private var searchResultDate: String {
         guard let date = NativeTimestamp.date(from: result.timestamp) else { return "" }
-        return date.formatted(date: .abbreviated, time: .omitted)
+        return date.formatted(.dateTime.year().month(.abbreviated).day().locale(NativeLocalization.currentLanguage.locale))
     }
 
     private func highlightedSnippet(_ source: String) -> Text {
@@ -261,8 +260,7 @@ private struct NativeCommandPaletteView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "command")
-                    .font(.title3)
+                NativeIcon.image("command", size: 18)
                     .foregroundStyle(.secondary)
                 TextField("输入命令…", text: $query)
                     .textFieldStyle(.plain)
@@ -277,15 +275,14 @@ private struct NativeCommandPaletteView: View {
             List(selection: $selection) {
                 ForEach(commands) { command in
                     HStack(spacing: 12) {
-                        Image(systemName: command.definition.systemImage)
+                        NativeIcon.image(command.definition.systemImage)
                             .frame(width: 22)
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
                                 Text(LocalizedStringKey(command.definition.title)).fontWeight(.medium)
                                 if command.isPinned {
-                                    Image(systemName: "pin.fill")
-                                        .font(.caption2)
+                                    NativeIcon.image("pin.fill", size: 12)
                                         .foregroundStyle(.tint)
                                 } else if command.isRecent && query.isEmpty {
                                     Text("最近")
@@ -301,7 +298,7 @@ private struct NativeCommandPaletteView: View {
                         Button {
                             preferences.togglePinned(command.id)
                         } label: {
-                            Image(systemName: command.isPinned ? "pin.slash" : "pin")
+                            NativeIcon.image(command.isPinned ? "pin.slash" : "pin")
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)

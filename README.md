@@ -2,155 +2,171 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`leon-book` is a native macOS writing app for managing articles, drafts, images, videos, moments, and creative activity.
+A native macOS workspace for writing, collecting ideas, and organizing personal content. Keep articles, local posts, Q&A, tasks, photos, audio, and video together, with a homepage you can arrange around your work.
 
-The app is built with SwiftUI and stores data directly on the local filesystem. It does not depend on an external browser, Node.js service, or HTTP API.
+Built with **SwiftUI, AppKit, WebKit, and SQLite**. Core writing and library features work offline; the app runs without a Node.js service, an external browser, or a local HTTP server. Articles and media stay in your chosen data directory.
 
-## Screenshots
+[Quick start](#quick-start) · [Features](#features) · [Data and backups](#data-and-backups) · [Automation](#automation) · [Development](#development)
 
-The screenshots below use an isolated `Product Demo` workspace populated with English mock articles, backlinks, posts, and a Q&A thread.
+## Quick start
 
-### Workspace overview
+Build requirements: **macOS 13+** and **Swift 5.10+** with a macOS SDK. Command Line Tools with a compatible toolchain are sufficient; full Xcode is optional.
 
-![LeonBook workspace overview with published articles, a draft, posts, and creative activity](docs/screenshots/leonbook-dashboard-en.jpg)
-
-### Article reading and backlinks
-
-![LeonBook article reader with task content, an outline, backlinks, and outgoing links](docs/screenshots/leonbook-article-en.jpg)
-
-### Knowledge graph
-
-![LeonBook knowledge graph connecting four English mock articles](docs/screenshots/leonbook-graph-en.jpg)
-
-### Posts
-
-Posts support local comments and replies, with comment counts on each card. Deleting a comment also removes its replies; comments are preserved when a post is restored from Trash.
-
-![LeonBook posts timeline with tags and mock product updates](docs/screenshots/leonbook-posts-en.jpg)
-
-### Q&A
-
-![LeonBook Q&A detail with a Markdown and SQLite architecture question and answer](docs/screenshots/leonbook-qna-en.jpg)
-
-## Features
-
-- Infinite canvas for articles, moments, notes, web pages, and attachments, with pan/zoom, groups, connections, undo/redo, local autosave, and `.canvas` import/export
-- Read, edit, and publish articles
-- Insert offline Excalidraw drawings with `/whiteboard`, save previews in articles, and double-click to continue editing
-- Automatically save recovery snapshots after 3 seconds of inactivity, with version diffs and restore
-- Search articles, typed properties, excerpts, bodies, and moments with SQLite FTS5, `[property:value]` filters, `⌘O` quick open, and a `⌘P` command palette with fuzzy matching, recents, pins, and configurable hotkeys
-- Save smart collections that SQLite filters and sorts directly, combining status, category, property, date, and numeric conditions with multi-sort, grouping, and list, table, or card layouts
-- Bookmark articles, headings, searches, and the global graph as shortcuts in the sidebar
-- Use the reader's right inspector for the outline, backlinks, outgoing links, convertible unlinked mentions, a local graph, and hover previews
-- Filter, zoom, and degree-clip the global graph before rendering large workspaces; drag nodes and find the shortest directed reference path between two articles
-- Incrementally update link and mention indexes when a body changes; the inspector queries only the current article's candidate relations, while the global graph reuses indexed edges instead of rescanning every body
-- Follow `[[wiki links]]` by title, slug, or alias; create missing targets from a click and jump through `[[note#heading]]` links
-- Automate new articles, article opening, search, and today's moments through `leonbook://` URLs or macOS Shortcuts/App Intents
-- Navigate with per-tab back/forward history, recent articles, pinned tabs, and `⌘-click` to open a new tab
-- Comment on a dragged or double-clicked text selection, with quotes and replies collected in the right sidebar
-- Edit text, list, number, date, checkbox, and tag properties; rename a property across the workspace; switch among Settings, Properties, Outline, and Links; and save per-user Writing, Reading, and Reviewing layouts
-- Keep the current article, tabs, and back/forward navigation independent in every macOS window
-- Mount only the selected main page and retain lightweight page state instead of prewarming full view trees
-- Enable or disable Search, Knowledge Graph, Publishing, Backup, and Capture independently; their commands, events, and permissions share one ModuleKit contract
-- Use any Markdown folder or Obsidian Vault as a workspace with copy import, read-only mount, or direct-edit modes
-- Embed remote HTTP(S) webpages directly in article bodies
-- Save drafts locally with independent workspaces for multiple users
-- Manage image and video assets
-- Publish image-and-text moments and browse the timeline
-- View recent edits and yearly creative activity
-- Work offline with full control over local data
-
-## Requirements
-
-- macOS 13 or later
-- Swift 5.10 or later
-
-Full Xcode is not required for local builds and checks.
-
-## Commands
-
-Run the following commands from the project root:
+From the repository root:
 
 ```bash
 ./scripts/leonblog open
 ```
 
-`open` builds the app when it is missing or out of date, then opens `leon-book`. Other available commands are:
+The script builds the app if it is missing or out of date, then opens it. The first build uses Debug; subsequent launches reuse the installed build configuration. The app bundle is written to `macos/dist/leon-book.app` and is ad-hoc signed for local use.
+
+To choose a data directory explicitly:
 
 ```bash
-./scripts/leonblog start   # Alias for open
-./scripts/leonblog restart # Quit the running app, rebuild, and relaunch
-./scripts/leonblog build   # Build the macOS app
-./scripts/leonblog test    # Run native checks
-./scripts/leonblog help    # Show command help
+LEON_BOOK_WORKDIR="$HOME/Documents/LeonBookData" ./scripts/leonblog open
 ```
 
-The built app is located at:
+Without this override, the app uses your remembered directory, then the repository's default of `/Volumes/T7Shield/myblog`. If that directory does not exist, the app asks you to choose one. Each local user has an independent workspace.
+
+## Features
+
+| Area | What you can do |
+| --- | --- |
+| Custom homepage | Combine text, images, audio, video, articles, tasks, statistics, recent edits, and activity. Drag modules to reorder or resize them, then save your layout. |
+| Writing | Edit HTML rich text with headings, lists, tables, code blocks, callouts, and attachments. Use `/` commands, save drafts, compare versions, and restore recovery snapshots. |
+| Article library | Organize articles in directories up to five levels deep. Switch between list, table, card, board, and calendar views; use categories, tags, and typed properties. |
+| Search and links | Search articles and posts with SQLite FTS5. Navigate outlines, backlinks, outgoing links, and knowledge graphs; keep articles, headings, and searches in bookmarks. |
+| Whiteboards and canvas | Insert offline Excalidraw drawings into articles, or arrange articles, posts, notes, webpages, and files on an infinite canvas with groups and connections. Import and export `.canvas` files. |
+| Posts and Q&A | Keep a local timeline with images, comments, and replies, and collect questions with their answers. |
+| Photos | Create albums, import or drag in images from Finder, select multiple items, search and sort, and browse full-size images with zoom and keyboard navigation. |
+| Media Library | Organize video and audio into independent groups, add introductions, search, and play files with native controls and saved progress. |
+| Tasks | Track priorities, due dates, and notes. Filter open, today, overdue, and completed tasks, and include a task list on the homepage. |
+| Workspaces | Switch between local users, keep navigation independent across windows, and save named reading or writing layouts. |
+
+Article **Publish** and posting to the timeline update your local library. They do not publish content to an internet service. Embedded remote webpages require a network connection.
+
+### Writing and navigation
+
+Type `/` at the start of a paragraph for commands such as `/h1`, `/code`, `/callout`, `/task`, `/table`, and `/whiteboard`. Whiteboards are saved as editable scene files with article previews; double-click a preview to continue drawing.
+
+Editing pauses trigger a recovery snapshot after 3 seconds. Version history supports comparison and restoration; **Save Draft** and **Publish** remain the explicit actions for saving article content.
+
+| Shortcut | Action |
+| --- | --- |
+| `⌘O` | Quickly find and open an article |
+| `⌘P` | Open the command palette |
+| `⇧⌘F` | Open full-text search |
+
+Commands support recent items, pins, and configurable shortcuts in **Settings → Commands and Shortcuts**. Search supports filters such as `tag:writing`, `status:draft`, `type:article`, and `[property:value]`.
+
+## Screenshots
+
+These repository screenshots use a separate demo workspace with sample content. They illustrate the writing, linking, and timeline views; layouts may differ from the current version.
+
+![LeonBook workspace overview](docs/screenshots/leonbook-dashboard-en.jpg)
+
+<details>
+<summary>Article reading, knowledge graph, posts, and Q&A</summary>
+
+![Article reader with outline and links](docs/screenshots/leonbook-article-en.jpg)
+
+![Knowledge graph connecting articles](docs/screenshots/leonbook-graph-en.jpg)
+
+![Local posts timeline](docs/screenshots/leonbook-posts-en.jpg)
+
+![Question and answer detail](docs/screenshots/leonbook-qna-en.jpg)
+
+</details>
+
+## App commands
+
+Run these commands from the repository root:
+
+| Command | Behavior |
+| --- | --- |
+| `./scripts/leonblog open` | Build if needed and open the app; `start` is an alias |
+| `./scripts/leonblog restart` | Quit gracefully, build if needed, and relaunch with Debug by default |
+| `./scripts/leonblog restart --release` | Restart with an optimized Release build |
+| `./scripts/leonblog build` | Build and package Release without launching |
+| `./scripts/leonblog test` | Run the native test and check suites |
+| `./scripts/leonblog coverage` | Run unit tests and generate a coverage report |
+| `./scripts/leonblog help` | Show command help |
+
+`open`, `start`, `restart`, and `build` accept `--debug` or `--release`. Debug uses the native build engine when available, with a separate cache from normal Release builds; automatic selection falls back to the toolchain default when needed. Set `LEON_BOOK_BUILD_SYSTEM=default` to select the toolchain default explicitly. The first build for a configuration populates its cache.
+
+## Data and backups
+
+The app chooses its data root in this order:
+
+1. `LEON_BOOK_WORKDIR`, when set.
+2. The directory remembered from your previous selection.
+3. `/Volumes/T7Shield/myblog`, the current repository default.
+
+A typical data directory contains:
 
 ```text
-macos/dist/leon-book.app
-```
-
-## Local data
-
-By default, data is stored at:
-
-```text
-/Volumes/T7Shield/myblog/
-├── leon-book.sqlite    # Primary SQLite database for users and settings
-├── users.json          # Human-readable compatibility export
-├── active-user.json    # Human-readable compatibility export
+data-root/
+├── leon-book.sqlite          # Local users and active-user settings
+├── users.json                # Compatibility export
+├── active-user.json          # Compatibility export
 └── workspaces/
-    └── <user-id>/      # Per-user workspace
-        ├── leon-book.sqlite # Articles, moments, and activity records
-        ├── articles/   # Article JSON, Markdown, and indexes
-        ├── drafts/     # Draft recovery copies
-        ├── media/      # Original image and video files
-        ├── moments/    # Moment data and feed index
-        └── activity/   # Creative activity records
+    └── <user-id>/
+        ├── leon-book.sqlite  # Content indexes and structured records
+        ├── articles/         # HTML articles and compatibility files
+        ├── drafts/           # Draft recovery copies
+        ├── media/            # Images, audio, video, and whiteboard assets
+        ├── canvases/         # Saved .canvas documents
+        ├── moments/          # Post exports and feed index
+        ├── activity/         # Creative activity records
+        ├── trash/            # Trashed content
+        └── extensions/       # Optional declarative extension packages
 ```
 
-The data directory is selected in this order:
+Current article editing saves **HTML rich text** as `.html` files. SQLite stores article indexes alongside comments, revision history, bookmarks, tasks, homepage layouts, albums, and media groups. Those structured records are part of your data: backing up only `articles/` does not preserve the complete workspace. Media remains in ordinary local files.
 
-1. `LEON_BOOK_WORKDIR`
-2. `/Volumes/T7Shield/myblog/`
+Older Markdown content retains a compatibility read and one-way conversion path. Markdown/Obsidian import and mount controls have been removed from the normal settings flow; an existing mounted workspace can switch back to the app-managed library from the article-format section in Settings. The automation API also accepts Markdown and converts it to HTML on input.
 
-The default data directory is `/Volumes/T7Shield/myblog/`. If it is unavailable, the app asks you to choose a work directory on first launch and remembers your choice. To use another directory, set the environment variable before opening the app:
+### Backups
+
+Choose a separate destination in **Settings → Backups**. After data changes, the default policy creates at most one automatic snapshot per hour, retains snapshots for 90 days, caps the set at 60, and keeps at least 10 GB free. These limits are configurable, and you can also back up manually.
+
+Snapshots include the data root and its user workspaces. Unchanged files use APFS clones when available, or reuse/copy from earlier snapshots. The app offers snapshot verification and whole-library restore, with a safety snapshot before restoration. The destination must be outside the live data directory; any legacy externally mounted article folders need separate backups. Backups are local, unencrypted files and are not uploaded automatically.
+
+## Automation
+
+The CLI exposes content operations for external tools and AI assistants through JSON commands and a JSON Lines interface:
 
 ```bash
-LEON_BOOK_WORKDIR=/Volumes/T7Shield/myblog ./scripts/leonblog open
+./scripts/leonblog api capabilities
+./scripts/leonblog api articles.list --json '{"limit":20}'
+./scripts/leonblog api --stdio
 ```
 
-When the multi-user structure is initialized, existing articles, drafts, media, moments, and activity records in the root directory are automatically moved into the default `leon` workspace. Uninstalling the app does not remove local data; back up the directory like any other local files.
+When the app is running, the CLI uses its local Unix socket. When it is closed, the CLI uses the same storage layer directly. Use `--root` for the data root containing `workspaces/`, and `--user` to select a specific local user. First use may compile the CLI.
 
-### Configure a separate backup location
+The app also supports `leonbook://new`, `leonbook://open?slug=example`, `leonbook://search?q=example`, and `leonbook://today`, with corresponding macOS Shortcuts/App Intents.
 
-Choose a different disk or independent directory under **Settings → Backups**. Data changes are coalesced and, by default, produce at most one timestamped, logically complete snapshot per hour. Unchanged files use APFS copy-on-write clones when available and otherwise reuse the preceding snapshot or fall back to copying, so large media is not blindly duplicated after every change.
-
-The default policy retains snapshots for 90 days, caps the set at 60 snapshots, and preserves at least 10 GB of free space; all values are configurable. Settings shows the source size, estimated additional storage, and available capacity. You can browse snapshots in Finder, verify version 2 snapshots with SHA-256, or restore the entire data directory. Restore first creates a safety snapshot of the current workspace, then swaps a staged copy into place atomically and rolls back on failure.
-
-The backup destination cannot be inside the live data directory. Backups remain local, unencrypted files and are never uploaded automatically; use a FileVault-protected APFS volume, encrypted external disk, or access-controlled folder for sensitive content.
-
-Markdown is authoritative for articles, while SQLite keeps rebuildable article indexes plus comments, revisions, bookmarks, and other structured records. Images and videos remain ordinary local files under `media/`. Existing JSON records are imported automatically on first launch.
-
-Settings offers three Markdown workspace modes. **Copy import** reads the selected folder and copies confirmed notes and attachments into the current user workspace. **Read-only mount** uses and watches the original folder while rejecting all article writes. **Direct edit** uses the same live mount but atomically writes saves, moves, and deletes back to the original Markdown files. SQLite, comments, revisions, layout state, and app-managed media stay inside the LeonBook user workspace; external mounted folders must be backed up separately.
+See the [AI automation guide](docs/AI_AUTOMATION.md) for method discovery, input formats, concurrency rules, and Python examples.
 
 ## Development
 
-The native macOS source code, resources, and check scripts are located in [`macos/`](macos/). See [`macos/README.md`](macos/README.md) for additional build, debugging, and data-directory details.
-
-The Swift package uses `LeonBookModuleKit` as the first-party feature seam and gives Search, Knowledge Graph, Publishing, Backup, and Capture their own targets. Each module declares a stable ID, permissions, complete command metadata, and event names. The `LeonBook` target retains the SwiftUI, SQLite, and filesystem adapters, native command handlers, and persisted enablement. Disabling a module removes its commands and applies the same authorization gate to direct UI actions; destructive backup restores and capture writes must drain before disablement, while read-only scans are cancelled safely. Search/graph SQLite adapters and schema setup are also split out of the core `LocalBlogStore` file.
-
-To run the SwiftPM executable directly:
-
-```bash
-swift run --package-path macos LeonBook
+```text
+scripts/leonblog                    # App and automation command entry point
+macos/Package.swift                # SwiftPM products and targets
+macos/Sources/LeonBookApp/          # App entry point and App Intents
+macos/Sources/LeonBook/             # UI, editor, storage, and host adapters
+macos/Sources/LeonBookCLI/          # JSON CLI and JSON Lines transport
+macos/Sources/LeonBookModuleKit/    # First-party module contracts
+macos/Sources/LeonBook*Module/      # Search, graph, publishing, backup, capture, tasks
+macos/Sources/LeonBookExtensionKit/ # Declarative extension contracts
+macos/Whiteboard/                   # Excalidraw resource build sources
+macos/Tests/                       # Native, module, and automation tests
+macos/Checks/                      # Additional application and storage checks
+macos/scripts/                     # Build, test, coverage, and performance scripts
 ```
 
-## Design principles
+First-party modules can be enabled independently in Settings. Declarative extensions use a versioned `extension.json` to contribute commands, template variables, text/JSON importers, and fence renderers. See the [example extension](macos/Examples/DeclarativeExtension/extension.json).
 
-`leon-book` prioritizes local availability, transparent data storage, and a responsive interface. Articles and media are stored as ordinary local files that users can manage with Finder, backup tools, or version control.
+Normal Swift builds use the bundled whiteboard assets and do not require Node.js. Node.js/npm are needed only when rebuilding those assets; follow the [whiteboard guide](macos/Whiteboard/README.md).
 
-## External AI automation
-
-Run `./scripts/leonblog api capabilities` to discover the CLI and JSON Lines API for articles, local microblog posts, comments, Q&A, tasks, media, collections and backups. Calls use the running app’s local socket or the same storage layer offline. See the [AI automation guide](docs/AI_AUTOMATION.md) for parameter contracts and Python examples.
+Further documentation: [macOS guide](macos/README.md) · [Performance notes](macos/PERFORMANCE.md) · [AI automation](docs/AI_AUTOMATION.md).

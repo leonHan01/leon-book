@@ -58,7 +58,7 @@ public enum NativeObsidianVaultImporter {
         let root = vaultURL.standardizedFileURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw NativeStoreError.fileSystem("选择的 Obsidian Vault 不存在或不是文件夹")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("选择的 Obsidian Vault 不存在或不是文件夹"))
         }
 
         let resourceKeys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
@@ -68,7 +68,7 @@ public enum NativeObsidianVaultImporter {
             options: [.skipsHiddenFiles, .skipsPackageDescendants],
             errorHandler: { _, _ in true }
         ) else {
-            throw NativeStoreError.fileSystem("无法读取 Obsidian Vault")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 Obsidian Vault"))
         }
 
         var markdownURLs: [URL] = []
@@ -319,7 +319,7 @@ private extension NativeObsidianVaultImporter {
                 guard let sourceURL = index.resolve(reference, relativeTo: noteURL) else {
                     let extensionName = URL(fileURLWithPath: decodedAttachmentPath(reference)).pathExtension
                     if !extensionName.isEmpty, extensionName.caseInsensitiveCompare("md") != .orderedSame {
-                        warnings.append("找不到附件 \(reference)")
+                        warnings.append(NativeLocalization.text("找不到附件 \(reference)"))
                     }
                     continue
                 }

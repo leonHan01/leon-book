@@ -261,10 +261,10 @@ public enum NativeArticlePropertyError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case let .invalidKey(key): return "属性名“\(key)”无效；请使用文字、数字、空格、点、下划线或连字符。"
-        case let .invalidValue(key): return "属性“\(key)”的值与所选类型不匹配。"
-        case .tooMany: return "每篇文章最多保存 100 个属性。"
-        case let .destinationExists(key): return "已有名为“\(key)”且值不同的属性，无法统一重命名。"
+        case let .invalidKey(key): return NativeLocalization.text("属性名“\(key)”无效；请使用文字、数字、空格、点、下划线或连字符。")
+        case let .invalidValue(key): return NativeLocalization.text("属性“\(key)”的值与所选类型不匹配。")
+        case .tooMany: return NativeLocalization.text("每篇文章最多保存 100 个属性。")
+        case let .destinationExists(key): return NativeLocalization.text("已有名为“\(key)”且值不同的属性，无法统一重命名。")
         }
     }
 }

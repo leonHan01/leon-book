@@ -57,9 +57,9 @@ public enum FirstPartyPublicationValidationError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .missingTitle: return "标题不能为空。"
-        case .missingBody: return "正文不能为空。"
-        case .emptyMoment: return "动态需要文字或至少一个附件。"
+        case .missingTitle: return ModuleLocalization.text("标题不能为空。")
+        case .missingBody: return ModuleLocalization.text("正文不能为空。")
+        case .emptyMoment: return ModuleLocalization.text("动态需要文字或至少一个附件。")
         }
     }
 }

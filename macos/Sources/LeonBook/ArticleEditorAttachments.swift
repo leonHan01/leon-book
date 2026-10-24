@@ -8,8 +8,7 @@ struct EditorAttachmentRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: media.isVideo ? "video.fill" : media.isImage ? "photo.fill" : media.isAudio ? "waveform" : "doc.fill")
-                .font(.caption)
+            NativeIcon.image(media.isVideo ? "video.fill" : media.isImage ? "photo.fill" : media.isAudio ? "waveform" : "doc.fill", size: 12)
                 .foregroundStyle(.tint)
                 .frame(width: 24, height: 24)
                 .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
@@ -22,7 +21,7 @@ struct EditorAttachmentRow: View {
 
             if let savedTimestamp, media.isVideo {
                 Button(action: onInsertTimestamp) {
-                    Label(savedTimestamp, systemImage: "text.badge.plus")
+                    Label(savedTimestamp, nativeIcon: "text.badge.plus")
                 }
                 .font(.caption.monospacedDigit())
                 .buttonStyle(.borderless)
@@ -30,7 +29,7 @@ struct EditorAttachmentRow: View {
             }
 
             Button(action: onRemove) {
-                Image(systemName: "xmark.circle.fill")
+                NativeIcon.image("xmark.circle.fill")
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)

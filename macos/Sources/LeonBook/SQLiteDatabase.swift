@@ -94,7 +94,7 @@ final class SQLiteDatabase {
 
     func execute(_ sql: String, values: [SQLiteValue] = []) throws {
         if values.isEmpty {
-            guard let handle else { throw NativeStoreError.fileSystem("SQLite：数据库连接已关闭") }
+            guard let handle else { throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：数据库连接已关闭")) }
             var errorMessage: UnsafeMutablePointer<CChar>?
             let result = sqlite3_exec(handle, sql, nil, nil, &errorMessage)
             guard result == SQLITE_OK else {
@@ -121,7 +121,7 @@ final class SQLiteDatabase {
 
         if checkingCancellation {
             guard sqlite3_stmt_readonly(statement) != 0 else {
-                throw NativeStoreError.fileSystem("SQLite：只有只读查询支持取消")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：只有只读查询支持取消"))
             }
             // The owning actor runs this synchronous query without suspension.
             // SQLite calls back on the same task, including inside a long step
@@ -180,7 +180,7 @@ final class SQLiteDatabase {
     }
 
     private func prepare(_ sql: String) throws -> OpaquePointer {
-        guard let handle else { throw NativeStoreError.fileSystem("SQLite：数据库连接已关闭") }
+        guard let handle else { throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：数据库连接已关闭")) }
         var statement: OpaquePointer?
         let result = sqlite3_prepare_v2(handle, sql, -1, &statement, nil)
         guard result == SQLITE_OK, let statement else { throw databaseError() }
@@ -294,7 +294,7 @@ final class ExclusiveDirectoryLock {
         if flock(handle.fileDescriptor, LOCK_EX | LOCK_NB) != 0 {
             try? handle.close()
             Self.registryLock.unlock()
-            throw NativeStoreError.fileSystem("leon-book 已在其他窗口中打开同一资料库。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("leon-book 已在其他窗口中打开同一资料库。"))
         }
         let lease = Lease(handle: handle)
         Self.processLeases[lockPath] = RegisteredLease(lease: lease, referenceCount: 1)

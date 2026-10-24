@@ -618,6 +618,7 @@ private struct NativeWorkspaceLayoutEditorRequest: Identifiable {
 struct NativeWorkspaceLayoutMenu: View {
     @ObservedObject var model: NativeAppModel
     @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
+    var usesArticleActionIcon = false
     @State private var editorRequest: NativeWorkspaceLayoutEditorRequest?
 
     private var currentDestination: NativeWorkspaceLayoutDestination {
@@ -634,7 +635,7 @@ struct NativeWorkspaceLayoutMenu: View {
 
     var body: some View {
         Menu {
-            Section("切换工作区") {
+            Section(NativeLocalization.text("切换工作区")) {
                 ForEach(workspaceLayout.profiles) { profile in
                     Button {
                         guard let activated = workspaceLayout.activate(profile.id, for: model.currentUser.id) else { return }
@@ -643,7 +644,7 @@ struct NativeWorkspaceLayoutMenu: View {
                         Label {
                             localizedProfileName(profile)
                         } icon: {
-                            Image(systemName: workspaceLayout.activeLayoutID == profile.id
+                            NativeIcon.image(workspaceLayout.activeLayoutID == profile.id
                                 ? "checkmark" : profile.systemImage)
                         }
                     }
@@ -660,32 +661,32 @@ struct NativeWorkspaceLayoutMenu: View {
                     activeTabID: model.activeArticleTabID
                 )
             } label: {
-                Label("保存当前工作区", systemImage: "square.and.arrow.down")
+                Label("保存当前工作区", nativeIcon: "square.and.arrow.down")
             }
 
             Button {
                 editorRequest = NativeWorkspaceLayoutEditorRequest(mode: .create)
             } label: {
-                Label("另存为新工作区…", systemImage: "plus.rectangle.on.rectangle")
+                Label("另存为新工作区…", nativeIcon: "plus.rectangle.on.rectangle")
             }
 
             Button {
                 editorRequest = NativeWorkspaceLayoutEditorRequest(mode: .edit)
             } label: {
-                Label("名称与尺寸…", systemImage: "slider.horizontal.3")
+                Label("名称与尺寸…", nativeIcon: "slider.horizontal.3")
             }
 
             if workspaceLayout.activeProfile?.builtInKind != nil {
                 Button {
                     if let profile = workspaceLayout.resetActiveLayout(for: model.currentUser.id) { apply(profile) }
                 } label: {
-                    Label("恢复内置默认布局", systemImage: "arrow.counterclockwise")
+                    Label("恢复内置默认布局", nativeIcon: "arrow.counterclockwise")
                 }
             } else {
                 Button(role: .destructive) {
                     if let profile = workspaceLayout.deleteActiveLayout(for: model.currentUser.id) { apply(profile) }
                 } label: {
-                    Label("删除当前工作区", systemImage: "trash")
+                    Label("删除当前工作区", nativeIcon: "trash")
                 }
             }
         } label: {
@@ -702,7 +703,13 @@ struct NativeWorkspaceLayoutMenu: View {
                     }
                 }
             } icon: {
-                Image(systemName: workspaceLayout.activeSystemImage)
+                if usesArticleActionIcon {
+                    ArticleActionIcon.menuImage(kind: .workspace)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                } else {
+                    NativeIcon.image(workspaceLayout.activeSystemImage)
+                }
             }
         }
         .help("切换或保存包含标签页、侧栏和分栏状态的工作区")

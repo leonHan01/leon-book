@@ -18,7 +18,7 @@ extension NativeAppModel {
                 errorMessage = nil
             } catch {
                 try? await refreshPortableSidecarStatus()
-                errorMessage = ".leonbook 设置失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text(".leonbook 设置失败：\(error.localizedDescription)")
             }
         }
     }
@@ -26,7 +26,7 @@ extension NativeAppModel {
     func synchronizePortableSidecarNow() {
         guard isPortableSidecarEnabled, !isSynchronizingPortableSidecar else { return }
         isSynchronizingPortableSidecar = true
-        portableSidecarStatus = isPortableSidecarWritable ? "正在合并并写入…" : "正在重新导入…"
+        portableSidecarStatus = isPortableSidecarWritable ? NativeLocalization.text("正在合并并写入…") : NativeLocalization.text("正在重新导入…")
         Task {
             defer { isSynchronizingPortableSidecar = false }
             do {
@@ -36,7 +36,7 @@ extension NativeAppModel {
                 errorMessage = nil
             } catch {
                 try? await refreshPortableSidecarStatus()
-                errorMessage = ".leonbook 同步失败：\(error.localizedDescription)"
+                errorMessage = NativeLocalization.text(".leonbook 同步失败：\(error.localizedDescription)")
             }
         }
     }
@@ -72,22 +72,22 @@ extension NativeAppModel {
         isPortableSidecarWritable = status.isWritable
         portableSidecarDirectoryPath = status.directoryPath
         if let error = status.lastError {
-            portableSidecarStatus = "需要处理：\(error)"
+            portableSidecarStatus = NativeLocalization.text("需要处理：\(error)")
         } else if !status.isEnabled {
-            portableSidecarStatus = "未启用"
+            portableSidecarStatus = NativeLocalization.text("未启用")
         } else if let result = importResult, result.didChange {
             let count = result.importedCommentCount + result.importedRevisionCount
                 + result.importedBookmarkCount + result.deletedCommentCount
                 + result.deletedBookmarkCount
             portableSidecarStatus = status.isWritable
-                ? "已合并 \(count) 项并写入 sidecar"
-                : "已从只读 sidecar 导入 \(count) 项"
+                ? NativeLocalization.text("已合并 \(count) 项并写入 sidecar")
+                : NativeLocalization.text("已从只读 sidecar 导入 \(count) 项")
         } else if !status.hasSidecar {
             portableSidecarStatus = status.isWritable
-                ? "已启用，等待创建 sidecar"
-                : "已启用，但只读目录中尚无 sidecar"
+                ? NativeLocalization.text("已启用，等待创建 sidecar")
+                : NativeLocalization.text("已启用，但只读目录中尚无 sidecar")
         } else {
-            portableSidecarStatus = status.isWritable ? "已同步" : "只读导入模式"
+            portableSidecarStatus = status.isWritable ? NativeLocalization.text("已同步") : NativeLocalization.text("只读导入模式")
         }
     }
 }

@@ -23,7 +23,7 @@ struct NativeDeclarativeRendererView: View {
             .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
         case .quote:
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "quote.opening")
+                NativeIcon.image("quote.opening")
                     .foregroundStyle(.secondary)
                 content
             }
@@ -36,7 +36,7 @@ struct NativeDeclarativeRendererView: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 7) {
             if !block.title.isEmpty {
-                Label(block.title, systemImage: block.icon)
+                Label(block.title, nativeIcon: block.icon, iconSize: 14)
                     .font(.callout.weight(.semibold))
             }
             Text(block.body)
@@ -44,12 +44,12 @@ struct NativeDeclarativeRendererView: View {
                 .lineSpacing(typography.lineSpacing)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
-            Text("由 \(block.extensionName) 声明式渲染")
+            Text(NativeLocalization.text("由 \(block.extensionName) 声明式渲染"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(block.extensionName) 扩展内容")
+        .accessibilityLabel(NativeLocalization.text("\(block.extensionName) 扩展内容"))
     }
 }
 
@@ -58,12 +58,12 @@ struct NativeDeclarativeExtensionSettingsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            LabeledContent("扩展目录") {
+            LabeledContent(NativeLocalization.text("扩展目录")) {
                 Text(model.declarativeExtensionDirectoryURL.path)
                     .lineLimit(2)
                     .textSelection(.enabled)
             }
-            LabeledContent("状态") { Text(LocalizedStringKey(model.declarativeExtensionStatus)) }
+            LabeledContent(NativeLocalization.text("状态")) { Text(LocalizedStringKey(model.declarativeExtensionStatus)) }
 
             HStack {
                 Button("打开扩展目录") { model.openDeclarativeExtensionDirectory() }
@@ -110,7 +110,7 @@ struct NativeDeclarativeExtensionSettingsPanel: View {
                                     .font(.caption)
                                     .textSelection(.enabled)
                             } icon: {
-                                Image(systemName: "exclamationmark.shield")
+                                NativeIcon.image("exclamationmark.shield")
                             }
                             .foregroundStyle(.orange)
                         }
@@ -119,7 +119,7 @@ struct NativeDeclarativeExtensionSettingsPanel: View {
                 }
             }
 
-            Text("扩展只可声明命令、静态模板变量、用户选取文件的导入器、围栏文本渲染器和纯 Base 公式。LeonBook 不加载动态库，不执行 JavaScript、Shell 或扩展提供的原生代码；不安全清单会整包拒绝。")
+            Text("扩展只可声明命令、静态模板变量、用户选取文件的导入器、围栏文本渲染器。LeonBook 不加载动态库，不执行 JavaScript、Shell 或扩展提供的原生代码；不安全清单会整包拒绝。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

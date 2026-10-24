@@ -6,6 +6,17 @@ SCRIPT_DIR="${0:A:h}"
 MACOS_DIR="${SCRIPT_DIR:h}"
 BUILD_ROOT="${TMPDIR%/}/leon-book-swiftpm-tests"
 
+python3 "${SCRIPT_DIR}/check-localization.py"
+if command -v node >/dev/null 2>&1; then
+    node "${SCRIPT_DIR}/test-web-localization.mjs"
+else
+    print -- 'SKIP: web localization runtime checks require Node.js.'
+fi
+
+/bin/bash "${SCRIPT_DIR}/test-leonblog.sh"
+/bin/zsh "${SCRIPT_DIR}/test-build-app.sh"
+/bin/zsh "${SCRIPT_DIR}/test-resource-bundle.sh"
+
 mkdir -p "${BUILD_ROOT}/cache" "${BUILD_ROOT}/config" "${BUILD_ROOT}/security" "${BUILD_ROOT}/scratch" "${BUILD_ROOT}/modules"
 export CLANG_MODULE_CACHE_PATH="${BUILD_ROOT}/modules"
 

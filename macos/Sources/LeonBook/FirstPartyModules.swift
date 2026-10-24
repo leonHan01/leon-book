@@ -125,7 +125,7 @@ enum NativeFirstPartyModules {
             deactivate: { model in
                 model.backupTask?.cancel()
                 model.backupTask = nil
-                model.backupStatus = "备份模块已停用"
+                model.backupStatus = NativeLocalization.text("备份模块已停用")
             },
             commandHandlers: [
                 "backup.create": { model, _ in model.backupNow() },
@@ -139,7 +139,7 @@ enum NativeFirstPartyModules {
                 model.obsidianScanTask = nil
                 model.isScanningObsidianVault = false
                 model.obsidianImportPreview = nil
-                model.obsidianImportStatus = "采集模块已停用"
+                model.obsidianImportStatus = NativeLocalization.text("采集模块已停用")
             },
             commandHandlers: [
                 "capture.markdown-folder": { model, _ in model.chooseObsidianVault() },
@@ -336,7 +336,7 @@ extension NativeAppModel {
            firstPartyModuleRuntime.catalog.module(for: moduleID) != nil,
            !NativeFirstPartyModules.canDeactivate(moduleID, in: self) {
             let moduleName = firstPartyModuleRuntime.catalog.module(for: moduleID)?.name ?? moduleID.rawValue
-            errorMessage = "“\(moduleName)”正在执行写入操作，请等待完成后再停用。"
+            errorMessage = NativeLocalization.text("“\(moduleName)”正在执行写入操作，请等待完成后再停用。")
             return
         }
         var runtime = firstPartyModuleRuntime
@@ -380,11 +380,11 @@ extension NativeAppModel {
             let moduleName = firstPartyModuleRuntime.catalog.module(for: moduleID)?.name ?? moduleID.rawValue
             switch authorization {
             case .disabled:
-                errorMessage = "“\(moduleName)”模块已停用，无法\(action)。可在设置的“第一方模块”中重新启用。"
+                errorMessage = NativeLocalization.text("“\(moduleName)”模块已停用，无法\(NativeLocalization.string(action, language: NativeLocalization.currentLanguage))。可在设置的“第一方模块”中重新启用。")
             case .unknownModule:
-                errorMessage = "模块配置错误：找不到“\(moduleName)”。"
+                errorMessage = NativeLocalization.text("模块配置错误：找不到“\(moduleName)”。")
             case .undeclaredPermission(_, let permission):
-                errorMessage = "模块配置错误：“\(moduleName)”未声明 \(permission.rawValue) 能力。"
+                errorMessage = NativeLocalization.text("模块配置错误：“\(moduleName)”未声明 \(permission.rawValue) 能力。")
             case .allowed:
                 break
             }

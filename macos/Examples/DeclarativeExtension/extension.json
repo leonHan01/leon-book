@@ -3,7 +3,7 @@
   "id": "example.reading-tools",
   "name": "Reading Tools",
   "version": "1.0.0",
-  "description": "演示五种安全声明式扩展点。",
+  "description": "演示四种安全声明式扩展点。",
   "author": "LeonBook",
   "commands": [
     {
@@ -40,7 +40,9 @@
       "id": "book-json",
       "title": "导入图书 JSON",
       "description": "从 title、author 和 notes 字段生成草稿",
-      "fileExtensions": ["json"],
+      "fileExtensions": [
+        "json"
+      ],
       "format": "json",
       "titleTemplate": "{{json.title}}",
       "bodyTemplate": "作者：{{json.author}}\n\n{{json.notes}}",
@@ -55,14 +57,6 @@
       "bodyTemplate": "{{content}}",
       "style": "card",
       "icon": "book.closed"
-    }
-  ],
-  "baseFunctions": [
-    {
-      "name": "double",
-      "parameters": ["value"],
-      "expression": "value * 2",
-      "description": "返回数值的两倍，可在 Base 公式中使用 double(wordcount)。"
     }
   ]
 }

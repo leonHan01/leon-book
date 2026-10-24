@@ -32,7 +32,7 @@ enum MarkdownArticleSource {
             // Never overwrite an external edit made after our attempted save.
             guard let current = try? Data(contentsOf: url),
                   MarkdownArticleSource.hash(current) == expected else {
-                throw NativeStoreError.fileSystem("保存失败后 Markdown 又被修改，已保留磁盘上的版本。")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("保存失败后 Markdown 又被修改，已保留磁盘上的版本。"))
             }
             if let data { try data.write(to: url, options: .atomic) }
             else { try FileManager.default.removeItem(at: url) }
@@ -44,7 +44,7 @@ enum MarkdownArticleSource {
         let root = articlesURL.standardizedFileURL.resolvingSymlinksInPath()
         let url = root.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
         guard isInside(url, root: root) else {
-            throw NativeStoreError.fileSystem("Markdown 文章路径超出资料库")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("Markdown 文章路径超出资料库"))
         }
         let data = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
         return FileSnapshot(url: url, data: data)
@@ -78,7 +78,7 @@ enum MarkdownArticleSource {
             : root.appendingPathComponent(safeDirectory, isDirectory: true)
                 .standardizedFileURL.resolvingSymlinksInPath()
         guard isInside(directory, root: root) else {
-            throw NativeStoreError.fileSystem("Markdown 目录路径超出资料库")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("Markdown 目录路径超出资料库"))
         }
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory),
@@ -98,7 +98,7 @@ enum MarkdownArticleSource {
         let url = root.appendingPathComponent(safePath)
             .standardizedFileURL.resolvingSymlinksInPath()
         guard isInside(url, root: root) else {
-            throw NativeStoreError.fileSystem("Markdown 文章路径超出资料库")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("Markdown 文章路径超出资料库"))
         }
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
         guard let values = try? url.resourceValues(forKeys: keys),
@@ -123,7 +123,7 @@ enum MarkdownArticleSource {
             options: [.skipsHiddenFiles, .skipsPackageDescendants],
             errorHandler: { _, _ in true }
         ) else {
-            throw NativeStoreError.fileSystem("无法扫描 Markdown 文章目录")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法扫描 Markdown 文章目录"))
         }
 
         var records: [MarkdownArticleSourceRecord] = []
@@ -152,10 +152,10 @@ enum MarkdownArticleSource {
         do {
             data = try Data(contentsOf: url)
         } catch {
-            throw NativeStoreError.fileSystem("无法读取 \(safePath)：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 \(safePath)：\(error.localizedDescription)"))
         }
         guard var source = String(data: data, encoding: .utf8) else {
-            throw NativeStoreError.fileSystem("\(safePath) 不是 UTF-8 Markdown 文件")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("\(safePath) 不是 UTF-8 Markdown 文件"))
         }
         if source.hasPrefix("\u{feff}") { source.removeFirst() }
 
@@ -227,7 +227,7 @@ enum MarkdownArticleSource {
         let root = articlesURL.standardizedFileURL.resolvingSymlinksInPath()
         let url = root.appendingPathComponent(relativePath).standardizedFileURL.resolvingSymlinksInPath()
         guard isInside(url, root: root) else {
-            throw NativeStoreError.fileSystem("Markdown 文章路径超出资料库")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("Markdown 文章路径超出资料库"))
         }
         try fileManager.createDirectory(
             at: url.deletingLastPathComponent(),
@@ -244,7 +244,7 @@ enum MarkdownArticleSource {
                     throw NativeStoreError.conflict
                 }
                 guard let decoded = String(data: existingData, encoding: .utf8) else {
-                    throw NativeStoreError.fileSystem("\(relativePath) 不是 UTF-8 Markdown 文件")
+                    throw NativeStoreError.fileSystem(NativeLocalization.text("\(relativePath) 不是 UTF-8 Markdown 文件"))
                 }
                 let hasUTF8ByteOrderMark = existingData.starts(with: [0xEF, 0xBB, 0xBF])
                 existingSource = hasUTF8ByteOrderMark && !decoded.hasPrefix("\u{feff}")
@@ -253,7 +253,7 @@ enum MarkdownArticleSource {
             } catch let error as NativeStoreError {
                 throw error
             } catch {
-                throw NativeStoreError.fileSystem("无法读取 \(relativePath)：\(error.localizedDescription)")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 \(relativePath)：\(error.localizedDescription)"))
             }
         } else {
             guard expectedContentHash == nil else { throw NativeStoreError.conflict }
@@ -265,7 +265,7 @@ enum MarkdownArticleSource {
         do {
             try data.write(to: url, options: .atomic)
         } catch {
-            throw NativeStoreError.fileSystem("无法写入 \(relativePath)：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法写入 \(relativePath)：\(error.localizedDescription)"))
         }
         do {
             return try read(at: url, relativePath: relativePath, fileManager: fileManager)
@@ -293,13 +293,13 @@ enum MarkdownArticleSource {
         let sourceURL = root.appendingPathComponent(sourceRelativePath).standardizedFileURL.resolvingSymlinksInPath()
         let destinationURL = root.appendingPathComponent(destinationRelativePath).standardizedFileURL.resolvingSymlinksInPath()
         guard isInside(sourceURL, root: root), isInside(destinationURL, root: root) else {
-            throw NativeStoreError.fileSystem("Markdown 文章路径超出资料库")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("Markdown 文章路径超出资料库"))
         }
         guard fileManager.fileExists(atPath: sourceURL.path) else {
             throw NativeStoreError.notFound
         }
         guard !fileManager.fileExists(atPath: destinationURL.path) else {
-            throw NativeStoreError.fileSystem("目标 Markdown 文件已存在")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("目标 Markdown 文件已存在"))
         }
         try fileManager.createDirectory(
             at: destinationURL.deletingLastPathComponent(),
@@ -308,7 +308,7 @@ enum MarkdownArticleSource {
         do {
             try fileManager.moveItem(at: sourceURL, to: destinationURL)
         } catch {
-            throw NativeStoreError.fileSystem("无法移动 Markdown 文件：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法移动 Markdown 文件：\(error.localizedDescription)"))
         }
         removeEmptyParentDirectories(
             startingAt: sourceURL.deletingLastPathComponent(),
@@ -331,13 +331,13 @@ enum MarkdownArticleSource {
         let root = articlesURL.standardizedFileURL.resolvingSymlinksInPath()
         let url = root.appendingPathComponent(safePath).standardizedFileURL.resolvingSymlinksInPath()
         guard isInside(url, root: root) else {
-            throw NativeStoreError.fileSystem("Markdown 文章路径超出资料库")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("Markdown 文章路径超出资料库"))
         }
         guard fileManager.fileExists(atPath: url.path) else { return }
         do {
             try fileManager.removeItem(at: url)
         } catch {
-            throw NativeStoreError.fileSystem("无法删除 \(safePath)：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法删除 \(safePath)：\(error.localizedDescription)"))
         }
         removeEmptyParentDirectories(
             startingAt: url.deletingLastPathComponent(),
@@ -355,7 +355,7 @@ enum MarkdownArticleSource {
         guard !segments.isEmpty,
               segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.hasPrefix(".") }),
               ["md", "html"].contains((segments.last! as NSString).pathExtension.lowercased()) else {
-            throw NativeStoreError.fileSystem("文章相对路径无效")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("文章相对路径无效"))
         }
         return segments.joined(separator: "/").precomposedStringWithCanonicalMapping
     }
@@ -369,7 +369,7 @@ enum MarkdownArticleSource {
         guard !value.isEmpty else { return "" }
         let segments = value.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.hasPrefix(".") }) else {
-            throw NativeStoreError.fileSystem("Markdown 目录相对路径无效")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("Markdown 目录相对路径无效"))
         }
         return segments.joined(separator: "/").precomposedStringWithCanonicalMapping
     }

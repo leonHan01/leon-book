@@ -8,7 +8,7 @@ struct InfiniteCanvasDocument: Codable, Equatable {
     var leonbook = Metadata()
 
     struct Metadata: Codable, Equatable {
-        var title = "未命名画布"
+        var title = NativeLocalization.text("未命名画布")
         var viewport = Viewport()
     }
     struct Viewport: Codable, Equatable {
@@ -62,7 +62,7 @@ struct InfiniteCanvasDocument: Codable, Equatable {
     static let maximumBytes = 8 * 1024 * 1024
 
     static func decode(_ data: Data) throws -> Self {
-        guard data.count <= maximumBytes else { throw InfiniteCanvasError.invalid("画布超过 8 MB。") }
+        guard data.count <= maximumBytes else { throw InfiniteCanvasError.invalid(NativeLocalization.text("画布超过 8 MB。")) }
         let document = try JSONDecoder().decode(Self.self, from: data)
         try document.validate()
         return document
@@ -73,13 +73,13 @@ struct InfiniteCanvasDocument: Codable, Equatable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(self)
-        guard data.count <= Self.maximumBytes else { throw InfiniteCanvasError.invalid("画布超过 8 MB。") }
+        guard data.count <= Self.maximumBytes else { throw InfiniteCanvasError.invalid(NativeLocalization.text("画布超过 8 MB。")) }
         return data
     }
 
     func validate() throws {
         func require(_ value: Bool) throws {
-            if !value { throw InfiniteCanvasError.invalid("画布包含无效的卡片、连线或坐标。") }
+            if !value { throw InfiniteCanvasError.invalid(NativeLocalization.text("画布包含无效的卡片、连线或坐标。")) }
         }
         let viewport = leonbook.viewport
         try require(nodes.count <= 1_500 && edges.count <= 5_000 && leonbook.title.count <= 200)
@@ -132,7 +132,7 @@ enum InfiniteCanvasError: LocalizedError {
     case invalid(String)
     var errorDescription: String? {
         switch self {
-        case .conflict: return "画布已被其他窗口修改。当前修改将另存为冲突副本。"
+        case .conflict: return NativeLocalization.text("画布已被其他窗口修改。当前修改将另存为冲突副本。")
         case .invalid(let reason): return reason
         }
     }
@@ -185,7 +185,7 @@ extension LocalBlogStore {
         let trash = try canvasDirectory().appendingPathComponent(".trash", isDirectory: true)
         try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
         guard trash.resolvingSymlinksInPath().path == trash.standardizedFileURL.path else {
-            throw InfiniteCanvasError.invalid("画布回收目录不能是符号链接。")
+            throw InfiniteCanvasError.invalid(NativeLocalization.text("画布回收目录不能是符号链接。"))
         }
         try FileManager.default.moveItem(at: url, to: trash.appendingPathComponent("\(id)-\(UUID().uuidString).canvas"))
     }
@@ -212,22 +212,22 @@ extension LocalBlogStore {
         let root = rootURL.standardizedFileURL.resolvingSymlinksInPath()
         let directory = root.appendingPathComponent("canvases", isDirectory: true)
         guard directory.resolvingSymlinksInPath().path == directory.path else {
-            throw InfiniteCanvasError.invalid("画布目录不能是符号链接。")
+            throw InfiniteCanvasError.invalid(NativeLocalization.text("画布目录不能是符号链接。"))
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
 
     private func canvasURL(id: String) throws -> URL {
-        guard UUID(uuidString: id) != nil else { throw InfiniteCanvasError.invalid("画布 ID 无效。") }
+        guard UUID(uuidString: id) != nil else { throw InfiniteCanvasError.invalid(NativeLocalization.text("画布 ID 无效。")) }
         let file = try canvasDirectory().appendingPathComponent(id + ".canvas")
-        guard file.resolvingSymlinksInPath().path == file.path else { throw InfiniteCanvasError.invalid("画布文件不能是符号链接。") }
+        guard file.resolvingSymlinksInPath().path == file.path else { throw InfiniteCanvasError.invalid(NativeLocalization.text("画布文件不能是符号链接。")) }
         return file
     }
 
     private func canvasData(at url: URL) throws -> Data {
         guard let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size <= InfiniteCanvasDocument.maximumBytes else { throw InfiniteCanvasError.invalid("画布超过 8 MB。") }
+              size <= InfiniteCanvasDocument.maximumBytes else { throw InfiniteCanvasError.invalid(NativeLocalization.text("画布超过 8 MB。")) }
         return try Data(contentsOf: url)
     }
 

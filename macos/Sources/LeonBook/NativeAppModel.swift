@@ -33,7 +33,7 @@ public final class NativeAppModel: ObservableObject {
     @Published var firstPartyModuleRuntime = NativeFirstPartyModules.loadRuntime()
     @Published var latestFirstPartyModuleEvent: FirstPartyModuleEvent?
     @Published var declarativeExtensions = DeclarativeExtensionRuntime.empty
-    @Published var declarativeExtensionStatus = "尚未加载扩展"
+    @Published var declarativeExtensionStatus = NativeLocalization.text("尚未加载扩展")
     let firstPartyModuleEventBus = FirstPartyModuleEventBus()
     let navigation = NativeNavigationState()
     var section: NativeSection {
@@ -53,6 +53,12 @@ public final class NativeAppModel: ObservableObject {
     }
     var cachedWorkspaceResourceIndex: NativeWorkspaceResourceIndex?
     @Published var activity: [NativeActivityDay] = []
+    @Published var dashboard = NativeDashboardDocument.standard
+    let dashboardEditing = NativeDashboardEditingState()
+    @Published var isDashboardLoaded = false
+    @Published var dashboardLoadError: String?
+    @Published var isSavingDashboard = false
+    var dashboardLoadGeneration = 0
     @Published var moments: [NativeMoment] = [] {
         didSet { rebuildMomentTimelineProjection() }
     }
@@ -191,23 +197,23 @@ public final class NativeAppModel: ObservableObject {
     @Published var isPortableSidecarEnabled = false
     @Published var isPortableSidecarWritable = true
     @Published var isSynchronizingPortableSidecar = false
-    @Published var portableSidecarStatus = "未启用"
+    @Published var portableSidecarStatus = NativeLocalization.text("未启用")
     @Published var portableSidecarDirectoryPath = ""
     @Published var portableSidecarRevision = UUID()
     @Published var backupDirectoryPath = LocalBlogStore.savedBackupDirectoryURL?.path ?? ""
     @Published var lastBackupPath = ""
-    @Published var backupStatus = "尚未生成备份"
+    @Published var backupStatus = NativeLocalization.text("尚未生成备份")
     @Published var isBackingUp = false
     @Published var backupPolicy = LocalBlogStore.savedBackupPolicy
     @Published var backupSnapshots: [NativeBackupSnapshot] = []
     @Published var backupStorageEstimate: NativeBackupStorageEstimate?
     @Published var isValidatingBackup = false
     @Published var isRestoringBackup = false
-    @Published var backupValidationStatus = "尚未校验快照"
+    @Published var backupValidationStatus = NativeLocalization.text("尚未校验快照")
     @Published var isScanningObsidianVault = false
     @Published var isImportingObsidianVault = false
     @Published var obsidianImportPreview: NativeObsidianImportPreview?
-    @Published var obsidianImportStatus = "尚未选择 Vault"
+    @Published var obsidianImportStatus = NativeLocalization.text("尚未选择 Vault")
     @Published var errorMessage: String?
     @Published var searchText = ""
     @Published var momentSearchText = ""
@@ -218,16 +224,15 @@ public final class NativeAppModel: ObservableObject {
     @Published var isSearchingArticles = false
     @Published var articleSearchMatchSlugs: Set<String> = []
     @Published var articleSearchResolvedText = ""
-    @Published var smartCollections: [NativeSmartCollection] = []
-    @Published var selectedSmartCollectionID: String?
-    @Published var selectedSmartCollectionViewID: String?
-    @Published var smartCollectionArticles: [NativeArticleSummary] = []
     @Published var bookmarks: [NativeBookmark] = []
     @Published var pendingArticleScrollAnchor: String?
     @Published var articleScrollRevision = UUID()
 
     var userWorkspaces: UserWorkspaceStore
-    var store: LocalBlogStore
+    var store: LocalBlogStore {
+        didSet { mediaLibrary = NativeMediaLibraryModel(store: store) }
+    }
+    @Published var mediaLibrary: NativeMediaLibraryModel
     var trashCleanupTask: Task<Void, Never>?
     private var uploadCount = 0
     var workspaceGeneration = 0
@@ -245,7 +250,6 @@ public final class NativeAppModel: ObservableObject {
     var workspaceAncillaryLoadTask: Task<Void, Never>?
     let articleSelectionCache = NativeArticleSelectionCache()
     private var articleLibraryProjection = NativeArticleLibraryProjection()
-    private var smartCollectionArticleProjection = NativeArticleLibraryProjection()
     private var projectionRebuilds = NativeProjectionRebuildCoordinator()
     var projectionRebuildWillBuild: (@MainActor (NativeProjectionKind) async -> Void)?
     private var articlePageViewOverrides: [String: Int] = [:]
@@ -290,6 +294,7 @@ public final class NativeAppModel: ObservableObject {
         acceptsAutomationRequests = startsAutomatically
         let store = injectedStore ?? LocalBlogStore()
         self.store = store
+        mediaLibrary = NativeMediaLibraryModel(store: store)
         userWorkspaces = injectedUserWorkspaces ?? UserWorkspaceStore(rootURL: store.rootURL)
         NativeWorkspaceWindows.register(self)
         markdownConfigurationObserver = NotificationCenter.default.addObserver(
@@ -426,36 +431,10 @@ public final class NativeAppModel: ObservableObject {
         if articleLibraryProjection.updatePageViews(for: slug, to: pageViews) {
             articles = articleLibraryProjection.articles
         }
-        if smartCollectionArticleProjection.updatePageViews(for: slug, to: pageViews) {
-            smartCollectionArticles = smartCollectionArticleProjection.articles
-        }
     }
 
     func resolveArticleLink(_ reference: String) -> NativeArticleSummary? {
         articleLibraryProjection.resolveArticleLink(reference)
-    }
-
-    func clearSmartCollectionArticleSummaries() {
-        projectionRebuilds.invalidate(.smartCollection)
-        smartCollectionArticleProjection = NativeArticleLibraryProjection()
-        smartCollectionArticles = []
-    }
-
-    func replaceSmartCollectionArticleSummaries(_ summaries: [NativeArticleSummary]) async {
-        guard !summaries.isEmpty else {
-            clearSmartCollectionArticleSummaries()
-            return
-        }
-
-        let batch = NativeProjectionBatch(summaries)
-        guard var projection = await rebuildProjection(
-            .smartCollection,
-            input: batch,
-            using: { NativeArticleLibraryProjection(articles: $0.elements) }
-        ) else { return }
-        applyPageViewOverrides(to: &projection, prunesResolvedOverrides: false)
-        smartCollectionArticleProjection = projection
-        smartCollectionArticles = projection.articles
     }
 
     func clearMomentFacetRecords() {
@@ -513,29 +492,9 @@ public final class NativeAppModel: ObservableObject {
         availableArticleTagFilters.map(\.tag)
     }
 
-    var selectedSmartCollectionDefinition: NativeSmartCollection? {
-        guard let selectedSmartCollectionID else { return nil }
-        return smartCollections.first(where: { $0.id == selectedSmartCollectionID })
-    }
+    var articleListTitle: String { selectedArticleFolderPath ?? "全部文章" }
 
-    var selectedSmartCollection: NativeSmartCollection? {
-        selectedSmartCollectionDefinition?.materialized(viewID: selectedSmartCollectionViewID)
-    }
-
-    var articleListTitle: String {
-        if let collection = selectedSmartCollection,
-           let view = collection.selectedView,
-           collection.views.count > 1 {
-            return "\(collection.name) · \(view.name)"
-        }
-        return selectedSmartCollection?.name ?? selectedArticleFolderPath ?? "全部文章"
-    }
-
-    private var articleListProjection: NativeArticleLibraryProjection {
-        selectedSmartCollection == nil
-            ? articleLibraryProjection
-            : smartCollectionArticleProjection
-    }
+    private var articleListProjection: NativeArticleLibraryProjection { articleLibraryProjection }
 
     func articleSearchProjectionSnapshot() -> NativeArticleLibraryProjection {
         articleListProjection
@@ -575,6 +534,7 @@ public final class NativeAppModel: ObservableObject {
                 || isPublishingQuestion
                 || isPublishingQuestionAnswer
                 || isSavingTodo
+                || isSavingDashboard
                 || isUploadingMedia
                 || isBackingUp
                 || isScanningObsidianVault
@@ -683,7 +643,7 @@ public final class NativeAppModel: ObservableObject {
         guard let rootURL = workDirectoryForStartup() else {
             storageReady = false
             needsWorkDirectorySelection = true
-            errorMessage = "未选择工作目录，应用不会创建空数据库。"
+            errorMessage = NativeLocalization.text("未选择工作目录，应用不会创建空数据库。")
             return
         }
         do {
@@ -723,6 +683,7 @@ public final class NativeAppModel: ObservableObject {
 
     func connect(to rootURL: URL, preferredUserID: String? = nil) async throws {
         try WorkspaceStorageLifecycle.requireAvailable(rootURL)
+        storageReady = false
         userWorkspaces = UserWorkspaceStore(rootURL: rootURL)
         store = LocalBlogStore(rootURL: rootURL)
         dataRootDirectoryPath = rootURL.standardizedFileURL.path
@@ -750,9 +711,9 @@ public final class NativeAppModel: ObservableObject {
 
     private func presentWorkDirectoryPicker() -> URL? {
         let panel = NSOpenPanel()
-        panel.title = "选择工作目录"
-        panel.message = "默认工作目录 /Volumes/T7Shield/myblog 不可用，请选择一个用于保存博客数据的文件夹。"
-        panel.prompt = "使用此目录"
+        panel.title = NativeLocalization.text("选择工作目录")
+        panel.message = NativeLocalization.text("默认工作目录 /Volumes/T7Shield/myblog 不可用，请选择一个用于保存博客数据的文件夹。")
+        panel.prompt = NativeLocalization.text("使用此目录")
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -766,7 +727,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func selectUser(_ user: NativeUser) {
-        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isSavingTodo, !isPublishingMoment, !isSavingMomentComment,
+        guard user.id != currentUser.id, !isSwitchingWorkspace, !isSaving, !isSavingTodo, !isSavingDashboard, !isPublishingMoment, !isSavingMomentComment,
               !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia,
               !isBackingUp, !isScanningObsidianVault, !isImportingObsidianVault else { return }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return }
@@ -793,7 +754,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func createUser(named name: String) async -> Bool {
-        guard !isSwitchingWorkspace, !isSaving, !isSavingTodo, !isPublishingMoment, !isSavingMomentComment,
+        guard !isSwitchingWorkspace, !isSaving, !isSavingTodo, !isSavingDashboard, !isPublishingMoment, !isSavingMomentComment,
               !isPublishingQuestion, !isPublishingQuestionAnswer, !isUploadingMedia, !isBackingUp,
               !isScanningObsidianVault, !isImportingObsidianVault else { return false }
         guard confirmDiscardUnsavedWork(includingMomentDraft: true) else { return false }
@@ -927,7 +888,7 @@ public final class NativeAppModel: ObservableObject {
         pendingNewArticleFolderPath = NativeArticleDirectoryPolicy.displayFolderPath(destinationFolder)
         editorBodySelection = NSRange(location: 0, length: 0)
         articleRevisions = []
-        editorAutosaveStatus = "尚未自动保存"
+        editorAutosaveStatus = NativeLocalization.text("尚未自动保存")
         pendingEditorMediaCleanup = []
         editorOriginalArticle = nil
         section = .editor
@@ -948,7 +909,7 @@ public final class NativeAppModel: ObservableObject {
         newArticle()
         guard editor.recoveryID != previousRecoveryID else { return }
         pendingNewArticleFolderPath = normalized
-        editorAutosaveStatus = "将在“\(normalized)”目录保存"
+        editorAutosaveStatus = NativeLocalization.text("将在“\(normalized)”目录保存")
     }
 
     func editSelected() {
@@ -981,7 +942,7 @@ public final class NativeAppModel: ObservableObject {
         editorBodySelection = NSRange(location: 0, length: 0)
         pendingEditorMediaCleanup = []
         editorOriginalArticle = article
-        editorAutosaveStatus = "已载入正式版本"
+        editorAutosaveStatus = NativeLocalization.text("已载入正式版本")
         section = .editor
         restoreLatestAutosaveIfNeeded(for: article)
         refreshArticleHistory()
@@ -995,7 +956,7 @@ public final class NativeAppModel: ObservableObject {
         selectedArticle = article
         selectedSlug = article.slug
         editorAutosaveTask?.cancel()
-        editorAutosaveStatus = isEditorDirty ? "正文已重构，其他修改尚未保存" : "正文重构已保存"
+        editorAutosaveStatus = isEditorDirty ? NativeLocalization.text("正文已重构，其他修改尚未保存") : NativeLocalization.text("正文重构已保存")
         refreshArticleHistory()
     }
 
@@ -1005,14 +966,14 @@ public final class NativeAppModel: ObservableObject {
         editorAutosaveTask?.cancel()
         guard storageReady, isEditorDirty, hasRecoverableEditorContent else {
             if !isEditorDirty {
-                editorAutosaveStatus = editor.updatedAt == nil ? "尚未自动保存" : "已保存"
+                editorAutosaveStatus = editor.updatedAt == nil ? NativeLocalization.text("尚未自动保存") : NativeLocalization.text("已保存")
             }
             return
         }
 
         let recoveryID = editor.recoveryID
         let generation = workspaceGeneration
-        editorAutosaveStatus = "等待自动保存…"
+        editorAutosaveStatus = NativeLocalization.text("等待自动保存…")
         editorAutosaveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard !Task.isCancelled, let self,
@@ -1046,10 +1007,10 @@ public final class NativeAppModel: ObservableObject {
 
     func restoreArticleRevision(_ revision: NativeArticleRevision) -> Bool {
         let alert = NSAlert()
-        alert.messageText = "恢复这个版本？"
-        alert.informativeText = "当前编辑内容会被替换，但仍会先保留为自动保存版本。恢复后请确认内容并正式保存。"
-        alert.addButton(withTitle: "恢复到编辑器")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = NativeLocalization.text("恢复这个版本？")
+        alert.informativeText = NativeLocalization.text("当前编辑内容会被替换，但仍会先保留为自动保存版本。恢复后请确认内容并正式保存。")
+        alert.addButton(withTitle: NativeLocalization.text("恢复到编辑器"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         guard alert.runModal() == .alertFirstButtonReturn else { return false }
 
         let slug = editor.slug.isEmpty ? selectedArticle?.slug ?? "" : editor.slug
@@ -1064,7 +1025,7 @@ public final class NativeAppModel: ObservableObject {
             slug: slug,
             expectedUpdatedAt: expectedUpdatedAt
         )
-        editorAutosaveStatus = "已恢复版本，等待自动保存…"
+        editorAutosaveStatus = NativeLocalization.text("已恢复版本，等待自动保存…")
         section = .editor
         scheduleEditorAutosave()
         return true
@@ -1072,7 +1033,7 @@ public final class NativeAppModel: ObservableObject {
 
     func saveEditor(as status: NativeArticleStatus) async {
         guard !isBackingUp else {
-            errorMessage = "备份进行中，请稍后再保存。"
+            errorMessage = NativeLocalization.text("备份进行中，请稍后再保存。")
             return
         }
         let title = editor.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1153,7 +1114,7 @@ public final class NativeAppModel: ObservableObject {
             editorOriginalArticle = saved
             pendingNewArticleFolderPath = nil
             editorAutosaveTask?.cancel()
-            editorAutosaveStatus = "已正式保存"
+            editorAutosaveStatus = NativeLocalization.text("已正式保存")
             discardUnreferencedMedia(cleanupCandidates)
             scheduleBackup()
             section = .reader
@@ -1163,8 +1124,7 @@ public final class NativeAppModel: ObservableObject {
             loadArticleAncillaryState(
                 slug: saved.slug,
                 navigationGeneration: articleNavigationGeneration,
-                workspaceGeneration: workspaceGeneration,
-                refreshesPageViewCollection: false
+                workspaceGeneration: workspaceGeneration
             )
             if status == .published {
                 recordFirstPartyModuleEvent(
@@ -1183,7 +1143,7 @@ public final class NativeAppModel: ObservableObject {
                     external: latest,
                     local: editorRevisionSnapshot
                 )
-                errorMessage = "Markdown 在编辑期间发生了外部修改，请比较两个版本后选择处理方式。"
+                errorMessage = NativeLocalization.text("Markdown 在编辑期间发生了外部修改，请比较两个版本后选择处理方式。")
                 return
             }
             if !slug.isEmpty, let latest = try? await store.getArticle(slug: slug) {
@@ -1213,7 +1173,7 @@ public final class NativeAppModel: ObservableObject {
         editorOriginalArticle = article
         selectedArticle = article
         articleSourceConflict = nil
-        editorAutosaveStatus = "已载入外部 Markdown 版本"
+        editorAutosaveStatus = NativeLocalization.text("已载入外部 Markdown 版本")
         errorMessage = nil
         section = .editor
     }
@@ -1238,7 +1198,7 @@ public final class NativeAppModel: ObservableObject {
         selectedSlug = nil
         selectedArticle = nil
         articleSourceConflict = nil
-        editorAutosaveStatus = "将保存为新文章"
+        editorAutosaveStatus = NativeLocalization.text("将保存为新文章")
         errorMessage = nil
         section = .editor
     }
@@ -1248,10 +1208,10 @@ public final class NativeAppModel: ObservableObject {
         guard let article = selectedArticle else { return }
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "将这篇文章移入回收站？"
-        alert.informativeText = "文章和关联的本地媒体会保留 30 天，可在回收站中恢复，之后自动永久删除。"
-        alert.addButton(withTitle: "移入回收站")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = NativeLocalization.text("将这篇文章移入回收站？")
+        alert.informativeText = NativeLocalization.text("文章和关联的本地媒体会保留 30 天，可在回收站中恢复，之后自动永久删除。")
+        alert.addButton(withTitle: NativeLocalization.text("移入回收站"))
+        alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
@@ -1372,7 +1332,7 @@ public final class NativeAppModel: ObservableObject {
         guard !isBackingUp, !isUploadingMedia else { return }
         let remaining = max(0, 9 - momentDraft.images.count)
         guard remaining > 0 else {
-            errorMessage = "每条微博最多添加 9 个图片、视频或音频。"
+            errorMessage = NativeLocalization.text("每条微博最多添加 9 个图片、视频或音频。")
             return
         }
 
@@ -1421,7 +1381,7 @@ public final class NativeAppModel: ObservableObject {
     private func chooseMomentAVMedia(isAudio: Bool) {
         guard !isBackingUp, !isUploadingMedia else { return }
         guard momentDraft.images.count < 9 else {
-            errorMessage = "每条微博最多添加 9 个图片、视频或音频。"
+            errorMessage = NativeLocalization.text("每条微博最多添加 9 个图片、视频或音频。")
             return
         }
 
@@ -1429,10 +1389,10 @@ public final class NativeAppModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.allowedContentTypes = isAudio ? [.mp3] : [.mpeg4Movie]
-        panel.message = isAudio ? "选择一个 MP3 音频" : "选择一个 MP4 视频"
+        panel.message = isAudio ? NativeLocalization.text("选择一个 MP3 音频") : NativeLocalization.text("选择一个 MP4 视频")
         guard panel.runModal() == .OK, let fileURL = panel.url else { return }
         guard fileURL.pathExtension.caseInsensitiveCompare(isAudio ? "mp3" : "mp4") == .orderedSame else {
-            errorMessage = isAudio ? "微博音频仅支持 MP3 格式。" : "微博视频仅支持 MP4 格式。"
+            errorMessage = isAudio ? NativeLocalization.text("微博音频仅支持 MP3 格式。") : NativeLocalization.text("微博视频仅支持 MP4 格式。")
             return
         }
 
@@ -1525,9 +1485,6 @@ public final class NativeAppModel: ObservableObject {
     func showArticles(tag: String) {
         let normalized = tag.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return }
-        selectedSmartCollectionID = nil
-        selectedSmartCollectionViewID = nil
-        clearSmartCollectionArticleSummaries()
         selectedArticleTags = [normalized]
         section = .articles
     }
@@ -1605,7 +1562,7 @@ public final class NativeAppModel: ObservableObject {
         guard !isBackingUp, !isUploadingMedia else { return }
         let remaining = max(0, 9 - momentDraft.images.count)
         guard remaining > 0 else {
-            errorMessage = "每条微博最多添加 9 个图片、视频或音频。"
+            errorMessage = NativeLocalization.text("每条微博最多添加 9 个图片、视频或音频。")
             return
         }
 
@@ -1650,7 +1607,7 @@ public final class NativeAppModel: ObservableObject {
             payload: ["kind": "moment"]
         )
         guard !isBackingUp else {
-            errorMessage = "备份进行中，请稍后再发布。"
+            errorMessage = NativeLocalization.text("备份进行中，请稍后再发布。")
             return
         }
         guard !momentDraft.isEmpty else {
@@ -1760,7 +1717,7 @@ public final class NativeAppModel: ObservableObject {
 
     func insertVideoTimestamp(_ media: NativeMedia) {
         guard let timestamp = videoTimestampLabel(for: media) else {
-            errorMessage = "请先播放视频，再插入时间点。"
+            errorMessage = NativeLocalization.text("请先播放视频，再插入时间点。")
             return
         }
         let insertion = "视频《\(media.name)》@ \(timestamp)"
@@ -1848,15 +1805,15 @@ public final class NativeAppModel: ObservableObject {
             )
             guard !Task.isCancelled, generation == workspaceGeneration,
                   editor.recoveryID == recoveryID, editorRevisionSnapshot == snapshot else { return }
-            editorAutosaveStatus = "已自动保存：\(revision.updatedAt.nativeDateLabel)"
+            editorAutosaveStatus = NativeLocalization.text("已自动保存：\(revision.updatedAt.nativeDateLabel)")
             articleRevisions = revisions
             scheduleCompatibilityExportVerification(for: activeStore)
             errorMessage = nil
         } catch {
             guard !Task.isCancelled, generation == workspaceGeneration,
                   editor.recoveryID == recoveryID, editorRevisionSnapshot == snapshot else { return }
-            editorAutosaveStatus = "自动保存失败"
-            errorMessage = "自动保存失败：\(error.localizedDescription)"
+            editorAutosaveStatus = NativeLocalization.text("自动保存失败")
+            errorMessage = NativeLocalization.text("自动保存失败：\(error.localizedDescription)")
         }
     }
 
@@ -1885,7 +1842,7 @@ public final class NativeAppModel: ObservableObject {
                     slug: article.slug,
                     expectedUpdatedAt: article.updatedAt
                 )
-                editorAutosaveStatus = "已恢复自动保存：\(revision.updatedAt.nativeDateLabel)"
+                editorAutosaveStatus = NativeLocalization.text("已恢复自动保存：\(revision.updatedAt.nativeDateLabel)")
                 refreshArticleHistory()
             } catch {
                 guard !Task.isCancelled, generation == workspaceGeneration,
@@ -1923,7 +1880,7 @@ public final class NativeAppModel: ObservableObject {
             expectedUpdatedAt: nil
         )
         articleRevisions = revisions
-        editorAutosaveStatus = "已恢复自动保存：\(revision.updatedAt.nativeDateLabel)"
+        editorAutosaveStatus = NativeLocalization.text("已恢复自动保存：\(revision.updatedAt.nativeDateLabel)")
         section = .editor
     }
 
@@ -1988,32 +1945,35 @@ public final class NativeAppModel: ObservableObject {
     private func confirmDiscardUnsavedWork(includingMomentDraft: Bool = false) -> Bool {
         let willDiscardMomentDraft = includingMomentDraft && isMomentDraftDirty
         let willDiscardQuestionAnswerDraft = includingMomentDraft && !questionAnswerDraft.isEmpty
-        guard isEditorDirty || willDiscardMomentDraft || willDiscardQuestionAnswerDraft else { return true }
+        let willDiscardDashboard = includingMomentDraft && dashboardEditing.draft.map { $0 != dashboard } == true
+        guard isEditorDirty || willDiscardMomentDraft || willDiscardQuestionAnswerDraft || willDiscardDashboard else { return true }
         let alert = NSAlert()
-        alert.messageText = "放弃未保存的修改？"
-        let draftCount = [isEditorDirty, willDiscardMomentDraft, willDiscardQuestionAnswerDraft]
+        alert.messageText = NativeLocalization.text("放弃未保存的修改？")
+        let draftCount = [isEditorDirty, willDiscardMomentDraft, willDiscardQuestionAnswerDraft, willDiscardDashboard]
             .filter { $0 }.count
         if draftCount > 1 {
-            alert.informativeText = "当前有多份草稿包含未保存的内容或媒体。"
+            alert.informativeText = NativeLocalization.text("当前有多份草稿包含未保存的内容或媒体。")
+        } else if willDiscardDashboard {
+            alert.informativeText = NativeLocalization.string(NativeLocalization.text("首页还有未保存的模块或布局修改。"), language: NativeLocalization.currentLanguage)
         } else if willDiscardQuestionAnswerDraft {
-            alert.informativeText = "当前回答草稿还有未发布的文字或图片。"
+            alert.informativeText = NativeLocalization.text("当前回答草稿还有未发布的文字或图片。")
         } else if willDiscardMomentDraft {
-            alert.informativeText = "当前微博草稿还有未发布的内容或媒体。"
+            alert.informativeText = NativeLocalization.text("当前微博草稿还有未发布的内容或媒体。")
         } else {
-            alert.informativeText = "当前文章还有未保存的标题、正文或附件。"
+            alert.informativeText = NativeLocalization.text("当前文章还有未保存的标题、正文或附件。")
         }
-        alert.addButton(withTitle: "放弃")
-        alert.addButton(withTitle: "继续编辑")
+        alert.addButton(withTitle: NativeLocalization.text("放弃"))
+        alert.addButton(withTitle: NativeLocalization.text("继续编辑"))
         return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func confirmDiscardMomentDraft() -> Bool {
         guard isMomentDraftDirty else { return true }
         let alert = NSAlert()
-        alert.messageText = "放弃未发布的微博？"
-        alert.informativeText = "当前微博草稿中的文字和媒体将被放弃。"
-        alert.addButton(withTitle: "放弃并编辑")
-        alert.addButton(withTitle: "继续编辑")
+        alert.messageText = NativeLocalization.text("放弃未发布的微博？")
+        alert.informativeText = NativeLocalization.text("当前微博草稿中的文字和媒体将被放弃。")
+        alert.addButton(withTitle: NativeLocalization.text("放弃并编辑"))
+        alert.addButton(withTitle: NativeLocalization.text("继续编辑"))
         return alert.runModal() == .alertFirstButtonReturn
     }
 

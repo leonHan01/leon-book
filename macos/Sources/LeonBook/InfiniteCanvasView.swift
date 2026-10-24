@@ -51,7 +51,7 @@ final class InfiniteCanvasWriter {
                         snapshot = try await store.saveCanvas(id: snapshot.id, document: document, expectedRevision: snapshot.revision)
                     } catch InfiniteCanvasError.conflict {
                         var copy = document
-                        copy.leonbook.title = String(copy.leonbook.title.prefix(180)) + " · 冲突副本"
+                        copy.leonbook.title = String(copy.leonbook.title.prefix(180)) + NativeLocalization.text(" · 冲突副本")
                         snapshot = try await store.saveCanvas(id: UUID().uuidString.lowercased(), document: copy, expectedRevision: nil)
                         latestDocument.leonbook.title = copy.leonbook.title
                         pending?.leonbook.title = copy.leonbook.title
@@ -76,6 +76,10 @@ final class InfiniteCanvasWriter {
 }
 
 struct InfiniteCanvasWebView: NSViewRepresentable {
+    @Environment(\.nativeAppPalette) private var appPalette
+    @Environment(\.locale) private var locale
+    private var language: NativeAppLanguage { locale.identifier.hasPrefix("en") ? .english : .simplifiedChinese }
+
     let store: LocalBlogStore
     var onSave: () -> Void = {}
     var onOpenArticle: (String) -> Void
@@ -84,17 +88,29 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        NativeWebLocalization.install(on: configuration, language: language)
+        context.coordinator.language = language
         configuration.websiteDataStore = .nonPersistent()
         configuration.setURLSchemeHandler(InfiniteCanvasResources(store: store), forURLScheme: "leoncanvas")
         configuration.userContentController.add(context.coordinator, name: "canvas")
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         context.coordinator.webView = view
+        context.coordinator.palette = appPalette
         view.load(URLRequest(url: URL(string: "leoncanvas://app/InfiniteCanvas.html")!))
         return view
     }
 
-    func updateNSView(_ view: WKWebView, context: Context) {}
+    func updateNSView(_ view: WKWebView, context: Context) {
+        if context.coordinator.language != language {
+            context.coordinator.language = language
+            if context.coordinator.isReady { NativeWebLocalization.apply(language, to: view) }
+        }
+        if context.coordinator.palette != appPalette {
+            context.coordinator.palette = appPalette
+            if context.coordinator.isReady { NativeWebTheme.apply(appPalette, to: view) }
+        }
+    }
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
         // Every committed interaction has already reached the writer, which finishes
         // independently of the view. Do not cancel pending disk writes on navigation.
@@ -112,6 +128,9 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
         weak var webView: WKWebView?
         var writer: InfiniteCanvasWriter?
         private var generation = 0
+        var palette = NativeAppPalette(theme: .classic, colorScheme: .light)
+        var isReady = false
+        var language = NativeLocalization.currentLanguage
 
         init(store: LocalBlogStore, onSave: @escaping () -> Void = {}, onOpenArticle: @escaping (String) -> Void) {
             self.store = store
@@ -143,6 +162,11 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
         private func handle(_ type: String, _ payload: [String: Any]) async throws {
             switch type {
             case "ready":
+                isReady = true
+                if let webView {
+                    NativeWebTheme.apply(palette, to: webView)
+                    NativeWebLocalization.apply(language, to: webView)
+                }
                 let list = try await store.listCanvases()
                 send("catalog", ["items": list])
                 let root = store.rootURL.path
@@ -182,7 +206,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
                     result["id"] = boardID; result["nodeID"] = nodeID
                     send("content", result)
                 } catch {
-                    send("content", ["id": boardID, "nodeID": nodeID, "error": "原内容已移动、删除或暂时不可用。"])
+                    send("content", ["id": boardID, "nodeID": nodeID, "error": NativeLocalization.text("原内容已移动、删除或暂时不可用。")])
                 }
             case "openArticle":
                 if let slug = payload["slug"] as? String {
@@ -209,7 +233,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
                 panel.allowedContentTypes = [UTType(filenameExtension: "canvas") ?? .json, .json]
                 panel.canChooseDirectories = false
                 if panel.runModal() == .OK, let url = panel.url {
-                    guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? .max) <= InfiniteCanvasDocument.maximumBytes else { throw InfiniteCanvasError.invalid("画布超过 8 MB。") }
+                    guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? .max) <= InfiniteCanvasDocument.maximumBytes else { throw InfiniteCanvasError.invalid(NativeLocalization.text("画布超过 8 MB。")) }
                     var document = try InfiniteCanvasDocument.decode(Data(contentsOf: url))
                     if document.leonbook.title == "未命名画布" { document.leonbook.title = String(url.deletingPathExtension().lastPathComponent.prefix(200)) }
                     let snapshot = try await store.saveCanvas(id: UUID().uuidString.lowercased(), document: document, expectedRevision: nil)
@@ -220,9 +244,9 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
                 try await writer?.flush()
                 guard let writer else { return }
                 let alert = NSAlert()
-                alert.messageText = "删除“\(writer.snapshot.document.leonbook.title)”？"
-                alert.informativeText = "不会删除引用的文章和素材。画布文件会移入 canvases/.trash。"
-                alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "删除画布")
+                alert.messageText = NativeLocalization.text("删除“\(writer.snapshot.document.leonbook.title)”？")
+                alert.informativeText = NativeLocalization.text("不会删除引用的文章和素材。画布文件会移入 canvases/.trash。")
+                alert.addButton(withTitle: NativeLocalization.text("取消")); alert.addButton(withTitle: NativeLocalization.text("删除画布"))
                 if alert.runModal() == .alertSecondButtonReturn {
                     try await store.deleteCanvas(id: writer.snapshot.id, expectedRevision: writer.snapshot.revision)
                     onSave()
@@ -255,7 +279,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
                 self.send("saved", ["id": snapshot.id, "title": snapshot.document.leonbook.title, "forked": forked, "pending": writer?.pending != nil])
                 if forked { Task { try? await self.catalog() } }
             }
-            writer.onError = { [weak self] error in self?.send("error", ["message": "保存失败：\(error.localizedDescription)"]) }
+            writer.onError = { [weak self] error in self?.send("error", ["message": NativeLocalization.text("保存失败：\(error.localizedDescription)")]) }
             if let data = try? snapshot.document.encoded(), let raw = String(data: data, encoding: .utf8) {
                 send("load", ["id": snapshot.id, "document": raw])
             }
@@ -285,14 +309,14 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
             }
             if let reference = node.leonbook, reference.kind == "moment" {
                 let moment = try await store.getMoment(id: reference.id)
-                return ["kind": "moment", "title": "微博 · \(moment.createdAt.prefix(10))", "text": moment.text,
+                return ["kind": "moment", "title": NativeLocalization.text("微博 · \(moment.createdAt.prefix(10))"), "text": moment.text,
                         "media": moment.images.map { ["path": $0.url, "kind": $0.kind, "name": $0.name] }]
             }
             guard let path = node.file, let url = await store.canvasResourceURL(path: path) else { throw NativeStoreError.notFound }
             let type = UTType(filenameExtension: url.pathExtension)
             let kind = type?.conforms(to: .image) == true ? "image" : type?.conforms(to: .movie) == true ? "video" : type?.conforms(to: .audio) == true ? "audio" : url.pathExtension.lowercased() == "pdf" ? "pdf" : "file"
             if ["md", "txt", "html"].contains(url.pathExtension.lowercased()) {
-                guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? .max) <= 2 * 1024 * 1024 else { throw InfiniteCanvasError.invalid("文件过大，请在外部打开。") }
+                guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? .max) <= 2 * 1024 * 1024 else { throw InfiniteCanvasError.invalid(NativeLocalization.text("文件过大，请在外部打开。")) }
                 let body = try String(contentsOf: url, encoding: .utf8)
                 return ["kind": "article", "title": node.leonbook?.title ?? url.lastPathComponent,
                         "html": url.pathExtension.lowercased() == "html" ? body : RichArticleDocument.convertingLegacyBody(body),
@@ -323,7 +347,7 @@ final class InfiniteCanvasResources: NSObject, WKURLSchemeHandler {
         if url.host == "app" {
             let name = url.lastPathComponent
             guard ["InfiniteCanvas.html", "InfiniteCanvas.css", "InfiniteCanvas.js"].contains(name),
-                  let file = Bundle.module.url(forResource: (name as NSString).deletingPathExtension, withExtension: (name as NSString).pathExtension),
+                  let file = Bundle.leonBookResources.url(forResource: (name as NSString).deletingPathExtension, withExtension: (name as NSString).pathExtension),
                   let data = try? Data(contentsOf: file) else { task.didFailWithError(URLError(.fileDoesNotExist)); return }
             let mime = name.hasSuffix(".html") ? "text/html" : name.hasSuffix(".css") ? "text/css" : "text/javascript"
             task.didReceive(URLResponse(url: url, mimeType: mime, expectedContentLength: data.count, textEncodingName: "utf-8"))

@@ -34,11 +34,11 @@ public enum TodoError: LocalizedError {
     case invalidTitle, invalidNotes, invalidDueDay, conflict, notFound
     public var errorDescription: String? {
         switch self {
-        case .invalidTitle: return "待办标题需要 1 到 200 个字符。"
-        case .invalidNotes: return "待办备注最多 5000 个字符。"
-        case .invalidDueDay: return "请选择有效的截止日期。"
-        case .conflict: return "这项待办已在其他窗口中更新，请根据最新内容重新操作。"
-        case .notFound: return "这项待办已不存在。"
+        case .invalidTitle: return ModuleLocalization.text("待办标题需要 1 到 200 个字符。")
+        case .invalidNotes: return ModuleLocalization.text("待办备注最多 5000 个字符。")
+        case .invalidDueDay: return ModuleLocalization.text("请选择有效的截止日期。")
+        case .conflict: return ModuleLocalization.text("这项待办已在其他窗口中更新，请根据最新内容重新操作。")
+        case .notFound: return ModuleLocalization.text("这项待办已不存在。")
         }
     }
 }

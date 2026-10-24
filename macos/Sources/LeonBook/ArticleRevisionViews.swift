@@ -15,7 +15,7 @@ struct ArticleHistoryView: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("版本历史", systemImage: "clock.arrow.circlepath")
+                    Label("版本历史", nativeIcon: "clock.arrow.circlepath", iconSize: 24)
                         .font(.title2.weight(.semibold))
                     Text(model.currentArticleHistoryTitle)
                         .font(.callout)
@@ -85,7 +85,7 @@ private struct ArticleRevisionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
-                Image(systemName: revision.reason == .autosave ? "bolt.circle" : "tray.full")
+                NativeIcon.image(revision.reason == .autosave ? "bolt.circle" : "tray.full")
                     .foregroundStyle(revision.reason == .autosave ? Color.accentColor : Color.orange)
                 Text(LocalizedStringKey(revision.reason.label))
                     .font(.subheadline.weight(.medium))
@@ -136,12 +136,12 @@ private struct ArticleRevisionDiffView: View {
                     Text("与当前内容比较")
                         .font(.headline)
                     HStack(spacing: 10) {
-                        Label("删除 \(diff.removedLineOffsets.count) 行", systemImage: "minus.circle")
+                        Label(NativeLocalization.text("删除 \(diff.removedLineOffsets.count) 行"), nativeIcon: "minus.circle")
                             .foregroundStyle(.red)
-                        Label("新增 \(diff.addedLineOffsets.count) 行", systemImage: "plus.circle")
+                        Label(NativeLocalization.text("新增 \(diff.addedLineOffsets.count) 行"), nativeIcon: "plus.circle")
                             .foregroundStyle(.green)
                         if !metadataChanges.isEmpty {
-                            Text("属性变化：\(metadataChanges.joined(separator: "、"))")
+                            Text(NativeLocalization.text("属性变化：\(metadataChanges.joined(separator: "、"))"))
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -149,7 +149,7 @@ private struct ArticleRevisionDiffView: View {
                 }
                 Spacer()
                 Button(action: onRestore) {
-                    Label("恢复此版本", systemImage: "arrow.uturn.backward.circle.fill")
+                    Label("恢复此版本", nativeIcon: "arrow.uturn.backward.circle.fill")
                 }
                 .nativePrimaryButton()
             }
@@ -176,6 +176,8 @@ private struct ArticleRevisionDiffView: View {
 }
 
 private struct ArticleRevisionCodeColumn: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let title: LocalizedStringKey
     let source: String
     let highlightedOffsets: Set<Int>
@@ -191,13 +193,13 @@ private struct ArticleRevisionCodeColumn: View {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                Text("\(lines.count) 行")
+                Text(NativeLocalization.text("\(lines.count) 行"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
-            .background(NativeTheme.surface)
+            .background(appPalette.surface)
 
             Divider()
 
@@ -225,7 +227,7 @@ private struct ArticleRevisionCodeColumn: View {
                 }
                 .padding(.vertical, 6)
             }
-            .background(NativeTheme.surface)
+            .background(appPalette.surface)
         }
     }
 }

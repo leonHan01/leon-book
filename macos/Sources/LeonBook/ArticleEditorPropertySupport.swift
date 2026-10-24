@@ -63,18 +63,18 @@ struct EditorPropertyValueField: View {
                 .textFieldStyle(.roundedBorder).lineLimit(1...3)
         case .select, .status:
             HStack(spacing: 6) {
-                TextField(row.kind == .select ? "单选值" : "状态", text: $row.value)
+                TextField(LocalizedStringKey(row.kind == .select ? "单选值" : "状态"), text: $row.value)
                     .textFieldStyle(.roundedBorder)
                 Menu {
                     ForEach(scalarOptions, id: \.self) { option in
                         Button {
                             row.value = option
                         } label: {
-                            Label(option, systemImage: row.value == option ? "checkmark" : row.kind.systemImage)
+                            Label(option, nativeIcon: row.value == option ? "checkmark" : row.kind.systemImage)
                         }
                     }
                 } label: {
-                    Image(systemName: "chevron.down.circle")
+                    NativeIcon.image("chevron.down.circle")
                 }
                 .menuStyle(.borderlessButton)
                 .help("复用工作区中已有的选项")
@@ -90,12 +90,12 @@ struct EditorPropertyValueField: View {
                         } label: {
                             Label(
                                 article.title,
-                                systemImage: relationContains(article) ? "checkmark" : "doc.text"
+                                nativeIcon: relationContains(article) ? "checkmark" : "doc.text"
                             )
                         }
                     }
                 } label: {
-                    Label("选择关联页面", systemImage: "arrow.triangle.branch")
+                    Label("选择关联页面", nativeIcon: "arrow.triangle.branch")
                 }
                 .menuStyle(.borderlessButton)
             }
@@ -239,7 +239,7 @@ struct EditorPropertyRenameSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("统一重命名属性").font(.title3.weight(.semibold))
-            Text("所有文章中的“\(oldKey)”都会一起修改；如果目标名称已有不同值，操作会取消，不会覆盖数据。")
+            Text(NativeLocalization.text("所有文章中的“\(oldKey)”都会一起修改；如果目标名称已有不同值，操作会取消，不会覆盖数据。"))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

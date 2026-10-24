@@ -1,4 +1,5 @@
 import Foundation
+import LeonBookModuleKit
 import SwiftUI
 
 private let nativeLanguageDefaultsKey = "leon-book.app-language.v1"
@@ -55,15 +56,6 @@ public final class NativeLanguagePreferences: ObservableObject {
 }
 
 public enum NativeLocalization {
-    private static let resourceBundle: Bundle? = {
-        let bundleName = "LeonBookMac_LeonBook.bundle"
-        let candidates = [
-            Bundle.main.resourceURL?.appendingPathComponent(bundleName),
-            Bundle.main.bundleURL.appendingPathComponent(bundleName),
-        ]
-        return candidates.compactMap { $0 }.compactMap(Bundle.init(url:)).first
-    }()
-
     public static var currentLanguage: NativeAppLanguage {
         UserDefaults.standard.string(forKey: nativeLanguageDefaultsKey)
             .flatMap(NativeAppLanguage.init(rawValue:))
@@ -75,14 +67,25 @@ public enum NativeLocalization {
         language: NativeAppLanguage,
         table: String? = nil
     ) -> String {
-        for baseBundle in [resourceBundle, Bundle.main].compactMap({ $0 }) {
-            guard let path = baseBundle.path(forResource: language.rawValue, ofType: "lproj"),
-                  let languageBundle = Bundle(path: path) else { continue }
-            let localized = languageBundle.localizedString(forKey: key, value: nil, table: table)
-            if localized != key || language == .simplifiedChinese {
-                return localized
-            }
-        }
-        return key
+        ModuleLocalization.string(key, language: language.rawValue, bundle: .leonBookResources, table: table)
     }
+
+    public static func text(
+        _ message: ModuleLocalizedMessage,
+        language: NativeAppLanguage = currentLanguage
+    ) -> String {
+        ModuleLocalization.text(message, language: language.rawValue, bundle: .leonBookResources)
+    }
+
+    static func catalog(language: NativeAppLanguage) -> [String: String] {
+        guard language == .english else { return [:] }
+        return englishCatalog
+    }
+
+    private static let englishCatalog: [String: String] = {
+        guard let path = Bundle.leonBookResources.path(forResource: "en", ofType: "lproj"),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path).appendingPathComponent("Localizable.strings")),
+              let values = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: String] else { return [:] }
+        return values
+    }()
 }

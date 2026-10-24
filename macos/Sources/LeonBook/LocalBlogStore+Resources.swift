@@ -41,17 +41,17 @@ extension LocalBlogStore {
         try requireWritableArticleSource()
         let safePath = try NativeArticleDirectoryPolicy.validatedFolderPath(relativePath)
         guard !safePath.isEmpty else {
-            throw NativeStoreError.fileSystem("不能新建资料库根目录")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("不能新建资料库根目录"))
         }
         let root = articlesURL.standardizedFileURL.resolvingSymlinksInPath()
         let destination = root.appendingPathComponent(safePath, isDirectory: true).standardizedFileURL
         let resolvedParent = destination.deletingLastPathComponent().resolvingSymlinksInPath()
         guard workspaceURL(destination, isInside: root),
               workspaceURL(resolvedParent, isInside: root) else {
-            throw NativeStoreError.fileSystem("文件夹路径超出资料库")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("文件夹路径超出资料库"))
         }
         guard !FileManager.default.fileExists(atPath: destination.path) else {
-            throw NativeStoreError.fileSystem("同名文件或文件夹已存在")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("同名文件或文件夹已存在"))
         }
         do {
             try FileManager.default.createDirectory(
@@ -59,7 +59,7 @@ extension LocalBlogStore {
                 withIntermediateDirectories: true
             )
         } catch {
-            throw NativeStoreError.fileSystem("无法新建文件夹：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法新建文件夹：\(error.localizedDescription)"))
         }
     }
 
@@ -101,7 +101,7 @@ extension LocalBlogStore {
             }
             _ = try? refreshMarkdownSources()
             if let storeError = error as? NativeStoreError { throw storeError }
-            throw NativeStoreError.fileSystem("无法移动资源：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法移动资源：\(error.localizedDescription)"))
         }
     }
 
@@ -121,7 +121,7 @@ extension LocalBlogStore {
             guard workspaceURL(url, isInside: root),
                   workspaceURL(resolved, isInside: root),
                   url.path != root.path else {
-                throw NativeStoreError.fileSystem("不能删除资料库根目录")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("不能删除资料库根目录"))
             }
             let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey])
             guard FileManager.default.fileExists(atPath: url.path), values?.isSymbolicLink != true else {
@@ -138,7 +138,7 @@ extension LocalBlogStore {
         } catch {
             _ = try? refreshMarkdownSources()
             if let storeError = error as? NativeStoreError { throw storeError }
-            throw NativeStoreError.fileSystem("无法移入 macOS 废纸篓：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法移入 macOS 废纸篓：\(error.localizedDescription)"))
         }
     }
 
@@ -159,7 +159,7 @@ extension LocalBlogStore {
             options: [.skipsHiddenFiles, .skipsPackageDescendants],
             errorHandler: { _, _ in true }
         ) else {
-            throw NativeStoreError.fileSystem("无法扫描文件资源")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法扫描文件资源"))
         }
 
         var records: [NativeWorkspaceResourceRecord] = []
@@ -256,7 +256,7 @@ extension LocalBlogStore {
                   workspaceURL(destination, isInside: root),
                   workspaceURL(resolvedSource, isInside: root),
                   workspaceURL(resolvedDestinationParent, isInside: root) else {
-                throw NativeStoreError.fileSystem("资源路径超出资料库")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("资源路径超出资料库"))
             }
             let values = try? source.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
             guard values?.isSymbolicLink != true,
@@ -265,7 +265,7 @@ extension LocalBlogStore {
             }
             if values?.isDirectory == true,
                destinationPath.hasPrefix(sourcePath + "/") {
-                throw NativeStoreError.fileSystem("不能把文件夹移动到其自身内部")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("不能把文件夹移动到其自身内部"))
             }
             if values?.isDirectory == true {
                 try validateWorkspaceDirectoryMove(source: source, destinationPath: destinationPath)
@@ -277,15 +277,15 @@ extension LocalBlogStore {
                 if ["md", "html"].contains(source.pathExtension.lowercased()) {
                     try NativeArticleDirectoryPolicy.validateArticlePath(destinationPath)
                     guard source.pathExtension.caseInsensitiveCompare(destination.pathExtension) == .orderedSame else {
-                        throw NativeStoreError.fileSystem("文章文件必须保留原扩展名。")
+                        throw NativeStoreError.fileSystem(NativeLocalization.text("文章文件必须保留原扩展名。"))
                     }
                 }
             }
             guard destinations.insert(destinationPath).inserted else {
-                throw NativeStoreError.fileSystem("多个资源将产生同一个目标路径")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("多个资源将产生同一个目标路径"))
             }
             guard !FileManager.default.fileExists(atPath: destination.path) else {
-                throw NativeStoreError.fileSystem("目标位置已存在“\(destination.lastPathComponent)”")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("目标位置已存在“\(destination.lastPathComponent)”"))
             }
             results.append((sourcePath, destinationPath, source, destination))
         }
@@ -304,7 +304,7 @@ extension LocalBlogStore {
                 enumerationError = error
                 return false
             }
-        ) else { throw NativeStoreError.fileSystem("无法读取待移动目录。") }
+        ) else { throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取待移动目录。")) }
         for case let child as URL in enumerator {
             let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             if values.isSymbolicLink == true {
@@ -316,7 +316,7 @@ extension LocalBlogStore {
             // Its relative level avoids deriving depth from absolute strings.
             guard NativeArticleDirectoryPolicy.depth(of: destinationPath) + enumerator.level
                     <= NativeArticleDirectoryPolicy.maximumDepth else {
-                throw NativeStoreError.fileSystem("移动后子目录“\(child.lastPathComponent)”将超过 5 级。")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("移动后子目录“\(child.lastPathComponent)”将超过 5 级。"))
             }
         }
         if let enumerationError { throw enumerationError }
@@ -344,7 +344,7 @@ extension LocalBlogStore {
         let segments = value.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard !segments.isEmpty,
               segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.hasPrefix(".") }) else {
-            throw NativeStoreError.fileSystem("资源相对路径无效")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("资源相对路径无效"))
         }
         return segments.joined(separator: "/").precomposedStringWithCanonicalMapping
     }

@@ -12,6 +12,8 @@ MACOS_APP="$PROJECT_DIR/macos/dist/leon-book.app"
 MACOS_EXECUTABLE="$MACOS_APP/Contents/MacOS/LeonBook"
 MACOS_PROCESS_NAME="LeonBook"
 MACOS_BUNDLE_IDENTIFIER="com.leon-book.macos"
+MACOS_BUILD_INFO="$MACOS_APP/Contents/Resources/leonbook-build-configuration"
+MACOS_BUILD_SYSTEM_INFO="$MACOS_APP/Contents/Resources/leonbook-build-system"
 
 print_help() {
   cat <<EOF
@@ -20,13 +22,20 @@ leonblog - leon-book 原生 macOS 应用管理
 用法：
   leonblog open               构建过期版本后打开原生 leon-book 应用
   leonblog start              与 open 相同
-  leonblog restart            关闭当前应用，重新构建后启动
-  leonblog build              构建原生应用
+  leonblog restart            关闭当前应用，仅在版本过期时构建后启动
+  leonblog restart --release  使用 Release 优化构建后重启
+  leonblog build              构建 Release 原生应用
   leonblog test               运行原生应用检查
   leonblog coverage           运行单元测试并生成覆盖率报告
   leonblog api METHOD [...]   外部 AI JSON CLI（api capabilities 列出所有能力）
   leonblog api --stdio        JSON Lines 接口，每行一个请求和响应
   leonblog help               显示帮助
+
+构建模式：
+  restart 默认使用 Debug 增量构建，build 默认使用 Release。
+  open / start 沿用已安装版本的模式，首次构建使用 Debug。
+  上述命令可用 --debug / --release 切换模式；首次使用某模式需要完整编译。
+  Debug 默认使用 native 引擎；LEON_BOOK_BUILD_SYSTEM=default 可切回工具链默认引擎。
 
 数据位置：
   \$LEON_BOOK_WORKDIR（若已设置）
@@ -38,26 +47,34 @@ EOF
 }
 
 build_native_app() {
-  "$PROJECT_DIR/macos/scripts/build-app.sh"
+  LEON_BOOK_BUILD_CONFIGURATION="$BUILD_CONFIGURATION" LEON_BOOK_BUILD_SYSTEM="$BUILD_SYSTEM" \
+    "$PROJECT_DIR/macos/scripts/build-app.sh"
 }
 
 native_app_needs_build() {
   [[ ! -x "$MACOS_EXECUTABLE" ]] && return 0
+  [[ ! -x "$MACOS_APP/Contents/MacOS/LeonBookCLI" ]] && return 0
+  [[ ! -d "$MACOS_APP/Contents/Resources/LeonBookMac_LeonBook.bundle" ]] && return 0
+  [[ ! -f "$MACOS_BUILD_INFO" ]] && return 0
+  [[ "$(cat "$MACOS_BUILD_INFO")" != "$BUILD_CONFIGURATION" ]] && return 0
+  [[ ! -f "$MACOS_BUILD_SYSTEM_INFO" ]] && return 0
+  [[ "$(cat "$MACOS_BUILD_SYSTEM_INFO")" != "$BUILD_SYSTEM" ]] && return 0
 
   local input
   local build_inputs=(
     "$PROJECT_DIR/macos/Package.swift"
+    "$PROJECT_DIR/macos/Package.resolved"
     "$PROJECT_DIR/macos/Resources"
     "$PROJECT_DIR/macos/Sources"
     "$PROJECT_DIR/macos/scripts/build-app.sh"
     "$PROJECT_DIR/macos/scripts/swift-sdk.sh"
   )
   for input in "${build_inputs[@]}"; do
-    [[ "$input" -nt "$MACOS_EXECUTABLE" ]] && return 0
+    [[ "$input" -nt "$MACOS_BUILD_INFO" ]] && return 0
   done
 
   find "$PROJECT_DIR/macos/Sources" "$PROJECT_DIR/macos/Resources" \
-    -type f -newer "$MACOS_EXECUTABLE" -print -quit | /usr/bin/grep -q .
+    -newer "$MACOS_BUILD_INFO" -print -quit | /usr/bin/grep -q .
 }
 
 launch_native_app() {
@@ -99,9 +116,10 @@ quit_native_app() {
 }
 
 restart_native_app() {
+  local started_at=$SECONDS
   quit_native_app
-  build_native_app
-  launch_native_app
+  open_native_app
+  printf '[INFO] 重启完成（耗时 %s 秒）。\n' "$((SECONDS - started_at))"
 }
 
 open_native_app() {
@@ -123,6 +141,54 @@ open_native_app() {
 }
 
 command_name="${1:-help}"
+case "$command_name" in
+  open|start|restart|build)
+    REUSE_INSTALLED_BUILD=0
+    if [[ "$command_name" == build ]]; then
+      BUILD_CONFIGURATION=release
+    else
+      BUILD_CONFIGURATION=debug
+      if [[ "$command_name" != restart && -f "$MACOS_BUILD_INFO" ]]; then
+        BUILD_CONFIGURATION="$(cat "$MACOS_BUILD_INFO")"
+        if [[ $# -eq 1 && -z "${LEON_BOOK_BUILD_CONFIGURATION:-}" ]]; then
+          REUSE_INSTALLED_BUILD=1
+        fi
+      fi
+    fi
+    BUILD_CONFIGURATION="${LEON_BOOK_BUILD_CONFIGURATION:-$BUILD_CONFIGURATION}"
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --debug) BUILD_CONFIGURATION=debug ;;
+        --release) BUILD_CONFIGURATION=release ;;
+        *) printf '[ERROR] 未知构建选项：%s\n' "$1" >&2; exit 2 ;;
+      esac
+      shift
+    done
+    case "$BUILD_CONFIGURATION" in
+      debug|release) ;;
+      *) printf '[ERROR] 无效构建模式：%s（应为 debug 或 release）。\n' "$BUILD_CONFIGURATION" >&2; exit 2 ;;
+    esac
+    BUILD_SYSTEM="${LEON_BOOK_BUILD_SYSTEM:-}"
+    if [[ -z "$BUILD_SYSTEM" ]]; then
+      if [[ "$REUSE_INSTALLED_BUILD" -eq 1 && -f "$MACOS_BUILD_SYSTEM_INFO" ]]; then
+        BUILD_SYSTEM="$(cat "$MACOS_BUILD_SYSTEM_INFO")"
+      elif [[ "$BUILD_CONFIGURATION" == debug ]]; then
+        BUILD_SYSTEM=native
+      else
+        BUILD_SYSTEM=default
+      fi
+    fi
+    if [[ "$BUILD_SYSTEM" == native && -z "${LEON_BOOK_BUILD_SYSTEM:-}" ]] && \
+      ! swift build --help 2>/dev/null | /usr/bin/grep -E '^[[:space:]]+native[[:space:]]+-' >/dev/null; then
+      BUILD_SYSTEM=default
+    fi
+    case "$BUILD_SYSTEM" in
+      default|native|swiftbuild) ;;
+      *) printf '[ERROR] 无效构建引擎：%s（应为 default、native 或 swiftbuild）。\n' "$BUILD_SYSTEM" >&2; exit 2 ;;
+    esac
+    ;;
+esac
 case "$command_name" in
   open|start) open_native_app ;;
   restart) restart_native_app ;;

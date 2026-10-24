@@ -165,7 +165,7 @@ extension NativeAppModel {
         guard !isBackingUp, !isUploadingMedia, let questionID = selectedQuestion?.id else { return }
         let remaining = max(0, 9 - questionAnswerDraft.images.count)
         guard remaining > 0 else {
-            errorMessage = "每个回答最多添加 9 张图片。"
+            errorMessage = NativeLocalization.text("每个回答最多添加 9 张图片。")
             return
         }
         let imagesToUpload = Array(images.prefix(remaining))
@@ -277,10 +277,10 @@ extension NativeAppModel {
     private func confirmDiscardQuestionAnswerDraft() -> Bool {
         guard !questionAnswerDraft.isEmpty || editingQuestionAnswerID != nil else { return true }
         let alert = NSAlert()
-        alert.messageText = "放弃未发布的回答？"
-        alert.informativeText = "当前回答草稿中的 Markdown 内容和图片将被放弃。"
-        alert.addButton(withTitle: "放弃")
-        alert.addButton(withTitle: "继续编辑")
+        alert.messageText = NativeLocalization.text("放弃未发布的回答？")
+        alert.informativeText = NativeLocalization.text("当前回答草稿中的 Markdown 内容和图片将被放弃。")
+        alert.addButton(withTitle: NativeLocalization.text("放弃"))
+        alert.addButton(withTitle: NativeLocalization.text("继续编辑"))
         return alert.runModal() == .alertFirstButtonReturn
     }
 }

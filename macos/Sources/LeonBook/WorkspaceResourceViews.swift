@@ -3,13 +3,14 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct NativeWorkspaceResourceSection: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @Binding var expandedFolderIDs: Set<String>
     @Binding var selectedResourceIDs: Set<String>
 
     var body: some View {
         Section {
-            rootRow
             if model.workspaceResources.isEmpty {
                 Text("还没有文章。请新建目录，或在“未分类”目录中开始写作。")
                     .font(.caption)
@@ -30,18 +31,24 @@ struct NativeWorkspaceResourceSection: View {
                 Button {
                     model.newArticle(inFolder: "")
                 } label: {
-                    Image(systemName: "note.text.badge.plus")
+                    NativeIcon.image("plus", size: 12)
+                        .frame(width: 18, height: 18)
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(appPalette.textSecondary)
+                .accessibilityLabel("新文章")
                 .help("在“未分类”目录新建文章")
                 .disabled(model.isMarkdownSourceReadOnly)
 
                 Button {
                     model.promptToCreateWorkspaceFolder(parentPath: "")
                 } label: {
-                    Image(systemName: "folder.badge.plus")
+                    NativeIcon.image("folder", size: 12)
+                        .frame(width: 18, height: 18)
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(appPalette.textSecondary)
+                .accessibilityLabel("新建文件夹…")
                 .help("在根目录新建文件夹")
                 .disabled(model.isMarkdownSourceReadOnly)
 
@@ -49,70 +56,23 @@ struct NativeWorkspaceResourceSection: View {
                     Button {
                         expandedFolderIDs.removeAll()
                     } label: {
-                        Image(systemName: "rectangle.compress.vertical")
+                        NativeIcon.image("chevron.up", size: 12)
+                            .frame(width: 18, height: 18)
                     }
                     .buttonStyle(.plain)
+                    .foregroundStyle(appPalette.textSecondary)
+                    .accessibilityLabel("折叠全部")
                     .help("折叠全部")
                 }
             }
         }
     }
 
-    private var rootRow: some View {
-        Button {
-            selectedResourceIDs.removeAll()
-            model.showAllArticles()
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "tray")
-                    .foregroundStyle(.secondary)
-                Text("全部文章")
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text("\(model.articles.count)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(SidebarNavigationButtonStyle(
-            isSelected: model.section == .articles
-                && model.selectedSmartCollectionID == nil
-                && model.selectedArticleFolderPath == nil
-                && selectedResourceIDs.isEmpty
-        ))
-        .contextMenu {
-            Button("新建文章") { model.newArticle(inFolder: "") }
-                .disabled(model.isMarkdownSourceReadOnly)
-            Button("新建文件夹…") { model.promptToCreateWorkspaceFolder(parentPath: "") }
-                .disabled(model.isMarkdownSourceReadOnly)
-        }
-        .onDrop(of: [UTType.utf8PlainText.identifier], isTargeted: nil) { providers in
-            acceptResourceDrop(providers, destinationFolder: "")
-        }
-    }
-
-    private func acceptResourceDrop(
-        _ providers: [NSItemProvider],
-        destinationFolder: String
-    ) -> Bool {
-        guard let provider = providers.first(where: {
-            $0.hasItemConformingToTypeIdentifier(UTType.utf8PlainText.identifier)
-        }) else { return false }
-        provider.loadObject(ofClass: NSString.self) { object, _ in
-            guard let payload = object as? String,
-                  let ids = NativeWorkspaceResourceDragPayload.decode(payload) else { return }
-            DispatchQueue.main.async {
-                let resources = model.workspaceResources(ids: Set(ids))
-                model.moveWorkspaceResources(resources, toFolder: destinationFolder)
-            }
-        }
-        return true
-    }
 }
 
 private struct NativeWorkspaceResourceBranch: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     let resources: [NativeWorkspaceResourceNode]
     @Binding var expandedFolderIDs: Set<String>
@@ -157,7 +117,7 @@ private struct NativeWorkspaceResourceBranch: View {
                 select(resource)
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: resource.systemImage)
+                    NativeIcon.image(sidebarIcon(for: resource), size: 14)
                         .foregroundStyle(iconColor(resource))
                         .frame(width: 16)
                     Text(resource.articleTitle ?? resource.name)
@@ -165,8 +125,7 @@ private struct NativeWorkspaceResourceBranch: View {
                         .help(resource.relativePath)
                     Spacer(minLength: 4)
                     if resource.storage == .managedMedia {
-                        Image(systemName: "link")
-                            .font(.caption2)
+                        NativeIcon.image("link", size: 12)
                             .foregroundStyle(.tertiary)
                             .help("由 LeonBook 管理的文章附件")
                     } else if resource.canContainPages && resource.articleCount > 1 {
@@ -187,8 +146,7 @@ private struct NativeWorkspaceResourceBranch: View {
                 Button {
                     model.newArticle(inFolder: resource.pageContainerPath)
                 } label: {
-                    Image(systemName: "plus")
-                        .font(.caption.weight(.semibold))
+                    NativeIcon.image("plus", size: 12)
                         .frame(width: 18, height: 18)
                 }
                 .buttonStyle(.plain)
@@ -326,22 +284,30 @@ private struct NativeWorkspaceResourceBranch: View {
 
     private func rowBackground(_ resource: NativeWorkspaceResourceNode) -> Color {
         if selectedResourceIDs.contains(resource.id) {
-            return NativeTheme.selection
+            return appPalette.selection
         }
         if resource.articleSlug == model.selectedSlug {
-            return NativeTheme.selection
+            return appPalette.selection
         }
-        return hoveredResourceID == resource.id ? NativeTheme.surfaceSecondary : .clear
+        return hoveredResourceID == resource.id ? appPalette.surfaceSecondary : .clear
     }
 
     private func iconColor(_ resource: NativeWorkspaceResourceNode) -> Color {
         switch resource.kind {
         case .folder:
-            return NativeTheme.textSecondary
+            return appPalette.textSecondary
         case .article:
-            return resource.articleSlug == model.selectedSlug ? NativeTheme.deepBlue : NativeTheme.textPrimary
+            return resource.articleSlug == model.selectedSlug ? appPalette.deepBlue : appPalette.textPrimary
         case .attachment:
             return .secondary
+        }
+    }
+
+    private func sidebarIcon(for resource: NativeWorkspaceResourceNode) -> String {
+        switch resource.kind {
+        case .folder: return "folder"
+        case .article: return "doc"
+        case .attachment: return resource.systemImage
         }
     }
 }

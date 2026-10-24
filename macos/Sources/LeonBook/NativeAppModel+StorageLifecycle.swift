@@ -23,6 +23,12 @@ enum NativeWorkspaceWindows {
         }
     }
 
+    static func reloadDashboards(in root: URL, excluding initiator: NativeAppModel) {
+        for model in models.allObjects where model !== initiator && model.store.rootURL.standardizedFileURL == root.standardizedFileURL && model.storageReady && !model.isRestoringBackup {
+            Task { [weak model] in await model?.reloadDashboard() }
+        }
+    }
+
     static func reloadAfterAutomation(in workspace: URL, dataRoot: URL) {
         for model in matching(dataRoot) where model.store.rootURL.standardizedFileURL.resolvingSymlinksInPath() == workspace.standardizedFileURL.resolvingSymlinksInPath() && model.storageReady && !model.isRestoringBackup {
             Task { [weak model] in
@@ -71,12 +77,12 @@ enum NativeWorkspaceWindows {
                 && !model.isSavingMomentComment
                 && !model.isPublishingMoment && !model.isPublishingQuestion
                 && !model.isPublishingQuestionAnswer && !model.isUploadingMedia
-                && !model.isSavingTodo
+                && !model.isSavingTodo && !model.isSavingDashboard
                 && !model.isImportingObsidianVault && !model.isSwitchingWorkspace
                 && !model.isBackingUp && !model.isLoading
                 && (model === initiator || !model.isRestoringBackup)
         }) else {
-            throw NativeStoreError.fileSystem("其他窗口仍在处理资料库操作，请完成后再恢复。")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("其他窗口仍在处理资料库操作，请完成后再恢复。"))
         }
         for model in affected { model.pauseForWorkspaceRestore() }
         return affected

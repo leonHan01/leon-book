@@ -1,4 +1,5 @@
 import Foundation
+import LeonBookModuleKit
 
 public enum DeclarativeExtensionCommandActionType: String, Codable, Hashable, Sendable {
     case insertText
@@ -167,37 +168,6 @@ public struct DeclarativeExtensionRenderer: Codable, Hashable, Sendable {
     }
 }
 
-public struct DeclarativeExtensionBaseFunction: Codable, Hashable, Sendable {
-    public let name: String
-    public let parameters: [String]
-    public let expression: String
-    public let description: String
-
-    public init(
-        name: String,
-        parameters: [String],
-        expression: String,
-        description: String = ""
-    ) {
-        self.name = name
-        self.parameters = parameters
-        self.expression = expression
-        self.description = description
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case name, parameters, expression, description
-    }
-
-    public init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        name = try values.decode(String.self, forKey: .name)
-        parameters = try values.decodeIfPresent([String].self, forKey: .parameters) ?? []
-        expression = try values.decode(String.self, forKey: .expression)
-        description = try values.decodeIfPresent(String.self, forKey: .description) ?? ""
-    }
-}
-
 public struct DeclarativeExtensionManifest: Codable, Hashable, Sendable {
     public let manifestVersion: Int
     public let id: String
@@ -209,7 +179,6 @@ public struct DeclarativeExtensionManifest: Codable, Hashable, Sendable {
     public let templateVariables: [String: String]
     public let importers: [DeclarativeExtensionImporter]
     public let renderers: [DeclarativeExtensionRenderer]
-    public let baseFunctions: [DeclarativeExtensionBaseFunction]
 
     public init(
         manifestVersion: Int = 1,
@@ -221,8 +190,7 @@ public struct DeclarativeExtensionManifest: Codable, Hashable, Sendable {
         commands: [DeclarativeExtensionCommand] = [],
         templateVariables: [String: String] = [:],
         importers: [DeclarativeExtensionImporter] = [],
-        renderers: [DeclarativeExtensionRenderer] = [],
-        baseFunctions: [DeclarativeExtensionBaseFunction] = []
+        renderers: [DeclarativeExtensionRenderer] = []
     ) {
         self.manifestVersion = manifestVersion
         self.id = id
@@ -234,12 +202,11 @@ public struct DeclarativeExtensionManifest: Codable, Hashable, Sendable {
         self.templateVariables = templateVariables
         self.importers = importers
         self.renderers = renderers
-        self.baseFunctions = baseFunctions
     }
 
     private enum CodingKeys: String, CodingKey {
         case manifestVersion, id, name, version, description, author
-        case commands, templateVariables, importers, renderers, baseFunctions
+        case commands, templateVariables, importers, renderers
     }
 
     public init(from decoder: Decoder) throws {
@@ -254,7 +221,6 @@ public struct DeclarativeExtensionManifest: Codable, Hashable, Sendable {
         templateVariables = try values.decodeIfPresent([String: String].self, forKey: .templateVariables) ?? [:]
         importers = try values.decodeIfPresent([DeclarativeExtensionImporter].self, forKey: .importers) ?? []
         renderers = try values.decodeIfPresent([DeclarativeExtensionRenderer].self, forKey: .renderers) ?? []
-        baseFunctions = try values.decodeIfPresent([DeclarativeExtensionBaseFunction].self, forKey: .baseFunctions) ?? []
     }
 }
 
@@ -307,16 +273,16 @@ public enum DeclarativeExtensionError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case let .invalidManifest(message): return "扩展清单无效：\(message)"
-        case let .unsupportedManifestVersion(version): return "不支持 manifestVersion \(version)"
-        case let .duplicateExtension(id): return "重复的扩展 ID：\(id)"
-        case let .duplicateContribution(name): return "扩展点冲突：\(name)"
-        case let .unsafePackage(name): return "扩展包包含不安全的路径或链接：\(name)"
-        case let .fileTooLarge(limit): return "文件超过扩展导入器的 \(limit) 字节限制"
-        case let .unsupportedFileExtension(value): return "导入器不支持 .\(value) 文件"
-        case .unsupportedEncoding: return "文件不是受支持的 UTF-8/UTF-16 文本"
-        case .importerNotFound: return "找不到或未启用该导入器"
-        case .invalidJSON: return "JSON 文件内容无效"
+        case let .invalidManifest(message): return ModuleLocalization.text("扩展清单无效：\(message)")
+        case let .unsupportedManifestVersion(version): return ModuleLocalization.text("不支持 manifestVersion \(version)")
+        case let .duplicateExtension(id): return ModuleLocalization.text("重复的扩展 ID：\(id)")
+        case let .duplicateContribution(name): return ModuleLocalization.text("扩展点冲突：\(name)")
+        case let .unsafePackage(name): return ModuleLocalization.text("扩展包包含不安全的路径或链接：\(name)")
+        case let .fileTooLarge(limit): return ModuleLocalization.text("文件超过扩展导入器的 \(limit) 字节限制")
+        case let .unsupportedFileExtension(value): return ModuleLocalization.text("导入器不支持 .\(value) 文件")
+        case .unsupportedEncoding: return ModuleLocalization.text("文件不是受支持的 UTF-8/UTF-16 文本")
+        case .importerNotFound: return ModuleLocalization.text("找不到或未启用该导入器")
+        case .invalidJSON: return ModuleLocalization.text("JSON 文件内容无效")
         }
     }
 }
@@ -341,12 +307,6 @@ public struct DeclarativeExtensionRendererRegistration: Hashable, Sendable {
     public let extensionID: String
     public let extensionName: String
     public let renderer: DeclarativeExtensionRenderer
-}
-
-public struct DeclarativeExtensionBaseFunctionRegistration: Hashable, Sendable {
-    public let extensionID: String
-    public let extensionName: String
-    public let function: DeclarativeExtensionBaseFunction
 }
 
 public struct DeclarativeTemplateResult: Equatable, Sendable {
@@ -463,18 +423,6 @@ public struct DeclarativeExtensionRuntime: Sendable {
                     extensionID: package.id,
                     extensionName: package.manifest.name,
                     renderer: $0
-                )
-            }
-        }
-    }
-
-    public var baseFunctions: [DeclarativeExtensionBaseFunctionRegistration] {
-        activePackages.flatMap { package in
-            package.manifest.baseFunctions.map {
-                DeclarativeExtensionBaseFunctionRegistration(
-                    extensionID: package.id,
-                    extensionName: package.manifest.name,
-                    function: $0
                 )
             }
         }
@@ -700,7 +648,6 @@ public enum DeclarativeExtensionLoader {
         var extensionIDs = Set<String>()
         var globalVariables = Set<String>()
         var globalRenderers = Set<String>()
-        var globalFunctions = Set<String>()
 
         for child in children {
             let packageName = child.lastPathComponent
@@ -731,20 +678,15 @@ public enum DeclarativeExtensionLoader {
                 }
                 let variables = Set(manifest.templateVariables.keys.map { $0.lowercased() })
                 let renderers = Set(manifest.renderers.map { $0.language.lowercased() })
-                let functions = Set(manifest.baseFunctions.map { $0.name.lowercased() })
                 if let duplicate = variables.intersection(globalVariables).first {
-                    throw DeclarativeExtensionError.duplicateContribution("模板变量 \(duplicate)")
+                    throw DeclarativeExtensionError.duplicateContribution(ModuleLocalization.text("模板变量 \(duplicate)"))
                 }
                 if let duplicate = renderers.intersection(globalRenderers).first {
-                    throw DeclarativeExtensionError.duplicateContribution("渲染语言 \(duplicate)")
-                }
-                if let duplicate = functions.intersection(globalFunctions).first {
-                    throw DeclarativeExtensionError.duplicateContribution("Base 函数 \(duplicate)")
+                    throw DeclarativeExtensionError.duplicateContribution(ModuleLocalization.text("渲染语言 \(duplicate)"))
                 }
                 extensionIDs.insert(manifest.id)
                 globalVariables.formUnion(variables)
                 globalRenderers.formUnion(renderers)
-                globalFunctions.formUnion(functions)
                 packages.append(DeclarativeExtensionPackage(directoryURL: resolved, manifest: manifest))
             } catch {
                 diagnostics.append(DeclarativeExtensionDiagnostic(
@@ -768,90 +710,69 @@ public enum DeclarativeExtensionLoader {
         try require(manifest.id.range(
             of: #"^[a-z0-9][a-z0-9.-]{2,63}$"#,
             options: .regularExpression
-        ) != nil, "id 必须是 3–64 位小写命名空间")
-        try require(!manifest.name.isEmpty && manifest.name.count <= 80, "name 长度必须为 1–80")
+        ) != nil, ModuleLocalization.text("id 必须是 3–64 位小写命名空间"))
+        try require(!manifest.name.isEmpty && manifest.name.count <= 80, ModuleLocalization.text("name 长度必须为 1–80"))
         try require(manifest.version.range(
             of: #"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"#,
             options: .regularExpression
-        ) != nil, "version 必须使用语义版本格式")
-        try require(manifest.description.count <= 500, "description 过长")
-        try require(manifest.commands.count <= 64, "commands 最多 64 个")
-        try require(manifest.templateVariables.count <= 128, "templateVariables 最多 128 个")
-        try require(manifest.importers.count <= 32, "importers 最多 32 个")
-        try require(manifest.renderers.count <= 32, "renderers 最多 32 个")
-        try require(manifest.baseFunctions.count <= 64, "baseFunctions 最多 64 个")
+        ) != nil, ModuleLocalization.text("version 必须使用语义版本格式"))
+        try require(manifest.description.count <= 500, ModuleLocalization.text("description 过长"))
+        try require(manifest.commands.count <= 64, ModuleLocalization.text("commands 最多 64 个"))
+        try require(manifest.templateVariables.count <= 128, ModuleLocalization.text("templateVariables 最多 128 个"))
+        try require(manifest.importers.count <= 32, ModuleLocalization.text("importers 最多 32 个"))
+        try require(manifest.renderers.count <= 32, ModuleLocalization.text("renderers 最多 32 个"))
 
         var contributionIDs = Set<String>()
         for command in manifest.commands {
-            try validateContributionID(command.id, kind: "命令")
-            try require(contributionIDs.insert("command:\(command.id)").inserted, "命令 ID 重复：\(command.id)")
-            try require(!command.title.isEmpty && command.title.count <= 80, "命令标题无效：\(command.id)")
-            try require(command.description.count <= 240 && command.keywords.count <= 240, "命令描述过长：\(command.id)")
+            try validateContributionID(command.id, kind: ModuleLocalization.text("命令"))
+            try require(contributionIDs.insert("command:\(command.id)").inserted, ModuleLocalization.text("命令 ID 重复：\(command.id)"))
+            try require(!command.title.isEmpty && command.title.count <= 80, ModuleLocalization.text("命令标题无效：\(command.id)"))
+            try require(command.description.count <= 240 && command.keywords.count <= 240, ModuleLocalization.text("命令描述过长：\(command.id)"))
             switch command.action.type {
             case .insertText:
-                try require(command.action.text != nil, "insertText 命令缺少 text：\(command.id)")
-                try validateTemplate(command.action.text ?? "", label: "命令 \(command.id)")
-                try require((command.action.cursorOffset ?? 0) >= 0, "cursorOffset 不能为负数")
+                try require(command.action.text != nil, ModuleLocalization.text("insertText 命令缺少 text：\(command.id)"))
+                try validateTemplate(command.action.text ?? "", label: ModuleLocalization.text("命令 \(command.id)"))
+                try require((command.action.cursorOffset ?? 0) >= 0, ModuleLocalization.text("cursorOffset 不能为负数"))
             case .newNote:
-                try require(command.action.title != nil || command.action.body != nil, "newNote 命令至少需要 title 或 body")
-                try validateTemplate(command.action.title ?? "", label: "命令 \(command.id) 标题")
-                try validateTemplate(command.action.body ?? "", label: "命令 \(command.id) 正文")
+                try require(command.action.title != nil || command.action.body != nil, ModuleLocalization.text("newNote 命令至少需要 title 或 body"))
+                try validateTemplate(command.action.title ?? "", label: ModuleLocalization.text("命令 \(command.id) 标题"))
+                try validateTemplate(command.action.body ?? "", label: ModuleLocalization.text("命令 \(command.id) 正文"))
                 if let folder = command.action.folder { try validateFolderTemplate(folder) }
             }
         }
 
         var variableNames = Set<String>()
         for (name, value) in manifest.templateVariables {
-            try require(DeclarativeExtensionSecurity.isTemplateVariable(name), "模板变量名无效：\(name)")
-            try require(!reservedTemplateVariables.contains(name.lowercased()), "不能覆盖宿主模板变量：\(name)")
-            try require(variableNames.insert(name.lowercased()).inserted, "模板变量重复：\(name)")
-            try validateTemplate(value, label: "模板变量 \(name)", maximumLength: 8_192)
+            try require(DeclarativeExtensionSecurity.isTemplateVariable(name), ModuleLocalization.text("模板变量名无效：\(name)"))
+            try require(!reservedTemplateVariables.contains(name.lowercased()), ModuleLocalization.text("不能覆盖宿主模板变量：\(name)"))
+            try require(variableNames.insert(name.lowercased()).inserted, ModuleLocalization.text("模板变量重复：\(name)"))
+            try validateTemplate(value, label: ModuleLocalization.text("模板变量 \(name)"), maximumLength: 8_192)
         }
 
         for importer in manifest.importers {
-            try validateContributionID(importer.id, kind: "导入器")
-            try require(contributionIDs.insert("importer:\(importer.id)").inserted, "导入器 ID 重复：\(importer.id)")
-            try require(!importer.title.isEmpty && importer.title.count <= 80, "导入器标题无效：\(importer.id)")
-            try require(!importer.fileExtensions.isEmpty && importer.fileExtensions.count <= 16, "导入器扩展名必须为 1–16 个")
+            try validateContributionID(importer.id, kind: ModuleLocalization.text("导入器"))
+            try require(contributionIDs.insert("importer:\(importer.id)").inserted, ModuleLocalization.text("导入器 ID 重复：\(importer.id)"))
+            try require(!importer.title.isEmpty && importer.title.count <= 80, ModuleLocalization.text("导入器标题无效：\(importer.id)"))
+            try require(!importer.fileExtensions.isEmpty && importer.fileExtensions.count <= 16, ModuleLocalization.text("导入器扩展名必须为 1–16 个"))
             for fileExtension in importer.fileExtensions {
-                try require(fileExtension.range(of: #"^[A-Za-z0-9]{1,12}$"#, options: .regularExpression) != nil, "文件扩展名无效：\(fileExtension)")
+                try require(fileExtension.range(of: #"^[A-Za-z0-9]{1,12}$"#, options: .regularExpression) != nil, ModuleLocalization.text("文件扩展名无效：\(fileExtension)"))
             }
-            try require((1...4_194_304).contains(importer.maximumBytes), "maximumBytes 必须在 1–4194304")
-            try validateTemplate(importer.titleTemplate, label: "导入器 \(importer.id) 标题")
-            try validateTemplate(importer.bodyTemplate, label: "导入器 \(importer.id) 正文")
+            try require((1...4_194_304).contains(importer.maximumBytes), ModuleLocalization.text("maximumBytes 必须在 1–4194304"))
+            try validateTemplate(importer.titleTemplate, label: ModuleLocalization.text("导入器 \(importer.id) 标题"))
+            try validateTemplate(importer.bodyTemplate, label: ModuleLocalization.text("导入器 \(importer.id) 正文"))
             if let folder = importer.folderTemplate { try validateFolderTemplate(folder) }
         }
 
         var languages = Set<String>()
         for renderer in manifest.renderers {
             let language = renderer.language.lowercased()
-            try require(language.range(of: #"^[a-z][a-z0-9_-]{0,31}$"#, options: .regularExpression) != nil, "渲染语言无效：\(renderer.language)")
-            try require(languages.insert(language).inserted, "渲染语言重复：\(renderer.language)")
-            try require(!["mermaid", "math", "latex", "tex", "html-render", "embed"].contains(language), "不能覆盖内置渲染器：\(language)")
-            try validateTemplate(renderer.titleTemplate, label: "渲染器 \(language) 标题", maximumLength: 1_024)
-            try validateTemplate(renderer.bodyTemplate, label: "渲染器 \(language) 正文")
-        }
-
-        var functionNames = Set<String>()
-        for function in manifest.baseFunctions {
-            let name = function.name.lowercased()
-            try require(name.range(of: #"^[a-z][a-z0-9_]{1,31}$"#, options: .regularExpression) != nil, "Base 函数名无效：\(function.name)")
-            try require(functionNames.insert(name).inserted, "Base 函数重复：\(function.name)")
-            try require(!builtInBaseFunctions.contains(name), "不能覆盖内置 Base 函数：\(function.name)")
-            try require(function.parameters.count <= 8, "Base 函数参数最多 8 个：\(function.name)")
-            var parameters = Set<String>()
-            for parameter in function.parameters {
-                try require(parameter.range(of: #"^[A-Za-z_][A-Za-z0-9_]{0,31}$"#, options: .regularExpression) != nil, "Base 参数名无效：\(parameter)")
-                try require(parameters.insert(parameter.lowercased()).inserted, "Base 参数重复：\(parameter)")
-            }
-            try require(!function.expression.isEmpty && function.expression.count <= 2_048, "Base 表达式长度无效：\(function.name)")
+            try require(language.range(of: #"^[a-z][a-z0-9_-]{0,31}$"#, options: .regularExpression) != nil, ModuleLocalization.text("渲染语言无效：\(renderer.language)"))
+            try require(languages.insert(language).inserted, ModuleLocalization.text("渲染语言重复：\(renderer.language)"))
+            try require(!["mermaid", "math", "latex", "tex", "html-render", "embed"].contains(language), ModuleLocalization.text("不能覆盖内置渲染器：\(language)"))
+            try validateTemplate(renderer.titleTemplate, label: ModuleLocalization.text("渲染器 \(language) 标题"), maximumLength: 1_024)
+            try validateTemplate(renderer.bodyTemplate, label: ModuleLocalization.text("渲染器 \(language) 正文"))
         }
     }
-
-    private static let builtInBaseFunctions: Set<String> = [
-        "today", "now", "date", "prop", "daysbetween", "if", "round",
-        "abs", "length", "lower", "upper", "formatdate", "min", "max",
-    ]
 
     private static let reservedTemplateVariables: Set<String> = [
         "date", "time", "datetime", "user", "selection", "note.title", "note.body",
@@ -859,17 +780,17 @@ public enum DeclarativeExtensionLoader {
     ]
 
     private static func validateContributionID(_ id: String, kind: String) throws {
-        try require(id.range(of: #"^[a-z][a-z0-9-]{0,47}$"#, options: .regularExpression) != nil, "\(kind) ID 无效：\(id)")
+        try require(id.range(of: #"^[a-z][a-z0-9-]{0,47}$"#, options: .regularExpression) != nil, ModuleLocalization.text("\(kind) ID 无效：\(id)"))
     }
 
     private static func validateFolderTemplate(_ template: String) throws {
-        try validateTemplate(template, label: "文件夹", maximumLength: 512)
+        try validateTemplate(template, label: ModuleLocalization.text("文件夹"), maximumLength: 512)
         let placeholderStripped = template.replacingOccurrences(
             of: #"\{\{[A-Za-z][A-Za-z0-9_.-]{0,63}\}\}"#,
             with: "variable",
             options: .regularExpression
         )
-        try require(DeclarativeExtensionSecurity.isSafeRelativePath(placeholderStripped), "文件夹必须是安全的相对路径")
+        try require(DeclarativeExtensionSecurity.isSafeRelativePath(placeholderStripped), ModuleLocalization.text("文件夹必须是安全的相对路径"))
     }
 
     private static func validateTemplate(
@@ -877,10 +798,10 @@ public enum DeclarativeExtensionLoader {
         label: String,
         maximumLength: Int = 65_536
     ) throws {
-        try require(template.count <= maximumLength, "\(label) 模板过长")
+        try require(template.count <= maximumLength, ModuleLocalization.text("\(label) 模板过长"))
         let lowered = template.lowercased()
         let forbidden = ["<script", "javascript:", "```html-render", "~~~html-render"]
-        try require(!forbidden.contains(where: lowered.contains), "\(label) 含被禁止的可执行内容")
+        try require(!forbidden.contains(where: lowered.contains), ModuleLocalization.text("\(label) 含被禁止的可执行内容"))
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {

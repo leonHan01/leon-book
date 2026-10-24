@@ -6,6 +6,8 @@ import SwiftUI
 import WebKit
 
 struct NativePDFEmbedView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let reference: String
     let title: String
     let store: LocalBlogStore
@@ -17,7 +19,7 @@ struct NativePDFEmbedView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Label(title.isEmpty ? "PDF" : title, systemImage: "doc.richtext")
+                Label(title.isEmpty ? "PDF" : title, nativeIcon: "doc.richtext", iconSize: 14)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 Spacer()
@@ -25,7 +27,7 @@ struct NativePDFEmbedView: View {
                     Button {
                         NSWorkspace.shared.open(fileURL)
                     } label: {
-                        Label("在预览中打开", systemImage: "arrow.up.right.square")
+                        Label("在预览中打开", nativeIcon: "arrow.up.right.square")
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
@@ -39,7 +41,7 @@ struct NativePDFEmbedView: View {
                 NativePDFKitView(fileURL: fileURL)
                     .frame(maxWidth: .infinity, minHeight: 520, maxHeight: 680)
             } else if let errorMessage {
-                Label(errorMessage, systemImage: "doc.badge.ellipsis")
+                Label(errorMessage, nativeIcon: "doc.badge.ellipsis")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 140)
             } else {
@@ -47,7 +49,7 @@ struct NativePDFEmbedView: View {
                     .frame(maxWidth: .infinity, minHeight: 140)
             }
         }
-        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+        .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
         .overlay { RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.22)) }
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .task(id: "\(reference)|\(sourceRelativePath ?? "")") {
@@ -55,7 +57,7 @@ struct NativePDFEmbedView: View {
                 for: reference,
                 relativeToMarkdownSource: sourceRelativePath
             )
-            errorMessage = fileURL == nil ? "找不到 PDF：\(reference)" : nil
+            errorMessage = fileURL == nil ? NativeLocalization.text("找不到 PDF：\(reference)") : nil
         }
     }
 }
@@ -100,7 +102,7 @@ struct NativeAudioEmbedView: View {
                         Text(title)
                     }
                 } icon: {
-                    Image(systemName: "waveform")
+                    NativeIcon.image("waveform")
                 }
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
@@ -109,7 +111,7 @@ struct NativeAudioEmbedView: View {
                     Button {
                         NSWorkspace.shared.open(fileURL)
                     } label: {
-                        Label("打开文件", systemImage: "arrow.up.right.square")
+                        Label("打开文件", nativeIcon: "arrow.up.right.square")
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
@@ -120,7 +122,7 @@ struct NativeAudioEmbedView: View {
                 NativeAudioPlayerView(player: player)
                     .frame(maxWidth: .infinity, minHeight: 56, maxHeight: 64)
             } else if let errorMessage {
-                Label(errorMessage, systemImage: "speaker.slash")
+                Label(errorMessage, nativeIcon: "speaker.slash")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
             } else {
@@ -139,7 +141,7 @@ struct NativeAudioEmbedView: View {
                 relativeToMarkdownSource: sourceRelativePath
             )
             guard let fileURL else {
-                errorMessage = "找不到音频：\(reference)"
+                errorMessage = NativeLocalization.text("找不到音频：\(reference)")
                 return
             }
             errorMessage = nil

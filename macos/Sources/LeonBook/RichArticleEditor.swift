@@ -4,6 +4,12 @@ import UniformTypeIdentifiers
 import WebKit
 
 struct RichArticleEditor: NSViewRepresentable {
+    @Environment(\.locale) private var locale
+    @Environment(\.nativeAppPalette) private var appPalette
+    @Environment(\.colorScheme) private var colorScheme
+    private var webPalette: NativeAppPalette { NativeAppPalette(theme: appPalette.theme, colorScheme: colorScheme) }
+    private var language: NativeAppLanguage { locale.identifier.hasPrefix("en") ? .english : .simplifiedChinese }
+
     @Binding var html: String
     let documentID: String
     var isEditable = true
@@ -18,19 +24,19 @@ struct RichArticleEditor: NSViewRepresentable {
     var onOutlinePositions: (([CGFloat]) -> Void)? = nil
 
     static let pageHTML: String = {
-        guard let url = Bundle.module.url(forResource: "RichArticleEditor", withExtension: "html"),
+        guard let url = Bundle.leonBookResources.url(forResource: "RichArticleEditor", withExtension: "html"),
               let html = try? String(contentsOf: url, encoding: .utf8) else { return "" }
-        guard let scriptURL = Bundle.module.url(forResource: "RichArticleInteractions", withExtension: "js"),
-              let styleURL = Bundle.module.url(forResource: "RichArticleInteractions", withExtension: "css"),
+        guard let scriptURL = Bundle.leonBookResources.url(forResource: "RichArticleInteractions", withExtension: "js"),
+              let styleURL = Bundle.leonBookResources.url(forResource: "RichArticleInteractions", withExtension: "css"),
               let script = try? String(contentsOf: scriptURL, encoding: .utf8),
               let style = try? String(contentsOf: styleURL, encoding: .utf8) else { return "" }
-        guard let caretScriptURL = Bundle.module.url(forResource: "RichArticleCaret", withExtension: "js"),
-              let caretStyleURL = Bundle.module.url(forResource: "RichArticleCaret", withExtension: "css"),
+        guard let caretScriptURL = Bundle.leonBookResources.url(forResource: "RichArticleCaret", withExtension: "js"),
+              let caretStyleURL = Bundle.leonBookResources.url(forResource: "RichArticleCaret", withExtension: "css"),
               let caretScript = try? String(contentsOf: caretScriptURL, encoding: .utf8),
               let caretStyle = try? String(contentsOf: caretStyleURL, encoding: .utf8) else { return "" }
-        guard let boardURL = Bundle.module.url(forResource: "RichArticleWhiteboards", withExtension: "js"),
+        guard let boardURL = Bundle.leonBookResources.url(forResource: "RichArticleWhiteboards", withExtension: "js"),
               let boardScript = try? String(contentsOf: boardURL, encoding: .utf8) else { return "" }
-        guard let audioURL = Bundle.module.url(forResource: "RichArticleAudio", withExtension: "js"),
+        guard let audioURL = Bundle.leonBookResources.url(forResource: "RichArticleAudio", withExtension: "js"),
               let audioScript = try? String(contentsOf: audioURL, encoding: .utf8) else { return "" }
         return html.replacingOccurrences(of: "/* editor-interactions-script */", with: script)
             .replacingOccurrences(of: "/* editor-interactions-style */", with: style)
@@ -44,6 +50,7 @@ struct RichArticleEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        NativeWebLocalization.install(on: configuration, language: language)
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.add(context.coordinator, name: "richArticle")
         let media = RichArticleMediaHandler(store: store, sourceRelativePath: sourceRelativePath)
@@ -83,6 +90,8 @@ struct RichArticleEditor: NSViewRepresentable {
         private var lastID: String?
         private var lastEditable: Bool?
         private var lastFontSize: CGFloat?
+        private var lastPalette: NativeAppPalette?
+        private var lastLanguage: NativeAppLanguage?
         private var whiteboard: ArticleWhiteboardWindow?
         private var whiteboardRequestID: String?
 
@@ -90,6 +99,14 @@ struct RichArticleEditor: NSViewRepresentable {
 
         func synchronize(_ webView: WKWebView) {
             guard isReady else { return }
+            if lastLanguage != parent.language {
+                lastLanguage = parent.language
+                NativeWebLocalization.apply(parent.language, to: webView)
+            }
+            if lastPalette != parent.webPalette {
+                lastPalette = parent.webPalette
+                NativeWebTheme.apply(parent.webPalette, to: webView)
+            }
             if lastID != parent.documentID || !parent.isEditable { closeWhiteboard() }
             let html = RichArticleDocument.convertingLegacyBody(parent.html)
             guard lastBody != html || lastID != parent.documentID
@@ -124,7 +141,7 @@ struct RichArticleEditor: NSViewRepresentable {
                       let names = payload["names"] as? [String], let view = message.webView else { return }
                 guard let urls = NativeArticleAudioDrop.fileURLs(from: audioDropPasteboard, matching: names) else {
                     cancelAudio(requestID: requestID, in: view)
-                    showAudioError("无法读取拖入的 MP3 文件，请从访达重新拖入，或使用“插入音频”按钮。", in: view)
+                    showAudioError(NativeLocalization.text("无法读取拖入的 MP3 文件，请从访达重新拖入，或使用“插入音频”按钮。"), in: view)
                     return
                 }
                 insertAudio(urls: urls, requestID: requestID, in: view)
@@ -157,7 +174,7 @@ struct RichArticleEditor: NSViewRepresentable {
                 guard parent.isEditable, let requestID = payload["requestID"] as? String,
                       let view = message.webView else { return }
                 let panel = NSOpenPanel()
-                panel.title = "替换图片"
+                panel.title = NativeLocalization.text("替换图片")
                 panel.allowedContentTypes = [.png, .jpeg, .gif, .tiff, .webP, .bmp]
                 panel.allowsMultipleSelection = false
                 let source: String
@@ -172,12 +189,12 @@ struct RichArticleEditor: NSViewRepresentable {
             case "requestLink":
                 guard parent.isEditable, let view = message.webView else { return }
                 let alert = NSAlert()
-                alert.messageText = "添加链接"
+                alert.messageText = NativeLocalization.text("添加链接")
                 let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 26))
                 field.placeholderString = "https://example.com"
                 alert.accessoryView = field
-                alert.addButton(withTitle: "插入")
-                alert.addButton(withTitle: "取消")
+                alert.addButton(withTitle: NativeLocalization.text("插入"))
+                alert.addButton(withTitle: NativeLocalization.text("取消"))
                 guard alert.runModal() == .alertFirstButtonReturn else { return }
                 view.callAsyncJavaScript("window.LeonArticle.insertLink(url)", arguments: ["url": field.stringValue], in: nil, in: .page) { _ in }
             default: break
@@ -193,8 +210,8 @@ struct RichArticleEditor: NSViewRepresentable {
         private func chooseAudio(requestID: String, in view: WKWebView) {
             guard parent.store != nil, parent.onImportAudio != nil else { cancelAudio(requestID: requestID, in: view); return }
             let panel = NSOpenPanel()
-            panel.title = "插入音频"
-            panel.message = "选择一个 MP3 音频，插入文章后可直接播放。"
+            panel.title = NativeLocalization.text("插入音频")
+            panel.message = NativeLocalization.text("选择一个 MP3 音频，插入文章后可直接播放。")
             panel.allowedContentTypes = [.mp3]
             panel.canChooseDirectories = false
             panel.allowsMultipleSelection = false
@@ -208,7 +225,7 @@ struct RichArticleEditor: NSViewRepresentable {
 
         private func showAudioError(_ message: String, in view: WKWebView) {
             let alert = NSAlert()
-            alert.messageText = "无法插入音频"
+            alert.messageText = NativeLocalization.text("无法插入音频")
             alert.informativeText = message
             if let window = view.window { alert.beginSheetModal(for: window) { _ in } }
         }
@@ -235,7 +252,7 @@ struct RichArticleEditor: NSViewRepresentable {
                         arguments: ["requestID": requestID, "items": imported.map { ["source": $0.url, "title": $0.name] }], in: nil, contentWorld: .page
                     )
                     guard isCurrent(), let body = result as? String, RichArticleDocument.isHTML(body) else {
-                        throw NativeStoreError.fileSystem("文章中的插入位置已改变，请重新插入音频。")
+                        throw NativeStoreError.fileSystem(NativeLocalization.text("文章中的插入位置已改变，请重新插入音频。"))
                     }
                     lastBody = body
                     parent.html = body
@@ -266,19 +283,19 @@ struct RichArticleEditor: NSViewRepresentable {
                     let controller = ArticleWhiteboardWindow(scene: scene, onSave: { [weak self, weak view] scene, preview in
                         guard let self, let view, self.parent.documentID == documentID, self.parent.isEditable,
                               self.parent.store === store, self.whiteboardRequestID == requestID else {
-                            throw NativeStoreError.fileSystem("当前文章已改变，画板未写入文章。")
+                            throw NativeStoreError.fileSystem(NativeLocalization.text("当前文章已改变，画板未写入文章。"))
                         }
                         let asset = try await store.saveWhiteboard(scene: scene, preview: preview)
                         guard self.parent.documentID == documentID, self.parent.isEditable,
                               self.parent.store === store, self.whiteboardRequestID == requestID else {
-                            throw NativeStoreError.fileSystem("当前文章已改变，画板未写入文章。")
+                            throw NativeStoreError.fileSystem(NativeLocalization.text("当前文章已改变，画板未写入文章。"))
                         }
                         let applied = try await view.callAsyncJavaScript(
                             "return window.LeonArticle.completeWhiteboard(requestID, source, preview)",
                             arguments: ["requestID": requestID, "source": asset.source, "preview": asset.preview], in: nil, contentWorld: .page
                         )
                         guard applied as? Bool == true else {
-                            throw NativeStoreError.fileSystem("文章中的原位置已改变，请取消后重新插入画板。")
+                            throw NativeStoreError.fileSystem(NativeLocalization.text("文章中的原位置已改变，请取消后重新插入画板。"))
                         }
                     }, onClose: { [weak self, weak view] in
                         guard let self, self.whiteboardRequestID == requestID else { return }
@@ -293,7 +310,7 @@ struct RichArticleEditor: NSViewRepresentable {
                     whiteboardRequestID = nil
                     view.callAsyncJavaScript("window.LeonArticle.cancelWhiteboard(requestID)", arguments: ["requestID": requestID], in: nil, in: .page) { _ in }
                     let alert = NSAlert()
-                    alert.messageText = "无法打开画板"
+                    alert.messageText = NativeLocalization.text("无法打开画板")
                     alert.informativeText = error.localizedDescription
                     if let window = view.window { alert.beginSheetModal(for: window) { _ in } }
                 }

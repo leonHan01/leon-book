@@ -63,7 +63,7 @@ extension LocalBlogStore {
               let text = row.text(at: 4),
               let createdAt = row.text(at: 7),
               let updatedAt = row.text(at: 8) else {
-            throw NativeStoreError.fileSystem("SQLite：文章评论记录不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：文章评论记录不完整"))
         }
         let selection: NativeArticleCommentSelection?
         if let quote = row.text(at: 5), let anchorID = row.text(at: 6) {

@@ -186,7 +186,7 @@ public enum NativeArticleStatus: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-public struct NativeMedia: Codable, Hashable, Identifiable {
+public struct NativeMedia: Codable, Hashable, Identifiable, Sendable {
     public let kind: String
     public let name: String
     public let size: Int
@@ -1706,6 +1706,8 @@ enum NativeSection: Hashable {
     case articles
     case graph
     case canvas
+    case photos
+    case mediaLibrary
     case moments
     case qAndA
     case todos
@@ -1713,6 +1715,17 @@ enum NativeSection: Hashable {
     case editor
     case trash
     case settings
+
+    var showsArticleDirectory: Bool {
+        switch self {
+        case .articles, .reader, .editor: return true
+        default: return false
+        }
+    }
+
+    var hasNavigationSidebar: Bool {
+        showsArticleDirectory || self == .mediaLibrary
+    }
 }
 
 enum NativeSearchPresentation: String, Identifiable {
@@ -1747,39 +1760,39 @@ enum NativeStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .conflict:
-            return "这篇文章已在其他窗口中更新，请重新加载后再保存。"
+            return NativeLocalization.text("这篇文章已在其他窗口中更新，请重新加载后再保存。")
         case .readOnlyArticleSource:
-            return "当前 Markdown 目录以只读方式挂载；请切换为“直接编辑”后再修改文章。"
+            return NativeLocalization.text("当前 Markdown 目录以只读方式挂载；请切换为“直接编辑”后再修改文章。")
         case .reservedSlug:
-            return "不能使用 inbox 或 moments 作为文章地址。"
+            return NativeLocalization.text("不能使用 inbox 或 moments 作为文章地址。")
         case .slugTaken:
-            return "已有相同地址的文章，包括回收站中的文章。"
+            return NativeLocalization.text("已有相同地址的文章，包括回收站中的文章。")
         case .invalidArticle:
-            return "标题和正文不能为空。"
+            return NativeLocalization.text("标题和正文不能为空。")
         case .invalidArticleSelection:
-            return "请先在正文中选择要提取的非空文字。"
+            return NativeLocalization.text("请先在正文中选择要提取的非空文字。")
         case .noLevel2Sections:
-            return "正文中没有可拆分的二级标题（##）。"
+            return NativeLocalization.text("正文中没有可拆分的二级标题（##）。")
         case .invalidArticleMerge:
-            return "不能将文章合并到自身，或合并目标已经不存在。"
+            return NativeLocalization.text("不能将文章合并到自身，或合并目标已经不存在。")
         case .invalidMoment:
-            return "微博需要文字、至少一张图片或一个视频。"
+            return NativeLocalization.text("微博需要文字、至少一张图片或一个视频。")
         case .invalidQuestion:
-            return "问题标题需要 1 到 200 个字符。"
+            return NativeLocalization.text("问题标题需要 1 到 200 个字符。")
         case .invalidAnswer:
-            return "回答需要文字或至少一张图片，文字最多 10000 个字符。"
+            return NativeLocalization.text("回答需要文字或至少一张图片，文字最多 10000 个字符。")
         case .questionAnswerConflict:
-            return "这条回答已在其他窗口中更新，请重新载入后再编辑。"
+            return NativeLocalization.text("这条回答已在其他窗口中更新，请重新载入后再编辑。")
         case .invalidComment:
-            return "评论需要 1 到 2000 个字符。"
+            return NativeLocalization.text("评论需要 1 到 2000 个字符。")
         case .invalidUser:
-            return "请输入 1 到 40 个字符的用户名。"
+            return NativeLocalization.text("请输入 1 到 40 个字符的用户名。")
         case .notFound:
-            return "找不到这篇文章或本地媒体文件。"
+            return NativeLocalization.text("找不到这篇文章或本地媒体文件。")
         case .userAlreadyExists:
-            return "该用户名已经存在。"
+            return NativeLocalization.text("该用户名已经存在。")
         case let .fileSystem(message):
-            return "本地文件操作失败：\(message)"
+            return NativeLocalization.text("本地文件操作失败：\(message)")
         }
     }
 }

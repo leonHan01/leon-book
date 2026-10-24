@@ -223,7 +223,7 @@ extension NativeAppModel {
         let command = invocation.id
         guard firstPartyModuleAllowsCommand(command) else {
             if let module = firstPartyModuleRuntime.catalog.module(owningCommand: command.rawValue) {
-                errorMessage = "“\(module.name)”模块已停用，无法执行该命令。"
+                errorMessage = NativeLocalization.text("“\(NativeLocalization.string(module.name, language: NativeLocalization.currentLanguage))”模块已停用，无法执行该命令。")
                 recordFirstPartyModuleEvent(
                     moduleID: module.id,
                     name: "module.authorization-denied",
@@ -233,7 +233,7 @@ extension NativeAppModel {
             return
         }
         guard let definition = commandRegistry.definition(for: command) else {
-            errorMessage = "找不到命令“\(command.rawValue)”。"
+            errorMessage = NativeLocalization.text("找不到命令“\(command.rawValue)”。")
             return
         }
         guard definition.isAvailable(in: commandContext) else { return }
@@ -298,20 +298,20 @@ extension NativeAppModel {
         if let sourceURL { bodyParts.append("来源：\(sourceURL)") }
         if !bodyParts.isEmpty { editor.body = bodyParts.joined(separator: "\n\n") }
         if title != nil || !bodyParts.isEmpty {
-            editorAutosaveStatus = "已从自动化入口预填，等待保存…"
+            editorAutosaveStatus = NativeLocalization.text("已从自动化入口预填，等待保存…")
             scheduleEditorAutosave()
         }
     }
 
     private func performOpenArticleCommand(_ invocation: NativeCommandInvocation) {
         guard let slug = invocation.arguments["slug"], !slug.isEmpty else {
-            errorMessage = "打开文章命令缺少 slug。"
+            errorMessage = NativeLocalization.text("打开文章命令缺少 slug。")
             return
         }
         guard let article = articles.first(where: {
             $0.slug.caseInsensitiveCompare(slug) == .orderedSame
         }) else {
-            errorMessage = "找不到 slug 为“\(slug)”的文章。"
+            errorMessage = NativeLocalization.text("找不到 slug 为“\(slug)”的文章。")
             return
         }
         openArticleLink(article.slug, disposition: .currentTab)

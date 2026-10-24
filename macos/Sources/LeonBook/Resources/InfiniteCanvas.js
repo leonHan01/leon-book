@@ -1,5 +1,7 @@
 (() => {
   'use strict';
+  const t = (...args) => window.LeonL10n.text(...args);
+  window.LeonL10n.bindChrome(document);
   const $ = id => document.getElementById(id);
   const viewport = $('viewport'), world = $('world'), layer = $('nodes'), svg = $('edges');
   const post = (type, data = {}) => window.webkit?.messageHandlers.canvas.postMessage({ type, ...data });
@@ -18,6 +20,8 @@
   function local(event) { const r = viewport.getBoundingClientRect(); return { x: event.clientX - r.left, y: event.clientY - r.top }; }
   function point(event) { const p = local(event); return { x: (p.x - v.x) / v.zoom, y: (p.y - v.y) / v.zoom }; }
   function center() { return { x: (viewport.clientWidth / 2 - v.x) / v.zoom, y: (viewport.clientHeight / 2 - v.y) / v.zoom }; }
+  let statusKey = '本地工作区';
+  function setStatus(key) { statusKey = key; $('status').textContent = t(key); }
   function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toast.timer); toast.timer = setTimeout(() => $('toast').hidden = true, 6500); }
   function setBusy(value) {
     busy = value;
@@ -34,7 +38,7 @@
   function save() {
     if (!boardID || busy) return;
     doc.leonbook.viewport = { ...v };
-    $('status').textContent = '正在保存…';
+    setStatus('正在保存…');
     post('save', { id: boardID, document: JSON.stringify(doc) });
   }
   function change(action) { checkpoint(); action(); save(); render(); }
@@ -55,7 +59,7 @@
   }
   function addNode(fields, position) {
     if (!boardID || busy) return;
-    if (doc.nodes.length >= 1500) { toast('每张画布最多 1,500 张卡片，请新建画布。'); return; }
+    if (doc.nodes.length >= 1500) { toast(t('每张画布最多 1,500 张卡片，请新建画布。')); return; }
     const p = position || center(), group = fields.type === 'group';
     const node = { id: uid(), x: Math.round(p.x - (group ? 330 : 180)), y: Math.round(p.y - (group ? 230 : 130)), width: group ? 660 : 360, height: group ? 460 : 300, ...fields };
     change(() => { group ? doc.nodes.unshift(node) : doc.nodes.push(node); selection = new Set([node.id]); selectedEdge = null; });
@@ -104,7 +108,7 @@
     $('undo').disabled = !undo.length; $('redo').disabled = !redo.length;
     $('selection-tools').hidden = !selection.size && !selectedEdge;
     const edge = doc.edges.find(e => e.id === selectedEdge), node = selection.size === 1 ? doc.nodes.find(n => selection.has(n.id)) : null;
-    $('selection-label').textContent = edge ? '连线' : `${selection.size} 张卡片`;
+    $('selection-label').textContent = edge ? t('连线') : t('%@ 张卡片', selection.size);
     $('label').hidden = !edge && node?.type !== 'group';
     if (document.activeElement !== $('label')) $('label').value = edge?.label || node?.label || '';
     $('color').value = (edge || node)?.color || '';
@@ -129,7 +133,7 @@
       el.style.left = node.x + 'px'; el.style.top = node.y + 'px'; el.style.width = node.width + 'px'; el.style.height = node.height + 'px';
       el.style.setProperty('--node-color', colorOf(node.color) || 'var(--border)');
       el.classList.toggle('selected', selection.has(node.id));
-      if (node.type === 'group') el.querySelector('.card-title').textContent = node.label || '未命名分组';
+      if (node.type === 'group') el.querySelector('.card-title').textContent = node.label || t('未命名分组');
       if (!el.isConnected) layer.append(el);
       el.style.zIndex = index;
     }
@@ -173,7 +177,16 @@
     }
   }
   function button(label, action, title) {
-    const el = document.createElement('button'); el.textContent = label; if (title) el.title = title;
+    const el = document.createElement('button');
+    const icons = {
+      external: '<path d="M13 3h8v8M21 3 11 13M9 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',
+      refresh: '<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/>',
+    };
+    if (icons[label]) {
+      el.innerHTML = '<svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true">' + icons[label] + '</svg>';
+      el.setAttribute('aria-label', title);
+    } else el.textContent = label;
+    if (title) el.title = title;
     el.addEventListener('click', event => { event.stopPropagation(); action(event); }); return el;
   }
   function placeholder(body, title, message) {
@@ -185,28 +198,28 @@
     const el = document.createElement('article'); el.className = 'card' + (node.type === 'group' ? ' group' : ''); el.dataset.id = node.id;
     const header = document.createElement('div'); header.className = 'card-header';
     const kind = document.createElement('span'); kind.className = 'card-type';
-    kind.textContent = node.leonbook?.kind === 'article' ? '文章' : node.leonbook?.kind === 'moment' ? '微博' : ({ text: '便签', link: '网页', file: '文件', group: '分组' })[node.type];
+    kind.textContent = node.leonbook?.kind === 'article' ? t('文章') : node.leonbook?.kind === 'moment' ? t('微博') : ({ text: t('便签'), link: t('网页'), file: t('文件'), group: t('分组') })[node.type];
     const title = document.createElement('span'); title.className = 'card-title';
-    title.textContent = contentCache.get(node.id)?.title || node.leonbook?.title || node.label || (node.type === 'link' ? new URL(node.url).hostname : node.file?.split('/').pop() || '便签');
+    title.textContent = contentCache.get(node.id)?.title || node.leonbook?.title || node.label || (node.type === 'link' ? new URL(node.url).hostname : node.file?.split('/').pop() || t('便签'));
     header.append(kind, title);
-    if (node.leonbook?.kind === 'article') header.append(button('↗', () => post('openArticle', { slug: node.leonbook.id }), '打开原文'));
-    else if (node.type === 'link') header.append(button('↗', () => post('external', { url: node.url }), '在浏览器中打开'));
-    else if (node.type === 'file') header.append(button('↗', () => post('openFile', { path: node.file }), '在 Finder 中显示'));
-    if (node.type === 'file' || node.leonbook) header.append(button('↻', () => { requested.delete(node.id); contentCache.delete(node.id); fillBody(node, body); }, '刷新原内容'));
+    if (node.leonbook?.kind === 'article') header.append(button('external', () => post('openArticle', { slug: node.leonbook.id }), t('打开原文')));
+    else if (node.type === 'link') header.append(button('external', () => post('external', { url: node.url }), t('在浏览器中打开')));
+    else if (node.type === 'file') header.append(button('external', () => post('openFile', { path: node.file }), t('在 Finder 中显示')));
+    if (node.type === 'file' || node.leonbook) header.append(button('refresh', () => { requested.delete(node.id); contentCache.delete(node.id); fillBody(node, body); }, t('刷新原内容')));
     el.append(header);
     const body = document.createElement('div'); body.className = 'card-body'; el.append(body);
     if (node.type === 'group') body.style.pointerEvents = 'none';
     else fillBody(node, body);
     if (node.type !== 'group') for (const side of ['top', 'right', 'bottom', 'left']) {
-      const port = document.createElement('button'); port.className = 'port'; port.dataset.side = side; port.title = '拖动或点击，连接到另一张卡片'; port.setAttribute('aria-label', `从${side}侧连线`); el.append(port);
+      const port = document.createElement('button'); port.className = 'port'; port.dataset.side = side; port.title = t('拖动或点击，连接到另一张卡片'); port.setAttribute('aria-label', t('从%@侧连线', t(side))); el.append(port);
     }
-    const resize = document.createElement('div'); resize.className = 'resize'; resize.title = '拖动调整大小'; el.append(resize);
+    const resize = document.createElement('div'); resize.className = 'resize'; resize.title = t('拖动调整大小'); el.append(resize);
     return el;
   }
   function fillBody(node, body) {
     body.className = 'card-body'; body.replaceChildren();
     if (node.type === 'text' && !node.leonbook) {
-      body.classList.add('note'); const textarea = document.createElement('textarea'); textarea.value = node.text || ''; textarea.placeholder = '写下想法…'; textarea.setAttribute('aria-label', '便签内容');
+      body.classList.add('note'); const textarea = document.createElement('textarea'); textarea.value = node.text || ''; textarea.placeholder = t('写下想法…'); textarea.setAttribute('aria-label', t('便签内容'));
       let editingStarted = false;
       textarea.addEventListener('focus', () => { editingStarted = false; selection = new Set([node.id]); selectedEdge = null; scheduleRender(); });
       textarea.addEventListener('input', () => { const live = doc.nodes.find(n => n.id === node.id); if (live) { if (!editingStarted) { checkpoint(); editingStarted = true; } live.text = textarea.value; save(); } });
@@ -214,19 +227,19 @@
     }
     if (node.type === 'link') {
       const wrap = placeholder(body, new URL(node.url).hostname, node.url);
-      wrap.append(button('在画布中加载网页', () => {
+      wrap.append(button(t('在画布中加载网页'), () => {
         activated.add(node.id); body.classList.add('embed'); body.replaceChildren(); const iframe = document.createElement('iframe');
         iframe.title = node.url; iframe.sandbox = 'allow-scripts allow-forms allow-same-origin'; iframe.referrerPolicy = 'no-referrer'; iframe.src = node.url; body.append(iframe);
-        toast('如网页留白或拒绝嵌入，可点击卡片右上角在浏览器中打开。');
+        toast(t('如网页留白或拒绝嵌入，可点击卡片右上角在浏览器中打开。'));
       })); return;
     }
     const content = contentCache.get(node.id);
     if (!content) {
-      placeholder(body, '正在读取内容…', '');
+      placeholder(body, t('正在读取内容…'), '');
       if (!requested.has(node.id)) { requested.add(node.id); post('content', { id: boardID, nodeID: node.id }); }
       return;
     }
-    if (content.error) { placeholder(body, '内容暂不可用', content.error); return; }
+    if (content.error) { placeholder(body, t('内容暂不可用'), content.error); return; }
     if (content.kind === 'article') { body.append(sanitizedArticle(content.html, content.source)); return; }
     if (content.kind === 'moment') {
       const text = document.createElement('div'); text.style.whiteSpace = 'pre-wrap'; text.textContent = content.text; body.append(text);
@@ -235,19 +248,19 @@
     }
     if (['image', 'video', 'audio'].includes(content.kind)) { body.classList.add('media'); appendMedia(body, content.kind, content.path, content.title); return; }
     if (content.kind === 'pdf') {
-      const wrap = placeholder(body, 'PDF 文档', content.title);
-      wrap.append(button('在画布中预览 PDF', () => { body.classList.add('embed'); body.replaceChildren(); const iframe = document.createElement('iframe'); iframe.title = content.title; iframe.sandbox = ''; iframe.src = mediaURL(content.path); body.append(iframe); })); return;
+      const wrap = placeholder(body, t('PDF 文档'), content.title);
+      wrap.append(button(t('在画布中预览 PDF'), () => { body.classList.add('embed'); body.replaceChildren(); const iframe = document.createElement('iframe'); iframe.title = content.title; iframe.sandbox = ''; iframe.src = mediaURL(content.path); body.append(iframe); })); return;
     }
-    const wrap = placeholder(body, '文件附件', content.title);
-    wrap.append(button('在 Finder 中显示', () => post('openFile', { path: content.path })));
+    const wrap = placeholder(body, t('文件附件'), content.title);
+    wrap.append(button(t('在 Finder 中显示'), () => post('openFile', { path: content.path })));
   }
   function appendMedia(body, kind, path, name) {
     const tag = kind === 'image' ? 'img' : kind === 'video' ? 'video' : kind === 'audio' ? 'audio' : null;
     if (!tag) return;
     const media = document.createElement(tag); media.src = mediaURL(path); media.title = name || '';
-    if (tag === 'img') { media.alt = name || '图片'; media.loading = 'lazy'; }
+    if (tag === 'img') { media.alt = name || t('图片'); media.loading = 'lazy'; }
     else { media.controls = true; media.preload = 'none'; }
-    media.addEventListener('error', () => { const error = document.createElement('p'); error.textContent = '媒体无法预览，请从卡片右上角打开原文件。'; error.className = 'placeholder'; media.replaceWith(error); }, { once: true });
+    media.addEventListener('error', () => { const error = document.createElement('p'); error.textContent = t('媒体无法预览，请从卡片右上角打开原文件。'); error.className = 'placeholder'; media.replaceWith(error); }, { once: true });
     body.append(media);
   }
   function sanitizedArticle(html, source) {
@@ -364,7 +377,7 @@
     else if (cmd && ['+', '=', '-'].includes(key)) { event.preventDefault(); zoomTo(v.zoom * (key === '-' ? .8 : 1.25)); save(); }
     else if (!cmd && key === 'f') fit();
     else if (!cmd && key === 'n') addNode({ type: 'text', text: '' });
-    else if (!cmd && key === 'g') addNode({ type: 'group', label: '新分组', color: '6' });
+    else if (!cmd && key === 'g') addNode({ type: 'group', label: t('新分组'), color: '6' });
     else if (!cmd && key === 'l') showURL();
   });
   document.addEventListener('keyup', event => { if (event.key === ' ') space = false; });
@@ -377,16 +390,16 @@
   viewport.addEventListener('dragover', event => { if (boardID) event.preventDefault(); });
   viewport.addEventListener('drop', event => {
     if (!boardID) return; event.preventDefault();
-    if (event.dataTransfer.files.length) { toast('请点击“文件”，选择要加入画布的本地素材。'); return; }
+    if (event.dataTransfer.files.length) { toast(t('请点击“文件”，选择要加入画布的本地素材。')); return; }
     const text = event.dataTransfer.getData('text/uri-list').split('\n').find(line => line && !line.startsWith('#')) || event.dataTransfer.getData('text/plain');
     if (text) { const url = webURL(text.trim()); addNode(url ? { type: 'link', url } : { type: 'text', text }, point(event)); }
   });
   function showURL() { $('url-input').value = ''; $('url-dialog').showModal(); $('url-input').focus(); }
-  function requestLibrary() { $('results').textContent = '正在搜索…'; post('library', { kind: libraryKind, query: $('search').value }); }
+  function requestLibrary() { $('results').textContent = t('正在搜索…'); post('library', { kind: libraryKind, query: $('search').value }); }
   $('new-board').onclick = $('start').onclick = () => { save(); setBusy(true); post('create'); };
   $('boards').onchange = () => { if ($('boards').value) { save(); setBusy(true); post('open', { id: $('boards').value }); } };
   $('title').onfocus = () => { if (!titleEditing) checkpoint(); titleEditing = true; };
-  $('title').oninput = () => { doc.leonbook.title = $('title').value || '未命名画布'; save(); };
+  $('title').oninput = () => { doc.leonbook.title = $('title').value || t('未命名画布'); save(); };
   $('title').onblur = () => titleEditing = false;
   for (const name of ['import', 'export']) $(name).onclick = () => { document.querySelector('.more').open = false; save(); post(name); };
   $('delete-board').onclick = () => { document.querySelector('.more').open = false; save(); post('delete'); };
@@ -396,10 +409,10 @@
   document.querySelectorAll('[data-kind]').forEach(el => el.onclick = () => { libraryKind = el.dataset.kind; document.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('active', b === el)); requestLibrary(); });
   $('search').oninput = () => { clearTimeout(queryTimer); queryTimer = setTimeout(requestLibrary, 180); };
   $('note').onclick = () => addNode({ type: 'text', text: '' }); $('link').onclick = showURL;
-  $('file').onclick = () => post('attachment'); $('group').onclick = () => addNode({ type: 'group', label: '新分组', color: '6' });
+  $('file').onclick = () => post('attachment'); $('group').onclick = () => addNode({ type: 'group', label: t('新分组'), color: '6' });
   $('undo').onclick = () => history(-1); $('redo').onclick = () => history(1);
   $('remove').onclick = removeSelection; $('duplicate').onclick = duplicate;
-  $('connect').onclick = () => { connecting = { id: [...selection][0], side: 'right' }; toast('点击另一张卡片完成连线，Escape 取消。'); render(); };
+  $('connect').onclick = () => { connecting = { id: [...selection][0], side: 'right' }; toast(t('点击另一张卡片完成连线，Escape 取消。')); render(); };
   $('color').onchange = () => change(() => { for (const node of doc.nodes) if (selection.has(node.id)) node.color = $('color').value; const edge = doc.edges.find(e => e.id === selectedEdge); if (edge) edge.color = $('color').value; });
   $('label').onfocus = checkpoint;
   $('label').oninput = () => { const item = doc.edges.find(e => e.id === selectedEdge) || doc.nodes.find(n => selection.has(n.id)); if (item) { item.label = $('label').value; save(); render(); } };
@@ -412,7 +425,7 @@
     receive(action, payload) {
       if (action === 'catalog') {
         $('boards').replaceChildren();
-        if (!payload.items.length) $('boards').add(new Option('尚无画布', ''));
+        if (!payload.items.length) $('boards').add(new Option(t('尚无画布'), ''));
         for (const item of payload.items) $('boards').add(new Option(item.title, item.id));
         $('boards').value = boardID;
       } else if (action === 'load') {
@@ -420,26 +433,26 @@
         selection.clear(); selectedEdge = null; connecting = null; gesture = null; undo = []; redo = []; titleEditing = false;
         setBusy(false); contentCache.clear(); resetCards(); $('boards').value = boardID; $('title').value = doc.leonbook.title; $('title').disabled = false;
         $('welcome').hidden = true; for (const id of ['tools', 'navigation', 'hint']) $(id).hidden = false;
-        $('status').textContent = '已保存到本地'; $('retry').hidden = true; render();
+        setStatus('已保存到本地'); $('retry').hidden = true; render();
       } else if (action === 'empty') {
         boardID = ''; doc.nodes = []; doc.edges = []; selection.clear(); selectedEdge = null; resetCards(); render(); $('welcome').hidden = false;
         for (const id of ['tools', 'navigation', 'hint', 'selection-tools', 'library']) $(id).hidden = true;
-        $('title').value = ''; $('title').disabled = true; $('status').textContent = '本地工作区';
+        $('title').value = ''; $('title').disabled = true; setStatus('本地工作区');
       } else if (action === 'saved') {
-        if (payload.forked) { boardID = payload.id; doc.leonbook.title = payload.title; $('title').value = payload.title; toast('检测到其他窗口的修改，已将本次内容另存为冲突副本。'); }
+        if (payload.forked) { boardID = payload.id; doc.leonbook.title = payload.title; $('title').value = payload.title; toast(t('检测到其他窗口的修改，已将本次内容另存为冲突副本。')); }
         if (payload.id !== boardID) return;
         const option = [...$('boards').options].find(o => o.value === boardID); if (option) option.textContent = doc.leonbook.title;
-        $('status').textContent = payload.pending ? '正在保存…' : '已保存到本地'; $('retry').hidden = true;
+        setStatus(payload.pending ? '正在保存…' : '已保存到本地'); $('retry').hidden = true;
       } else if (action === 'library') {
         if (payload.kind !== libraryKind || payload.query !== $('search').value) return;
         $('results').replaceChildren();
-        if (!payload.items.length) $('results').textContent = '没有匹配的内容';
+        if (!payload.items.length) $('results').textContent = t('没有匹配的内容');
         for (const item of payload.items) {
           const el = button('', () => {
-            const ref = { kind: item.kind, id: item.id, title: item.title || '微博' };
+            const ref = { kind: item.kind, id: item.id, title: item.title || t('微博') };
             addNode(item.kind === 'article' ? { type: 'file', file: item.file, leonbook: ref, width: 400, height: 440 } : { type: 'text', text: '', leonbook: ref, height: 340 });
           });
-          el.className = 'result'; const title = document.createElement('strong'); title.textContent = item.title || '微博'; const subtitle = document.createElement('span'); subtitle.textContent = item.subtitle; el.append(title, subtitle); $('results').append(el);
+          el.className = 'result'; const title = document.createElement('strong'); title.textContent = item.title || t('微博'); const subtitle = document.createElement('span'); subtitle.textContent = item.subtitle; el.append(title, subtitle); $('results').append(el);
         }
       } else if (action === 'content') {
         if (payload.id !== boardID || !doc.nodes.some(n => n.id === payload.nodeID)) return;
@@ -453,11 +466,12 @@
         if (el) { if (payload.title) el.querySelector('.card-title').textContent = payload.title; fillBody(node, el.querySelector('.card-body')); }
       } else if (action === 'addFile') {
         if (payload.id === boardID) addNode({ type: 'file', file: payload.file, leonbook: { kind: 'attachment', id: payload.file, title: payload.title }, width: 420, height: 340 });
-      } else if (action === 'error') { setBusy(false); $('status').textContent = '操作未完成'; $('retry').hidden = false; $('boards').value = boardID; toast(payload.message); }
+      } else if (action === 'error') { setBusy(false); setStatus('操作未完成'); $('retry').hidden = false; $('boards').value = boardID; toast(payload.message); }
     },
     // Small deterministic surface also used by the headless WebKit checks.
     snapshot: () => clone(doc), addNode, connect, fit,
     state: () => ({ id: boardID, visibleCards: elements.size, selection: [...selection] })
   };
+  window.addEventListener('leonlanguagechange', () => { resetCards(); render(); setStatus(statusKey); });
   post('ready');
 })();

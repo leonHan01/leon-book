@@ -7,6 +7,8 @@ import WebKit
 // MARK: - Reader and tabs
 
 struct ArticleReaderView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
     @ObservedObject var readingPreferences: NativeReadingPreferences
@@ -38,9 +40,9 @@ struct ArticleReaderView: View {
 
                                 if !usesCompactInspector && workspaceLayout.isReaderInspectorVisible {
                                     Rectangle()
-                                        .fill(NativeTheme.sidebar)
+                                        .fill(appPalette.sidebar)
                                         .frame(width: 7)
-                                        .overlay { NativeTheme.border.frame(width: 1) }
+                                        .overlay { appPalette.border.frame(width: 1) }
                                         .contentShape(Rectangle())
                                         .onHover { hovering in
                                             if hovering { NSCursor.resizeLeftRight.push() }
@@ -156,8 +158,8 @@ struct ArticleReaderView: View {
                 HStack(spacing: 12) {
                     Text(article.category)
                     Text("·")
-                    Text("更新于 \(article.updatedAt.nativeDateLabel)")
-                    if let wordCount = article.wordCount { Text("· \(wordCount) 字") }
+                    Text(NativeLocalization.text("更新于 \(article.updatedAt.nativeDateLabel)"))
+                    if let wordCount = article.wordCount { Text(NativeLocalization.text("· \(wordCount) 字")) }
                     Text("· \(article.pageViews) PV")
                 }
                 .font(.callout)
@@ -165,7 +167,7 @@ struct ArticleReaderView: View {
 
                 if !article.tags.isEmpty {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: "tag.fill")
+                        NativeIcon.image("tag.fill")
                             .foregroundStyle(.tint)
                         ForEach(article.tags, id: \.self) { tag in
                             Button {
@@ -175,7 +177,7 @@ struct ArticleReaderView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .help("查看标签 #\(tag) 的文章")
+                            .help(NativeLocalization.text("查看标签 #\(tag) 的文章"))
                         }
                     }
                 }
@@ -253,7 +255,7 @@ struct ArticleReaderView: View {
                             Button {
                                 model.openMedia(media)
                             } label: {
-                                Label(media.name, systemImage: "doc.fill")
+                                Label(media.name, nativeIcon: "doc.fill")
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(12)
                                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
@@ -268,7 +270,7 @@ struct ArticleReaderView: View {
             .frame(maxWidth: .infinity)
             .padding(42)
         }
-        .background(readingPreferences.profile.theme.background(system: systemColorScheme))
+        .background(readingPreferences.profile.theme.background(system: systemColorScheme, palette: appPalette))
         .environment(
             \.colorScheme,
             readingPreferences.profile.theme.colorScheme(system: systemColorScheme)
@@ -281,93 +283,120 @@ struct ArticleReaderView: View {
         outline: [MarkdownOutlineItem],
         usesCompactInspector: Bool
     ) -> some View {
-        HStack(spacing: 12) {
+        let isBookmarked = model.isBookmarked(.article(slug: article.slug))
+        let isInspectorVisible = usesCompactInspector
+            ? isPresentingCompactInspector : workspaceLayout.isReaderInspectorVisible
+
+        return HStack(spacing: 12) {
             Label(
                 LocalizedStringKey(article.status.label),
-                systemImage: article.status == .published ? "checkmark.circle" : "pencil.circle"
+                nativeIcon: article.status == .published ? "checkmark.circle" : "pencil.circle", iconSize: 12
             )
             .font(.system(size: 12))
-            .foregroundStyle(NativeTheme.textSecondary)
+            .foregroundStyle(appPalette.textSecondary)
             Spacer(minLength: 8)
 
-            if let summary = model.articleSummary(for: article.slug) {
-                Button { model.toggleArticleBookmark(summary) } label: {
-                    Label(
-                        LocalizedStringKey(model.isBookmarked(.article(slug: article.slug)) ? "取消收藏" : "收藏文章"),
-                        systemImage: model.isBookmarked(.article(slug: article.slug)) ? "bookmark.fill" : "bookmark"
-                    )
+            HStack(spacing: 4) {
+                if let summary = model.articleSummary(for: article.slug) {
+                    Button { model.toggleArticleBookmark(summary) } label: {
+                        ArticleActionIcon(kind: .bookmark)
+                            .foregroundStyle(isBookmarked ? appPalette.accent : appPalette.textSecondary)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(NativeChromeIconButtonStyle(isSelected: isBookmarked))
+                    .accessibilityLabel(Text(LocalizedStringKey(isBookmarked ? "取消收藏" : "收藏文章")))
+                    .accessibilityAddTraits(isBookmarked ? .isSelected : [])
+                    .help(Text(LocalizedStringKey(isBookmarked ? "取消收藏" : "收藏文章")))
                 }
-                .labelStyle(.iconOnly)
-                .help("收藏文章")
-            }
 
-            NativeWorkspaceLayoutMenu(model: model, workspaceLayout: workspaceLayout)
-                .labelStyle(.iconOnly)
-                .menuIndicator(.hidden)
-                .fixedSize()
+                NativeWorkspaceLayoutMenu(model: model, workspaceLayout: workspaceLayout, usesArticleActionIcon: true)
+                    .labelStyle(.iconOnly)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .tint(appPalette.textSecondary)
+                    .fixedSize()
 
-            Button {
-                if usesCompactInspector { isPresentingCompactInspector = true }
-                else { workspaceLayout.isReaderInspectorVisible.toggle() }
-            } label: {
-                Label("文章面板", systemImage: "sidebar.right")
-            }
-            .labelStyle(.iconOnly)
-            .help("文章面板")
+                Button {
+                    if usesCompactInspector { isPresentingCompactInspector = true }
+                    else { workspaceLayout.isReaderInspectorVisible.toggle() }
+                } label: {
+                    ArticleActionIcon(kind: .inspector)
+                        .foregroundStyle(isInspectorVisible ? appPalette.accent : appPalette.textSecondary)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(NativeChromeIconButtonStyle(isSelected: isInspectorVisible))
+                .accessibilityLabel("文章面板")
+                .accessibilityAddTraits(isInspectorVisible ? .isSelected : [])
+                .help("文章面板")
 
-            Menu {
-                if !outline.isEmpty {
-                    Menu("收藏标题") {
-                        ForEach(outline) { heading in
-                            Button { model.bookmarkHeading(article: article, heading: heading) } label: {
-                                let target = NativeBookmarkTarget.heading(
-                                    slug: article.slug, heading: heading.title, anchorID: heading.id
-                                )
-                                Label(heading.title, systemImage: model.isBookmarked(target) ? "bookmark.fill" : "textformat.size")
+                Menu {
+                    if !outline.isEmpty {
+                        Menu("收藏标题") {
+                            ForEach(outline) { heading in
+                                Button { model.bookmarkHeading(article: article, heading: heading) } label: {
+                                    let target = NativeBookmarkTarget.heading(
+                                        slug: article.slug, heading: heading.title, anchorID: heading.id
+                                    )
+                                    Label(heading.title, nativeIcon: model.isBookmarked(target) ? "bookmark.fill" : "textformat.size")
+                                }
                             }
                         }
                     }
+                    Button("版本历史", nativeIcon: "clock.arrow.circlepath") {
+                        model.refreshArticleHistory()
+                        isPresentingHistory = true
+                    }
+                    Divider()
+                    Button("移入回收站", nativeIcon: "trash", role: .destructive) {
+                        Task { await model.deleteSelected() }
+                    }
+                } label: {
+                    Label {
+                        Text("页面操作")
+                    } icon: {
+                        ArticleActionIcon.menuImage(kind: .more)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                    }
                 }
-                Button("版本历史", systemImage: "clock.arrow.circlepath") {
-                    model.refreshArticleHistory()
-                    isPresentingHistory = true
-                }
-                Divider()
-                Button("移入回收站", systemImage: "trash", role: .destructive) {
-                    Task { await model.deleteSelected() }
-                }
-            } label: {
-                Label("页面操作", systemImage: "ellipsis")
-            }
-            .labelStyle(.iconOnly)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("页面操作")
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .tint(appPalette.textSecondary)
+                .fixedSize()
+                .help("页面操作")
 
-            Button("编辑") { model.editSelected() }
-                .buttonStyle(.bordered)
+                Button("编辑") { model.editSelected() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .font(.system(size: 12, weight: .medium))
+            }
         }
         .buttonStyle(.borderless)
         .controlSize(.small)
-        .foregroundStyle(NativeTheme.textSecondary)
+        .foregroundStyle(appPalette.textSecondary)
     }
 
 }
 
 private struct ArticleTabBar: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
 
     var body: some View {
         HStack(spacing: 8) {
             Button(action: model.navigateArticleBack) {
-                Image(systemName: "chevron.left")
+                NativeIcon.image("chevron.left")
             }
             .buttonStyle(.borderless)
             .disabled(!model.canNavigateArticleBack)
             .help("后退（⌘[）")
 
             Button(action: model.navigateArticleForward) {
-                Image(systemName: "chevron.right")
+                NativeIcon.image("chevron.right")
             }
             .buttonStyle(.borderless)
             .disabled(!model.canNavigateArticleForward)
@@ -387,7 +416,7 @@ private struct ArticleTabBar: View {
                     }
                 }
             } label: {
-                Label("最近文章", systemImage: "clock.arrow.circlepath")
+                Label("最近文章", nativeIcon: "clock.arrow.circlepath")
             }
             .menuStyle(.borderlessButton)
             .labelStyle(.iconOnly)
@@ -417,24 +446,26 @@ private struct ArticleTabBar: View {
             Divider().frame(height: 22)
 
             Button(action: model.toggleActiveArticleTabPin) {
-                Image(systemName: model.isActiveArticleTabPinned ? "pin.slash" : "pin")
+                NativeIcon.image(model.isActiveArticleTabPinned ? "pin.slash" : "pin")
             }
             .buttonStyle(.borderless)
             .help(Text(LocalizedStringKey(model.isActiveArticleTabPinned ? "取消固定当前标签页" : "固定当前标签页")))
 
             Button(action: model.closeActiveArticleTab) {
-                Image(systemName: "xmark")
+                NativeIcon.image("xmark")
             }
             .buttonStyle(.borderless)
             .help("关闭当前标签页")
         }
         .controlSize(.small)
         .padding(.horizontal, 12)
-        .background(NativeTheme.sidebar)
+        .background(appPalette.sidebar)
     }
 }
 
 private struct ArticleTabItem: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let tab: NativeArticleTab
     let title: String
     let isActive: Bool
@@ -448,8 +479,7 @@ private struct ArticleTabItem: View {
             Button(action: onActivate) {
                 HStack(spacing: 6) {
                     if tab.isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.caption2)
+                        NativeIcon.image("pin.fill", size: 12)
                             .foregroundStyle(.tint)
                     }
                     Text(title)
@@ -459,13 +489,12 @@ private struct ArticleTabItem: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(tab.isPinned ? Text("\(title)，已固定") : Text(title))
+            .accessibilityLabel(tab.isPinned ? Text(NativeLocalization.text("\(title)，已固定")) : Text(title))
             .accessibilityAddTraits(isActive ? .isSelected : [])
 
             if isHovered || isActive {
                 Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.caption2)
+                    NativeIcon.image("xmark", size: 12)
                 }
                 .buttonStyle(.plain)
                 .help("关闭标签页")
@@ -475,7 +504,7 @@ private struct ArticleTabItem: View {
         .padding(.horizontal, 10)
         .frame(height: 28)
         .background(
-            isActive ? NativeTheme.selection : (isHovered ? NativeTheme.surfaceSecondary : .clear),
+            isActive ? appPalette.selection : (isHovered ? appPalette.surfaceSecondary : .clear),
             in: RoundedRectangle(cornerRadius: 7, style: .continuous)
         )
         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -491,6 +520,8 @@ private struct ArticleTabItem: View {
 // MARK: - Inspector and comments
 
 private struct ArticleInspectorView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     @Binding var selectedPane: ArticleInspectorPane
     let article: NativeArticle
@@ -518,7 +549,7 @@ private struct ArticleInspectorView: View {
         VStack(spacing: 0) {
             VStack(spacing: 9) {
                 HStack(alignment: .firstTextBaseline) {
-                    Label("阅读面板", systemImage: "sidebar.right")
+                    Label("阅读面板", nativeIcon: "sidebar.right")
                         .font(.headline)
                     Spacer()
                     Text(LocalizedStringKey(selectedPane == .comments ? "划词评论" : "上下文导航"))
@@ -526,7 +557,7 @@ private struct ArticleInspectorView: View {
                         .foregroundStyle(.secondary)
                 }
                 Picker("阅读面板", selection: $selectedPane) {
-                    Text("评论 \(model.articleComments.count)").tag(ArticleInspectorPane.comments)
+                    Text(NativeLocalization.text("评论 \(model.articleComments.count)")).tag(ArticleInspectorPane.comments)
                     Text("文章").tag(ArticleInspectorPane.context)
                 }
                 .pickerStyle(.segmented)
@@ -547,7 +578,7 @@ private struct ArticleInspectorView: View {
                 contextNavigation
             }
         }
-        .background(NativeTheme.sidebar)
+        .background(appPalette.sidebar)
         .onChange(of: model.articleCommentSelectionRevision) { _ in
             if model.pendingArticleCommentSelection != nil {
                 selectedPane = .comments
@@ -637,6 +668,8 @@ private struct ArticleInspectorView: View {
 }
 
 private struct ArticleCommentsSidebar: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     @ObservedObject var model: NativeAppModel
     let article: NativeArticle
     let onSelectAnchor: (String) -> Void
@@ -658,8 +691,7 @@ private struct ArticleCommentsSidebar: View {
 
             if model.articleComments.isEmpty {
                 VStack(spacing: 10) {
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 28))
+                    NativeIcon.image("text.bubble", size: 32)
                         .foregroundStyle(.secondary)
                     Text("还没有评论")
                         .font(.headline)
@@ -727,15 +759,15 @@ private struct ArticleCommentsSidebar: View {
         VStack(alignment: .leading, spacing: 9) {
             if let replyingTo {
                 HStack(spacing: 7) {
-                    Image(systemName: "arrowshape.turn.up.left")
+                    NativeIcon.image("arrowshape.turn.up.left")
                         .foregroundStyle(.tint)
-                    Text("回复 \(replyingTo.authorName)")
+                    Text(NativeLocalization.text("回复 \(replyingTo.authorName)"))
                         .font(.caption.weight(.semibold))
                     Spacer()
                     Button {
                         self.replyingTo = nil
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        NativeIcon.image("xmark.circle.fill")
                     }
                     .buttonStyle(.plain)
                     .help("取消回复")
@@ -743,12 +775,12 @@ private struct ArticleCommentsSidebar: View {
             } else if let selection = model.pendingArticleCommentSelection {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Label("评论所选原文", systemImage: "quote.opening")
+                        Label("评论所选原文", nativeIcon: "quote.opening", iconSize: 12)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.tint)
                         Spacer()
                         Button(action: model.clearPendingArticleCommentSelection) {
-                            Image(systemName: "xmark.circle.fill")
+                            NativeIcon.image("xmark.circle.fill")
                         }
                         .buttonStyle(.plain)
                         .help("改为评论整篇文章")
@@ -762,7 +794,7 @@ private struct ArticleCommentsSidebar: View {
                 .padding(9)
                 .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
             } else {
-                Label("评论整篇文章", systemImage: "text.bubble")
+                Label("评论整篇文章", nativeIcon: "text.bubble", iconSize: 12)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -771,7 +803,7 @@ private struct ArticleCommentsSidebar: View {
                 .font(.callout)
                 .frame(minHeight: 62, maxHeight: 96)
                 .padding(5)
-                .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 8))
+                .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(Color.secondary.opacity(0.2))
@@ -812,6 +844,8 @@ private struct ArticleCommentsSidebar: View {
 }
 
 private struct ArticleCommentRow: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let comment: NativeArticleComment
     let parent: NativeArticleComment?
     let canDelete: Bool
@@ -841,14 +875,14 @@ private struct ArticleCommentRow: View {
                         Button("删除", role: .destructive, action: onDelete)
                     }
                 } label: {
-                    Image(systemName: "ellipsis")
+                    NativeIcon.image("ellipsis")
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
             }
 
             if let parent {
-                Label("回复 \(parent.authorName)", systemImage: "arrowshape.turn.up.left")
+                Label(NativeLocalization.text("回复 \(parent.authorName)"), nativeIcon: "arrowshape.turn.up.left", iconSize: 12)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -886,7 +920,7 @@ private struct ArticleCommentRow: View {
         }
         .padding(11)
         .padding(.leading, comment.parentID == nil ? 0 : 14)
-        .background(NativeTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
+        .background(appPalette.canvas, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Color.secondary.opacity(0.13))
@@ -1029,6 +1063,8 @@ private struct NativePasteboardSnapshot {
 }
 
 private struct ArticleInspectorSection<Content: View>: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let title: LocalizedStringKey
     let systemImage: String
     let count: Int
@@ -1043,7 +1079,7 @@ private struct ArticleInspectorSection<Content: View>: View {
             .padding(.top, 8)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: systemImage)
+                NativeIcon.image(systemImage)
                     .foregroundStyle(.tint)
                     .frame(width: 18)
                 Text(title)
@@ -1058,7 +1094,7 @@ private struct ArticleInspectorSection<Content: View>: View {
             }
         }
         .padding(11)
-        .background(NativeTheme.canvas, in: RoundedRectangle(cornerRadius: 10))
+        .background(appPalette.canvas, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Color.secondary.opacity(0.13))
@@ -1094,7 +1130,7 @@ private struct ArticleTableOfContents: View {
                 .foregroundStyle(.secondary)
                 .padding(.leading, CGFloat(max(0, item.level - baseLevel)) * 12)
                 .padding(.vertical, 4)
-                .help("跳转到“\(item.title)”")
+                .help(NativeLocalization.text("跳转到“\(item.title)”"))
             }
         }
         .accessibilityElement(children: .contain)
@@ -1103,14 +1139,16 @@ private struct ArticleTableOfContents: View {
 }
 
 struct ArticleInspectorLinkRow: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let article: NativeArticleSummary
     let onOpen: () -> Void
 
     var body: some View {
         Button(action: onOpen) {
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: article.status == .published ? "doc.text" : "doc.text.fill")
-                    .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
+                NativeIcon.image(article.status == .published ? "doc.text" : "doc.text.fill")
+                    .foregroundStyle(article.status == .published ? appPalette.accent : appPalette.textSecondary)
                     .frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(article.title)
@@ -1127,11 +1165,13 @@ struct ArticleInspectorLinkRow: View {
         }
         .buttonStyle(.plain)
         .articleHoverPreview(article)
-        .accessibilityLabel("打开文章：\(article.title)")
+        .accessibilityLabel(NativeLocalization.text("打开文章：\(article.title)"))
     }
 }
 
 struct ArticleUnlinkedMentionRow: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let mention: NativeArticleMention
     let onOpen: () -> Void
     let onConvert: () -> Void
@@ -1141,13 +1181,13 @@ struct ArticleUnlinkedMentionRow: View {
             Button(action: onOpen) {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 7) {
-                        Image(systemName: "quote.bubble")
-                            .foregroundStyle(NativeTheme.blue)
+                        NativeIcon.image("quote.bubble")
+                            .foregroundStyle(appPalette.blue)
                         Text(mention.article.title)
                             .font(.callout.weight(.medium))
                             .lineLimit(1)
                         Spacer()
-                        Text("\(mention.count) 处")
+                        Text(NativeLocalization.text("\(mention.count) 处"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -1163,14 +1203,14 @@ struct ArticleUnlinkedMentionRow: View {
             .articleHoverPreview(mention.article)
 
             Button(action: onConvert) {
-                Label("将 \(mention.count) 处提及转为双链", systemImage: "link.badge.plus")
+                Label(NativeLocalization.text("将 \(mention.count) 处提及转为双链"), nativeIcon: "link.badge.plus", iconSize: 12)
                     .font(.caption.weight(.medium))
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
         }
         .padding(.vertical, 6)
-        .accessibilityLabel("未链接提及来自：\(mention.article.title)，共 \(mention.count) 处")
+        .accessibilityLabel(NativeLocalization.text("未链接提及来自：\(mention.article.title)，共 \(mention.count) 处"))
     }
 }
 
@@ -1252,18 +1292,20 @@ private struct ArticleLocalGraphView: View {
             .frame(height: 250)
             .overlay(alignment: .bottomTrailing) {
                 if graph.nodes.count > displayedNodes.count {
-                    Text("另有 \(graph.nodes.count - displayedNodes.count) 个邻居")
+                    Text(NativeLocalization.text("另有 \(graph.nodes.count - displayedNodes.count) 个邻居"))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("局部关系图，共 \(graph.nodes.count) 个文章节点")
+            .accessibilityLabel(NativeLocalization.text("局部关系图，共 \(graph.nodes.count) 个文章节点"))
         }
     }
 }
 
 private struct ArticleLocalGraphNode: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let article: NativeArticleSummary
     let isSelected: Bool
     let onOpen: () -> Void
@@ -1276,7 +1318,7 @@ private struct ArticleLocalGraphNode: View {
                 .multilineTextAlignment(.center)
                 .frame(width: isSelected ? 96 : 80, height: isSelected ? 42 : 36)
                 .background(
-                    isSelected ? Color.accentColor.opacity(0.2) : NativeTheme.canvas,
+                    isSelected ? Color.accentColor.opacity(0.2) : appPalette.canvas,
                     in: RoundedRectangle(cornerRadius: 8)
                 )
                 .overlay {
@@ -1288,7 +1330,7 @@ private struct ArticleLocalGraphNode: View {
         }
         .buttonStyle(.plain)
         .articleHoverPreview(article)
-        .help(isSelected ? Text("当前文章") : Text("打开文章：\(article.title)"))
+        .help(isSelected ? Text("当前文章") : Text(NativeLocalization.text("打开文章：\(article.title)")))
     }
 }
 
@@ -1346,13 +1388,15 @@ private struct ArticleHoverPreviewModifier: ViewModifier {
 }
 
 private struct ArticleHoverPreviewCard: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let article: NativeArticleSummary
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: article.status == .published ? "doc.text" : "doc.text.fill")
-                    .foregroundStyle(article.status == .published ? NativeTheme.accent : NativeTheme.textSecondary)
+                NativeIcon.image(article.status == .published ? "doc.text" : "doc.text.fill")
+                    .foregroundStyle(article.status == .published ? appPalette.accent : appPalette.textSecondary)
                 Text(LocalizedStringKey(article.status.label))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -1379,8 +1423,8 @@ private struct ArticleHoverPreviewCard: View {
                     .foregroundStyle(.tint)
             }
             HStack(spacing: 10) {
-                Label(article.category, systemImage: "folder")
-                Label("\(article.wordCount) 字", systemImage: "character.cursor.ibeam")
+                Label(article.category, nativeIcon: "folder")
+                Label(NativeLocalization.text("\(article.wordCount) 字"), nativeIcon: "character.cursor.ibeam")
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
@@ -1402,7 +1446,6 @@ enum MarkdownArticleBlock {
     case image(url: String, alt: String)
     case pdf(reference: String, title: String)
     case audio(reference: String, title: String)
-    case base(reference: String)
     case transclusion(reference: String)
     case text(
         blocks: [MarkdownBlock],
@@ -1419,7 +1462,7 @@ final class NativeMarkdownArticleDocument {
     let embeddedAttachmentURLs: Set<String>
 
     private static let embeddedBlockExpression = try! NSRegularExpression(
-        pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)|!\[\[([^\[\]\r\n]+)\]\]|(?s:```base[^\r\n]*\r?\n(.*?)\r?\n```)"#
+        pattern: #"!\[([^\]]*)\]\(([^)\s]+)\)|!\[\[([^\[\]\r\n]+)\]\]"#
     )
 
     init(markdown: String) {
@@ -1460,9 +1503,7 @@ final class NativeMarkdownArticleDocument {
             let title = alt.isEmpty
                 ? URL(fileURLWithPath: target).deletingPathExtension().lastPathComponent
                 : alt
-            if extensionName == "base" {
-                parsedBlocks.append(.base(reference: reference))
-            } else if extensionName == "pdf" {
+            if extensionName == "pdf" {
                 parsedBlocks.append(.pdf(reference: target, title: title))
                 parsedEmbeddedAttachmentURLs.insert(target)
             } else if ["mp3", "m4a", "aac", "wav", "aif", "aiff", "caf", "flac"]
@@ -1501,20 +1542,7 @@ final class NativeMarkdownArticleDocument {
                     appendTextBlock(textBefore, lineOffset: cursorLineOffset + leadingLines)
                 }
 
-                if let baseRange = Range(match.range(at: 4), in: markdown) {
-                    let config = String(markdown[baseRange])
-                    let reference = config.components(separatedBy: .newlines).compactMap { line -> String? in
-                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard let colon = trimmed.firstIndex(of: ":") else { return nil }
-                        let key = trimmed[..<colon].lowercased()
-                        guard key == "id" || key == "name" || key == "source" else { return nil }
-                        return String(trimmed[trimmed.index(after: colon)...])
-                            .trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
-                    }.first ?? config.trimmingCharacters(in: .whitespacesAndNewlines)
-                    parsedBlocks.append(.base(
-                        reference: reference.hasSuffix(".base") ? reference : "\(reference).base"
-                    ))
-                } else if let referenceRange = Range(match.range(at: 3), in: markdown) {
+                if let referenceRange = Range(match.range(at: 3), in: markdown) {
                     let reference = String(markdown[referenceRange])
                     appendEmbeddedFile(reference: reference, alt: "", allowsTransclusion: true)
                 } else if let altRange = Range(match.range(at: 1), in: markdown),
@@ -1670,12 +1698,6 @@ struct MarkdownArticleBody: View {
                         store: store,
                         sourceRelativePath: sourceRelativePath
                     )
-                case let .base(reference):
-                    SmartCollectionEmbedView(
-                        reference: reference,
-                        store: store,
-                        onOpenArticle: onOpenArticle
-                    )
                 case let .transclusion(reference):
                     MarkdownArticleTransclusionView(
                         reference: reference,
@@ -1721,7 +1743,7 @@ private struct MarkdownArticleTransclusionView: View {
     var body: some View {
         Group {
             if let target, embeddedSlugs.contains(target.slug) {
-                transclusionMessage("检测到循环嵌入：\(target.title)", systemImage: "arrow.triangle.2.circlepath")
+                transclusionMessage(NativeLocalization.text("检测到循环嵌入：\(target.title)"), systemImage: "arrow.triangle.2.circlepath")
             } else if let article {
                 VStack(alignment: .leading, spacing: 12) {
                     Button {
@@ -1729,7 +1751,7 @@ private struct MarkdownArticleTransclusionView: View {
                             onOpenArticle(destination)
                         }
                     } label: {
-                        Label(article.title, systemImage: "doc.text")
+                        Label(article.title, nativeIcon: "doc.text")
                             .font(.headline)
                     }
                     .buttonStyle(.plain)
@@ -1747,7 +1769,7 @@ private struct MarkdownArticleTransclusionView: View {
                             onOpenArticle: onOpenArticle
                         ))
                     } else {
-                        transclusionMessage("未找到嵌入片段 #\(parsed.heading ?? "")", systemImage: "questionmark.folder")
+                        transclusionMessage(NativeLocalization.text("未找到嵌入片段 #\(parsed.heading ?? "")"), systemImage: "questionmark.folder")
                     }
                 }
                 .padding(16)
@@ -1767,7 +1789,7 @@ private struct MarkdownArticleTransclusionView: View {
         .task(id: target?.slug) {
             guard article == nil else { return }
             guard let target else {
-                errorMessage = "找不到嵌入文章：\(parsed.target)"
+                errorMessage = NativeLocalization.text("找不到嵌入文章：\(parsed.target)")
                 return
             }
             guard !embeddedSlugs.contains(target.slug) else { return }
@@ -1777,7 +1799,7 @@ private struct MarkdownArticleTransclusionView: View {
     }
 
     private func transclusionMessage(_ message: String, systemImage: String) -> some View {
-        Label(message, systemImage: systemImage)
+        Label(message, nativeIcon: systemImage, iconSize: 14)
             .font(.callout)
             .foregroundStyle(.secondary)
             .padding(12)
@@ -1787,12 +1809,14 @@ private struct MarkdownArticleTransclusionView: View {
 }
 
 struct MarkdownWebEmbedView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let embed: MarkdownWebEmbed
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Label(embed.title, systemImage: "safari")
+                Label(embed.title, nativeIcon: "safari", iconSize: 14)
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
 
@@ -1801,7 +1825,7 @@ struct MarkdownWebEmbedView: View {
                 Button {
                     NSWorkspace.shared.open(embed.url)
                 } label: {
-                    Label("在浏览器中打开", systemImage: "arrow.up.right.square")
+                    Label("在浏览器中打开", nativeIcon: "arrow.up.right.square")
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
@@ -1813,7 +1837,7 @@ struct MarkdownWebEmbedView: View {
             MarkdownEmbeddedWebView(url: embed.url)
                 .frame(maxWidth: .infinity, minHeight: embed.height, maxHeight: embed.height)
         }
-        .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+        .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.secondary.opacity(0.24))
@@ -1823,12 +1847,14 @@ struct MarkdownWebEmbedView: View {
 }
 
 struct MarkdownHTMLComponentView: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let component: MarkdownHTMLComponent
 
     var body: some View {
         MarkdownHTMLWebView(html: component.html)
             .frame(maxWidth: .infinity, minHeight: component.height, maxHeight: component.height)
-            .background(NativeTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(Color.secondary.opacity(0.2))
@@ -2025,7 +2051,7 @@ struct NativeImageView: View {
                     .frame(maxWidth: .infinity, maxHeight: 680)
                     .accessibilityLabel(alt)
             } else if failedToLoad {
-                Label("无法加载图片：\(alt)", systemImage: "photo.badge.exclamationmark")
+                Label(NativeLocalization.text("无法加载图片：\(alt)"), nativeIcon: "photo.badge.exclamationmark")
                     .foregroundStyle(.secondary)
             } else {
                 ProgressView("正在加载图片…")
@@ -2053,15 +2079,19 @@ struct NativeImageView: View {
     }
 }
 
-private struct InlineVideoPlayer: View {
+struct InlineVideoPlayer: View {
+    @Environment(\.nativeAppPalette) private var appPalette
+
     let media: NativeMedia
     let store: LocalBlogStore
+    let preferredHeight: CGFloat?
 
     @StateObject private var playback: NativeInlineVideoPlayerModel
 
-    init(media: NativeMedia, store: LocalBlogStore) {
+    init(media: NativeMedia, store: LocalBlogStore, preferredHeight: CGFloat? = nil) {
         self.media = media
         self.store = store
+        self.preferredHeight = preferredHeight
         _playback = StateObject(
             wrappedValue: NativeInlineVideoPlayerModel(mediaID: media.url)
         )
@@ -2094,12 +2124,12 @@ private struct InlineVideoPlayer: View {
                     failureView(message: message)
                 }
             }
-            .frame(minHeight: 320)
+            .frame(minHeight: preferredHeight ?? 320, maxHeight: preferredHeight)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .accessibilityLabel(media.name)
 
             HStack(spacing: 10) {
-                Label(media.name, systemImage: "video")
+                Label(media.name, nativeIcon: "video")
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 if playback.phase == .ready {
@@ -2109,7 +2139,7 @@ private struct InlineVideoPlayer: View {
                     Button {
                         playback.copyTimestamp(named: media.name)
                     } label: {
-                        Label("复制时间点", systemImage: "text.badge.plus")
+                        Label("复制时间点", nativeIcon: "text.badge.plus")
                     }
                     .buttonStyle(.borderless)
                     .help("复制当前播放时间，方便粘贴到笔记")
@@ -2133,16 +2163,15 @@ private struct InlineVideoPlayer: View {
                     Image(nsImage: poster)
                         .resizable()
                         .scaledToFill()
-                        .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 420)
+                        .frame(maxWidth: .infinity, minHeight: preferredHeight ?? 320, maxHeight: preferredHeight ?? 420)
                         .clipped()
                 } else {
-                    NativeTheme.canvas
+                    appPalette.canvas
                 }
                 Color.black.opacity(playback.poster == nil ? 0.05 : 0.24)
                 VStack(spacing: 10) {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 56))
-                        .symbolRenderingMode(.hierarchical)
+                    NativeIcon.image("play.circle.fill", size: 48)
+                        .symbolRenderingMode(.monochrome)
                     Group {
                         if let resumeLabel = playback.resumeLabel {
                             Text(resumeLabel)
@@ -2172,16 +2201,16 @@ private struct InlineVideoPlayer: View {
 
     private func videoPlaceholder<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         ZStack {
-            NativeTheme.canvas
+            appPalette.canvas
             content()
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
+        .frame(maxWidth: .infinity, minHeight: preferredHeight ?? 320)
     }
 
     private func failureView(message: String) -> some View {
         videoPlaceholder {
             VStack(spacing: 12) {
-                Label("无法播放 \(media.name)", systemImage: "video.slash")
+                Label(NativeLocalization.text("无法播放 \(media.name)"), nativeIcon: "video.slash")
                     .font(.headline)
                 Text(message)
                     .font(.caption)
@@ -2197,14 +2226,15 @@ private struct InlineVideoPlayer: View {
     }
 }
 
-private struct NativeAVPlayerView: NSViewRepresentable {
+struct NativeAVPlayerView: NSViewRepresentable {
     let player: AVPlayer
+    var isAudio = false
 
     func makeNSView(context: Context) -> AVPlayerView {
         let playerView = AVPlayerView()
         playerView.controlsStyle = .inline
-        playerView.showsFullScreenToggleButton = true
-        playerView.allowsPictureInPicturePlayback = true
+        playerView.showsFullScreenToggleButton = !isAudio
+        playerView.allowsPictureInPicturePlayback = !isAudio
         playerView.allowsVideoFrameAnalysis = false
         playerView.updatesNowPlayingInfoCenter = false
         playerView.player = player

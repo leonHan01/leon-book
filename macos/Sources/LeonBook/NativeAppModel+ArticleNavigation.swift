@@ -21,7 +21,7 @@ extension NativeAppModel {
             return
         }
         guard let summary = articleSummary(for: resolvedSlug) else {
-            errorMessage = "关联的文章已不存在。"
+            errorMessage = NativeLocalization.text("关联的文章已不存在。")
             return
         }
         let opensNewTab = NSEvent.modifierFlags
@@ -47,7 +47,7 @@ extension NativeAppModel {
 
     func openArticleLink(_ slug: String, disposition: NativeArticleOpenDisposition) {
         guard let summary = articleSummary(for: slug) else {
-            errorMessage = "关联的文章已不存在。"
+            errorMessage = NativeLocalization.text("关联的文章已不存在。")
             return
         }
         Task {
@@ -70,7 +70,7 @@ extension NativeAppModel {
             guard let block = NativeArticleEmbed.blockReferences(in: article.body).first(where: {
                 $0.id.caseInsensitiveCompare(requestedID) == .orderedSame
             }) else {
-                errorMessage = "已打开文章，但没有找到块“^\(requestedID)”。"
+                errorMessage = NativeLocalization.text("已打开文章，但没有找到块“^\(requestedID)”。")
                 return
             }
             pendingArticleScrollAnchor = block.scrollAnchorID
@@ -83,7 +83,7 @@ extension NativeAppModel {
             $0.title.trimmingCharacters(in: .whitespacesAndNewlines)
                 .caseInsensitiveCompare(requested.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
         }) else {
-            errorMessage = "已打开文章，但没有找到标题“\(rawHeading)”。"
+            errorMessage = NativeLocalization.text("已打开文章，但没有找到标题“\(rawHeading)”。")
             return
         }
         pendingArticleScrollAnchor = heading.id
@@ -94,7 +94,7 @@ extension NativeAppModel {
         let decodedTarget = destination.target.removingPercentEncoding ?? destination.target
         let extensionName = URL(fileURLWithPath: decodedTarget).pathExtension
         guard extensionName.isEmpty || extensionName.caseInsensitiveCompare("md") == .orderedSame else {
-            errorMessage = "“\(destination.target)”不是文章链接，无法创建。"
+            errorMessage = NativeLocalization.text("“\(destination.target)”不是文章链接，无法创建。")
             return
         }
         let targetWithoutExtension = extensionName.isEmpty
@@ -103,7 +103,7 @@ extension NativeAppModel {
         let title = URL(fileURLWithPath: targetWithoutExtension).lastPathComponent
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
-            errorMessage = "双链目标为空，无法创建文章。"
+            errorMessage = NativeLocalization.text("双链目标为空，无法创建文章。")
             return
         }
 
@@ -121,7 +121,7 @@ extension NativeAppModel {
                 editor.body = "## \(heading)\n\n"
             }
         }
-        editorAutosaveStatus = "已从未创建双链预填，等待保存…"
+        editorAutosaveStatus = NativeLocalization.text("已从未创建双链预填，等待保存…")
         scheduleEditorAutosave()
         errorMessage = nil
     }

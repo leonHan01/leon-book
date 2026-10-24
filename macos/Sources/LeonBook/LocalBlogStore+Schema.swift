@@ -7,6 +7,29 @@ extension LocalBlogStore {
             key TEXT PRIMARY KEY NOT NULL,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS photo_albums (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS photo_library_items (
+            url TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            album_id TEXT REFERENCES photo_albums(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS photo_library_album_idx ON photo_library_items(album_id);
+        CREATE TABLE IF NOT EXISTS media_library_groups (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS media_library_items (
+            url TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('video', 'audio')),
+            introduction TEXT NOT NULL DEFAULT '',
+            group_id TEXT REFERENCES media_library_groups(id) ON DELETE SET NULL
+        );
         CREATE TABLE IF NOT EXISTS todos (
             id TEXT PRIMARY KEY NOT NULL,
             title TEXT NOT NULL,
@@ -109,13 +132,6 @@ extension LocalBlogStore {
         );
         CREATE INDEX IF NOT EXISTS article_link_references_source_idx
             ON article_link_references(source_slug, position);
-        CREATE TABLE IF NOT EXISTS smart_collections (
-            id TEXT PRIMARY KEY NOT NULL,
-            config_json TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS smart_collections_updated_idx
-            ON smart_collections(updated_at DESC);
         CREATE TABLE IF NOT EXISTS bookmarks (
             id TEXT PRIMARY KEY NOT NULL,
             bookmark_json TEXT NOT NULL,
@@ -212,6 +228,10 @@ extension LocalBlogStore {
         );
         CREATE INDEX IF NOT EXISTS activity_created_at_idx ON activity_events(created_at);
         """)
+        try ensureColumn("introduction", in: "media_library_items", database: database, definition: "TEXT NOT NULL DEFAULT ''")
+        try ensureColumn("group_id", in: "media_library_items", database: database,
+                         definition: "TEXT REFERENCES media_library_groups(id) ON DELETE SET NULL")
+        try database.execute("CREATE INDEX IF NOT EXISTS media_library_group_idx ON media_library_items(group_id)")
         try ensureColumn("deleted_at", in: "articles", database: database)
         try ensureColumn("delete_expires_at", in: "articles", database: database)
         try ensureColumn("page_views", in: "articles", database: database, definition: "INTEGER NOT NULL DEFAULT 0")

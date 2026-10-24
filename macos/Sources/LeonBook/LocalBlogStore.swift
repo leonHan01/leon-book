@@ -8,7 +8,7 @@ public actor LocalBlogStore {
     private static let articleAutosaveRevisionInterval: TimeInterval = 5 * 60
     private static let maximumArticleRevisionsPerDraft = 100
 
-    static let reservedMediaDirectories: Set<String> = ["inbox", "moments", "question-answers", "whiteboards", "canvases"]
+    static let reservedMediaDirectories: Set<String> = ["inbox", "moments", "question-answers", "whiteboards", "canvases", "photo-library", "media-library", "dashboard"]
 
     let rootURL: URL
     private var database: SQLiteDatabase?
@@ -39,8 +39,6 @@ public actor LocalBlogStore {
     private var draftsURL: URL { rootURL.appendingPathComponent("drafts", isDirectory: true) }
     var mediaURL: URL { rootURL.appendingPathComponent("media", isDirectory: true) }
     private var momentsURL: URL { rootURL.appendingPathComponent("moments", isDirectory: true) }
-    private var basesURL: URL { rootURL.appendingPathComponent("bases", isDirectory: true) }
-    private var basesMarkerURL: URL { basesURL.appendingPathComponent(".files-v1") }
     private var momentsIndexURL: URL { momentsURL.appendingPathComponent("index.json") }
     private var momentSidecarsMarkerURL: URL { momentsURL.appendingPathComponent(".sidecars-v1") }
     private var jsonExportStampURL: URL { rootURL.appendingPathComponent(".json-exports-v1") }
@@ -80,7 +78,7 @@ public actor LocalBlogStore {
         let nextSource: NativeMarkdownWorkspaceSource
         if mode.isMounted {
             guard let directoryURL else {
-                throw NativeStoreError.fileSystem("挂载模式需要选择 Markdown 文件夹")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("挂载模式需要选择 Markdown 文件夹"))
             }
             let resolved = directoryURL.standardizedFileURL.resolvingSymlinksInPath()
             try validateMarkdownSourceDirectory(resolved, requiresWriteAccess: !mode.isReadOnly)
@@ -175,7 +173,6 @@ public actor LocalBlogStore {
             try fileManager.createDirectory(at: draftsURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: mediaURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: momentsURL, withIntermediateDirectories: true)
-            try fileManager.createDirectory(at: basesURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: activityURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: trashURL, withIntermediateDirectories: true)
 
@@ -233,11 +230,11 @@ public actor LocalBlogStore {
                 from: Data(contentsOf: markdownWorkspaceSourceURL)
             )
             guard source.mode.isMounted == (source.directoryPath != nil) else {
-                throw NativeStoreError.fileSystem("Markdown 工作区配置无效")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("Markdown 工作区配置无效"))
             }
             markdownWorkspaceSource = source
         } catch {
-            throw NativeStoreError.fileSystem("无法读取 Markdown 工作区配置：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 Markdown 工作区配置：\(error.localizedDescription)"))
         }
     }
 
@@ -248,7 +245,7 @@ public actor LocalBlogStore {
             try encoder.encode(markdownWorkspaceSource)
                 .write(to: markdownWorkspaceSourceURL, options: .atomic)
         } catch {
-            throw NativeStoreError.fileSystem("无法保存 Markdown 工作区配置：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法保存 Markdown 工作区配置：\(error.localizedDescription)"))
         }
     }
 
@@ -259,13 +256,13 @@ public actor LocalBlogStore {
         var isDirectory: ObjCBool = false
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            throw NativeStoreError.fileSystem("Markdown 文件夹不存在：\(url.path)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("Markdown 文件夹不存在：\(url.path)"))
         }
         guard fileManager.isReadableFile(atPath: url.path) else {
-            throw NativeStoreError.fileSystem("没有 Markdown 文件夹的读取权限：\(url.path)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("没有 Markdown 文件夹的读取权限：\(url.path)"))
         }
         if requiresWriteAccess, !fileManager.isWritableFile(atPath: url.path) {
-            throw NativeStoreError.fileSystem("没有 Markdown 文件夹的写入权限：\(url.path)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("没有 Markdown 文件夹的写入权限：\(url.path)"))
         }
     }
 
@@ -426,7 +423,7 @@ public actor LocalBlogStore {
         for record in records {
             if deletedPaths.contains(record.relativePath)
                 || record.slug.map(deletedSlugs.contains) == true {
-                warnings.append("\(record.relativePath)：对应文章仍在回收站，已跳过")
+                warnings.append(NativeLocalization.text("\(record.relativePath)：对应文章仍在回收站，已跳过"))
                 continue
             }
 
@@ -504,7 +501,7 @@ public actor LocalBlogStore {
         let repairedBacklinks: [NativeArticle]
         if markdownWorkspaceSource.mode.isReadOnly, !sourceMoves.isEmpty {
             repairedBacklinks = []
-            warnings.append("检测到 Markdown 文件移动；只读挂载不会自动改写其他文件中的双链")
+            warnings.append(NativeLocalization.text("检测到 Markdown 文件移动；只读挂载不会自动改写其他文件中的双链"))
         } else {
             repairedBacklinks = try repairBacklinks(after: sourceMoves)
         }
@@ -519,7 +516,7 @@ public actor LocalBlogStore {
                 try writeTrashBackup()
             } catch {
                 markJSONBackupNeedsRebuild()
-                warnings.append("Markdown 已同步，但 JSON 备份需要稍后重建")
+                warnings.append(NativeLocalization.text("Markdown 已同步，但 JSON 备份需要稍后重建"))
             }
         }
         let affectedArticleSlugs = Set(changes.map(\.updated.slug))
@@ -867,23 +864,7 @@ public actor LocalBlogStore {
         return changes.count
     }
 
-    // MARK: - Smart collections and bookmarks
-
-    public func listArticles(in collection: NativeSmartCollection) throws -> [NativeArticleSummary] {
-        try prepare()
-        let query = NativeSmartCollectionSQLCompiler.compile(collection)
-        let limit = collection.selectedView?.limit
-        let limitClause = limit == nil ? "" : " LIMIT ?"
-        let values = query.values + (limit.map { [.integer($0)] } ?? [])
-        var articles: [NativeArticleSummary] = []
-        try db().query(
-            "\(qualifiedArticleSummarySelect("a")) \(query.whereClause) \(query.orderClause)\(limitClause)",
-            values: values
-        ) { row in
-            articles.append(try decodeArticleSummary(row))
-        }
-        return articles
-    }
+    // MARK: - Article properties and bookmarks
 
     public func setArticleProperty(
         slug: String,
@@ -921,132 +902,12 @@ public actor LocalBlogStore {
         ))
     }
 
-    public func listSmartCollections() throws -> [NativeSmartCollection] {
-        try prepare()
-        try migrateSmartCollectionFilesIfNeeded()
-        let collections = try NativeSmartCollectionFile.readAll(in: basesURL)
-        try db().transaction {
-            try db().execute("DELETE FROM smart_collections")
-            for collection in collections {
-                try db().execute(
-                    "INSERT INTO smart_collections(id, config_json, updated_at) VALUES (?, ?, ?)",
-                    values: [
-                        .text(collection.id),
-                        .text(try jsonString(collection)),
-                        .text(collection.updatedAt),
-                    ]
-                )
-            }
-        }
-        return collections.sorted {
-            $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt
-        }
-    }
-
-    @discardableResult
-    public func saveSmartCollection(_ collection: NativeSmartCollection) throws -> NativeSmartCollection {
-        try prepare()
-        var candidate = collection
-        candidate.synchronizeActiveView()
-        let name = candidate.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let formulaKeys = candidate.formulas.map {
-            $0.key.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        }
-        let columnsAreValid: ([NativeSmartCollectionColumn]) -> Bool = { columns in columns.allSatisfy { column in
-            switch column.source {
-            case .system: return NativeSmartCollectionSystemField(rawValue: column.key) != nil
-            case .property: return NativeArticleProperties.isValidKey(column.key)
-            case .formula:
-                return candidate.formulas.contains {
-                    $0.key.caseInsensitiveCompare(column.key) == .orderedSame
-                }
-            }
-        } }
-        let filters = [candidate.filter].compactMap { $0 } + candidate.views.compactMap(\.filter)
-        guard !name.isEmpty, name.count <= 80,
-              candidate.rules.count <= 20,
-              candidate.rules.allSatisfy(\.isValid),
-              filters.reduce(0, { $0 + $1.ruleCount + $1.expressionCount }) <= 100,
-              filters.allSatisfy(\.allRulesAreValid),
-              candidate.views.count <= 50,
-              candidate.sorts.count <= 3,
-              candidate.views.allSatisfy({ $0.sorts.count <= 3 && $0.columns.count <= 30 }),
-              candidate.columns.count <= 30,
-              candidate.formulas.count <= 20,
-              candidate.formulas.allSatisfy(\.isValid),
-              Set(formulaKeys).count == formulaKeys.count,
-              columnsAreValid(candidate.columns),
-              candidate.views.allSatisfy({ columnsAreValid($0.columns) }) else {
-            throw NativeStoreError.fileSystem("智能集合名称、筛选或排序数量无效")
-        }
-        try migrateSmartCollectionFilesIfNeeded()
-        var saved = candidate
-        saved.name = name
-        saved.sorts = Array(saved.sorts.prefix(3))
-        saved.columns = Array(saved.columns.prefix(30)).map { column in
-            var normalized = column
-            normalized.key = column.key.trimmingCharacters(in: .whitespacesAndNewlines)
-            normalized.title = column.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            normalized.width = min(max(column.width, 80), 480)
-            return normalized
-        }
-        saved.formulas = Array(saved.formulas.prefix(20))
-        saved.updatedAt = timestamp(from: Date())
-        let previous = try NativeSmartCollectionFile.readAll(in: basesURL).first(where: { $0.id == saved.id })
-        _ = try NativeSmartCollectionFile.write(saved, in: basesURL)
-        guard let persisted = try NativeSmartCollectionFile.readAll(in: basesURL)
-            .first(where: { $0.id == saved.id }) else {
-            throw NativeStoreError.fileSystem("智能集合写入后无法重新读取")
-        }
-        saved = persisted
-        do {
-            try db().execute(
-                """
-                INSERT OR REPLACE INTO smart_collections(id, config_json, updated_at)
-                VALUES (?, ?, ?)
-                """,
-                values: [.text(saved.id), .text(try jsonString(saved)), .text(saved.updatedAt)]
-            )
-        } catch {
-            if let previous { _ = try? NativeSmartCollectionFile.write(previous, in: basesURL) }
-            else { try? NativeSmartCollectionFile.remove(id: saved.id, in: basesURL) }
-            throw error
-        }
-        return saved
-    }
-
-    public func deleteSmartCollection(id: String) throws {
-        try prepare()
-        try migrateSmartCollectionFilesIfNeeded()
-        let previous = try NativeSmartCollectionFile.readAll(in: basesURL).first(where: { $0.id == id })
-        try NativeSmartCollectionFile.remove(id: id, in: basesURL)
-        do {
-            try db().execute("DELETE FROM smart_collections WHERE id = ?", values: [.text(id)])
-        } catch {
-            if let previous { _ = try? NativeSmartCollectionFile.write(previous, in: basesURL) }
-            throw error
-        }
-    }
-
-    private func migrateSmartCollectionFilesIfNeeded() throws {
-        guard !FileManager.default.fileExists(atPath: basesMarkerURL.path) else { return }
-        var collections: [NativeSmartCollection] = []
-        try db().query("SELECT config_json FROM smart_collections ORDER BY updated_at DESC, id") { row in
-            guard let json = row.text(at: 0) else {
-                throw NativeStoreError.fileSystem("SQLite：智能集合记录不完整")
-            }
-            collections.append(try decode(json))
-        }
-        for collection in collections { _ = try NativeSmartCollectionFile.write(collection, in: basesURL) }
-        try Data().write(to: basesMarkerURL, options: .atomic)
-    }
-
     public func listBookmarks() throws -> [NativeBookmark] {
         try prepare()
         var bookmarks: [NativeBookmark] = []
         try db().query("SELECT bookmark_json FROM bookmarks ORDER BY position, created_at, id") { row in
             guard let json = row.text(at: 0) else {
-                throw NativeStoreError.fileSystem("SQLite：收藏记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：收藏记录不完整"))
             }
             bookmarks.append(try decode(json))
         }
@@ -1060,7 +921,7 @@ public actor LocalBlogStore {
         saved.title = saved.title.trimmingCharacters(in: .whitespacesAndNewlines)
         saved.groupName = saved.groupName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !saved.title.isEmpty, saved.title.count <= 120, saved.groupName.count <= 80 else {
-            throw NativeStoreError.fileSystem("收藏标题或分组名称无效")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("收藏标题或分组名称无效"))
         }
         let nextPosition = (try db().integer("SELECT COALESCE(MAX(position), -1) + 1 FROM bookmarks")) ?? 0
         try db().execute(
@@ -1158,7 +1019,7 @@ public actor LocalBlogStore {
         ORDER BY moment.created_at DESC, moment.id DESC, tag.normalized_tag
         """) { row in
             guard let id = row.text(at: 0), let createdAt = row.text(at: 1) else {
-                throw NativeStoreError.fileSystem("SQLite：微博筛选记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：微博筛选记录不完整"))
             }
             if records[id] == nil {
                 order.append(id)
@@ -1388,7 +1249,7 @@ public actor LocalBlogStore {
         ORDER BY COUNT(*) DESC, normalized_tag ASC
         """) { row in
             guard let tag = row.text(at: 0) else {
-                throw NativeStoreError.fileSystem("SQLite：问题标签记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：问题标签记录不完整"))
             }
             facets.append(NativeQuestionTagFacet(tag: tag, count: row.integer(at: 1) ?? 0))
         }
@@ -1655,7 +1516,7 @@ public actor LocalBlogStore {
         ])
         guard let primary = saved.first(where: { $0.slug == source.slug }),
               let created = saved.first(where: { $0.slug == targetSlug }) else {
-            throw NativeStoreError.fileSystem("文章提取结果不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("文章提取结果不完整"))
         }
         return NativeArticleRefactorResult(primaryArticle: primary, createdArticles: [created])
     }
@@ -1722,7 +1583,7 @@ public actor LocalBlogStore {
 
         let saved = try persistArticleRefactor(changes)
         guard let primary = saved.first(where: { $0.slug == source.slug }) else {
-            throw NativeStoreError.fileSystem("文章拆分结果不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("文章拆分结果不完整"))
         }
         let createdSlugs = Set(targets.map(\.slug))
         let created = saved.filter { createdSlugs.contains($0.slug) }
@@ -1773,7 +1634,7 @@ public actor LocalBlogStore {
         }
         let saved = try persistArticleRefactor(changes, removing: source)
         guard let primary = saved.first(where: { $0.slug == destination.slug }) else {
-            throw NativeStoreError.fileSystem("文章合并结果不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("文章合并结果不完整"))
         }
         return NativeArticleRefactorResult(
             primaryArticle: primary,
@@ -1946,7 +1807,7 @@ public actor LocalBlogStore {
             values: [.text(destination), .text(article.slug)]
         ) ?? 0
         guard occupied == 0 else {
-            throw NativeStoreError.fileSystem("目标 Markdown 路径已被另一篇文章占用")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("目标 Markdown 路径已被另一篇文章占用"))
         }
 
         let record = try MarkdownArticleSource.move(
@@ -2259,7 +2120,7 @@ public actor LocalBlogStore {
             candidate = "\(base)-\(suffix)"
             suffix += 1
             if suffix > 1_000 {
-                throw NativeStoreError.fileSystem("无法为文章分配可用地址")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("无法为文章分配可用地址"))
             }
         }
         return candidate
@@ -2289,7 +2150,7 @@ public actor LocalBlogStore {
         let writeLease = try WorkspaceStorageLifecycle.beginAsyncWrite(in: rootURL)
         defer { withExtendedLifetime(writeLease) {} }
         guard markdownWorkspaceSource.mode == .copyImport else {
-            throw NativeStoreError.fileSystem("复制导入前请先将 Markdown 源切换为“复制导入”")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("复制导入前请先将 Markdown 源切换为“复制导入”"))
         }
         var importedArticles: [NativeArticle] = []
         var copiedMediaURLs: [URL] = []
@@ -2301,7 +2162,7 @@ public actor LocalBlogStore {
             let existingIsActive = try storedArticle(withSlug: note.slug, includingDeleted: false) != nil
             if existingIsActive {
                 skippedCount += 1
-                warnings.append("\(note.relativePath)：SQLite 中已存在 \(note.slug)，已跳过")
+                warnings.append(NativeLocalization.text("\(note.relativePath)：SQLite 中已存在 \(note.slug)，已跳过"))
                 continue
             }
 
@@ -2329,7 +2190,7 @@ public actor LocalBlogStore {
                         uploadedBySourcePath[sourcePath] = storedMedia
                         if let copiedURL = mediaURL(for: uploaded.url) { copiedMediaURLs.append(copiedURL) }
                     } catch {
-                        warnings.append("\(note.relativePath)：附件 \(attachment.sourceURL.lastPathComponent) 导入失败：\(error.localizedDescription)")
+                        warnings.append(NativeLocalization.text("\(note.relativePath)：附件 \(attachment.sourceURL.lastPathComponent) 导入失败：\(error.localizedDescription)"))
                         continue
                     }
                 }
@@ -2415,7 +2276,7 @@ public actor LocalBlogStore {
             try writeActivityEventsAfterMutation()
         } catch {
             markJSONBackupNeedsRebuild()
-            warnings.append("Markdown 已导入，但部分 JSON 备份需要在下次启动时重建")
+            warnings.append(NativeLocalization.text("Markdown 已导入，但部分 JSON 备份需要在下次启动时重建"))
         }
 
         return NativeObsidianImportResult(
@@ -2471,7 +2332,7 @@ public actor LocalBlogStore {
            FileManager.default.fileExists(
                atPath: articlesURL.appendingPathComponent(sourceRelativePath).path
             ) {
-            throw NativeStoreError.fileSystem("目标文章文件已存在")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("目标文章文件已存在"))
         }
         let originalFile = try MarkdownArticleSource.snapshot(relativePath: sourceRelativePath, in: articlesURL)
         let previousFile = try previous.map {
@@ -2727,7 +2588,7 @@ public actor LocalBlogStore {
                   let excerpt = row.text(at: 2),
                   let deletedAt = row.text(at: 3),
                   let expiresAt = row.text(at: 4) else {
-                throw NativeStoreError.fileSystem("SQLite：回收站文章记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：回收站文章记录不完整"))
             }
             items.append(NativeTrashItem(
                 kind: .article,
@@ -2749,7 +2610,7 @@ public actor LocalBlogStore {
                   let imagesJSON = row.text(at: 2),
                   let deletedAt = row.text(at: 3),
                   let expiresAt = row.text(at: 4) else {
-                throw NativeStoreError.fileSystem("SQLite：回收站微博记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：回收站微博记录不完整"))
             }
             let images: [NativeMedia] = try decode(imagesJSON)
             let preview = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -3009,7 +2870,7 @@ public actor LocalBlogStore {
             ]
         )
         guard let id = try db().integer("SELECT last_insert_rowid()") else {
-            throw NativeStoreError.fileSystem("SQLite：无法读取文章版本编号")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：无法读取文章版本编号"))
         }
         return NativeArticleRevision(
             id: id,
@@ -3046,7 +2907,7 @@ public actor LocalBlogStore {
               let snapshotJSON = row.text(at: 5),
               let createdAt = row.text(at: 6),
               let updatedAt = row.text(at: 7) else {
-            throw NativeStoreError.fileSystem("SQLite：文章版本记录不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：文章版本记录不完整"))
         }
         let snapshot: NativeArticleRevisionSnapshot = try decode(snapshotJSON)
         return NativeArticleRevision(
@@ -3138,6 +2999,13 @@ public actor LocalBlogStore {
         func relocate(_ storedPath: String) throws -> String {
             let normalized = normalizeMediaURL(storedPath)
             guard let range = normalized.range(of: "/media/inbox/") else { return normalized }
+            // Media explicitly kept in a library has a stable public URL.
+            if try db().integer("SELECT COUNT(*) FROM photo_library_items WHERE url = ?", values: [.text(normalized)]) == 1 {
+                return normalized
+            }
+            if try db().integer("SELECT COUNT(*) FROM media_library_items WHERE url = ?", values: [.text(normalized)]) == 1 {
+                return normalized
+            }
             let filename = try requireSafeSegment(String(normalized[range.upperBound...]), label: "媒体文件")
             let source = mediaURL.appendingPathComponent("inbox").appendingPathComponent(filename)
             let destinationDirectory = mediaURL.appendingPathComponent(slug, isDirectory: true)
@@ -3145,7 +3013,7 @@ public actor LocalBlogStore {
             let destination = destinationDirectory.appendingPathComponent(filename)
             if FileManager.default.fileExists(atPath: source.path) {
                 if FileManager.default.fileExists(atPath: destination.path) {
-                    throw NativeStoreError.fileSystem("目标媒体文件已存在：\(filename)")
+                    throw NativeStoreError.fileSystem(NativeLocalization.text("目标媒体文件已存在：\(filename)"))
                 }
                 try FileManager.default.moveItem(at: source, to: destination)
                 moves.append((source, destination))
@@ -3190,11 +3058,11 @@ public actor LocalBlogStore {
         let targetSlug = try requireSafeSegment(slug?.isEmpty == false ? slug! : "inbox", label: "媒体目录")
         if kind == "video", targetSlug == "moments",
            fileURL.pathExtension.caseInsensitiveCompare("mp4") != .orderedSame {
-            throw NativeStoreError.fileSystem("微博视频仅支持 MP4 格式")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("微博视频仅支持 MP4 格式"))
         }
         if kind == "audio", targetSlug == "moments",
            fileURL.pathExtension.caseInsensitiveCompare("mp3") != .orderedSame {
-            throw NativeStoreError.fileSystem("微博音频仅支持 MP3 格式")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("微博音频仅支持 MP3 格式"))
         }
         let targetDirectory = mediaURL.appendingPathComponent(targetSlug, isDirectory: true)
         try FileManager.default.createDirectory(at: targetDirectory, withIntermediateDirectories: true)
@@ -3273,9 +3141,18 @@ public actor LocalBlogStore {
     ) throws {
         for item in media {
             let normalizedURL = normalizeMediaURL(item.url)
+            if try db().integer("SELECT COUNT(*) FROM photo_library_items WHERE url = ?", values: [.text(normalizedURL)]) == 1 {
+                continue
+            }
+            if try db().integer("SELECT COUNT(*) FROM media_library_items WHERE url = ?", values: [.text(normalizedURL)]) == 1 {
+                continue
+            }
             // Whiteboard revisions can still be referenced by draft/undo/history
             // snapshots. They are retained with the workspace's backup data.
             if normalizedURL.hasPrefix("/media/whiteboards/") || normalizedURL.hasPrefix("/media/canvases/") { continue }
+            // Homepage imports belong to the workspace, including while a layout
+            // is being edited. Removing a module must not delete its local media.
+            if normalizedURL.hasPrefix("/media/dashboard/") { continue }
             let referenceCount = try db().integer(
                 "SELECT COUNT(*) FROM media_references WHERE normalized_url = ?",
                 values: [.text(normalizedURL)]
@@ -3290,7 +3167,7 @@ public actor LocalBlogStore {
     // MARK: - Database and compatibility exports
 
     func db() throws -> SQLiteDatabase {
-        guard let database else { throw NativeStoreError.fileSystem("SQLite：数据库尚未准备好") }
+        guard let database else { throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：数据库尚未准备好")) }
         return database
     }
 
@@ -3374,7 +3251,7 @@ public actor LocalBlogStore {
             do {
                 indexed = try JSONDecoder().decode([NativeArticle].self, from: Data(contentsOf: indexURL))
             } catch {
-                throw NativeStoreError.fileSystem("无法读取 \(indexURL.lastPathComponent)：\(error.localizedDescription)")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 \(indexURL.lastPathComponent)：\(error.localizedDescription)"))
             }
 
             var bySlug: [String: NativeArticle] = [:]
@@ -3385,7 +3262,7 @@ public actor LocalBlogStore {
                     let fromFile = try readArticle(at: file)
                     let fileSlug = try requireSafeSegment(fromFile.slug, label: "文章 slug")
                     guard fileSlug == slug else {
-                        throw NativeStoreError.fileSystem("文章 JSON 的 slug 与 index.json 不一致")
+                        throw NativeStoreError.fileSystem(NativeLocalization.text("文章 JSON 的 slug 与 index.json 不一致"))
                     }
                     bySlug[slug] = fromFile
                 } else {
@@ -3423,7 +3300,7 @@ public actor LocalBlogStore {
                     byID[id] = moment
                 }
             } catch {
-                throw NativeStoreError.fileSystem("无法读取 \(momentsIndexURL.lastPathComponent)：\(error.localizedDescription)")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 \(momentsIndexURL.lastPathComponent)：\(error.localizedDescription)"))
             }
         }
 
@@ -3448,7 +3325,7 @@ public actor LocalBlogStore {
         do {
             return try JSONDecoder().decode([NativeActivityEvent].self, from: Data(contentsOf: legacyURL))
         } catch {
-            throw NativeStoreError.fileSystem("无法读取 \(legacyURL.lastPathComponent)：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 \(legacyURL.lastPathComponent)：\(error.localizedDescription)"))
         }
     }
 
@@ -3463,7 +3340,7 @@ public actor LocalBlogStore {
                 _ = try requireSafeSegment(article.slug, label: "回收站文章 slug")
                 guard NativeTimestamp.date(from: entry.deletedAt) != nil,
                       NativeTimestamp.date(from: entry.expiresAt) != nil else {
-                    throw NativeStoreError.fileSystem("回收站文章的时间戳无效")
+                    throw NativeStoreError.fileSystem(NativeLocalization.text("回收站文章的时间戳无效"))
                 }
                 return NativeTrashedArticle(article: article, deletedAt: entry.deletedAt, expiresAt: entry.expiresAt)
             }
@@ -3471,7 +3348,7 @@ public actor LocalBlogStore {
                 _ = try requireSafeSegment(entry.moment.id, label: "回收站微博 ID")
                 guard NativeTimestamp.date(from: entry.deletedAt) != nil,
                       NativeTimestamp.date(from: entry.expiresAt) != nil else {
-                    throw NativeStoreError.fileSystem("回收站微博的时间戳无效")
+                    throw NativeStoreError.fileSystem(NativeLocalization.text("回收站微博的时间戳无效"))
                 }
                 return entry
             }
@@ -3479,7 +3356,7 @@ public actor LocalBlogStore {
         } catch let error as NativeStoreError {
             throw error
         } catch {
-            throw NativeStoreError.fileSystem("无法读取 \(trashIndexURL.lastPathComponent)：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 \(trashIndexURL.lastPathComponent)：\(error.localizedDescription)"))
         }
     }
 
@@ -3839,7 +3716,7 @@ public actor LocalBlogStore {
               let tagsJSON = row.text(at: 8),
               let updatedAt = row.text(at: 9),
               let status = NativeArticleStatus(rawValue: statusValue) else {
-            throw NativeStoreError.fileSystem("SQLite：文章记录不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：文章记录不完整"))
         }
         return NativeArticle(
             banner: try decodeOptional(row.text(at: 5)),
@@ -3871,7 +3748,7 @@ public actor LocalBlogStore {
               let status = NativeArticleStatus(rawValue: statusValue),
               let tagsJSON = row.text(at: 6),
               let updatedAt = row.text(at: 7) else {
-            throw NativeStoreError.fileSystem("SQLite：文章摘要记录不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：文章摘要记录不完整"))
         }
         let properties: [String: NativeArticlePropertyValue] = try decode(row.text(at: 11) ?? "{}")
         return NativeArticleSummary(
@@ -4170,7 +4047,7 @@ public actor LocalBlogStore {
               let text = row.text(at: 3),
               let textRunsJSON = row.text(at: 4),
               let imagesJSON = row.text(at: 5) else {
-            throw NativeStoreError.fileSystem("SQLite：动态记录不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：动态记录不完整"))
         }
         let tags: [String]
         if let tagsJSON = row.text(at: 6) {
@@ -4216,7 +4093,7 @@ public actor LocalBlogStore {
               let tagsJSON = row.text(at: 3),
               let createdAt = row.text(at: 4),
               let updatedAt = row.text(at: 5) else {
-            throw NativeStoreError.fileSystem("SQLite：问题记录不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：问题记录不完整"))
         }
         return NativeQuestion(
             id: id,
@@ -4236,7 +4113,7 @@ public actor LocalBlogStore {
               let imagesJSON = row.text(at: 3),
               let createdAt = row.text(at: 4),
               let updatedAt = row.text(at: 5) else {
-            throw NativeStoreError.fileSystem("SQLite：问题回答记录不完整")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：问题回答记录不完整"))
         }
         return NativeQuestionAnswer(
             id: id,
@@ -4252,7 +4129,7 @@ public actor LocalBlogStore {
         var articles: [NativeTrashedArticle] = []
         try db().query(articleSelect + " WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL ORDER BY slug") { row in
             guard let deletedAt = row.text(at: 13), let expiresAt = row.text(at: 14) else {
-                throw NativeStoreError.fileSystem("SQLite：回收站文章记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：回收站文章记录不完整"))
             }
             articles.append(NativeTrashedArticle(
                 article: try decodeArticle(row),
@@ -4268,7 +4145,7 @@ public actor LocalBlogStore {
         ORDER BY id
         """) { row in
             guard let deletedAt = row.text(at: 8), let expiresAt = row.text(at: 9) else {
-                throw NativeStoreError.fileSystem("SQLite：回收站微博记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：回收站微博记录不完整"))
             }
             moments.append(NativeTrashedMoment(
                 moment: try decodeMoment(row),
@@ -4283,7 +4160,7 @@ public actor LocalBlogStore {
         var events: [NativeActivityEvent] = []
         try db().query("SELECT type, created_at FROM activity_events ORDER BY id") { row in
             guard let type = row.text(at: 0), let createdAt = row.text(at: 1) else {
-                throw NativeStoreError.fileSystem("SQLite：活动记录不完整")
+                throw NativeStoreError.fileSystem(NativeLocalization.text("SQLite：活动记录不完整"))
             }
             events.append(NativeActivityEvent(type: type, createdAt: createdAt))
         }
@@ -4375,7 +4252,7 @@ public actor LocalBlogStore {
             let data = try Data(contentsOf: url)
             return normalize(try JSONDecoder().decode(NativeArticle.self, from: data))
         } catch {
-            throw NativeStoreError.fileSystem("无法读取 \(url.lastPathComponent)：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 \(url.lastPathComponent)：\(error.localizedDescription)"))
         }
     }
 
@@ -4383,7 +4260,7 @@ public actor LocalBlogStore {
         do {
             return try JSONDecoder().decode(NativeMoment.self, from: Data(contentsOf: url))
         } catch {
-            throw NativeStoreError.fileSystem("无法读取 \(url.lastPathComponent)：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取 \(url.lastPathComponent)：\(error.localizedDescription)"))
         }
     }
 
@@ -4397,7 +4274,7 @@ public actor LocalBlogStore {
             // decoding every article body to compare it with SQLite.
             try Data().write(to: jsonExportStampURL, options: .atomic)
         } catch {
-            throw NativeStoreError.fileSystem("无法写入 \(url.lastPathComponent)：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法写入 \(url.lastPathComponent)：\(error.localizedDescription)"))
         }
     }
 
@@ -4535,7 +4412,7 @@ public actor LocalBlogStore {
     func jsonString<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         guard let result = String(data: try encoder.encode(value), encoding: .utf8) else {
-            throw NativeStoreError.fileSystem("无法编码 SQLite JSON 字段")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法编码 SQLite JSON 字段"))
         }
         return result
     }
@@ -4544,7 +4421,7 @@ public actor LocalBlogStore {
         do {
             return try JSONDecoder().decode(T.self, from: Data(value.utf8))
         } catch {
-            throw NativeStoreError.fileSystem("无法解析 SQLite JSON 字段：\(error.localizedDescription)")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("无法解析 SQLite JSON 字段：\(error.localizedDescription)"))
         }
     }
 
@@ -4601,7 +4478,7 @@ public actor LocalBlogStore {
               value != "..",
               !value.hasPrefix("."),
               value.rangeOfCharacter(from: allowed.inverted) == nil else {
-            throw NativeStoreError.fileSystem("\(label) 无效")
+            throw NativeStoreError.fileSystem(NativeLocalization.text("\(NativeLocalization.string(label, language: NativeLocalization.currentLanguage)) 无效"))
         }
         return value
     }
