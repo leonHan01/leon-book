@@ -10,6 +10,22 @@ private func directoryExpect(_ condition: Bool, _ message: String) throws {
 }
 
 final class ArticleDirectoryTests {
+    func testHTMLImportExtractsArticleAndEmbeddedImages() throws {
+        let html = """
+        <html><head><meta charset="utf-8"></head><body><nav>导航</nav><h1>课程标题</h1>
+        <div data-slate-editor="true"><div data-slate-type="paragraph">正文<span data-slate-type="bold">重点</span></div>
+        <div data-slate-type="pre"><div data-slate-type="code-line"><span data-slate-string="true">if ready:</span></div><div data-slate-type="code-line"><span data-slate-string="true">    </span><span data-slate-string="true">if ok:</span></div><div data-slate-type="code-line"><span data-slate-string="true">        run()</span></div></div>
+        <div data-slate-type="image"><img src="data:image/png;base64,iVBORw0KGgo="></div></div>
+        <footer>页脚</footer></body></html>
+        """
+        let result = try NativeHTMLArticleImporter.parse(html, fileURL: URL(fileURLWithPath: "/tmp/course.html"))
+        try directoryExpect(result.title == "课程标题", "HTML title should be retained")
+        try directoryExpect(result.body.contains("<p>正文<strong>重点</strong>"), "Slate paragraphs and emphasis should become semantic HTML")
+        try directoryExpect(result.body.contains("<pre><code>if ready:\n    if ok:\n        run()</code></pre>"), "code indentation and line breaks should be preserved")
+        try directoryExpect(result.images.count == 1 && result.body.contains(result.images[0].token), "embedded images must be extracted for managed storage")
+        try directoryExpect(!result.body.contains("导航") && !result.body.contains("页脚"), "page chrome must not be imported")
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("leon-directory-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

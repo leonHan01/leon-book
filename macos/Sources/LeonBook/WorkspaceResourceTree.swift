@@ -155,6 +155,13 @@ enum NativeWorkspaceResourceTree {
 
         for record in records where record.kind == .file {
             let filename = URL(fileURLWithPath: record.relativePath).lastPathComponent
+            let fileExtension = URL(fileURLWithPath: filename).pathExtension.lowercased()
+            // Inline article images are available in the article and media library;
+            // displaying each one alongside the article clutters its directory.
+            if record.storage == .managedMedia,
+               ["png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff", "svg"].contains(fileExtension) {
+                continue
+            }
             guard URL(fileURLWithPath: filename).pathExtension
                 .caseInsensitiveCompare("json") != .orderedSame else { continue }
             let isArticle = record.storage == .markdownSource && articleByPath[normalized(record.relativePath)] != nil
@@ -204,6 +211,23 @@ enum NativeWorkspaceResourceTree {
 
     static func flattened(_ roots: [NativeWorkspaceResourceNode]) -> [NativeWorkspaceResourceNode] {
         roots.flatMap { $0.flattened() }
+    }
+
+    /// The article sidebar is a navigation tree, not a list of physical media
+    /// and attachments. Keep all folders, including empty destinations.
+    static func articleDirectory(_ nodes: [NativeWorkspaceResourceNode]) -> [NativeWorkspaceResourceNode] {
+        nodes.compactMap { node in
+            switch node.kind {
+            case .attachment:
+                return nil
+            case .article:
+                return node
+            case .folder:
+                var folder = node
+                folder.children = articleDirectory(node.children)
+                return folder
+            }
+        }
     }
 
     static func folderPaths(in roots: [NativeWorkspaceResourceNode]) -> [String] {

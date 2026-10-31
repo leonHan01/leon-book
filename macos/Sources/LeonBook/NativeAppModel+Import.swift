@@ -202,3 +202,57 @@ extension NativeAppModel {
     }
 
 }
+
+extension NativeAppModel {
+    /// Import a Finder-dropped HTML file into the selected article directory.
+    func importHTMLArticle(from url: URL, into folder: String) {
+        guard !isMarkdownSourceReadOnly else {
+            errorMessage = NativeStoreError.readOnlyArticleSource.localizedDescription
+            return
+        }
+        guard url.isFileURL, ["html", "htm"].contains(url.pathExtension.lowercased()) else {
+            errorMessage = NativeLocalization.text("请拖入 HTML 文件。")
+            return
+        }
+        let loadingID = loadingOperations.begin(.resources)
+        Task {
+            defer { loadingOperations.end(loadingID) }
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            var uploaded: [NativeMedia] = []
+            var saved = false
+            do {
+                let destination = try NativeArticleDirectoryPolicy.validatedFolderPath(folder)
+                let parsed = try await Task.detached(priority: .userInitiated) {
+                    let html = try String(contentsOf: url, encoding: .utf8)
+                    return try NativeHTMLArticleImporter.parse(html, fileURL: url)
+                }.value
+                let slug = try await store.allocateSlug(from: parsed.title)
+                var body = parsed.body
+                let temporaryDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("leonbook-html-\(UUID().uuidString)", isDirectory: true)
+                try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+                defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+                for (index, image) in parsed.images.enumerated() {
+                    let imageURL = temporaryDirectory.appendingPathComponent("image-\(index).\(image.fileExtension)")
+                    try image.data.write(to: imageURL, options: .atomic)
+                    let item = try await store.uploadMedia(fileURL: imageURL, kind: "image", slug: slug)
+                    let media = NativeMedia(kind: item.kind, name: item.name, size: item.size, url: item.url)
+                    uploaded.append(media)
+                    body = body.replacingOccurrences(of: image.token, with: item.url)
+                }
+                _ = try await store.saveArticle(NativeSaveArticle(
+                    banner: nil, body: body, category: "Notes", excerpt: "", media: uploaded,
+                    slug: slug, status: .draft, tags: [], title: parsed.title, expectedUpdatedAt: nil,
+                    sourceRelativePath: "\(destination)/\(slug).html"
+                ))
+                saved = true
+                try await reload()
+                scheduleBackup()
+                errorMessage = nil
+            } catch {
+                if !saved { try? await store.discardUnreferencedMedia(uploaded) }
+                errorMessage = NativeLocalization.text("HTML 导入失败：\(error.localizedDescription)")
+            }
+        }
+    }
+}

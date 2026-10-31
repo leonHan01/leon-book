@@ -78,6 +78,7 @@ struct RichArticleEditor: NSViewRepresentable {
             context.coordinator.mediaHandler?.store = store
         }
         context.coordinator.mediaHandler?.sourceRelativePath = sourceRelativePath
+        context.coordinator.observeReaderScroll(in: view)
         context.coordinator.synchronize(view)
     }
 
@@ -88,6 +89,7 @@ struct RichArticleEditor: NSViewRepresentable {
         (view as? NativeLoadingWebView)?.cancelLoadingFeedback()
         coordinator.mediaHandler?.cancelAll()
         coordinator.cancelImageRequests()
+        coordinator.stopObservingReaderScroll()
         coordinator.closeWhiteboard()
     }
 
@@ -115,10 +117,52 @@ struct RichArticleEditor: NSViewRepresentable {
         private var lastLanguage: NativeAppLanguage?
         private var whiteboard: ArticleWhiteboardWindow?
         private var whiteboardRequestID: String?
+        private weak var readerClipView: NSClipView?
+        private var readerScrollObserver: NSObjectProtocol?
+        private var readerViewportUpdatePending = false
 
         init(parent: RichArticleEditor) { self.parent = parent }
 
         deinit { imageTasks.values.forEach { $0.cancel() } }
+
+        func stopObservingReaderScroll() {
+            if let readerScrollObserver { NotificationCenter.default.removeObserver(readerScrollObserver) }
+            readerScrollObserver = nil
+            readerClipView = nil
+        }
+
+        func observeReaderScroll(in webView: WKWebView) {
+            guard parent.onHeightChange != nil, let clip = webView.enclosingScrollView?.contentView else {
+                stopObservingReaderScroll()
+                return
+            }
+            if readerClipView !== clip {
+                stopObservingReaderScroll()
+                readerClipView = clip
+                clip.postsBoundsChangedNotifications = true
+                readerScrollObserver = NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
+                ) { [weak self, weak webView] _ in
+                    guard let self, let webView else { return }
+                    MainActor.assumeIsolated { self.scheduleReaderViewportUpdate(webView) }
+                }
+            }
+            scheduleReaderViewportUpdate(webView)
+        }
+
+        private func scheduleReaderViewportUpdate(_ webView: WKWebView) {
+            guard isReady, !readerViewportUpdatePending else { return }
+            readerViewportUpdatePending = true
+            DispatchQueue.main.async { [weak self, weak webView] in
+                guard let self else { return }
+                self.readerViewportUpdatePending = false
+                guard let webView, self.parent.onHeightChange != nil else { return }
+                let visible = webView.visibleRect
+                let top = webView.isFlipped ? visible.minY : webView.bounds.height - visible.maxY
+                webView.callAsyncJavaScript("window.LeonArticle.setReaderViewport(top)",
+                    arguments: ["top": max(0, top)], in: nil, in: .page) { _ in }
+            }
+        }
 
         func synchronize(_ webView: WKWebView) {
             guard isReady else { return }
@@ -142,13 +186,16 @@ struct RichArticleEditor: NSViewRepresentable {
             lastEditable = parent.isEditable
             lastFontSize = parent.fontSize
             webView.callAsyncJavaScript(
-                "return window.LeonArticle.load(body, id, editable, size)",
-                arguments: ["body": html, "id": parent.documentID, "editable": parent.isEditable, "size": parent.fontSize],
+                "return window.LeonArticle.load(body, id, editable, size, embeddedReader)",
+                arguments: ["body": html, "id": parent.documentID, "editable": parent.isEditable,
+                            "size": parent.fontSize, "embeddedReader": parent.onHeightChange != nil],
                 in: nil, in: .page
-            ) { [weak loadingView] result in
+            ) { [weak self, weak webView, weak loadingView] result in
                 guard let loadingView, loadingView.loadingRequestID == loadingID else { return }
                 switch result {
-                case .success: loadingView.finishContentLoading(loadingID)
+                case .success:
+                    loadingView.finishContentLoading(loadingID)
+                    if let webView { self?.observeReaderScroll(in: webView) }
                 case .failure: loadingView.showLoadingFailure(NativeLocalization.text("内容加载失败，请重新打开。"))
                 }
             }
@@ -188,6 +235,17 @@ struct RichArticleEditor: NSViewRepresentable {
                 if parent.html != html { parent.html = html }
             case "height":
                 if let height = payload["height"] as? Double { parent.onHeightChange?(max(24, height)) }
+            case "readerWheel":
+                guard !parent.isEditable, parent.onHeightChange != nil, let delta = payload["deltaY"] as? Double,
+                      delta.isFinite, let scrollView = message.webView?.enclosingScrollView,
+                      let document = scrollView.documentView else { return }
+                let clip = scrollView.contentView
+                let minimum = document.bounds.minY
+                let maximum = max(minimum, document.bounds.maxY - clip.bounds.height)
+                let direction: CGFloat = document.isFlipped ? 1 : -1
+                let y = min(maximum, max(minimum, clip.bounds.origin.y + CGFloat(delta) * direction))
+                clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
+                scrollView.reflectScrolledClipView(clip)
             case "selection":
                 if !parent.isEditable, let text = payload["text"] as? String { parent.onSelectText?(text) }
             case "outline":

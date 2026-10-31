@@ -30,6 +30,8 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #document[contenteditable=true] > *:focus-within { border-radius: 4px; }
 #document[contenteditable=true] > * { border-radius: 6px; }
 #document[contenteditable=true] > *:hover { border-radius: 6px; outline: 2px solid var(--block-hover); }
+#document .article-multiselected { outline: 2px solid #9fc5f5 !important; border-radius: 6px; }
+#document.article-multiselect::selection, #document.article-multiselect *::selection { background: transparent; }
 #document > p:only-child:has(>br:only-child)::before { content: var(--editor-placeholder); color: var(--muted); pointer-events: none; position: absolute; }
 #document h1 { font-size: 1.8em; line-height: 1.4; font-weight: 720; margin-top: 20px; }
 #document h2 { font-size: 1.4em; line-height: 1.5; margin-top: 16px; }
@@ -53,6 +55,9 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #document a { color: var(--accent); text-decoration: underline; }
 #document img { display: block; max-width: 100%; height: auto; border-radius: 8px; }
 #document figure[data-type=audio] { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); }
+#document[data-sticky-audio=true] > figure[data-type=audio]:first-child { z-index: 2; }
+body:not(.readonly) #document[data-sticky-audio=true] > figure[data-type=audio]:first-child { position: sticky; top: 40px; }
+body.readonly #document[data-sticky-audio=true] > figure[data-type=audio]:first-child { transform: translateY(var(--reader-audio-offset, 0px)); }
 #document figure[data-type=audio]:focus { outline: 2px solid var(--accent); }
 #document audio { display: block; width: 100%; max-width: 100%; }
 #document video { display: block; width: 100%; max-height: 580px; border-radius: 8px; background: #000; }
@@ -236,11 +241,27 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   const attributes = new Set(['data-block-id', 'data-type', 'data-depth', 'data-checked', 'data-number', 'data-language']);
   const blockTags = new Set('DIV P H1 H2 H3 H4 PRE ASIDE BLOCKQUOTE TABLE FIGURE UL OL LI HR'.split(' '));
   const pendingImagePastes = new Map();
-  let documentID = '', editable = false, composing = false, pendingLoad = null;
+  let documentID = '', editable = false, embeddedReader = false, composing = false, pendingLoad = null;
   let matches = [], menuIndex = 0, slashBlock = null, menuQuery = null, history = [], historyIndex = -1, lastEdit = 0;
   let formatRange = null, formatDocumentID = '', formatBackward = false, colorMode = null, selectingWithPointer = false;
   let markdownTail = null;
   const send = payload => window.webkit?.messageHandlers?.richArticle?.postMessage({ ...payload, documentID });
+  // The reader expands this web view to the document height inside a native
+  // scroll view. WebKit otherwise consumes wheel events over the article.
+  document.addEventListener('wheel', event => {
+    if (!embeddedReader || event.ctrlKey || event.metaKey || !event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    for (let node = event.target instanceof Element ? event.target : event.target.parentElement;
+         node && node !== root; node = node.parentElement) {
+      const overflow = getComputedStyle(node).overflowY;
+      if ((overflow === 'auto' || overflow === 'scroll') && node.scrollHeight > node.clientHeight &&
+          ((event.deltaY < 0 && node.scrollTop > 0) ||
+           (event.deltaY > 0 && node.scrollTop + node.clientHeight < node.scrollHeight - 1))) return;
+    }
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 :
+      event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? window.innerHeight : 1;
+    event.preventDefault();
+    send({ type: 'readerWheel', deltaY: event.deltaY * scale });
+  }, { passive: false });
   // Visual work consumes only the latest event in a display frame. Content
   // publication stays synchronous so save/navigation never miss the last edit.
   function frameTask(work) {
@@ -694,7 +715,23 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       else hideSelectionToolbar();
     }
   });
+  let readerViewportTop = 0;
+  function updateStickyAudio() {
+    const first = root.firstElementChild;
+    const players = root.querySelectorAll('audio');
+    const source = players[0]?.dataset.originalSrc || players[0]?.getAttribute('src') || '';
+    const eligible = first?.matches('figure[data-type=audio]') && players.length === 1 &&
+      first.contains(players[0]) && /\.mp3(?:[?#]|$)/i.test(source);
+    if (eligible) root.dataset.stickyAudio = 'true'; else delete root.dataset.stickyAudio;
+    let offset = 0;
+    if (eligible && embeddedReader) {
+      offset = Math.max(0, Math.min(readerViewportTop - first.offsetTop,
+        root.offsetHeight - first.offsetTop - first.offsetHeight));
+    }
+    root.style.setProperty('--reader-audio-offset', `${offset}px`);
+  }
   function prepareBlocks() {
+    updateStickyAudio();
     invalidate(contentObserver.takeRecords());
     if (!needsPreparation) return;
     columnLayout.normalize();
@@ -1159,7 +1196,32 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     const block = event.target.closest('[data-type=task]');
     if (block && !event.target.closest('img') && event.clientX - block.getBoundingClientRect().left < 26 && editable) { checkpoint(); block.dataset.checked = String(block.dataset.checked !== 'true'); notify(); }
   });
+  let highlightedBlocks = new Set();
+  function updateBlockSelection() {
+    const selection = getSelection();
+    let blocks = [];
+    if (editable && selection?.rangeCount && !selection.isCollapsed) {
+      const range = selection.getRangeAt(0);
+      if (root.contains(range.startContainer) && root.contains(range.endContainer)) {
+        const candidates = [...root.children].flatMap(block => block.matches('div[data-type=columns]')
+          ? [...block.querySelectorAll('div[data-type=column] > *')] : [block]);
+        blocks = candidates.filter(block => {
+          if (!range.intersectsNode(block)) return false;
+          const overlap = document.createRange(); overlap.selectNodeContents(block);
+          if (range.compareBoundaryPoints(Range.START_TO_START, overlap) > 0) overlap.setStart(range.startContainer, range.startOffset);
+          if (range.compareBoundaryPoints(Range.END_TO_END, overlap) < 0) overlap.setEnd(range.endContainer, range.endOffset);
+          return !overlap.collapsed;
+        });
+      }
+    }
+    const next = new Set(blocks.length > 1 ? blocks : []);
+    for (const block of highlightedBlocks) if (!next.has(block)) block.classList.remove('article-multiselected');
+    for (const block of next) if (!highlightedBlocks.has(block)) block.classList.add('article-multiselected');
+    highlightedBlocks = next;
+    root.classList.toggle('article-multiselect', next.size > 0);
+  }
   document.addEventListener('selectionchange', () => {
+    updateBlockSelection();
     updateLanguage(); if (!composing) updateMenu(); updateSelectionToolbar();
     if (!editable) {
       const selection = getSelection();
@@ -1222,11 +1284,11 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (block?.tagName === 'PRE') { checkpoint(); block.dataset.language = value; notify(); }
     closeTools();
   });
-  function load(body, id, canEdit, size) {
-    if (composing) { pendingLoad = [body, id, canEdit, size]; return false; }
+  function load(body, id, canEdit, size, isEmbeddedReader = false) {
+    if (composing) { pendingLoad = [body, id, canEdit, size, isEmbeddedReader]; return false; }
     const changed = documentID !== id || serialize() !== body;
     if (documentID !== id) lastHeight = -1;
-    documentID = id; editable = canEdit; document.body.classList.toggle('readonly', !editable);
+    documentID = id; editable = canEdit; embeddedReader = isEmbeddedReader; document.body.classList.toggle('readonly', !editable);
     root.contentEditable = String(editable); document.documentElement.style.setProperty('--size', size + 'px');
     if (changed || !editable) { closeTools(); selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); columnLayout.reset(); whiteboards.reset(); audioBlocks.reset(); }
     if (changed) {
@@ -1248,6 +1310,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   /* editor-audio-script */
   const audioBlocks = createArticleAudio({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu });
   window.LeonArticle = { load, serialize, execute, commands, cleanHTML, undo, insertPastedImages,
+    setReaderViewport(top) { readerViewportTop = Math.max(0, Number(top) || 0); updateStickyAudio(); },
     completeAudio: audioBlocks.complete, cancelAudio: audioBlocks.cancel,
     completeAudios: audioBlocks.completeMany,
     completeMedia: audioBlocks.completeMedia,

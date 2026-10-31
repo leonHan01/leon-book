@@ -10,6 +10,36 @@ private func audioExpect(_ condition: Bool, _ message: String) throws {
 
 final class ArticleAudioTests {
     @MainActor
+    func testSingleLeadingMP3SticksWithoutRecreatingPlayer() async throws {
+        try await RichArticleTests().withWebEditor { view in
+            _ = try await view.callAsyncJavaScript(#"""
+            const root = document.getElementById('document');
+            const audio = '<figure data-type="audio"><audio src="/media/note/a.mp3" controls></audio><figcaption>录音</figcaption></figure>';
+            const tail = '<p>' + '正文<br>'.repeat(500) + '</p>';
+            const expect = (ok, reason) => { if (!ok) throw new Error(reason); };
+            LeonArticle.load('<article data-leon-format="html-v1">' + audio + tail + '</article>', 'sticky-editor', true, 18);
+            const player = root.querySelector('audio'), block = player.closest('figure');
+            expect(root.dataset.stickyAudio === 'true' && getComputedStyle(block).position === 'sticky', 'leading MP3 should stick in editor');
+            const before = LeonArticle.serialize();
+            window.scrollTo(0, 600);
+            expect(block.getBoundingClientRect().top >= 39 && block.getBoundingClientRect().top < 43, 'player must stay below the editor toolbar');
+            expect(root.querySelector('audio') === player && LeonArticle.serialize() === before, 'scroll must keep player and saved HTML unchanged');
+            LeonArticle.load('<article data-leon-format="html-v1"><p>前文</p>' + audio + tail + '</article>', 'not-first', true, 18);
+            expect(!root.dataset.stickyAudio, 'audio after text must not stick');
+            LeonArticle.load('<article data-leon-format="html-v1">' + audio + audio + tail + '</article>', 'two', true, 18);
+            expect(!root.dataset.stickyAudio, 'multiple audio players must not stick');
+            LeonArticle.load('<article data-leon-format="html-v1">' + audio.replace('a.mp3', 'a.wav') + tail + '</article>', 'other-format', true, 18);
+            expect(!root.dataset.stickyAudio, 'non-MP3 audio must not stick');
+            LeonArticle.load('<article data-leon-format="html-v1">' + audio + tail + '</article>', 'reader', false, 18, true);
+            const readerPlayer = root.querySelector('audio'), readerBlock = readerPlayer.closest('figure');
+            LeonArticle.setReaderViewport(500);
+            expect(parseFloat(getComputedStyle(root).getPropertyValue('--reader-audio-offset')) > 0, 'native reader viewport must move the player');
+            expect(root.querySelector('audio') === readerPlayer && readerBlock === root.firstElementChild, 'reader must retain the original player');
+            """#, arguments: [:], in: nil, contentWorld: .page)
+        }
+    }
+
+    @MainActor
     func testAudioDropImportsAtDropLocationThroughNativeBridge(mixedMedia: Bool = false) async throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("leon-audio-drop-\(UUID().uuidString)")

@@ -159,7 +159,7 @@ swift run --package-path macos LeonBook
 
 ## File explorer
 
-The sidebar reads the authoritative Markdown directory as a real file tree. Folders can be expanded or collapsed, articles and attachments appear together, and the currently open article is revealed automatically. Use Command- or Shift-click for multi-selection, drag selected source items onto a folder to move them, or use the context menu to create, rename, move, reveal, and trash resources. App-managed article media is shown beside its owning article folder with a link badge; it follows the article and stays under the workspace `media/` directory.
+The article sidebar shows folders and articles, and reveals the currently open article automatically. Attachments and media remain in their original storage and are accessible from the article or media library. Use Command- or Shift-click for multi-selection, drag selected source items onto a folder to move them, or use the context menu to create, rename, move, reveal, and trash resources.
 
 Read-only Markdown mounts expose the same tree but disable all filesystem mutations.
 

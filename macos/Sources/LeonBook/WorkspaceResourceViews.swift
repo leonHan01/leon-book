@@ -10,8 +10,9 @@ struct NativeWorkspaceResourceSection: View {
     @Binding var selectedResourceIDs: Set<String>
 
     var body: some View {
+        let directory = NativeWorkspaceResourceTree.articleDirectory(model.workspaceResources)
         Section {
-            if model.workspaceResources.isEmpty {
+            if directory.isEmpty {
                 Text("还没有文章。请新建目录，或在“未分类”目录中开始写作。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -19,7 +20,7 @@ struct NativeWorkspaceResourceSection: View {
             } else {
                 NativeWorkspaceResourceBranch(
                     model: model,
-                    resources: model.workspaceResources,
+                    resources: directory,
                     expandedFolderIDs: $expandedFolderIDs,
                     selectedResourceIDs: $selectedResourceIDs
                 )
@@ -97,13 +98,13 @@ private struct NativeWorkspaceResourceBranch: View {
                     }
                 )
                 .id(resource.id)
-                .onDrop(of: [UTType.utf8PlainText.identifier], isTargeted: nil) { providers in
+                .onDrop(of: [UTType.fileURL.identifier, UTType.utf8PlainText.identifier], isTargeted: nil) { providers in
                     acceptResourceDrop(providers, destinationFolder: resource.pageContainerPath)
                 }
             } else {
                 resourceRow(resource)
                     .id(resource.id)
-                    .onDrop(of: [UTType.utf8PlainText.identifier], isTargeted: nil) { providers in
+                    .onDrop(of: [UTType.fileURL.identifier, UTType.utf8PlainText.identifier], isTargeted: nil) { providers in
                         guard resource.canContainPages else { return false }
                         return acceptResourceDrop(providers, destinationFolder: resource.pageContainerPath)
                     }
@@ -268,6 +269,29 @@ private struct NativeWorkspaceResourceBranch: View {
         _ providers: [NSItemProvider],
         destinationFolder: String
     ) -> Bool {
+        let files = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        if !files.isEmpty {
+            guard files.count == 1 else {
+                model.errorMessage = NativeLocalization.text("请每次拖入一个 HTML 文件。")
+                return false
+            }
+            for provider in files {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+                    let url: URL?
+                    if let value = item as? URL { url = value }
+                    else if let data = item as? Data { url = URL(dataRepresentation: data, relativeTo: nil) }
+                    else { url = nil }
+                    DispatchQueue.main.async {
+                        guard let url else {
+                            model.errorMessage = error?.localizedDescription ?? NativeLocalization.text("无法读取拖入的文件。")
+                            return
+                        }
+                        model.importHTMLArticle(from: url, into: destinationFolder)
+                    }
+                }
+            }
+            return true
+        }
         guard let provider = providers.first(where: {
             $0.hasItemConformingToTypeIdentifier(UTType.utf8PlainText.identifier)
         }) else { return false }

@@ -5125,6 +5125,9 @@ final class LocalBlogStoreTests {
             kind: "image",
             slug: "resource-note"
         )
+        let audioSource = root.appendingPathComponent("recording.mp3")
+        try Data("audio fixture".utf8).write(to: audioSource)
+        let audio = try await store.uploadMedia(fileURL: audioSource, kind: "audio", slug: "resource-note")
         let saved = try await store.saveArticle(NativeSaveArticle(
             banner: nil,
             body: "Resource body\n\n![cover](\(uploaded.url))",
@@ -5150,6 +5153,12 @@ final class LocalBlogStoreTests {
 
         let initial = try await store.listWorkspaceResources()
         let initialItems = NativeWorkspaceResourceTree.flattened(initial)
+        let sidebarItems = NativeWorkspaceResourceTree.flattened(NativeWorkspaceResourceTree.articleDirectory(initial))
+        XCTAssertTrue(sidebarItems.allSatisfy { $0.kind == .folder || $0.kind == .article })
+        XCTAssertNotNil(sidebarItems.first { $0.kind == .folder && $0.relativePath == "projects/empty" })
+        XCTAssertNotNil(sidebarItems.first { $0.kind == .article && $0.articleSlug == saved.slug })
+        let audioFilename = URL(fileURLWithPath: audio.url).lastPathComponent
+        XCTAssertNotNil(initialItems.first { $0.kind == .attachment && $0.absolutePath.hasSuffix(audioFilename) })
         XCTAssertNotNil(initialItems.first(where: {
             $0.kind == .folder && $0.relativePath == "projects/empty"
         }))
@@ -5161,7 +5170,7 @@ final class LocalBlogStoreTests {
                 && $0.storage == .markdownSource
                 && $0.name == "specification.pdf"
         }))
-        XCTAssertNotNil(initialItems.first(where: {
+        XCTAssertNil(initialItems.first(where: {
             $0.kind == .attachment
                 && $0.storage == .managedMedia
                 && $0.name == "cover.png"
@@ -5189,11 +5198,12 @@ final class LocalBlogStoreTests {
         let movedItems = NativeWorkspaceResourceTree.flattened(
             try await store.listWorkspaceResources()
         )
-        XCTAssertNotNil(movedItems.first(where: {
+        XCTAssertNil(movedItems.first(where: {
             $0.kind == .attachment
                 && $0.storage == .managedMedia
                 && $0.relativePath == "archive/projects/cover.png"
         }))
+        XCTAssertTrue(try await store.getArticle(slug: saved.slug).body.contains(uploaded.url))
     }
 
     func testPortableSidecarSynchronizesNonRebuildableStateAcrossWorkspaces() async throws {
@@ -7153,6 +7163,8 @@ struct LeonBookUnitTests {
             ("NativeModelsTests.testGlobalSearchQueryParsesPhrasesAndFilters", { NativeModelsTests().testGlobalSearchQueryParsesPhrasesAndFilters() }),
             ("NativeModelsTests.testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename", { try NativeModelsTests().testTypedArticlePropertiesDecodeLegacyValuesValidateAndRename() }),
             ("ArticleDirectoryTests.testDirectoryTreeAndLegacySources", { try await ArticleDirectoryTests().testDirectoryTreeAndLegacySources() }),
+            ("ArticleDirectoryTests.testHTMLImportExtractsArticleAndEmbeddedImages", { try ArticleDirectoryTests().testHTMLImportExtractsArticleAndEmbeddedImages() }),
+            ("ArticleAudioTests.testSingleLeadingMP3SticksWithoutRecreatingPlayer", { try await ArticleAudioTests().testSingleLeadingMP3SticksWithoutRecreatingPlayer() }),
             ("ArticleDirectoryTests.testDirectorySaveAndMoveBoundaries", { try await ArticleDirectoryTests().testDirectorySaveAndMoveBoundaries() }),
             ("ArticleDirectoryTests.testNewArticlesUseSelectedDirectory", { try await ArticleDirectoryTests().testNewArticlesUseSelectedDirectory() }),
             ("NativeModelsTests.testWorkspaceResourceTreeHidesJSONFiles", { NativeModelsTests().testWorkspaceResourceTreeHidesJSONFiles() }),
