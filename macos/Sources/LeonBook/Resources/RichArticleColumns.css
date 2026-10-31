@@ -3,8 +3,7 @@
 #document div[data-type=column] { flex: 0 1 auto; min-width: 0; width: 50%; }
 #document div[data-type=column] > * { position: relative; margin: 0 0 14px; min-height: 1.75em; outline: none; }
 #document div[data-type=column] > :last-child { margin-bottom: 0; }
-#document[contenteditable=true] div[data-type=column] > *:hover { border-radius: 6px; outline: 3px solid var(--block-hover); }
-#document[contenteditable=true] div[data-type=column] > :not(table):hover { background-color: var(--block-hover); }
+#document[contenteditable=true] div[data-type=column] > *:hover { border-radius: 6px; outline: 2px solid var(--block-hover); }
 #document div[data-type=column] :is(pre,aside,blockquote) { padding-left: 10px; padding-right: 10px; }
 #document div[data-type=column] aside::before { display: none; }
 #document div[data-type=column] :is(th,td) { min-width: 0; padding: 4px; }

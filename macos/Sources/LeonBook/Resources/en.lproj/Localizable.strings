@@ -2241,3 +2241,6 @@
 "选择高亮颜色" = "Choose Highlight Color";
 "取消高亮" = "Remove Highlight";
 "使用所选颜色高亮；再次点击可取消" = "Highlight with the selected color; click again to remove";
+
+"展开微博" = "Expand post";
+"折叠微博" = "Collapse post";

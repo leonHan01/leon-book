@@ -904,6 +904,7 @@ private struct MomentCard: View {
     let onComment: () -> Void
     let onDelete: () -> Void
     @State private var isHovered = false
+    @State private var isCollapsed = false
 
     var body: some View {
         let displayContent = moment.displayContent
@@ -911,9 +912,23 @@ private struct MomentCard: View {
         let images = moment.imageAttachments
         let videos = moment.videoAttachments
 
-        VStack(alignment: .leading, spacing: 15) {
-            HStack(alignment: .center, spacing: 10) {
-                Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { isCollapsed.toggle() }
+                } label: {
+                    HStack(spacing: 8) {
+                        NativeIcon.image(isCollapsed ? "chevron.right" : "chevron.down", size: 11)
+                        Text(dateLabel)
+                            .font(.caption.weight(.medium))
+                    }
+                    .foregroundStyle(appPalette.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(LocalizedStringKey(isCollapsed ? "展开微博" : "折叠微博"))
+                .accessibilityValue(Text(LocalizedStringKey(isCollapsed ? "已折叠" : "已展开")))
 
                 Button(action: onToggleFavorite) {
                     NativeIcon.image(moment.isFavorite ? "heart.fill" : "heart", size: 14)
@@ -952,70 +967,77 @@ private struct MomentCard: View {
                 .help("更多操作")
                 .accessibilityLabel("微博更多操作")
             }
-            if !displayContent.text.isEmpty {
-                MomentStyledText(text: displayContent.text, runs: displayContent.runs)
-                    .font(.body)
-                    .lineSpacing(3)
-            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+            .background(Color.primary.opacity(0.045))
 
-            if !moment.tags.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 7) {
-                        ForEach(moment.tags, id: \.self) { tag in
-                            Button {
-                                onSelectTag(tag)
-                            } label: {
-                                Text("#\(tag)")
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(appPalette.accent)
-                                    .padding(.horizontal, 9)
-                                    .padding(.vertical, 5)
-                                    .background(appPalette.accent.opacity(0.09), in: Capsule())
+            if !isCollapsed {
+                VStack(alignment: .leading, spacing: 12) {
+                    if !displayContent.text.isEmpty {
+                        MomentStyledText(text: displayContent.text, runs: displayContent.runs)
+                            .font(.body)
+                            .lineSpacing(3)
+                    }
+
+                    if !moment.tags.isEmpty {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 7) {
+                                ForEach(moment.tags, id: \.self) { tag in
+                                    Button {
+                                        onSelectTag(tag)
+                                    } label: {
+                                        Text("#\(tag)")
+                                            .font(.caption.weight(.medium))
+                                            .foregroundStyle(appPalette.accent)
+                                            .padding(.horizontal, 9)
+                                            .padding(.vertical, 5)
+                                            .background(appPalette.accent.opacity(0.09), in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(NativeLocalization.text("筛选标签 #\(tag)"))
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .help(NativeLocalization.text("筛选标签 #\(tag)"))
+                        }
+                        .scrollIndicators(.hidden)
+                    }
+
+                    if !images.isEmpty {
+                        MomentDeferredMedia(height: MomentMediaSizing.imageHeight(count: images.count, width: max(1, min(availableWidth, 860) - 36))) {
+                            MomentImageGrid(images: images, store: store, onOpenImage: onOpenImage)
                         }
                     }
-                }
-                .scrollIndicators(.hidden)
-            }
 
-            if !images.isEmpty {
-                MomentDeferredMedia(height: MomentMediaSizing.imageHeight(count: images.count, width: max(1, min(availableWidth, 860) - 36))) {
-                    MomentImageGrid(images: images, store: store, onOpenImage: onOpenImage)
-                }
-            }
+                    ForEach(moment.audioAttachments) { audio in
+                        MomentInlineAudioPlayer(media: audio, store: store)
+                    }
 
-            ForEach(moment.audioAttachments) { audio in
-                MomentInlineAudioPlayer(media: audio, store: store)
-            }
-
-            if !videos.isEmpty {
-                MomentDeferredMedia(height: MomentMediaSizing.videoHeight(count: videos.count, width: max(1, min(availableWidth, 860) - 36))) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(videos) { video in
-                            MomentInlineVideoPlayer(media: video, store: store, posterMaxPixelSize: videoPosterMaxPixelSize)
+                    if !videos.isEmpty {
+                        MomentDeferredMedia(height: MomentMediaSizing.videoHeight(count: videos.count, width: max(1, min(availableWidth, 860) - 36))) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(videos) { video in
+                                    MomentInlineVideoPlayer(media: video, store: store, posterMaxPixelSize: videoPosterMaxPixelSize)
+                                }
+                            }
                         }
                     }
-                }
-            }
 
-            HStack {
-                Text(dateLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button(action: onComment) {
-                    Label(NativeLocalization.text("评论 \(moment.commentCount)"), nativeIcon: "text.bubble", iconSize: 12)
-                        .font(.caption.weight(.medium))
+                    HStack {
+                        Spacer()
+                        Button(action: onComment) {
+                            Label(NativeLocalization.text("评论 \(moment.commentCount)"), nativeIcon: "text.bubble", iconSize: 12)
+                                .font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(appPalette.accent)
+                        .help("查看和发表微博评论")
+                    }
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(appPalette.accent)
-                .help("查看和发表微博评论")
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
             }
         }
-        .padding(18)
-        .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .background(appPalette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 17, style: .continuous)
                 .strokeBorder(isHovered ? appPalette.blue.opacity(0.5) : appPalette.border)

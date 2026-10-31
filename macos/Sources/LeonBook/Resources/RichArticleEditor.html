@@ -29,8 +29,7 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #document :is(td, th) > :last-child { margin-bottom: 0; }
 #document[contenteditable=true] > *:focus-within { border-radius: 4px; }
 #document[contenteditable=true] > * { border-radius: 6px; }
-#document[contenteditable=true] > *:hover { border-radius: 6px; outline: 4px solid var(--block-hover); }
-#document[contenteditable=true] > :not(table):hover { background-color: var(--block-hover); }
+#document[contenteditable=true] > *:hover { border-radius: 6px; outline: 2px solid var(--block-hover); }
 #document > p:only-child:has(>br:only-child)::before { content: var(--editor-placeholder); color: var(--muted); pointer-events: none; position: absolute; }
 #document h1 { font-size: 1.8em; line-height: 1.4; font-weight: 720; margin-top: 20px; }
 #document h2 { font-size: 1.4em; line-height: 1.5; margin-top: 16px; }
@@ -1035,6 +1034,20 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (event.inputType === 'insertParagraph' && applyMarkdownShortcut(true)) { event.preventDefault(); notify(); return; }
     if (event.inputType === 'insertParagraph' && block && block.tagName !== 'PRE' && block.tagName !== 'TABLE') { event.preventDefault(); newParagraph(block); }
   });
+  function insertCodeText(block, text) {
+    const range = insertionRange();
+    if (!range || !block.contains(range.startContainer) || !block.contains(range.endContainer)) return false;
+    text = text.replace(/\r\n?|\u2029/g, '\n');
+    const placeholder = block.querySelector('code:has(> br:only-child)');
+    if (placeholder && !placeholder.textContent && range.collapsed && placeholder.contains(range.startContainer)) {
+      placeholder.replaceChildren(); range.setStart(placeholder, 0); range.collapse(true);
+    }
+    range.deleteContents();
+    const node = document.createTextNode(text); range.insertNode(node);
+    range.setStartAfter(node); range.collapse(true);
+    const selection = getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    return true;
+  }
   root.addEventListener('keydown', event => {
     if (composing || event.isComposing || event.keyCode === 229 || !editable) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); undo(event.shiftKey ? 1 : -1); return; }
@@ -1050,8 +1063,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       const anchor = block.tagName === 'PRE' ? block : cellFor(getSelection().anchorNode)?.closest('table') || block;
       anchor.after(next); focusBlock(next); notify();
     }
-    else if (event.key === 'Enter' && block.tagName === 'PRE') { event.preventDefault(); document.execCommand('insertText', false, '\n'); notify(true); }
-    else if (event.key === 'Tab' && block.tagName === 'PRE') { event.preventDefault(); document.execCommand('insertText', false, '    '); notify(true); }
+    else if (event.key === 'Enter' && block.tagName === 'PRE') { event.preventDefault(); if (insertCodeText(block, '\n')) notify(true); }
+    else if (event.key === 'Tab' && block.tagName === 'PRE') { event.preventDefault(); if (insertCodeText(block, '    ')) notify(true); }
     else if (event.key === 'Tab' && cellFor(getSelection().anchorNode)) {
       event.preventDefault(); const cell = cellFor(getSelection().anchorNode), table = cell.closest('table');
       const cells = [...table.querySelectorAll('td,th')].filter(item => item.closest('table') === table);
@@ -1089,7 +1102,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (!editable || composing) return; event.preventDefault();
     const clipboard = event.clipboardData; const block = blockAtSelection(); if (!clipboard || !block || !insertionRange()) return;
     checkpoint(); lastEdit = 0;
-    if (block.tagName === 'PRE') { document.execCommand('insertText', false, clipboard.getData('text/plain')); notify(); return; }
+    if (block.tagName === 'PRE') { if (insertCodeText(block, clipboard.getData('text/plain'))) notify(); return; }
     const images = [...clipboard.files].filter(file => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
     if (images.length) {
       const requestID = rememberImagePaste(); if (!requestID) return;
@@ -1129,6 +1142,19 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     }
   }
   root.addEventListener('click', event => {
+    if (editable && event.target === root && getSelection()?.isCollapsed) {
+      const last = root.lastElementChild;
+      if (last && event.clientY >= last.getBoundingClientRect().bottom) {
+        if (last.tagName === 'P' && !last.dataset.type && !last.textContent.trim() && !last.querySelector('img,video,audio')) {
+          focusBlock(last);
+        } else {
+          checkpoint();
+          const paragraph = document.createElement('p'); paragraph.innerHTML = '<br>';
+          root.append(paragraph); focusBlock(paragraph); notify();
+        }
+        return;
+      }
+    }
     const link = event.target.closest('a'); if (link && (!editable || event.metaKey)) { event.preventDefault(); send({ type: 'link', url: link.getAttribute('href') }); }
     const block = event.target.closest('[data-type=task]');
     if (block && !event.target.closest('img') && event.clientX - block.getBoundingClientRect().left < 26 && editable) { checkpoint(); block.dataset.checked = String(block.dataset.checked !== 'true'); notify(); }
