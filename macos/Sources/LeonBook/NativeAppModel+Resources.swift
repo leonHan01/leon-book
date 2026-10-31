@@ -67,7 +67,9 @@ extension NativeAppModel {
         }
         let destination = joinedWorkspacePath(parentPath, name)
 
+        let loadingID = loadingOperations.begin(.resources)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 try await store.createWorkspaceFolder(relativePath: destination)
                 workspaceResources = try await store.listWorkspaceResources()
@@ -189,7 +191,9 @@ extension NativeAppModel {
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
+        let loadingID = loadingOperations.begin(.resources)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 _ = try await store.trashWorkspaceSourceItems(
                     relativePaths: eligible.compactMap(\.sourceRelativePath)
@@ -222,7 +226,9 @@ extension NativeAppModel {
             pendingNewArticleFolderPath,
             after: moves
         )
+        let loadingID = loadingOperations.begin(.resources)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 _ = try await store.moveWorkspaceSourceItems(moves)
                 try await reload()

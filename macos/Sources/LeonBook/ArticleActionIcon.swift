@@ -3,14 +3,15 @@ import SwiftUI
 /// Article actions share the same icon renderer as navigation and other pages.
 struct ArticleActionIcon: View {
     enum Kind {
-        case newArticle, bookmark, workspace, inspector, more
+        case newArticle, bookmark, workspace, export, inspector, more
         case writing, saved, document, tag, image, attachment, statistics, publish, template
 
         var symbol: String {
             switch self {
             case .newArticle: return "doc.badge.plus"
             case .bookmark: return "bookmark"
-            case .workspace: return "rectangle.3.group"
+            case .workspace: return "rectangle.split.2x1"
+            case .export: return "arrow.up.right"
             case .inspector: return "sidebar.right"
             case .more: return "ellipsis"
             case .writing: return "square.and.pencil"

@@ -38,7 +38,8 @@ enum ResourceProbe {
     }
 }
 EOF
-MODULE_CACHE="${TMPDIR%/}/leon-book-resource-probe-modules"
+source "${SCRIPT_DIR}/swift-cache.sh"
+MODULE_CACHE="$(leonbook_build_root resource-probe)/modules"
 mkdir -p "${MODULE_CACHE}"
 export CLANG_MODULE_CACHE_PATH="${MODULE_CACHE}"
 source "${SCRIPT_DIR}/swift-sdk.sh"

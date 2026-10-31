@@ -108,8 +108,11 @@ final class InfiniteCanvasTests {
         document.nodes.append(.init(id: "missing", type: "file", x: 550, y: 360, width: 320, height: 300, file: "articles/no-such-file.txt"))
         let snapshot = try await store.saveCanvas(id: UUID().uuidString.lowercased(), document: document, expectedRevision: nil)
         var openedSlug: String?
-        let coordinator = InfiniteCanvasWebView.Coordinator(store: store) { openedSlug = $0 }
+        var finishedLoading = false
+        let coordinator = InfiniteCanvasWebView.Coordinator(store: store, onReady: { finishedLoading = true }) { openedSlug = $0 }
+        coordinator.language = .simplifiedChinese
         let configuration = WKWebViewConfiguration()
+        NativeWebLocalization.install(on: configuration, language: .simplifiedChinese)
         configuration.websiteDataStore = .nonPersistent()
         configuration.setURLSchemeHandler(InfiniteCanvasResources(store: store), forURLScheme: "leoncanvas")
         configuration.userContentController.add(coordinator, name: "canvas")
@@ -127,6 +130,7 @@ final class InfiniteCanvasTests {
             throw CanvasCheckFailure(description: "native bridge did not reach: \(expression)")
         }
         try await waitFor("document.body.innerText.includes('第一版正文') && document.body.innerText.includes('内容暂不可用')")
+        try canvasExpect(finishedLoading, "canvas loading feedback must finish after the runtime and initial document are ready")
         _ = try await store.saveArticle(NativeSaveArticle(
             banner: nil, body: RichArticleDocument.opening + "<p>第二版正文</p></article>", category: "Notes", excerpt: "", media: [],
             slug: article.slug, status: .draft, tags: [], title: "更新后的标题", expectedUpdatedAt: article.updatedAt
@@ -150,6 +154,7 @@ final class InfiniteCanvasTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = LocalBlogStore(rootURL: root)
         let configuration = WKWebViewConfiguration()
+        NativeWebLocalization.install(on: configuration, language: .simplifiedChinese)
         configuration.websiteDataStore = .nonPersistent()
         configuration.setURLSchemeHandler(InfiniteCanvasResources(store: store), forURLScheme: "leoncanvas")
         let recorder = CanvasMessageRecorder()
@@ -172,6 +177,16 @@ final class InfiniteCanvasTests {
         const field = window.document.querySelector('textarea');
         field.focus(); field.value = '便签编辑后立即保存'; field.dispatchEvent(new Event('input',{bubbles:true})); field.blur();
         expect(LeonCanvas.snapshot().nodes[0].text === field.value, 'note edits must persist');
+        const status = window.document.getElementById('status');
+        expect(status.classList.contains('is-loading'), 'pending autosave must animate');
+        LeonCanvas.receive('saved', {id:'board', pending:false});
+        expect(!status.classList.contains('is-loading'), 'completed autosave must stop animating');
+        window.document.getElementById('show-library').click();
+        const results = window.document.getElementById('results');
+        expect(results.getAttribute('aria-busy') === 'true' && results.classList.contains('is-loading'), 'library search must show pending feedback');
+        LeonCanvas.receive('library', {kind:'article', query:'', items:[]});
+        expect(results.getAttribute('aria-busy') === 'false' && !results.classList.contains('is-loading'), 'library search completion must stop animating');
+        window.document.getElementById('close-library').click();
         const added = LeonCanvas.addNode({type:'text',text:'新的想法'}, {x:530,y:580});
         LeonCanvas.connect('note', added.id);
         expect(LeonCanvas.snapshot().edges.length === 2, 'connecting cards must add edge');

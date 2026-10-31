@@ -17,12 +17,13 @@ function createArticleInteractions(api) {
     document.body.append(button); return button;
   }
   const rowAdd = quickAdd('table-add-row', '在表格底部添加一行'), columnAdd = quickAdd('table-add-column', '在此处添加一列');
+  const rowInsert = quickAdd('table-insert-row', '在此处添加一行');
   const frame = document.createElement('div'); frame.id = 'image-frame'; frame.className = 'editor-overlay'; frame.hidden = true; frame.innerHTML = '<span class="image-resize" data-side="-1" role="separator" aria-label="拖动调整图片宽度"></span><span class="image-resize" data-side="1" role="separator" aria-label="拖动调整图片宽度"></span>'; document.body.append(frame);
   const preview = document.createElement('div'); preview.id = 'image-preview'; preview.className = 'editor-overlay'; preview.hidden = true; preview.setAttribute('role', 'dialog'); preview.setAttribute('aria-label', '图片预览'); preview.setAttribute('aria-modal', 'true'); preview.innerHTML = '<button title="关闭预览" aria-label="关闭预览"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button><img alt="">'; document.body.append(preview);
   const progress = document.createElement('div'); progress.id = 'image-progress'; progress.hidden = true; progress.setAttribute('role', 'status'); document.body.append(progress);
-  let activeCell = null, quickRowTable = null, quickColumnCell = null, selectedImage = null, insertion = null, drag = null, tableTimer, progressTimer, pickerRows = 2, pickerColumns = 2, previewFocus = null;
+  let activeCell = null, quickRowTable = null, quickRowCell = null, quickColumnCell = null, selectedImage = null, insertion = null, drag = null, tableTimer, progressTimer, pickerRows = 2, pickerColumns = 2, previewFocus = null;
   const replacements = new Map();
-  for (const chrome of [grip, rowAdd, columnAdd, frame, preview]) window.LeonL10n.bindChrome(chrome);
+  for (const chrome of [grip, rowAdd, rowInsert, columnAdd, frame, preview]) window.LeonL10n.bindChrome(chrome);
   function place(element, rect, gap = 7) {
     const minimum = Math.max(8, document.getElementById('toolbar').getBoundingClientRect().bottom + 5);
     const top = rect.top - element.offsetHeight - gap;
@@ -30,9 +31,9 @@ function createArticleInteractions(api) {
     element.style.top = Math.max(8, Math.min(top >= minimum ? top : rect.bottom + gap, innerHeight - element.offsetHeight - 8)) + 'px';
   }
   function owns(element) { return element && root.contains(element); }
-  function hideQuickAdds() { rowAdd.hidden = columnAdd.hidden = true; quickRowTable = quickColumnCell = null; }
-  function tableControl(target) { return tableTools.contains(target) || rowAdd.contains(target) || columnAdd.contains(target) || target === grip; }
-  function scheduleTableHide() { if (tableTools.hidden && grip.hidden && rowAdd.hidden && columnAdd.hidden) return; clearTimeout(tableTimer); tableTimer = setTimeout(() => { tableTools.hidden = grip.hidden = true; hideQuickAdds(); }, 180); }
+  function hideQuickAdds() { rowAdd.hidden = rowInsert.hidden = columnAdd.hidden = true; quickRowTable = quickRowCell = quickColumnCell = null; }
+  function tableControl(target) { return tableTools.contains(target) || rowAdd.contains(target) || rowInsert.contains(target) || columnAdd.contains(target) || target === grip; }
+  function scheduleTableHide() { if (tableTools.hidden && grip.hidden && rowAdd.hidden && rowInsert.hidden && columnAdd.hidden) return; clearTimeout(tableTimer); tableTimer = setTimeout(() => { tableTools.hidden = grip.hidden = true; hideQuickAdds(); }, 180); }
   function positionQuickAdds() {
     if (!canEdit() || selectedImage || !picker.hidden || !preview.hidden || !getSelection().isCollapsed) { hideQuickAdds(); return; }
     const minimum = Math.max(8, document.getElementById('toolbar').getBoundingClientRect().bottom + 5);
@@ -40,7 +41,12 @@ function createArticleInteractions(api) {
       const rect = quickRowTable.getBoundingClientRect();
       rowAdd.hidden = rect.bottom < minimum || rect.bottom > innerHeight - 11 || rect.right < 0 || rect.left > innerWidth;
       if (!rowAdd.hidden) { rowAdd.style.left = Math.max(3, Math.min(rect.left - 11, innerWidth - 25)) + 'px'; rowAdd.style.top = rect.bottom - 11 + 'px'; }
-    } else rowAdd.hidden = true;
+      if (owns(quickRowCell) && quickRowCell.closest('table') === quickRowTable) {
+        const edge = quickRowCell.parentElement.getBoundingClientRect().bottom;
+        rowInsert.hidden = edge < minimum || edge > innerHeight - 11 || rect.right < 0 || rect.left > innerWidth;
+        if (!rowInsert.hidden) { rowInsert.style.left = Math.max(3, Math.min(rect.left - 11, innerWidth - 25)) + 'px'; rowInsert.style.top = edge - 11 + 'px'; }
+      } else rowInsert.hidden = true;
+    } else rowAdd.hidden = rowInsert.hidden = true;
     if (owns(quickColumnCell)) {
       const table = quickColumnCell.closest('table'), rect = table.getBoundingClientRect(), edge = quickColumnCell.getBoundingClientRect().right;
       const top = Math.max(minimum, rect.top - 11);
@@ -51,6 +57,7 @@ function createArticleInteractions(api) {
   function showQuickAdds(cell) {
     if (!canEdit() || !owns(cell)) { hideQuickAdds(); return; }
     clearTimeout(tableTimer); quickRowTable = cell.closest('table');
+    if (quickRowCell?.closest('table') !== quickRowTable) quickRowCell = null;
     if (quickColumnCell?.closest('table') !== quickRowTable) quickColumnCell = null;
     positionQuickAdds();
   }
@@ -82,10 +89,10 @@ function createArticleInteractions(api) {
         if (rowList.length === 1) removeTable(table);
         else { const next = rowList[index + 1] || rowList[index - 1]; row.remove(); activeCell = next.cells[Math.min(column, next.cells.length - 1)]; focusBlock(activeCell); }
       } else {
-        const next = document.createElement('tr'), header = action === 'row-before' && row.parentElement.tagName === 'THEAD';
+        const next = document.createElement('tr'), header = row.parentElement.tagName === 'THEAD' && (action === 'row-before' || !!row.nextElementSibling);
         next.append(...Array.from({ length: columns(table) }, () => emptyCell(header)));
         if (action === 'row-before') row.before(next);
-        else if (row.parentElement.tagName === 'THEAD') { const body = table.tBodies[0] || table.createTBody(); body.prepend(next); }
+        else if (row.parentElement.tagName === 'THEAD' && !row.nextElementSibling) { const body = table.tBodies[0] || table.createTBody(); body.prepend(next); }
         else row.after(next);
         activeCell = next.cells[column]; focusBlock(activeCell);
       }
@@ -110,11 +117,15 @@ function createArticleInteractions(api) {
   }
   rowAdd.addEventListener('click', () => {
     if (rowAdd.hidden || !owns(quickRowTable)) return;
-    quickColumnCell = null; columnAdd.hidden = true; appendRow(quickRowTable);
+    quickRowCell = quickColumnCell = null; rowInsert.hidden = columnAdd.hidden = true; appendRow(quickRowTable);
+  });
+  rowInsert.addEventListener('click', () => {
+    if (rowInsert.hidden || !canEdit() || !owns(quickRowCell)) return;
+    activeCell = quickRowCell; quickRowCell = quickColumnCell = null; rowInsert.hidden = columnAdd.hidden = true; editTable('row-after');
   });
   columnAdd.addEventListener('click', () => {
     if (columnAdd.hidden || !canEdit() || !owns(quickColumnCell)) return;
-    activeCell = quickColumnCell; quickColumnCell = null; columnAdd.hidden = true; editTable('column-after');
+    activeCell = quickColumnCell; quickRowCell = quickColumnCell = null; rowInsert.hidden = columnAdd.hidden = true; editTable('column-after');
   });
   function drawPicker() {
     picker.querySelector('.size-label').textContent = pickerRows + ' × ' + pickerColumns;
@@ -188,7 +199,11 @@ function createArticleInteractions(api) {
     if (action === 'preview') { showPreview(image); return; }
     checkpoint();
     if (action === 'caption') captionImage(image);
-    if (action === 'replace') { const requestID = uuid(); replacements.set(requestID, image); send({ type: 'chooseImage', requestID }); }
+    if (action === 'replace') {
+      // A slower conversion must not overwrite a newer replacement of this image.
+      for (const [requestID, target] of replacements) if (target === image) replacements.delete(requestID);
+      const requestID = uuid(); replacements.set(requestID, image); send({ type: 'chooseImage', requestID });
+    }
     if (action === 'delete') {
       const parent = image.closest('figure') || image.parentElement, target = image.closest('figure') || image;
       target.remove(); if (owns(parent) && !parent.childNodes.length) parent.innerHTML = parent === root ? '<p><br></p>' : '<br>';
@@ -197,6 +212,8 @@ function createArticleInteractions(api) {
   });
   preview.addEventListener('click', event => { if (event.target === preview || event.target.closest('button')) closePreview(); });
   function imageProgress(count, failed = false) {
+    progress.classList.toggle('is-loading', count > 0 && !failed);
+    progress.setAttribute('role', 'status');
     clearTimeout(progressTimer); progress.hidden = !count && !failed; progress.textContent = failed ? t('图片未能粘贴，请重试') : t('正在处理图片…');
     if (failed) progressTimer = setTimeout(() => { progress.hidden = true; }, 2500);
   }
@@ -243,6 +260,13 @@ function createArticleInteractions(api) {
     if (cell) {
       if (cell !== activeCell || tableTools.hidden) showTable(cell);
       const rect = cell.getBoundingClientRect(), index = cell.cellIndex, siblings = cell.parentElement.cells;
+      const row = cell.parentElement, tableRows = cell.closest('table').rows;
+      quickRowCell = row.rowIndex < tableRows.length - 1 && Math.abs(event.clientY - rect.bottom) < 14 ? row.cells[0]
+        : row.rowIndex > 0 && Math.abs(event.clientY - rect.top) < 14 ? tableRows[row.rowIndex - 1].cells[0] : null;
+      if (quickRowCell) {
+        const label = t('在第 %@、%@ 行之间添加一行', quickRowCell.parentElement.rowIndex + 1, quickRowCell.parentElement.rowIndex + 2);
+        rowInsert.title = label; rowInsert.setAttribute('aria-label', label);
+      }
       quickColumnCell = index < siblings.length - 1 && Math.abs(event.clientX - rect.right) < 14 ? cell
         : index > 0 && Math.abs(event.clientX - rect.left) < 14 ? siblings[index - 1] : null;
       if (quickColumnCell) {
@@ -258,7 +282,7 @@ function createArticleInteractions(api) {
   root.addEventListener('pointermove', event => { if (!drag && canEdit() && (event.target.closest('td,th') || !tableTools.hidden || !grip.hidden || quickRowTable)) hoverTable(event); }, { passive: true });
   tableTools.addEventListener('pointerenter', () => clearTimeout(tableTimer));
   root.addEventListener('pointerleave', event => { hoverTable.cancel(); if (!tableControl(event.relatedTarget)) scheduleTableHide(); });
-  for (const control of [tableTools, rowAdd, columnAdd, grip]) control.addEventListener('pointerleave', event => {
+  for (const control of [tableTools, rowAdd, rowInsert, columnAdd, grip]) control.addEventListener('pointerleave', event => {
     if (!root.contains(event.relatedTarget) && !tableControl(event.relatedTarget)) scheduleTableHide();
   });
   root.addEventListener('click', event => {

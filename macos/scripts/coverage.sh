@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 MACOS_DIR="${SCRIPT_DIR:h}"
-BUILD_ROOT="${TMPDIR%/}/leon-book-swiftpm-coverage"
+source "${SCRIPT_DIR}/swift-cache.sh"
+BUILD_ROOT="$(leonbook_build_root coverage)"
 
 mkdir -p "${BUILD_ROOT}/cache" "${BUILD_ROOT}/config" "${BUILD_ROOT}/security" "${BUILD_ROOT}/scratch" "${BUILD_ROOT}/modules"
 export CLANG_MODULE_CACHE_PATH="${BUILD_ROOT}/modules"

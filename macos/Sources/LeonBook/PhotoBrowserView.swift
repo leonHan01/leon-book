@@ -181,6 +181,7 @@ private struct NativePhotoZoomView: View {
     @State private var offset: CGSize = .zero
     @State private var dragStart: CGSize = .zero
     @State private var gestureStart: CGFloat?
+    @State private var isDecoding = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -216,14 +217,17 @@ private struct NativePhotoZoomView: View {
             }
             .onChange(of: proxy.size) { _ in offset = .zero; dragStart = .zero }
         }
+        .nativeLoadingFeedback(isDecoding && image != nil ? NativeLocalization.text("正在加载高清图片…") : nil)
         .task(id: scale > 1) {
+            isDecoding = true
+            defer { if !Task.isCancelled { isDecoding = false } }
             // Decode original pixels only when zooming; fit-to-window uses a bounded image.
             guard let url = await store.mediaURL(for: media.url) else { failed = true; return }
             let result = await NativeImagePipeline.shared.image(
                 from: url, mode: scale > 1 ? .fullSize : .thumbnail(maxPixelSize: 2400)
             )
             guard !Task.isCancelled else { return }
-            image = result.image
+            if let decoded = result.image { image = decoded }
             failed = image == nil
         }
         .accessibilityLabel(NativeLocalization.text("大图浏览：\(media.name)"))

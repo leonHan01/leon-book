@@ -10,12 +10,16 @@ export LEONBLOG_TEST_EVENTS="$FIXTURE_ROOT/events"
 export LEONBLOG_TEST_RUNNING="$FIXTURE_ROOT/running"
 mkdir -p "$PROJECT/scripts" "$PROJECT/macos/scripts" "$FIXTURE_ROOT/bin"
 cp "$SCRIPT_DIR/../../scripts/leonblog" "$PROJECT/scripts/leonblog"
+cp "$SCRIPT_DIR/build-state.py" "$SCRIPT_DIR/swift-cache.sh" "$PROJECT/macos/scripts/"
 
 # Run the real CLI dispatch and freshness check without Swift or an app window.
 cat > "$PROJECT/macos/scripts/build-app.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'build:%s:%s\n' "${LEON_BOOK_BUILD_CONFIGURATION:-missing}" "${LEON_BOOK_BUILD_SYSTEM:-missing}" >> "$LEONBLOG_TEST_EVENTS"
+if [[ -n "${LEONBLOG_TEST_EXPECT_FORCE:-}" ]]; then
+  [[ "${LEON_BOOK_FORCE_SWIFT_BUILD:-0}" == "$LEONBLOG_TEST_EXPECT_FORCE" ]]
+fi
 [[ "${LEONBLOG_TEST_BUILD_FAIL:-0}" != 1 ]] || exit 1
 EOF
 cat > "$FIXTURE_ROOT/bin/pgrep" <<'EOF'
@@ -41,7 +45,7 @@ printf '        swiftbuild - Swift Build engine\n'
 EOF
 chmod +x "$PROJECT/macos/scripts/build-app.sh" "$FIXTURE_ROOT/bin/"*
 export PATH="$FIXTURE_ROOT/bin:$PATH"
-unset LEON_BOOK_BUILD_CONFIGURATION LEON_BOOK_BUILD_SYSTEM
+unset LEON_BOOK_BUILD_CONFIGURATION LEON_BOOK_BUILD_SYSTEM LEON_BOOK_FORCE_SWIFT_BUILD
 
 reset_fixture() {
   rm -rf "$PROJECT/macos/Sources" "$PROJECT/macos/Resources" "$PROJECT/macos/dist"
@@ -55,6 +59,7 @@ reset_fixture() {
   printf 'debug\n' > "$APP/Resources/leonbook-build-configuration"
   printf 'native\n' > "$APP/Resources/leonbook-build-system"
   touch -t 202001020000 "$APP/Resources/leonbook-build-configuration"
+  python3 "$PROJECT/macos/scripts/build-state.py" capture "$PROJECT/macos" "$APP/Resources/leonbook-build-inputs.json"
   : > "$LEONBLOG_TEST_EVENTS"
   : > "$LEONBLOG_TEST_RUNNING"
   unset LEONBLOG_TEST_BUILD_FAIL LEONBLOG_TEST_QUIT_FAIL
@@ -76,7 +81,7 @@ bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output"
 assert_events $'quit\nopen' 'unchanged restart skips all compilation and packaging'
 
 reset_fixture
-touch -t 202001030000 "$PROJECT/macos/Sources/LeonBook/Example.swift"
+printf '// changed source\n' > "$PROJECT/macos/Sources/LeonBook/Example.swift"
 bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output"
 assert_events $'quit\nbuild:debug:native\nopen' 'changed Swift source rebuilds before launching'
 
@@ -86,7 +91,7 @@ bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output"
 assert_events $'quit\nbuild:debug:native\nopen' 'deleted source triggers a rebuild'
 
 reset_fixture
-touch -t 202001030000 "$PROJECT/macos/Resources/Info.plist"
+printf 'changed plist\n' > "$PROJECT/macos/Resources/Info.plist"
 bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output"
 assert_events $'quit\nbuild:debug:native\nopen' 'changed app resources trigger a rebuild'
 
@@ -106,7 +111,7 @@ bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output"
 assert_events 'open' 'stopped, current app launches without rebuilding'
 
 reset_fixture
-touch -t 202001030000 "$PROJECT/macos/Package.swift"
+printf '// changed package\n' >> "$PROJECT/macos/Package.swift"
 export LEONBLOG_TEST_BUILD_FAIL=1
 if bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output" 2>&1; then
   printf 'FAIL: restart succeeded after a build failure\n' >&2
@@ -123,7 +128,7 @@ fi
 assert_events 'quit' 'quit failure prevents rebuilding or launching'
 
 reset_fixture
-bash "$PROJECT/scripts/leonblog" build > "$FIXTURE_ROOT/output"
+LEONBLOG_TEST_EXPECT_FORCE=1 bash "$PROJECT/scripts/leonblog" build > "$FIXTURE_ROOT/output"
 assert_events 'build:release:default' 'explicit build always invokes the builder'
 
 reset_fixture
@@ -163,7 +168,7 @@ bash "$PROJECT/scripts/leonblog" open > "$FIXTURE_ROOT/output"
 assert_events 'open' 'open reuses an existing Release build without switching modes'
 
 reset_fixture
-bash "$PROJECT/scripts/leonblog" build --debug > "$FIXTURE_ROOT/output"
+LEONBLOG_TEST_EXPECT_FORCE=1 bash "$PROJECT/scripts/leonblog" build --debug > "$FIXTURE_ROOT/output"
 assert_events 'build:debug:native' 'explicit build --debug selects development compilation'
 
 reset_fixture
@@ -201,3 +206,19 @@ reset_fixture
 export LEONBLOG_TEST_NATIVE_AVAILABLE=0
 bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output"
 assert_events $'quit\nbuild:debug:default\nopen' 'future toolchain without native falls back to its default engine'
+
+reset_fixture
+touch "$PROJECT/macos/Sources/LeonBook/Example.swift"
+bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output"
+assert_events $'quit\nopen' 'touching identical content does not trigger a build'
+
+reset_fixture
+rm "$APP/Resources/leonbook-build-inputs.json"
+bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output"
+assert_events $'quit\nbuild:debug:native\nopen' 'legacy app without content manifest gets a baseline build'
+
+reset_fixture
+mkdir -p "$PROJECT/macos/Sources/LeonBook/Resources"
+printf '// new editor script\n' > "$PROJECT/macos/Sources/LeonBook/Resources/RichArticleNew.js"
+bash "$PROJECT/scripts/leonblog" restart > "$FIXTURE_ROOT/output"
+assert_events $'quit\nbuild:debug:native\nopen' 'editor resource changes reach the builder before launch'

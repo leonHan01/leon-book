@@ -8,55 +8,37 @@ struct NativeVideoThumbnailResult: @unchecked Sendable {
 }
 
 actor NativeVideoThumbnailPipeline {
-    static let shared = NativeVideoThumbnailPipeline()
+    typealias Decoder = @Sendable (URL, Int) -> NSImage?
+    static let shared = NativeVideoThumbnailPipeline(scheduler: .shared)
 
-    private let cache = NSCache<NSString, NSImage>()
-    private let maximumConcurrentDecodes: Int
-    private var activeDecodeCount = 0
-    private var decodeWaiters: [CheckedContinuation<Void, Never>] = []
-    private var inFlight: [String: Task<NativeVideoThumbnailResult, Never>] = [:]
+    private let cache = NativeMediaImageCache(byteLimit: 32 * 1_024 * 1_024, countLimit: 96)
+    private let scheduler: NativeMediaDecodeScheduler
+    private let decoder: Decoder
 
-    init(maximumConcurrentDecodes: Int = 2) {
-        self.maximumConcurrentDecodes = max(1, maximumConcurrentDecodes)
-        cache.countLimit = 96
-        cache.totalCostLimit = 96 * 1_024 * 1_024
+    init(maximumConcurrentDecodes: Int = 2, scheduler: NativeMediaDecodeScheduler? = nil,
+         decoder: @escaping Decoder = { NativeVideoThumbnailDecoder.load(from: $0, maxPixelSize: $1) }) {
+        self.scheduler = scheduler ?? NativeMediaDecodeScheduler(maximumConcurrentDecodes: maximumConcurrentDecodes)
+        self.decoder = decoder
     }
 
     func thumbnail(for url: URL, maxPixelSize: Int = 1_280) async -> NativeVideoThumbnailResult {
+        guard !Task.isCancelled else { return NativeVideoThumbnailResult(image: nil) }
         let key = cacheKey(for: url, maxPixelSize: maxPixelSize)
-        if let cached = cache.object(forKey: key as NSString) {
+        if let cached = cache.image(for: key) {
             return NativeVideoThumbnailResult(image: cached)
         }
-        if let task = inFlight[key] { return await task.value }
-
-        await acquireDecodeSlot()
-        guard !Task.isCancelled else {
-            releaseDecodeSlot()
-            return NativeVideoThumbnailResult(image: nil)
+        let cache = self.cache
+        let decoder = self.decoder
+        let result = await scheduler.decode(key: "video|\(key)") {
+            if let cached = cache.image(for: key) { return cached }
+            guard let image = decoder(url, maxPixelSize), !Task.isCancelled else { return nil }
+            cache.insert(image, for: key)
+            return image
         }
-        if let task = inFlight[key] {
-            releaseDecodeSlot()
-            return await task.value
-        }
-        if let cached = cache.object(forKey: key as NSString) {
-            releaseDecodeSlot()
-            return NativeVideoThumbnailResult(image: cached)
-        }
-
-        let task = Task.detached(priority: .utility) {
-            NativeVideoThumbnailResult(
-                image: NativeVideoThumbnailDecoder.load(from: url, maxPixelSize: maxPixelSize)
-            )
-        }
-        inFlight[key] = task
-        let result = await task.value
-        inFlight[key] = nil
-        releaseDecodeSlot()
-        if let image = result.image {
-            cache.setObject(image, forKey: key as NSString, cost: imageCost(image))
-        }
-        return result
+        return NativeVideoThumbnailResult(image: result.image)
     }
+
+    var cachedByteCount: Int { cache.retainedBytes }
 
     private func cacheKey(for url: URL, maxPixelSize: Int) -> String {
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -65,31 +47,6 @@ actor NativeVideoThumbnailPipeline {
         return "\(url.standardizedFileURL.path)|\(fileSize)|\(modifiedAt)|\(maxPixelSize)"
     }
 
-    private func imageCost(_ image: NSImage) -> Int {
-        let representation = image.representations.first
-        let width = representation?.pixelsWide ?? Int(image.size.width)
-        let height = representation?.pixelsHigh ?? Int(image.size.height)
-        return max(1, width * height * 4)
-    }
-
-    private func acquireDecodeSlot() async {
-        if activeDecodeCount < maximumConcurrentDecodes {
-            activeDecodeCount += 1
-            return
-        }
-        await withCheckedContinuation { continuation in
-            decodeWaiters.append(continuation)
-        }
-    }
-
-    private func releaseDecodeSlot() {
-        if let waiter = decodeWaiters.first {
-            decodeWaiters.removeFirst()
-            waiter.resume()
-        } else {
-            activeDecodeCount = max(0, activeDecodeCount - 1)
-        }
-    }
 }
 
 private enum NativeVideoThumbnailDecoder {
@@ -218,6 +175,9 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
     let mediaID: String
     let isAudio: Bool
     private var fileURL: URL?
+    private weak var resolvedStore: LocalBlogStore?
+    private var hasResolvedPoster = false
+    private var resolvedPosterMaxPixelSize: Int?
     private var itemStatusObservation: NSKeyValueObservation?
     private var timeControlObservation: NSKeyValueObservation?
     private var periodicTimeObserver: Any?
@@ -244,9 +204,24 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
         return "\(Self.timeLabel(currentSeconds)) / \(Self.timeLabel(duration))"
     }
 
-    func resolve(using store: LocalBlogStore) async {
+    func resolve(using store: LocalBlogStore, posterMaxPixelSize: Int = 1_280) async {
+        // Lazy feed cells reappear as the viewport moves. Keep a completed
+        // poster (and resume state) instead of publishing a loading cycle.
+        if resolvedStore === store, resolvedPosterMaxPixelSize == posterMaxPixelSize, phase == .poster {
+            if hasResolvedPoster { return }
+            if let url = fileURL {
+                let generation = loadGeneration
+                let result = await NativeVideoThumbnailPipeline.shared.thumbnail(for: url, maxPixelSize: posterMaxPixelSize)
+                guard !Task.isCancelled, generation == loadGeneration else { return }
+                poster = result.image
+                hasResolvedPoster = true
+                return
+            }
+        }
         releasePlayer(nextPhase: .resolving)
         let generation = loadGeneration
+        resolvedStore = nil
+        hasResolvedPoster = false
         poster = nil
         fileURL = nil
         currentSeconds = 0
@@ -259,10 +234,13 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
         }
         fileURL = url
         if !isAudio {
-            let result = await NativeVideoThumbnailPipeline.shared.thumbnail(for: url)
+            let result = await NativeVideoThumbnailPipeline.shared.thumbnail(for: url, maxPixelSize: posterMaxPixelSize)
             guard !Task.isCancelled, generation == loadGeneration else { return }
             poster = result.image
         }
+        resolvedStore = store
+        hasResolvedPoster = true
+        resolvedPosterMaxPixelSize = posterMaxPixelSize
         phase = .poster
     }
 
@@ -298,9 +276,15 @@ final class NativeInlineVideoPlayerModel: ObservableObject {
         await play()
     }
 
-    func release() {
+    func release(discardPoster: Bool = false) {
         loadGeneration += 1
-        releasePlayer(nextPhase: fileURL == nil ? .resolving : .poster)
+        if player != nil || (phase != .poster && !(phase == .resolving && fileURL == nil)) {
+            releasePlayer(nextPhase: fileURL == nil ? .resolving : .poster, invalidatingLoad: false)
+        }
+        if discardPoster, !isAudio {
+            if poster != nil { poster = nil }
+            hasResolvedPoster = false
+        }
     }
 
     func copyTimestamp(named name: String) {

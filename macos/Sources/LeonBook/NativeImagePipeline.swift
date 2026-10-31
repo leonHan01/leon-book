@@ -1,6 +1,18 @@
 import AppKit
 import Foundation
 import ImageIO
+import SwiftUI
+
+private struct NativeImagePipelineKey: EnvironmentKey {
+    static let defaultValue = NativeImagePipeline.shared
+}
+
+extension EnvironmentValues {
+    var nativeImagePipeline: NativeImagePipeline {
+        get { self[NativeImagePipelineKey.self] }
+        set { self[NativeImagePipelineKey.self] = newValue }
+    }
+}
 
 enum NativeImageLoadMode: Equatable, Sendable {
     case thumbnail(maxPixelSize: Int)
@@ -21,87 +33,40 @@ struct NativeImageDecodeResult: @unchecked Sendable {
 actor NativeImagePipeline {
     typealias Decoder = @Sendable (URL, NativeImageLoadMode) -> NSImage?
 
-    static let shared = NativeImagePipeline(maximumConcurrentDecodes: 2)
+    static let shared = NativeImagePipeline(scheduler: .shared)
 
-    private let cache = NSCache<NSString, NSImage>()
-    private let maximumConcurrentDecodes: Int
+    private let cache = NativeMediaImageCache(byteLimit: 64 * 1_024 * 1_024, countLimit: 256)
+    private let scheduler: NativeMediaDecodeScheduler
     private let decoder: Decoder
-    private var activeDecodeCount = 0
-    private var decodeWaiters: [CheckedContinuation<Void, Never>] = []
-    private var inFlight: [String: Task<NativeImageDecodeResult, Never>] = [:]
 
     init(
         maximumConcurrentDecodes: Int = 2,
+        scheduler: NativeMediaDecodeScheduler? = nil,
         decoder: @escaping Decoder = { url, mode in
             NativeImageDecoder.load(from: url, mode: mode)
         }
     ) {
-        self.maximumConcurrentDecodes = max(1, maximumConcurrentDecodes)
+        self.scheduler = scheduler ?? NativeMediaDecodeScheduler(maximumConcurrentDecodes: maximumConcurrentDecodes)
         self.decoder = decoder
-        cache.countLimit = 512
-        cache.totalCostLimit = 192 * 1_024 * 1_024
     }
 
     func image(from url: URL, mode: NativeImageLoadMode) async -> NativeImageDecodeResult {
+        guard !Task.isCancelled else { return NativeImageDecodeResult(image: nil) }
         let key = cacheKey(for: url, mode: mode)
-        if mode != .fullSize, let cached = cache.object(forKey: key as NSString) {
+        if mode != .fullSize, let cached = cache.image(for: key) {
             return NativeImageDecodeResult(image: cached)
         }
-        if let task = inFlight[key] {
-            return await task.value
-        }
-
-        await acquireDecodeSlot()
-        guard !Task.isCancelled else {
-            releaseDecodeSlot()
-            return NativeImageDecodeResult(image: nil)
-        }
-
-        // Waiting for a slot yields the actor. Another caller may have started
-        // this exact decode while this request was suspended.
-        if let task = inFlight[key] {
-            releaseDecodeSlot()
-            return await task.value
-        }
-        if mode != .fullSize, let cached = cache.object(forKey: key as NSString) {
-            releaseDecodeSlot()
-            return NativeImageDecodeResult(image: cached)
-        }
-
         let decoder = self.decoder
-        let task = Task.detached(priority: .utility) {
-            guard !Task.isCancelled else { return NativeImageDecodeResult(image: nil) }
-            return NativeImageDecodeResult(image: decoder(url, mode))
-        }
-        inFlight[key] = task
-        let decoded = await task.value
-        inFlight[key] = nil
-        releaseDecodeSlot()
-
-        if mode != .fullSize, let image = decoded.image {
-            cache.setObject(image, forKey: key as NSString, cost: imageCost(image))
-        }
-        return decoded
-    }
-
-    private func acquireDecodeSlot() async {
-        if activeDecodeCount < maximumConcurrentDecodes {
-            activeDecodeCount += 1
-            return
-        }
-        await withCheckedContinuation { continuation in
-            decodeWaiters.append(continuation)
+        let cache = self.cache
+        return await scheduler.decode(key: "image|\(key)", priority: mode == .fullSize ? .userInitiated : .utility) {
+            if mode != .fullSize, let cached = cache.image(for: key) { return cached }
+            guard let image = decoder(url, mode), !Task.isCancelled else { return nil }
+            if mode != .fullSize { cache.insert(image, for: key) }
+            return image
         }
     }
 
-    private func releaseDecodeSlot() {
-        if let waiter = decodeWaiters.first {
-            decodeWaiters.removeFirst()
-            waiter.resume()
-        } else {
-            activeDecodeCount = max(0, activeDecodeCount - 1)
-        }
-    }
+    var cachedByteCount: Int { cache.retainedBytes }
 
     private func cacheKey(for url: URL, mode: NativeImageLoadMode) -> String {
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -110,18 +75,12 @@ actor NativeImagePipeline {
         return "\(url.standardizedFileURL.path)|\(fileSize)|\(modifiedAt)|\(mode.cacheKey)"
     }
 
-    private func imageCost(_ image: NSImage) -> Int {
-        let representation = image.representations.first
-        let width = representation?.pixelsWide ?? Int(image.size.width)
-        let height = representation?.pixelsHigh ?? Int(image.size.height)
-        return max(1, width * height * 4)
-    }
 }
 
 private enum NativeImageDecoder {
     static func load(from url: URL, mode: NativeImageLoadMode) -> NSImage? {
         if mode == .fullSize {
-            return NSImage(contentsOf: url)
+            return fullSizeImage(from: url)
         }
 
         guard case let .thumbnail(maxPixelSize) = mode else { return nil }
@@ -133,7 +92,9 @@ private enum NativeImageDecoder {
             try? FileManager.default.removeItem(at: cachedURL)
         }
         guard !Task.isCancelled,
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+              let source = CGImageSourceCreateWithURL(
+                url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary
+              ) else {
             return nil
         }
 
@@ -141,6 +102,7 @@ private enum NativeImageDecoder {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceShouldCacheImmediately: true,
         ]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
               !Task.isCancelled else { return nil }
@@ -149,6 +111,30 @@ private enum NativeImageDecoder {
             cgImage: image,
             size: NSSize(width: image.width, height: image.height)
         )
+    }
+
+    private static func fullSizeImage(from url: URL) -> NSImage? {
+        guard !Task.isCancelled else { return nil }
+        guard let source = CGImageSourceCreateWithURL(
+            url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary
+        ), let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? Int,
+           let height = properties[kCGImagePropertyPixelHeight] as? Int else {
+            // Preserve AppKit support for formats ImageIO cannot rasterize.
+            return NSImage(contentsOf: url)
+        }
+        // Decode on the pipeline's worker before publishing to SwiftUI. A lazy
+        // NSImage(contentsOf:) can otherwise decompress the original at draw time.
+        // The source dimensions keep every pixel; ImageIO applies EXIF orientation.
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(width, height),
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+              !Task.isCancelled else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
     private static func decodedImage(from url: URL) -> NSImage? {

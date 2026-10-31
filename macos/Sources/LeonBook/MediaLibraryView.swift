@@ -205,6 +205,7 @@ private struct NativeMediaLibraryThumbnail: View {
     let media: NativeMedia
     let store: LocalBlogStore
     @State private var poster: NSImage?
+    @State private var isLoadingPoster = true
 
     var body: some View {
         ZStack {
@@ -221,7 +222,15 @@ private struct NativeMediaLibraryThumbnail: View {
             NativeIcon.image("play.circle.fill", size: 32).foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
         }
+        .overlay(alignment: .topTrailing) {
+            if media.isVideo && isLoadingPoster {
+                ProgressView().controlSize(.small).padding(8)
+                    .accessibilityLabel("正在加载视频封面…")
+            }
+        }
         .task(id: media.url) {
+            isLoadingPoster = true
+            defer { if !Task.isCancelled { isLoadingPoster = false } }
             guard media.isVideo, let url = await store.mediaURL(for: media.url), !Task.isCancelled else { return }
             let result = await NativeVideoThumbnailPipeline.shared.thumbnail(for: url, maxPixelSize: 600)
             guard !Task.isCancelled else { return }

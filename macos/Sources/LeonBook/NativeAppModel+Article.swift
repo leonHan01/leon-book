@@ -91,7 +91,9 @@ extension NativeAppModel {
     }
 
     func toggleArticleTask(article: NativeArticle, lineIndex: Int, completed: Bool) {
+        let loadingID = loadingOperations.begin(.articleEdit)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 let updated = try await store.toggleArticleTask(
                     slug: article.slug,
@@ -120,6 +122,8 @@ extension NativeAppModel {
         operation: EditorBlockTransferOperation
     ) async -> EditorBlockTransferReceipt? {
         guard !markdownBlocks.isEmpty, !isMarkdownSourceReadOnly else { return nil }
+        let loadingID = loadingOperations.begin(.articleEdit)
+        defer { loadingOperations.end(loadingID) }
         do {
             let targetBefore = try await store.getArticle(slug: targetSlug)
             var sourceBefore: NativeArticle?
@@ -269,7 +273,9 @@ extension NativeAppModel {
         let slug = editor.slug
         let body = editor.body
 
+        let loadingID = loadingOperations.begin(.articleEdit)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 let result = try await store.extractArticleSelection(
                     sourceSlug: slug,
@@ -310,7 +316,9 @@ extension NativeAppModel {
         let slug = editor.slug
         let body = editor.body
 
+        let loadingID = loadingOperations.begin(.articleEdit)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 let result = try await store.splitArticleByLevel2Headings(
                     sourceSlug: slug,
@@ -361,7 +369,9 @@ extension NativeAppModel {
         let destination = destinations[destinationPopup.indexOfSelectedItem]
         let position: NativeArticleMergePosition = positionPopup.indexOfSelectedItem == 0 ? .end : .beginning
 
+        let loadingID = loadingOperations.begin(.articleEdit)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 let destinationArticle = try await store.getArticle(slug: destination.slug)
                 let result = try await store.mergeArticle(
@@ -456,6 +466,8 @@ extension NativeAppModel {
     ) async throws -> Bool {
         articleNavigationGeneration += 1
         let navigationGeneration = articleNavigationGeneration
+        let loadingID = loadingOperations.begin(.article)
+        defer { loadingOperations.end(loadingID) }
         let workspace = workspaceGeneration
         let selected: NativeArticle
         if recordsPageView {
@@ -505,6 +517,8 @@ extension NativeAppModel {
         let activeStore = store
         articleAncillaryLoadTask = Task { [weak self] in
             guard let self else { return }
+            let loadingID = self.loadingOperations.begin(.articleDetails)
+            defer { self.loadingOperations.end(loadingID) }
             do {
                 let comments = try await activeStore.listArticleComments(articleSlug: slug)
                 guard !Task.isCancelled,

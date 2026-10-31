@@ -130,6 +130,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
     @Binding var textRuns: [NativeMomentTextRun]
     let controller: MomentRichTextController
     let onPasteImages: ([NSImage]) -> Void
+    var onDropVideos: (([URL]) -> Void)? = nil
     var maximumLength = 500
 
     func makeCoordinator() -> Coordinator {
@@ -164,6 +165,10 @@ struct MomentRichTextEditor: NSViewRepresentable {
         textView.onPasteImages = { [weak coordinator = context.coordinator] images in
             coordinator?.parent.onPasteImages(images)
         }
+        textView.onDropVideos = { [weak coordinator = context.coordinator] urls in
+            coordinator?.parent.onDropVideos?(urls)
+        }
+        textView.acceptsVideoDrops = onDropVideos != nil
         controller.attach(to: textView)
 
         scrollView.documentView = textView
@@ -173,6 +178,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? MomentTextView else { return }
+        textView.acceptsVideoDrops = onDropVideos != nil
         controller.attach(to: textView)
         textView.backgroundColor = NSColor(appPalette.surface)
         textView.insertionPointColor = appPalette.nsColor(.accent)
@@ -215,6 +221,8 @@ struct MomentRichTextEditor: NSViewRepresentable {
 
 private final class MomentTextView: NSTextView {
     var onPasteImages: (([NSImage]) -> Void)?
+    var onDropVideos: (([URL]) -> Void)?
+    var acceptsVideoDrops = false
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         var types = super.readablePasteboardTypes
@@ -243,7 +251,8 @@ private final class MomentTextView: NSTextView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        images(from: sender.draggingPasteboard).isEmpty ? [] : .copy
+        if acceptsVideoDrops && !videoURLs(from: sender.draggingPasteboard).isEmpty { return .copy }
+        return images(from: sender.draggingPasteboard).isEmpty ? [] : .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -251,10 +260,24 @@ private final class MomentTextView: NSTextView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let videos = videoURLs(from: sender.draggingPasteboard)
+        if acceptsVideoDrops && !videos.isEmpty {
+            onDropVideos?(videos)
+            return true
+        }
         guard insertPastedImages(from: sender.draggingPasteboard) else {
             return super.performDragOperation(sender)
         }
         return true
+    }
+
+    private func videoURLs(from pasteboard: NSPasteboard) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
+        return urls.filter { url in
+            url.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame
+                || UTType(filenameExtension: url.pathExtension)?.conforms(to: .movie) == true
+        }
     }
 
     @discardableResult

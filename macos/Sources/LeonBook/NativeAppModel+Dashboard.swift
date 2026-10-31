@@ -10,6 +10,8 @@ extension NativeAppModel {
         // Before connection, store is only a placeholder at the user registry
         // root. Preparing it as a content store corrupts the registry's role.
         guard storageReady else { return }
+        let loadingID = loadingOperations.begin(.dashboard)
+        defer { loadingOperations.end(loadingID) }
         let activeStore = store, generation = workspaceGeneration
         dashboardLoadGeneration += 1
         let request = dashboardLoadGeneration

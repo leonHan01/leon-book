@@ -317,6 +317,11 @@ struct ArticleReaderView: View {
                     .tint(appPalette.textSecondary)
                     .fixedSize()
 
+                if let summary = model.articleSummary(for: article.slug) {
+                    ArticleExportButton(articles: [summary], store: model.store, compact: true)
+                        .buttonStyle(NativeChromeIconButtonStyle())
+                }
+
                 Button {
                     if usesCompactInspector { isPresentingCompactInspector = true }
                     else { workspaceLayout.isReaderInspectorVisible.toggle() }
@@ -689,7 +694,9 @@ private struct ArticleCommentsSidebar: View {
 
             Divider()
 
-            if model.articleComments.isEmpty {
+            if model.articleComments.isEmpty && model.loadingOperations.contains(.articleDetails) {
+                NativeLoadingPlaceholder(title: NativeLocalization.text("正在加载评论…"))
+            } else if model.articleComments.isEmpty {
                 VStack(spacing: 10) {
                     NativeIcon.image("text.bubble", size: 32)
                         .foregroundStyle(.secondary)
@@ -1471,6 +1478,7 @@ final class NativeMarkdownArticleDocument {
             outline = RichArticleDocument.outline(in: markdown)
             imageURLs = Set(RichArticleDocument.imageURLs(in: markdown))
             embeddedAttachmentURLs = imageURLs.union(RichArticleDocument.audioURLs(in: markdown))
+                .union(RichArticleDocument.videoURLs(in: markdown))
             return
         }
         var parsedBlocks: [MarkdownArticleBlock] = []
@@ -1877,7 +1885,7 @@ private struct MarkdownHTMLWebView: NSViewRepresentable {
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
 
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = NativeLoadingWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = false
@@ -1887,6 +1895,13 @@ private struct MarkdownHTMLWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         loadHTML(in: webView, coordinator: context.coordinator)
+    }
+
+    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        view.navigationDelegate = nil
+        view.uiDelegate = nil
+        view.stopLoading()
+        (view as? NativeLoadingWebView)?.cancelLoadingFeedback()
     }
 
     private func loadHTML(in webView: WKWebView, coordinator: Coordinator) {
@@ -1976,19 +1991,29 @@ private struct MarkdownEmbeddedWebView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> WKWebView {
-        let webView = WKWebView(frame: .zero)
+        let webView = NativeLoadingWebView(frame: .zero, configuration: WKWebViewConfiguration())
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
+        context.coordinator.requestedURL = url
         webView.load(URLRequest(url: url))
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard webView.url != url else { return }
+        guard context.coordinator.requestedURL != url else { return }
+        context.coordinator.requestedURL = url
         webView.load(URLRequest(url: url))
     }
 
+    static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        view.navigationDelegate = nil
+        view.uiDelegate = nil
+        view.stopLoading()
+        (view as? NativeLoadingWebView)?.cancelLoadingFeedback()
+    }
+
     final class Coordinator: NSObject, WKNavigationDelegate {
+        var requestedURL: URL?
         func webView(
             _ webView: WKWebView,
             createWebViewWith configuration: WKWebViewConfiguration,

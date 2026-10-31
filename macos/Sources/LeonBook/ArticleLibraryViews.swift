@@ -27,7 +27,9 @@ struct ArticleLibraryView: View {
             }
             Divider()
 
-            if filteredArticles.isEmpty {
+            if filteredArticles.isEmpty && (model.isLoading || model.isSearchingArticles || model.loadingOperations.contains(.refresh)) {
+                NativeLoadingPlaceholder(title: NativeLocalization.text("正在加载文章…"))
+            } else if filteredArticles.isEmpty {
                 EmptyState(
                     title: "没有匹配的文章",
                     message: "试试其他搜索词，或者开始写一篇新文章。",
@@ -74,6 +76,8 @@ struct ArticleLibraryView: View {
                         .foregroundStyle(appPalette.textSecondary)
                 }
                 Spacer()
+
+                ArticleExportButton(articles: model.filteredArticles, store: model.store)
 
                 Menu {
                     ForEach(NativeArticleLibraryLayout.allCases) { option in

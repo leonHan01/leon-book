@@ -4,11 +4,13 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 MACOS_DIR="${SCRIPT_DIR:h}"
-BUILD_ROOT="${TMPDIR%/}/leon-book-swiftpm-tests"
+source "${SCRIPT_DIR}/swift-cache.sh"
+BUILD_ROOT="$(leonbook_build_root tests)"
 
 python3 "${SCRIPT_DIR}/check-localization.py"
 if command -v node >/dev/null 2>&1; then
     node "${SCRIPT_DIR}/test-web-localization.mjs"
+    node "${SCRIPT_DIR}/test-article-media-drop.mjs"
 else
     print -- 'SKIP: web localization runtime checks require Node.js.'
 fi

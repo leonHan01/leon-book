@@ -36,6 +36,8 @@ leonblog - leon-book 原生 macOS 应用管理
   open / start 沿用已安装版本的模式，首次构建使用 Debug。
   上述命令可用 --debug / --release 切换模式；首次使用某模式需要完整编译。
   Debug 默认使用 native 引擎；LEON_BOOK_BUILD_SYSTEM=default 可切回工具链默认引擎。
+  仅编辑器 JS/CSS/HTML 变化时更新资源并重新签名，跳过 Swift 编译。
+  缓存位于 ~/Library/Caches/leon-book；可用 LEON_BOOK_BUILD_CACHE_DIR 指定其他目录。
 
 数据位置：
   \$LEON_BOOK_WORKDIR（若已设置）
@@ -52,29 +54,10 @@ build_native_app() {
 }
 
 native_app_needs_build() {
-  [[ ! -x "$MACOS_EXECUTABLE" ]] && return 0
-  [[ ! -x "$MACOS_APP/Contents/MacOS/LeonBookCLI" ]] && return 0
-  [[ ! -d "$MACOS_APP/Contents/Resources/LeonBookMac_LeonBook.bundle" ]] && return 0
-  [[ ! -f "$MACOS_BUILD_INFO" ]] && return 0
-  [[ "$(cat "$MACOS_BUILD_INFO")" != "$BUILD_CONFIGURATION" ]] && return 0
-  [[ ! -f "$MACOS_BUILD_SYSTEM_INFO" ]] && return 0
-  [[ "$(cat "$MACOS_BUILD_SYSTEM_INFO")" != "$BUILD_SYSTEM" ]] && return 0
-
-  local input
-  local build_inputs=(
-    "$PROJECT_DIR/macos/Package.swift"
-    "$PROJECT_DIR/macos/Package.resolved"
-    "$PROJECT_DIR/macos/Resources"
-    "$PROJECT_DIR/macos/Sources"
-    "$PROJECT_DIR/macos/scripts/build-app.sh"
-    "$PROJECT_DIR/macos/scripts/swift-sdk.sh"
-  )
-  for input in "${build_inputs[@]}"; do
-    [[ "$input" -nt "$MACOS_BUILD_INFO" ]] && return 0
-  done
-
-  find "$PROJECT_DIR/macos/Sources" "$PROJECT_DIR/macos/Resources" \
-    -newer "$MACOS_BUILD_INFO" -print -quit | /usr/bin/grep -q .
+  local build_status
+  build_status="$(python3 "$PROJECT_DIR/macos/scripts/build-state.py" status \
+    "$PROJECT_DIR/macos" "$MACOS_APP" "$BUILD_CONFIGURATION" "$BUILD_SYSTEM")" || return 0
+  [[ "$build_status" != unchanged ]]
 }
 
 launch_native_app() {
@@ -125,7 +108,7 @@ restart_native_app() {
 open_native_app() {
   local rebuilt=0
   if native_app_needs_build; then
-    printf '[INFO] 原生应用缺失或已过期，正在构建…\n'
+    printf '[INFO] 原生应用缺失或已过期，正在更新…\n'
     build_native_app
     rebuilt=1
   else
@@ -192,7 +175,7 @@ esac
 case "$command_name" in
   open|start) open_native_app ;;
   restart) restart_native_app ;;
-  build) build_native_app ;;
+  build) LEON_BOOK_FORCE_SWIFT_BUILD=1 build_native_app ;;
   test) "$PROJECT_DIR/macos/scripts/test-app.sh" ;;
   coverage) "$PROJECT_DIR/macos/scripts/coverage.sh" ;;
   api) shift; exec /bin/zsh "$PROJECT_DIR/macos/scripts/run-cli.sh" "$@" ;;

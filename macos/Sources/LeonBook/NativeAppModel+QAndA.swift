@@ -9,6 +9,8 @@ extension NativeAppModel {
 
     func reloadQuestionList(selecting questionID: String? = nil) async throws {
         guard !Task.isCancelled else { return }
+        let loadingID = loadingOperations.begin(.questions)
+        defer { loadingOperations.end(loadingID) }
         questionListGeneration += 1
         let request = questionListGeneration
         let generation = workspaceGeneration

@@ -5,11 +5,23 @@ import WebKit
 
 struct InfiniteCanvasView: View {
     @ObservedObject var model: NativeAppModel
+    @State private var isLoading = true
+
     var body: some View {
-        InfiniteCanvasWebView(store: model.store, onSave: { model.scheduleBackup() }) { slug in
+        let workspacePath = model.dataDirectoryPath
+        InfiniteCanvasWebView(store: model.store, onSave: { model.scheduleBackup() }, onReady: {
+            guard model.dataDirectoryPath == workspacePath else { return }
+            isLoading = false
+        }) { slug in
             model.openArticleLink(slug, disposition: .currentTab)
         }
-        .id(model.dataDirectoryPath)
+        .id(workspacePath)
+        .overlay {
+            if isLoading {
+                NativeNavigationLoadingView(section: .canvas, sidebarWidth: nil, isActive: true)
+            }
+        }
+        .onChange(of: workspacePath) { _ in isLoading = true }
     }
 }
 
@@ -82,9 +94,10 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
 
     let store: LocalBlogStore
     var onSave: () -> Void = {}
+    var onReady: () -> Void = {}
     var onOpenArticle: (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(store: store, onSave: onSave, onOpenArticle: onOpenArticle) }
+    func makeCoordinator() -> Coordinator { Coordinator(store: store, onSave: onSave, onReady: onReady, onOpenArticle: onOpenArticle) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -124,6 +137,7 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         let store: LocalBlogStore
         let onSave: () -> Void
+        let onReady: () -> Void
         let onOpenArticle: (String) -> Void
         weak var webView: WKWebView?
         var writer: InfiniteCanvasWriter?
@@ -132,9 +146,10 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
         var isReady = false
         var language = NativeLocalization.currentLanguage
 
-        init(store: LocalBlogStore, onSave: @escaping () -> Void = {}, onOpenArticle: @escaping (String) -> Void) {
+        init(store: LocalBlogStore, onSave: @escaping () -> Void = {}, onReady: @escaping () -> Void = {}, onOpenArticle: @escaping (String) -> Void) {
             self.store = store
             self.onSave = onSave
+            self.onReady = onReady
             self.onOpenArticle = onOpenArticle
         }
 
@@ -162,6 +177,9 @@ struct InfiniteCanvasWebView: NSViewRepresentable {
         private func handle(_ type: String, _ payload: [String: Any]) async throws {
             switch type {
             case "ready":
+                // Keep the native loading surface through script startup and
+                // initial catalog/document loading, including the error path.
+                defer { if webView != nil { onReady() } }
                 isReady = true
                 if let webView {
                     NativeWebTheme.apply(palette, to: webView)

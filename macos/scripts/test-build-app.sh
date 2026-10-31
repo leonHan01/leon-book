@@ -8,6 +8,12 @@ FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp/}leon-book-packaging.XXXXXX")"
 trap 'rm -rf "${FIXTURE_ROOT}"' EXIT
 FIXTURE_MACOS_DIR="${FIXTURE_ROOT}/project with spaces/macos"
 FIXTURE_PRODUCTS="${FIXTURE_ROOT}/products"
+export LEON_BOOK_BUILD_CACHE_DIR="${FIXTURE_ROOT}/persistent cache"
+unset LEON_BOOK_FORCE_SWIFT_BUILD
+MACOS_DIR="${FIXTURE_MACOS_DIR}"
+source "${SCRIPT_DIR}/swift-cache.sh"
+DEFAULT_CACHE="$(leonbook_build_root default)"
+NATIVE_CACHE="$(leonbook_build_root native)"
 
 # Exercise the real packaging steps with tiny executables, without compiling
 # Swift or opening an application window.
@@ -16,8 +22,13 @@ mkdir -p "${FIXTURE_MACOS_DIR}/scripts" "${FIXTURE_MACOS_DIR}/Resources" \
     "${FIXTURE_PRODUCTS}/LeonBookMac_LeonBook.bundle" \
     "${FIXTURE_ROOT}/bin" "${FIXTURE_ROOT}/tmp"
 cp "${SCRIPT_DIR}/build-app.sh" "${FIXTURE_MACOS_DIR}/scripts/build-app.sh"
+cp "${SCRIPT_DIR}/build-state.py" "${SCRIPT_DIR}/swift-cache.sh" "${FIXTURE_MACOS_DIR}/scripts/"
 print -r -- 'SDK_ARGUMENTS=()' > "${FIXTURE_MACOS_DIR}/scripts/swift-sdk.sh"
-touch "${FIXTURE_MACOS_DIR}/Resources/Info.plist" "${FIXTURE_MACOS_DIR}/Resources/Notes.icns"
+touch "${FIXTURE_MACOS_DIR}/Resources/Info.plist" "${FIXTURE_MACOS_DIR}/Resources/Notes.icns" "${FIXTURE_MACOS_DIR}/Package.swift"
+EDITOR_JS="${FIXTURE_MACOS_DIR}/Sources/LeonBook/Resources/RichArticleColumns.js"
+EDITOR_CSS="${FIXTURE_MACOS_DIR}/Sources/LeonBook/Resources/RichArticleColumns.css"
+print -- '// initial script' > "${EDITOR_JS}"
+print -- '/* initial style */' > "${EDITOR_CSS}"
 
 cat > "${FIXTURE_PRODUCTS}/LeonBook" <<'EOF'
 #!/bin/sh
@@ -38,7 +49,7 @@ if [ "${2:-}" = --help ]; then
 fi
 printf '%s\n' "$*" >> "$LEON_BOOK_BUILD_TEST_CALLS"
 if [ -n "${LEON_BOOK_BUILD_TEST_EDIT:-}" ]; then
-    touch "$LEON_BOOK_BUILD_TEST_EDIT"
+    printf '// edit during compilation\n' >> "$LEON_BOOK_BUILD_TEST_EDIT"
 fi
 for argument in "$@"; do
     if [ "$argument" = '--show-bin-path' ]; then
@@ -49,14 +60,21 @@ done
 EOF
 cat > "${FIXTURE_ROOT}/bin/codesign" <<'EOF'
 #!/bin/sh
-if [ "${LEON_BOOK_BUILD_TEST_SIGN_FAIL:-0}" = 1 ]; then
+printf '%s\n' "$*" >> "${LEON_BOOK_BUILD_TEST_CALLS}.signing"
+if [ "${LEON_BOOK_BUILD_TEST_SIGN_FAIL:-0}" = 1 ] && [ "$1" = --force ]; then
     exit 1
+fi
+if [ -n "${LEON_BOOK_BUILD_TEST_SIGN_EDIT:-}" ] && [ "$1" = --force ]; then
+    printf '// edit during signing\n' >> "$LEON_BOOK_BUILD_TEST_SIGN_EDIT"
 fi
 exit 0
 EOF
 cat > "${FIXTURE_ROOT}/bin/ditto" <<'EOF'
 #!/bin/sh
 set -eu
+if [ "${LEON_BOOK_BUILD_TEST_COPY_FAIL:-0}" = 1 ]; then
+    exit 1
+fi
 if [ -n "${LEON_BOOK_BUILD_TEST_INSTALL_GUARD:-}" ]; then
     mkdir "$LEON_BOOK_BUILD_TEST_INSTALL_GUARD"
     trap 'rmdir "$LEON_BOOK_BUILD_TEST_INSTALL_GUARD"' EXIT
@@ -97,7 +115,7 @@ PACKAGED_BUILD_INFO="${FIXTURE_MACOS_DIR}/dist/leon-book.app/Contents/Resources/
 [[ "$(grep -c -- '--configuration release' "${FIXTURE_ROOT}/swift-calls")" == 3 ]]
 PACKAGED_BUILD_SYSTEM="${PACKAGED_BUILD_INFO:h}/leonbook-build-system"
 [[ "$(cat "${PACKAGED_BUILD_SYSTEM}")" == default ]]
-grep -Fq -- "--scratch-path ${FIXTURE_ROOT}/tmp/leon-book-swiftpm/scratch" "${FIXTURE_ROOT}/swift-calls"
+grep -Fq -- "--scratch-path ${DEFAULT_CACHE}/scratch" "${FIXTURE_ROOT}/swift-calls"
 if grep -q -- '--build-system' "${FIXTURE_ROOT}/swift-calls"; then
     print -u2 -- 'FAIL: default Release build overrode the toolchain build engine.'
     exit 1
@@ -118,7 +136,7 @@ PATH="${FIXTURE_ROOT}/bin:$PATH" TMPDIR="${FIXTURE_ROOT}/tmp/" \
 [[ "$(grep -c -- '--configuration debug' "${FIXTURE_ROOT}/swift-calls")" == 3 ]]
 [[ "$(cat "${PACKAGED_BUILD_SYSTEM}")" == native ]]
 [[ "$(grep -c -- '--build-system native' "${FIXTURE_ROOT}/swift-calls")" == 3 ]]
-grep -Fq -- "--scratch-path ${FIXTURE_ROOT}/tmp/leon-book-swiftpm-native/scratch" "${FIXTURE_ROOT}/swift-calls"
+grep -Fq -- "--scratch-path ${NATIVE_CACHE}/scratch" "${FIXTURE_ROOT}/swift-calls"
 [[ "${PACKAGED_BUILD_INFO}" -ot "${EDITED_SOURCE}" ]]
 print -- 'PASS: Debug configuration is packaged and edits during compilation remain detectable.'
 print -- 'PASS: Debug native and default Release builds use independent caches and locks.'
@@ -145,7 +163,7 @@ if PATH="${FIXTURE_ROOT}/bin:$PATH" TMPDIR="${FIXTURE_ROOT}/tmp/" \
 fi
 [[ -f "${PACKAGED_BUILD_INFO:h}/installed-sentinel" ]]
 [[ "$("${PACKAGED_GUI}")" == 'GUI fixture' ]]
-[[ -z "$(find "${FIXTURE_ROOT}/tmp" -type d -name 'staging.*' -print)" ]]
+[[ -z "$(find "${LEON_BOOK_BUILD_CACHE_DIR}" -type d -name 'staging.*' -print)" ]]
 print -- 'PASS: failed signing preserves the installed app and cleans private staging directories.'
 
 : > "${FIXTURE_ROOT}/swift-calls"
@@ -183,3 +201,96 @@ wait "${RELEASE_PID}"
 [[ "$(grep -c '^install$' "${FIXTURE_ROOT}/installs")" == 2 ]]
 [[ ! -e "${FIXTURE_ROOT}/install-busy" ]]
 print -- 'PASS: parallel Debug and Release builds serialize only final installation.'
+
+run_builder() {
+    PATH="${FIXTURE_ROOT}/bin:$PATH" TMPDIR="${FIXTURE_ROOT}/tmp/" \
+        LEON_BOOK_BUILD_TEST_PRODUCTS="${FIXTURE_PRODUCTS}" \
+        LEON_BOOK_BUILD_TEST_CALLS="${FIXTURE_ROOT}/swift-calls" \
+        LEON_BOOK_BUILD_CONFIGURATION=debug LEON_BOOK_BUILD_SYSTEM=native \
+        /bin/zsh "${FIXTURE_MACOS_DIR}/scripts/build-app.sh" > "${FIXTURE_ROOT}/resource-build.log" 2>&1
+}
+input_status() {
+    python3 "${FIXTURE_MACOS_DIR}/scripts/build-state.py" status "${FIXTURE_MACOS_DIR}" \
+        "${FIXTURE_MACOS_DIR}/dist/leon-book.app" debug native
+}
+run_builder
+[[ "$(input_status)" == unchanged ]]
+EXECUTABLE_HASHES="$(shasum -a 256 "${PACKAGED_MACOS_DIR}/"*)"
+print -- '// script update' >> "${EDITOR_JS}"
+print -- '/* style update */' >> "${EDITOR_CSS}"
+: > "${FIXTURE_ROOT}/swift-calls"
+: > "${FIXTURE_ROOT}/swift-calls.signing"
+run_builder
+[[ ! -s "${FIXTURE_ROOT}/swift-calls" ]]
+grep -q '^--force ' "${FIXTURE_ROOT}/swift-calls.signing"
+[[ "$(shasum -a 256 "${PACKAGED_MACOS_DIR}/"*)" == "${EXECUTABLE_HASHES}" ]]
+PACKAGED_RESOURCES="${PACKAGED_BUILD_INFO:h}/LeonBookMac_LeonBook.bundle"
+cmp "${EDITOR_JS}" "${PACKAGED_RESOURCES}/${EDITOR_JS:t}"
+cmp "${EDITOR_CSS}" "${PACKAGED_RESOURCES}/${EDITOR_CSS:t}"
+[[ "$(input_status)" == unchanged ]]
+print -- 'PASS: editor JS/CSS update and re-sign without Swift or executable changes.'
+
+cp -p "${EDITOR_JS}" "${FIXTURE_ROOT}/old-timestamp"
+print -- '// same timestamp, different content' >> "${EDITOR_JS}"
+touch -r "${FIXTURE_ROOT}/old-timestamp" "${EDITOR_JS}"
+[[ "$(input_status)" == resources ]]
+NEW_ASSET="${EDITOR_JS:h}/RichArticleExtra.js"
+print -- '// newly added resource' > "${NEW_ASSET}"
+rm "${EDITOR_CSS}"
+run_builder
+[[ ! -s "${FIXTURE_ROOT}/swift-calls" ]]
+[[ ! -f "${PACKAGED_RESOURCES}/${EDITOR_CSS:t}" ]]
+cmp "${NEW_ASSET}" "${PACKAGED_RESOURCES}/${NEW_ASSET:t}"
+[[ "$(input_status)" == unchanged ]]
+print -- 'PASS: resource additions/deletions and unchanged timestamps are detected.'
+
+print -- '// needs signing' >> "${EDITOR_JS}"
+PREVIOUS_STATE="$(cat "${PACKAGED_BUILD_INFO:h}/leonbook-build-inputs.json")"
+if LEON_BOOK_BUILD_TEST_SIGN_FAIL=1 run_builder; then
+    print -u2 -- 'FAIL: resource update ignored a signing failure.'; exit 1
+fi
+[[ ! -s "${FIXTURE_ROOT}/swift-calls" ]]
+[[ "$(cat "${PACKAGED_BUILD_INFO:h}/leonbook-build-inputs.json")" == "${PREVIOUS_STATE}" ]]
+[[ "$(input_status)" == resources ]]
+print -- 'PASS: failed resource signing preserves the installed app and pending changes.'
+
+if LEON_BOOK_BUILD_TEST_COPY_FAIL=1 run_builder; then
+    print -u2 -- 'FAIL: resource update ignored an installation copy failure.'; exit 1
+fi
+[[ "$(cat "${PACKAGED_BUILD_INFO:h}/leonbook-build-inputs.json")" == "${PREVIOUS_STATE}" ]]
+[[ "$(input_status)" == resources ]]
+[[ -z "$(find "${FIXTURE_MACOS_DIR}/dist" -name '.leonbook-install.*' -print)" ]]
+print -- 'PASS: failed installation copy preserves the existing app and cleans staging.'
+
+LEON_BOOK_BUILD_TEST_SIGN_EDIT="${EDITOR_JS}" run_builder
+[[ "$(input_status)" == resources ]]
+run_builder
+[[ "$(input_status)" == unchanged ]]
+print -- 'PASS: edits made during resource signing remain pending for the next update.'
+
+print -- '// native source change' >> "${EDITED_SOURCE}"
+touch -t 202001010000 "${EDITED_SOURCE}"
+: > "${FIXTURE_ROOT}/swift-calls"
+run_builder
+[[ "$(wc -l < "${FIXTURE_ROOT}/swift-calls" | tr -d ' ')" == 3 ]]
+[[ "$(input_status)" == unchanged ]]
+rm "${EDITED_SOURCE}"
+[[ "$(input_status)" == build ]]
+run_builder
+print -- 'PASS: changed/deleted Swift sources always take the compilation path.'
+
+print -- '// forced resource compilation' >> "${EDITOR_JS}"
+: > "${FIXTURE_ROOT}/swift-calls"
+LEON_BOOK_FORCE_SWIFT_BUILD=1 run_builder
+[[ "$(wc -l < "${FIXTURE_ROOT}/swift-calls" | tr -d ' ')" == 3 ]]
+rm "${PACKAGED_BUILD_INFO:h}/leonbook-build-inputs.json"
+[[ "$(input_status)" == build ]]
+run_builder
+print -- 'PASS: explicit builds and legacy apps establish a full-build baseline.'
+
+OLD_CACHE="$(leonbook_build_root native)"
+[[ "$(TMPDIR=/different/temporary/directory leonbook_build_root native)" == "${OLD_CACHE}" ]]
+[[ "$(leonbook_build_root tests)" != "${OLD_CACHE}" ]]
+MACOS_DIR="${FIXTURE_MACOS_DIR}-other-checkout"
+[[ "$(leonbook_build_root native)" != "${OLD_CACHE}" ]]
+print -- 'PASS: cache paths survive TMPDIR changes and isolate checkouts, engines and tests.'

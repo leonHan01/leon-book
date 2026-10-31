@@ -130,7 +130,10 @@ struct NativePhotoLibraryView: View {
     private var photoGrid: some View {
         let photos = visiblePhotos
         return ScrollView {
-            if photos.isEmpty {
+            if photos.isEmpty && library.isBusy {
+                ProgressView("正在加载图片…")
+                    .frame(maxWidth: .infinity, minHeight: 350)
+            } else if photos.isEmpty {
                 VStack(spacing: 12) {
                     NativeIcon.image(library.search.isEmpty ? "photo.on.rectangle.angled" : "magnifyingglass", size: 48)
                     Text(LocalizedStringKey(library.search.isEmpty ? "这里还没有图片" : "没有匹配的图片")).font(.headline)

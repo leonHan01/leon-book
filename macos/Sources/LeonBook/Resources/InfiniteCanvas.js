@@ -21,10 +21,12 @@
   function point(event) { const p = local(event); return { x: (p.x - v.x) / v.zoom, y: (p.y - v.y) / v.zoom }; }
   function center() { return { x: (viewport.clientWidth / 2 - v.x) / v.zoom, y: (viewport.clientHeight / 2 - v.y) / v.zoom }; }
   let statusKey = '本地工作区';
-  function setStatus(key) { statusKey = key; $('status').textContent = t(key); }
+  function setStatus(key) { statusKey = key; $('status').textContent = t(busy ? '正在加载…' : key); $('status').classList.toggle('is-loading', busy || key === '正在保存…' || key === '正在加载…'); $('status').setAttribute('role', 'status'); }
   function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toast.timer); toast.timer = setTimeout(() => $('toast').hidden = true, 6500); }
   function setBusy(value) {
     busy = value;
+    if (value) setStatus('正在加载…');
+    $('viewport').setAttribute('aria-busy', String(value));
     $('boards').disabled = value; $('new-board').disabled = value; $('start').disabled = value;
     $('viewport').style.pointerEvents = value ? 'none' : ''; $('library').style.pointerEvents = value ? 'none' : '';
     $('title').disabled = value || !boardID;
@@ -235,7 +237,7 @@
     }
     const content = contentCache.get(node.id);
     if (!content) {
-      placeholder(body, t('正在读取内容…'), '');
+      placeholder(body, t('正在读取内容…'), '').classList.add('is-loading');
       if (!requested.has(node.id)) { requested.add(node.id); post('content', { id: boardID, nodeID: node.id }); }
       return;
     }
@@ -395,7 +397,7 @@
     if (text) { const url = webURL(text.trim()); addNode(url ? { type: 'link', url } : { type: 'text', text }, point(event)); }
   });
   function showURL() { $('url-input').value = ''; $('url-dialog').showModal(); $('url-input').focus(); }
-  function requestLibrary() { $('results').textContent = t('正在搜索…'); post('library', { kind: libraryKind, query: $('search').value }); }
+  function requestLibrary() { $('results').classList.add('is-loading'); $('results').setAttribute('aria-busy', 'true'); $('results').textContent = t('正在搜索…'); post('library', { kind: libraryKind, query: $('search').value }); }
   $('new-board').onclick = $('start').onclick = () => { save(); setBusy(true); post('create'); };
   $('boards').onchange = () => { if ($('boards').value) { save(); setBusy(true); post('open', { id: $('boards').value }); } };
   $('title').onfocus = () => { if (!titleEditing) checkpoint(); titleEditing = true; };
@@ -445,6 +447,7 @@
         setStatus(payload.pending ? '正在保存…' : '已保存到本地'); $('retry').hidden = true;
       } else if (action === 'library') {
         if (payload.kind !== libraryKind || payload.query !== $('search').value) return;
+        $('results').classList.remove('is-loading'); $('results').setAttribute('aria-busy', 'false');
         $('results').replaceChildren();
         if (!payload.items.length) $('results').textContent = t('没有匹配的内容');
         for (const item of payload.items) {
@@ -466,7 +469,7 @@
         if (el) { if (payload.title) el.querySelector('.card-title').textContent = payload.title; fillBody(node, el.querySelector('.card-body')); }
       } else if (action === 'addFile') {
         if (payload.id === boardID) addNode({ type: 'file', file: payload.file, leonbook: { kind: 'attachment', id: payload.file, title: payload.title }, width: 420, height: 340 });
-      } else if (action === 'error') { setBusy(false); setStatus('操作未完成'); $('retry').hidden = false; $('boards').value = boardID; toast(payload.message); }
+      } else if (action === 'error') { if ($('results').classList.contains('is-loading')) $('results').textContent = t('操作未完成'); $('results').classList.remove('is-loading'); $('results').setAttribute('aria-busy', 'false'); setBusy(false); setStatus('操作未完成'); $('retry').hidden = false; $('boards').value = boardID; toast(payload.message); }
     },
     // Small deterministic surface also used by the headless WebKit checks.
     snapshot: () => clone(doc), addNode, connect, fit,

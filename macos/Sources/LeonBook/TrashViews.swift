@@ -16,12 +16,14 @@ struct TrashView: View {
                 }
                 Spacer()
                 Button("清空回收站", role: .destructive, action: confirmEmptyTrash)
-                    .disabled(model.trashItems.isEmpty || model.isLoading)
+                    .disabled(model.trashItems.isEmpty || model.isLoading || model.loadingOperations.contains(.trash))
             }
             .padding(22)
             Divider()
 
-            if model.trashItems.isEmpty {
+            if model.trashItems.isEmpty && (model.isLoading || model.loadingOperations.contains(.refresh)) {
+                NativeLoadingPlaceholder(title: NativeLocalization.text("正在加载…"))
+            } else if model.trashItems.isEmpty {
                 EmptyState(
                     title: "回收站是空的",
                     message: "删除的文章和微博会先出现在这里。",
@@ -36,6 +38,7 @@ struct TrashView: View {
                         onRestore: { model.restoreTrash(item) },
                         onPermanentDelete: { confirmPermanentDelete(item) }
                     )
+                    .disabled(model.loadingOperations.contains(.trash))
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 7, leading: 18, bottom: 7, trailing: 18))
                 }

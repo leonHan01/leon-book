@@ -59,6 +59,16 @@ LEON_BOOK_WORKDIR="$HOME/Documents/LeonBookData" ./scripts/leonblog open
 
 命令面板支持最近使用和固定命令，可在“设置 → 命令与快捷键”中调整快捷键。搜索支持 `tag:写作`、`status:draft`、`type:article`、`[属性名:值]` 等筛选条件。
 
+### 文章导出与分享
+
+在文章阅读页点击“导出与分享”，或从文章库顶部打开同名入口。文章库入口会带入当前筛选结果，可继续筛选、全选或勾选文章。
+
+- **PDF**：A4 自动分页，保留标题、正文、图片、表格和代码。
+- **独立 HTML**：内嵌图片及音视频等媒体，单个文件可以离线阅读；内嵌媒体总量上限为 256 MB，较大的内容请使用文章包。
+- **文章包**：ZIP 内包含 HTML、原始本地附件与目录页；解压后打开 `index.html` 即可浏览。
+
+批量 PDF 和 HTML 同样输出 ZIP，每篇文章为独立文件；批量 HTML 和文章包中的已导出文章链接会改写为相对链接。可选择是否包含分类、标签、更新时间和摘要。远程图片及媒体需要在导出时联网下载，网页嵌入转换为来源链接。导出读取已保存内容；找不到附件时提示错误，取消或失败不会覆盖已有导出。完成后可在访达中查看或使用系统分享菜单。
+
 ## 软件截图
 
 以下为仓库内的产品演示截图，使用独立工作区中的示例数据，展示写作、内容关联和时间线等界面；布局可能与当前版本不同。
@@ -93,6 +103,10 @@ LEON_BOOK_WORKDIR="$HOME/Documents/LeonBookData" ./scripts/leonblog open
 | `./scripts/leonblog help` | 查看命令帮助 |
 
 `open`、`start`、`restart`、`build` 均支持 `--debug` 和 `--release`。Debug 在可用时采用 native 构建引擎，缓存与常规 Release 构建分开；自动选择时若该引擎不可用，会回退到工具链默认引擎。可设置 `LEON_BOOK_BUILD_SYSTEM=default` 显式使用工具链默认引擎。每种构建配置首次使用时需要建立缓存。
+
+仅修改文章编辑器的 `RichArticle*.js`、`RichArticle*.css` 或 `RichArticleEditor.html` 时，`open` / `restart` 会复用现有程序，只更新资源并重新签名，跳过 Swift 编译。内容清单同时检测新增、删除和时间戳未改变的修改；Swift、构建配置或其他资源变化仍正常构建，`build` 始终强制走 Swift 构建。旧应用首次使用新流程需构建一次以建立清单。
+
+构建缓存位于 `~/Library/Caches/leon-book/<项目标识>/`，按引擎、测试、覆盖率和性能检查隔离，不再依赖临时目录。可用 `LEON_BOOK_BUILD_CACHE_DIR` 指定缓存父目录。切换到新目录后首次构建需要预热；不会搬运包含绝对路径的旧 Swift 缓存。
 
 ## 数据与备份
 

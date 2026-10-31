@@ -26,6 +26,7 @@ struct MomentCommentsView: View {
             HStack {
                 Label("微博评论", nativeIcon: "text.bubble")
                     .font(.headline)
+                if isLoading || isMutating { ProgressView().controlSize(.small) }
                 Text("\(comments.count)")
                     .foregroundStyle(.secondary)
                 Spacer()

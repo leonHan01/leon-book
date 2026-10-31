@@ -16,8 +16,8 @@ struct RichArticleEditor: NSViewRepresentable {
     var fontSize: CGFloat = 18
     var store: LocalBlogStore? = nil
     var sourceRelativePath: String? = nil
-    var onImportAudio: ((URL) async throws -> NativeMedia)? = nil
-    var onAudioInserted: ((NativeMedia) -> Void)? = nil
+    var onImportMedia: ((URL) async throws -> NativeMedia)? = nil
+    var onMediaInserted: ((NativeMedia) -> Void)? = nil
     var onHeightChange: ((CGFloat) -> Void)? = nil
     var onOpenLink: ((URL) -> Void)? = nil
     var onSelectText: ((String) -> Void)? = nil
@@ -38,8 +38,14 @@ struct RichArticleEditor: NSViewRepresentable {
               let boardScript = try? String(contentsOf: boardURL, encoding: .utf8) else { return "" }
         guard let audioURL = Bundle.leonBookResources.url(forResource: "RichArticleAudio", withExtension: "js"),
               let audioScript = try? String(contentsOf: audioURL, encoding: .utf8) else { return "" }
+        guard let columnsURL = Bundle.leonBookResources.url(forResource: "RichArticleColumns", withExtension: "js"),
+              let columnsStyleURL = Bundle.leonBookResources.url(forResource: "RichArticleColumns", withExtension: "css"),
+              let columnsScript = try? String(contentsOf: columnsURL, encoding: .utf8),
+              let columnsStyle = try? String(contentsOf: columnsStyleURL, encoding: .utf8) else { return "" }
         return html.replacingOccurrences(of: "/* editor-interactions-script */", with: script)
             .replacingOccurrences(of: "/* editor-interactions-style */", with: style)
+            .replacingOccurrences(of: "/* editor-columns-script */", with: columnsScript)
+            .replacingOccurrences(of: "/* editor-columns-style */", with: columnsStyle)
             .replacingOccurrences(of: "/* editor-caret-script */", with: caretScript)
             .replacingOccurrences(of: "/* editor-caret-style */", with: caretStyle)
             .replacingOccurrences(of: "/* editor-whiteboards-script */", with: boardScript)
@@ -56,7 +62,9 @@ struct RichArticleEditor: NSViewRepresentable {
         let media = RichArticleMediaHandler(store: store, sourceRelativePath: sourceRelativePath)
         configuration.setURLSchemeHandler(media, forURLScheme: "leonmedia")
         context.coordinator.mediaHandler = media
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = NativeLoadingWebView(frame: .zero, configuration: configuration)
+        view.waitsForContent = true
+        view.beginContentLoading()
         view.setValue(false, forKey: "drawsBackground")
         view.navigationDelegate = context.coordinator
         view.loadHTMLString(Self.pageHTML, baseURL: nil)
@@ -77,14 +85,27 @@ struct RichArticleEditor: NSViewRepresentable {
         view.configuration.userContentController.removeScriptMessageHandler(forName: "richArticle")
         view.navigationDelegate = nil
         view.stopLoading()
+        (view as? NativeLoadingWebView)?.cancelLoadingFeedback()
         coordinator.mediaHandler?.cancelAll()
+        coordinator.cancelImageRequests()
         coordinator.closeWhiteboard()
     }
 
     @MainActor final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-        var parent: RichArticleEditor
+        var parent: RichArticleEditor {
+            didSet {
+                if parent.documentID != oldValue.documentID || parent.store !== oldValue.store
+                    || !parent.isEditable {
+                    cancelImageRequests()
+                }
+            }
+        }
         var mediaHandler: RichArticleMediaHandler?
-        var audioDropPasteboard = NSPasteboard(name: .drag)
+        var mediaDropPasteboard = NSPasteboard(name: .drag)
+        var imagePasteboard = NSPasteboard.general
+        var imageLoader = RichArticleImageLoader.shared
+        private var imageTasks: [UUID: Task<Void, Never>] = [:]
+        private var imageGeneration = UUID()
         private var isReady = false
         private var lastBody: String?
         private var lastID: String?
@@ -96,6 +117,8 @@ struct RichArticleEditor: NSViewRepresentable {
         private var whiteboardRequestID: String?
 
         init(parent: RichArticleEditor) { self.parent = parent }
+
+        deinit { imageTasks.values.forEach { $0.cancel() } }
 
         func synchronize(_ webView: WKWebView) {
             guard isReady else { return }
@@ -111,6 +134,9 @@ struct RichArticleEditor: NSViewRepresentable {
             let html = RichArticleDocument.convertingLegacyBody(parent.html)
             guard lastBody != html || lastID != parent.documentID
                 || lastEditable != parent.isEditable || lastFontSize != parent.fontSize else { return }
+            let changesDocument = lastID != parent.documentID
+            let loadingView = webView as? NativeLoadingWebView
+            let loadingID = changesDocument ? loadingView?.beginContentLoading() : loadingView?.loadingRequestID
             lastBody = html
             lastID = parent.documentID
             lastEditable = parent.isEditable
@@ -119,7 +145,13 @@ struct RichArticleEditor: NSViewRepresentable {
                 "return window.LeonArticle.load(body, id, editable, size)",
                 arguments: ["body": html, "id": parent.documentID, "editable": parent.isEditable, "size": parent.fontSize],
                 in: nil, in: .page
-            ) { _ in }
+            ) { [weak loadingView] result in
+                guard let loadingView, loadingView.loadingRequestID == loadingID else { return }
+                switch result {
+                case .success: loadingView.finishContentLoading(loadingID)
+                case .failure: loadingView.showLoadingFailure(NativeLocalization.text("内容加载失败，请重新打开。"))
+                }
+            }
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -136,15 +168,15 @@ struct RichArticleEditor: NSViewRepresentable {
                 guard parent.isEditable, let requestID = payload["requestID"] as? String,
                       let view = message.webView else { return }
                 chooseAudio(requestID: requestID, in: view)
-            case "dropAudio":
+            case "dropMedia":
                 guard parent.isEditable, let requestID = payload["requestID"] as? String,
                       let names = payload["names"] as? [String], let view = message.webView else { return }
-                guard let urls = NativeArticleAudioDrop.fileURLs(from: audioDropPasteboard, matching: names) else {
+                guard let urls = NativeArticleMediaDrop.fileURLs(from: mediaDropPasteboard, matching: names) else {
                     cancelAudio(requestID: requestID, in: view)
-                    showAudioError(NativeLocalization.text("无法读取拖入的 MP3 文件，请从访达重新拖入，或使用“插入音频”按钮。"), in: view)
+                    showMediaError(NativeLocalization.text("无法读取拖入的媒体文件，请从访达重新拖入。"), in: view)
                     return
                 }
-                insertAudio(urls: urls, requestID: requestID, in: view)
+                insertMedia(urls: urls, requestID: requestID, in: view)
             case "editWhiteboard":
                 guard parent.isEditable, let requestID = payload["requestID"] as? String,
                       let source = payload["source"] as? String, let view = message.webView else { return }
@@ -165,11 +197,8 @@ struct RichArticleEditor: NSViewRepresentable {
             case "pasteImage":
                 guard parent.isEditable, let requestID = payload["requestID"] as? String,
                       let view = message.webView else { return }
-                let sources = RichArticleClipboard.imageDataURL(from: .general).map { [$0] } ?? []
-                view.callAsyncJavaScript(
-                    "return window.LeonArticle.insertPastedImages(requestID, sources)",
-                    arguments: ["requestID": requestID, "sources": sources], in: nil, in: .page
-                ) { _ in }
+                insertImage(from: .clipboard(RichArticleClipboard.imageData(from: imagePasteboard)),
+                            requestID: requestID, replacing: false, in: view)
             case "chooseImage":
                 guard parent.isEditable, let requestID = payload["requestID"] as? String,
                       let view = message.webView else { return }
@@ -177,15 +206,13 @@ struct RichArticleEditor: NSViewRepresentable {
                 panel.title = NativeLocalization.text("替换图片")
                 panel.allowedContentTypes = [.png, .jpeg, .gif, .tiff, .webP, .bmp]
                 panel.allowsMultipleSelection = false
-                let source: String
-                if panel.runModal() == .OK, let url = panel.url,
-                   let data = try? Data(contentsOf: url), let image = RichArticleClipboard.imageDataURL(from: data) {
-                    source = image
-                } else { source = "" }
-                view.callAsyncJavaScript(
-                    "return window.LeonArticle.completeImageReplacement(requestID, source)",
-                    arguments: ["requestID": requestID, "source": source], in: nil, in: .page
-                ) { _ in }
+                let generation = imageGeneration
+                let response = panel.runModal()
+                guard generation == imageGeneration else { return }
+                let source: RichArticleImageLoader.Source
+                if response == .OK, let url = panel.url { source = .file(url) }
+                else { source = .clipboard([]) }
+                insertImage(from: source, requestID: requestID, replacing: true, in: view)
             case "requestLink":
                 guard parent.isEditable, let view = message.webView else { return }
                 let alert = NSAlert()
@@ -201,6 +228,40 @@ struct RichArticleEditor: NSViewRepresentable {
             }
         }
 
+        func cancelImageRequests() {
+            imageGeneration = UUID()
+            imageTasks.values.forEach { $0.cancel() }
+            imageTasks.removeAll()
+        }
+
+        @discardableResult
+        func insertImage(from source: RichArticleImageLoader.Source, requestID: String, replacing: Bool,
+                         in view: WKWebView) -> Task<Void, Never> {
+            let token = UUID(), generation = imageGeneration
+            let documentID = parent.documentID, store = parent.store, loader = imageLoader
+            let task = Task(priority: .userInitiated) { [weak self, weak view] in
+                let image = try? await loader.imageDataURL(from: source)
+                guard let self else { return }
+                defer { self.imageTasks.removeValue(forKey: token) }
+                guard !Task.isCancelled, let view, self.imageGeneration == generation,
+                      self.parent.documentID == documentID, self.parent.isEditable,
+                      self.parent.store === store, view.navigationDelegate === self else { return }
+                if replacing {
+                    view.callAsyncJavaScript(
+                        "return window.LeonArticle.completeImageReplacement(requestID, source)",
+                        arguments: ["requestID": requestID, "source": image ?? ""], in: nil, in: .page
+                    ) { _ in }
+                } else {
+                    view.callAsyncJavaScript(
+                        "return window.LeonArticle.insertPastedImages(requestID, sources)",
+                        arguments: ["requestID": requestID, "sources": image.map { [$0] } ?? []], in: nil, in: .page
+                    ) { _ in }
+                }
+            }
+            imageTasks[token] = task
+            return task
+        }
+
         func closeWhiteboard() {
             whiteboardRequestID = nil
             whiteboard?.finish()
@@ -208,7 +269,7 @@ struct RichArticleEditor: NSViewRepresentable {
         }
 
         private func chooseAudio(requestID: String, in view: WKWebView) {
-            guard parent.store != nil, parent.onImportAudio != nil else { cancelAudio(requestID: requestID, in: view); return }
+            guard parent.store != nil, parent.onImportMedia != nil else { cancelAudio(requestID: requestID, in: view); return }
             let panel = NSOpenPanel()
             panel.title = NativeLocalization.text("插入音频")
             panel.message = NativeLocalization.text("选择一个 MP3 音频，插入文章后可直接播放。")
@@ -216,22 +277,22 @@ struct RichArticleEditor: NSViewRepresentable {
             panel.canChooseDirectories = false
             panel.allowsMultipleSelection = false
             guard panel.runModal() == .OK, let url = panel.url else { cancelAudio(requestID: requestID, in: view); return }
-            insertAudio(urls: [url], requestID: requestID, in: view)
+            insertMedia(urls: [url], requestID: requestID, in: view)
         }
 
         private func cancelAudio(requestID: String, in view: WKWebView) {
             view.callAsyncJavaScript("window.LeonArticle.cancelAudio(requestID)", arguments: ["requestID": requestID], in: nil, in: .page) { _ in }
         }
 
-        private func showAudioError(_ message: String, in view: WKWebView) {
+        private func showMediaError(_ message: String, in view: WKWebView) {
             let alert = NSAlert()
-            alert.messageText = NativeLocalization.text("无法插入音频")
+            alert.messageText = NativeLocalization.text("无法插入媒体")
             alert.informativeText = message
             if let window = view.window { alert.beginSheetModal(for: window) { _ in } }
         }
 
-        private func insertAudio(urls: [URL], requestID: String, in view: WKWebView) {
-            guard let store = parent.store, let importAudio = parent.onImportAudio else { cancelAudio(requestID: requestID, in: view); return }
+        private func insertMedia(urls: [URL], requestID: String, in view: WKWebView) {
+            guard let store = parent.store, let importMedia = parent.onImportMedia else { cancelAudio(requestID: requestID, in: view); return }
             let documentID = parent.documentID
             Task { [weak self, weak view] in
                 guard let self, let view else { return }
@@ -244,24 +305,24 @@ struct RichArticleEditor: NSViewRepresentable {
                 do {
                     for url in urls {
                         guard isCurrent() else { throw CancellationError() }
-                        imported.append(try await importAudio(url))
+                        imported.append(try await importMedia(url))
                     }
                     guard isCurrent() else { throw CancellationError() }
                     let result = try await view.callAsyncJavaScript(
-                        "return window.LeonArticle.completeAudios(requestID, items) ? window.LeonArticle.serialize() : null",
-                        arguments: ["requestID": requestID, "items": imported.map { ["source": $0.url, "title": $0.name] }], in: nil, contentWorld: .page
+                        "return window.LeonArticle.completeMedia(requestID, items) ? window.LeonArticle.serialize() : null",
+                        arguments: ["requestID": requestID, "items": imported.map { ["source": $0.url, "title": $0.name, "kind": $0.kind] }], in: nil, contentWorld: .page
                     )
                     guard isCurrent(), let body = result as? String, RichArticleDocument.isHTML(body) else {
-                        throw NativeStoreError.fileSystem(NativeLocalization.text("文章中的插入位置已改变，请重新插入音频。"))
+                        throw NativeStoreError.fileSystem(NativeLocalization.text("文章中的插入位置已改变，请重新插入媒体。"))
                     }
                     lastBody = body
                     parent.html = body
-                    for media in imported { parent.onAudioInserted?(media) }
+                    for media in imported { parent.onMediaInserted?(media) }
                 } catch {
                     try? await store.discardUnreferencedMedia(imported)
                     guard isCurrent() else { return }
                     cancelAudio(requestID: requestID, in: view)
-                    showAudioError(error.localizedDescription, in: view)
+                    showMediaError(error.localizedDescription, in: view)
                 }
             }
         }
@@ -337,12 +398,9 @@ struct RichArticleEditor: NSViewRepresentable {
 enum RichArticleClipboard {
     /// WebKit exposes most clipboard images as PNG files. macOS screenshots and
     /// copied images can also arrive as TIFF without a browser-readable file.
-    static func imageDataURL(from pasteboard: NSPasteboard) -> String? {
+    @MainActor static func imageData(from pasteboard: NSPasteboard) -> [Data] {
         let types: [NSPasteboard.PasteboardType] = [.png, .tiff, .init("public.jpeg"), .init("com.compuserve.gif"), .init("org.webmproject.webp"), .init("com.microsoft.bmp")]
-        for type in types {
-            if let data = pasteboard.data(forType: type), let result = imageDataURL(from: data) { return result }
-        }
-        return nil
+        return types.compactMap { pasteboard.data(forType: $0) }
     }
 
     static func imageDataURL(from data: Data) -> String? {

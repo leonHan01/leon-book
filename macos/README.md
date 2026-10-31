@@ -139,7 +139,9 @@ Requirements: macOS 13 or later and Swift 5.10 or later. From the project root, 
 ./scripts/leonblog restart
 ```
 
-`restart` gracefully quits the running app, waits for it to exit, and relaunches it. Like `open`, it only compiles, packages, and signs when sources, resources, or build scripts have changed, or a required executable/resource bundle is missing. Use `build` to force a build. The built app is located at `macos/dist/leon-book.app` and uses ad-hoc signing for local use.
+`restart` gracefully quits the running app, waits for it to exit, and relaunches it. Like `open`, it compares content manifests and skips updates when nothing changed. Changes limited to editor `RichArticle*.js`, `RichArticle*.css`, and `RichArticleEditor.html` only copy resources and re-sign, without compiling Swift. Other input changes or missing executables/resource bundles use a normal build. Use `build` to force compilation. The built app is located at `macos/dist/leon-book.app` and uses ad-hoc signing for local use.
+
+All build entry points use `~/Library/Caches/leon-book`, isolated by checkout path, engine, and test purpose. Set `LEON_BOOK_BUILD_CACHE_DIR` to override the parent directory. Existing apps need one normal build to establish an input manifest and populate the new cache. Old temporary caches stay in place because compiled artifacts contain absolute paths. Resource updates use a private staged copy; signing/copy failures preserve the installed app, and edits made during an update remain detectable on the next run.
 
 `restart` uses Debug incremental compilation by default to shorten the edit/build loop. The first Debug build populates a separate configuration cache and can still take time. Use `restart --release` for the optimized runtime, or `build` to produce Release without launching. `open` and `start` reuse the installed configuration; all four commands accept `--debug` and `--release`, or the `LEON_BOOK_BUILD_CONFIGURATION` environment variable. Build output reports compilation and packaging/signing time separately.
 

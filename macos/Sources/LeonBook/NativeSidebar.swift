@@ -4,7 +4,7 @@ struct NativeSidebar: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
-    @ObservedObject var navigation: NativeNavigationState
+    let section: NativeSection
     @Binding var isPresentingNewUser: Bool
     @State private var expandedWorkspaceFolderIDs = Set<String>()
     @State private var selectedWorkspaceResourceIDs = Set<String>()
@@ -15,13 +15,13 @@ struct NativeSidebar: View {
 
             ScrollViewReader { proxy in
                 List {
-                    if navigation.section == .mediaLibrary {
+                    if section == .mediaLibrary {
                         let library = model.mediaLibrary
                         NativeMediaLibrarySidebar(library: library) {
                             guard model.store === library.store else { return }
                             model.scheduleBackup()
                         }
-                    } else if navigation.section.showsArticleDirectory {
+                    } else if section.showsArticleDirectory {
                         articleSections
                     }
                 }
@@ -30,7 +30,7 @@ struct NativeSidebar: View {
                 .labelStyle(NativeSidebarLabelStyle())
                 .scrollContentBackground(.hidden)
                 .onAppear { revealSelectedArticle(model.selectedSlug, proxy: proxy) }
-                .onChange(of: navigation.section) { _ in revealSelectedArticle(model.selectedSlug, proxy: proxy) }
+                .onChange(of: section) { _ in revealSelectedArticle(model.selectedSlug, proxy: proxy) }
                 .onChange(of: model.selectedSlug) { revealSelectedArticle($0, proxy: proxy) }
                 .onChange(of: model.workspaceResources) { _ in
                     let liveIDs = Set(model.workspaceResourceItems.map(\.id))
@@ -100,7 +100,7 @@ struct NativeSidebar: View {
     }
 
     private func revealSelectedArticle(_ slug: String?, proxy: ScrollViewProxy) {
-        guard navigation.section.showsArticleDirectory else { return }
+        guard section.showsArticleDirectory else { return }
         guard let slug, let resourceID = model.workspaceResourceID(articleSlug: slug) else { return }
         expandedWorkspaceFolderIDs.formUnion(model.workspaceResourceAncestorIDs(resourceID: resourceID))
         selectedWorkspaceResourceIDs = [resourceID]

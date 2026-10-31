@@ -2,7 +2,8 @@
 set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 MACOS_DIR="${SCRIPT_DIR:h}"
-BUILD_ROOT="${TMPDIR:-/tmp/}leon-book-swiftpm-tests"
+source "${SCRIPT_DIR}/swift-cache.sh"
+BUILD_ROOT="$(leonbook_build_root tests)"
 CLI="${BUILD_ROOT}/scratch/debug/LeonBookCLI"
 
 if [[ ! -x "${CLI}" || "${MACOS_DIR}/Package.swift" -nt "${CLI}" ]] || \

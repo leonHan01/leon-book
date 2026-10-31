@@ -1,7 +1,31 @@
 import SwiftUI
 
+/// Rounds the workspace's junction with the title bar and navigation rail.
+struct NativeWorkspaceSurfaceShape: Shape {
+    static let cornerRadius: CGFloat = 12
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(Self.cornerRadius, min(rect.width, rect.height) / 2)
+        return Path { path in
+            path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX + radius, y: rect.minY),
+                control: CGPoint(x: rect.minX, y: rect.minY)
+            )
+            path.closeSubpath()
+        }
+    }
+}
+
 /// Global destinations stay available when the article sidebar is collapsed.
 struct NativeWorkspaceRail: View {
+    /// Space for the compact title bar, including when its toolbar is absent.
+    static let titlebarClearance: CGFloat = 38
+
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
@@ -34,7 +58,10 @@ struct NativeWorkspaceRail: View {
         .frame(width: 52)
         .background(appPalette.rail)
         .overlay(alignment: .trailing) {
-            appPalette.border.frame(width: 1).allowsHitTesting(false)
+            appPalette.border
+                .frame(width: 1)
+                .padding(.top, NativeWorkspaceSurfaceShape.cornerRadius)
+                .allowsHitTesting(false)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("主导航")

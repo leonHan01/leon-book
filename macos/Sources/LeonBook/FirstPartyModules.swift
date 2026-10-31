@@ -318,6 +318,8 @@ extension NativeAppModel {
     }
 
     func reloadKnowledgeGraph() async throws {
+        let loadingID = loadingOperations.begin(.graph)
+        defer { loadingOperations.end(loadingID) }
         guard isKnowledgeGraphModuleEnabled else {
             articleGraph = .empty
             return

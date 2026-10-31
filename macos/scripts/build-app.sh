@@ -25,12 +25,8 @@ case "${BUILD_SYSTEM}" in
     *) print -u2 -- "Invalid build system: ${BUILD_SYSTEM} (expected default, native or swiftbuild)"; exit 2 ;;
 esac
 APP_BUNDLE="${MACOS_DIR}/dist/${APP_NAME}.app"
-BUILD_ROOT="${TMPDIR%/}/leon-book-swiftpm"
-if [[ "${BUILD_SYSTEM}" != default ]]; then
-    # Keep the local native edit/build loop independent of Release/toolchain
-    # builds, including their SwiftPM lock and module cache.
-    BUILD_ROOT="${BUILD_ROOT}-${BUILD_SYSTEM}"
-fi
+source "${SCRIPT_DIR}/swift-cache.sh"
+BUILD_ROOT="$(leonbook_build_root "${BUILD_SYSTEM}")"
 
 mkdir -p "${BUILD_ROOT}/cache" "${BUILD_ROOT}/config" "${BUILD_ROOT}/security" "${BUILD_ROOT}/scratch" "${BUILD_ROOT}/modules"
 export CLANG_MODULE_CACHE_PATH="${BUILD_ROOT}/modules"
@@ -40,10 +36,74 @@ BUILD_INFO="$(mktemp "${BUILD_ROOT}/build-info.XXXXXX")"
 STAGING_ROOT="$(mktemp -d "${BUILD_ROOT}/staging.XXXXXX")"
 STAGING_APP="${STAGING_ROOT}/${APP_NAME}.app"
 CONTENTS_DIR="${STAGING_APP}/Contents"
-trap 'rm -f "${BUILD_INFO}"; rm -rf "${STAGING_ROOT}"' EXIT
+INPUT_STATE="${STAGING_ROOT}/build-inputs.json"
+# zsh's errexit inside a function does not run the top-level EXIT trap.
+trap 'rm -f "${BUILD_INFO}"; rm -rf "${STAGING_ROOT}"' EXIT ZERR
 print -r -- "${BUILD_CONFIGURATION}" > "${BUILD_INFO}"
 BUILD_STARTED_AT=$SECONDS
+python3 "${SCRIPT_DIR}/build-state.py" capture "${MACOS_DIR}" "${INPUT_STATE}"
+
+acquire_publish_lock() {
+    mkdir -p "${MACOS_DIR}/dist"
+    # The destination owns the lock, regardless of TMPDIR or cache overrides.
+    local lock_file="${MACOS_DIR}/dist/.leonbook-publish.lock"
+    touch "${lock_file}"
+    zmodload zsh/system
+    zsystem flock -t 30 -f PUBLISH_LOCK_FD "${lock_file}"
+}
+
+sign_and_publish() {
+    python3 "${SCRIPT_DIR}/build-state.py" sync-editor "${MACOS_DIR}" "${STAGING_APP}" "${INPUT_STATE}"
+    COPYFILE_DISABLE=1 cp "${INPUT_STATE}" "${CONTENTS_DIR}/Resources/leonbook-build-inputs.json"
+    COPYFILE_DISABLE=1 cp -p "${BUILD_INFO}" "${CONTENTS_DIR}/Resources/leonbook-build-configuration"
+    codesign --force --sign - --timestamp=none "${STAGING_APP}"
+    codesign --verify --deep --strict "${STAGING_APP}"
+
+    [[ -n "${PUBLISH_LOCK_FD:-}" ]] || acquire_publish_lock
+    # Copy and verify on the destination volume before replacing the old app.
+    local install_root
+    install_root="$(mktemp -d "${MACOS_DIR}/dist/.leonbook-install.XXXXXX")"
+    if ! COPYFILE_DISABLE=1 ditto --norsrc --noextattr --noqtn --noacl "${STAGING_APP}" "${install_root}/${APP_NAME}.app" || \
+        ! codesign --verify --deep --strict "${install_root}/${APP_NAME}.app"; then
+        rm -rf "${install_root}"
+        return 1
+    fi
+    [[ ! -e "${APP_BUNDLE}" ]] || mv "${APP_BUNDLE}" "${install_root}/previous.app"
+    if ! mv "${install_root}/${APP_NAME}.app" "${APP_BUNDLE}"; then
+        [[ ! -e "${install_root}/previous.app" ]] || mv "${install_root}/previous.app" "${APP_BUNDLE}"
+        rm -rf "${install_root}"
+        return 1
+    fi
+    rm -rf "${install_root}"
+    zsystem flock -u "${PUBLISH_LOCK_FD}"
+    unset PUBLISH_LOCK_FD
+}
+
+if [[ "${LEON_BOOK_FORCE_SWIFT_BUILD:-0}" != 1 ]] && \
+    [[ "$(python3 "${SCRIPT_DIR}/build-state.py" status "${MACOS_DIR}" "${APP_BUNDLE}" "${BUILD_CONFIGURATION}" "${BUILD_SYSTEM}" "${INPUT_STATE}")" == resources ]]; then
+    # Keep the source app stable while copying it; another engine may be publishing.
+    acquire_publish_lock
+    python3 "${SCRIPT_DIR}/build-state.py" capture "${MACOS_DIR}" "${INPUT_STATE}"
+    LOCKED_STATUS="$(python3 "${SCRIPT_DIR}/build-state.py" status "${MACOS_DIR}" "${APP_BUNDLE}" "${BUILD_CONFIGURATION}" "${BUILD_SYSTEM}" "${INPUT_STATE}")"
+    if [[ "${LOCKED_STATUS}" == unchanged ]]; then
+        zsystem flock -u "${PUBLISH_LOCK_FD}"
+        print -- '[INFO] 另一构建已更新应用，无需重复更新。'
+        exit 0
+    fi
+    if [[ "${LOCKED_STATUS}" == resources ]] && \
+        codesign --verify --deep --strict "${APP_BUNDLE}"; then
+        print -- '[INFO] 仅编辑器资源变化，更新资源并重新签名，跳过 Swift 编译…'
+        COPYFILE_DISABLE=1 cp -R "${APP_BUNDLE}" "${STAGING_APP}"
+        sign_and_publish
+        print -- "[INFO] 编辑器资源更新完成（耗时 $((SECONDS - BUILD_STARTED_AT)) 秒）。"
+        exit 0
+    fi
+    zsystem flock -u "${PUBLISH_LOCK_FD}"
+    unset PUBLISH_LOCK_FD
+fi
+
 print -- "[INFO] Swift ${BUILD_CONFIGURATION} 构建（${BUILD_SYSTEM} 引擎）…"
+print -- "[INFO] 构建缓存：${BUILD_ROOT}"
 
 source "${SCRIPT_DIR}/swift-sdk.sh"
 
@@ -75,7 +135,6 @@ COPYFILE_DISABLE=1 cp "${BIN_PATH}/${EXECUTABLE_NAME}" "${CONTENTS_DIR}/MacOS/${
 COPYFILE_DISABLE=1 cp "${BIN_PATH}/LeonBookCLI" "${CONTENTS_DIR}/MacOS/LeonBookCLI"
 COPYFILE_DISABLE=1 cp "${MACOS_DIR}/Resources/Info.plist" "${CONTENTS_DIR}/Info.plist"
 COPYFILE_DISABLE=1 cp "${MACOS_DIR}/Resources/Notes.icns" "${CONTENTS_DIR}/Resources/Notes.icns"
-COPYFILE_DISABLE=1 cp -p "${BUILD_INFO}" "${CONTENTS_DIR}/Resources/leonbook-build-configuration"
 print -r -- "${BUILD_SYSTEM}" > "${CONTENTS_DIR}/Resources/leonbook-build-system"
 for LOCALIZATION_DIR in "${MACOS_DIR}/Sources/LeonBook/Resources/"*.lproj; do
     [[ -d "${LOCALIZATION_DIR}" ]] || continue
@@ -87,21 +146,7 @@ else
     print -u2 -- "Missing SwiftPM resource bundle: ${BIN_PATH}/LeonBookMac_LeonBook.bundle"
     exit 1
 fi
-codesign --force --sign - --timestamp=none "${STAGING_APP}"
-codesign --verify --deep --strict "${STAGING_APP}"
-
-mkdir -p "${MACOS_DIR}/dist"
-# Only publishing is serialized across engines; compilation uses independent
-# caches. The OS releases this lock even if the shell is interrupted.
-PUBLISH_LOCK="${TMPDIR%/}/leon-book-swiftpm-publish.lock"
-touch "${PUBLISH_LOCK}"
-zmodload zsh/system
-zsystem flock -t 30 -f PUBLISH_LOCK_FD "${PUBLISH_LOCK}"
-rm -rf "${APP_BUNDLE}"
-COPYFILE_DISABLE=1 ditto --norsrc --noextattr --noqtn --noacl "${STAGING_APP}" "${APP_BUNDLE}"
-find "${APP_BUNDLE}" -name '._*' -delete
-codesign --verify --deep --strict "${APP_BUNDLE}"
-zsystem flock -u "${PUBLISH_LOCK_FD}"
+sign_and_publish
 
 print -- "[INFO] 打包与签名完成（耗时 $((SECONDS - PACKAGING_STARTED_AT)) 秒）。"
 echo "Built ${APP_BUNDLE}"

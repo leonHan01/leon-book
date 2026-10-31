@@ -20,7 +20,7 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
         self.onSave = onSave
         self.onClose = onClose
         let configuration = Self.configuration()
-        webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 760), configuration: configuration)
+        webView = NativeLoadingWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 760), configuration: configuration)
         let panel = NSPanel(contentRect: webView.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         panel.title = NativeLocalization.text("文章画板 · Excalidraw")
         panel.minSize = NSSize(width: 700, height: 500)
@@ -52,6 +52,9 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
         guard let window else { return }
         if let parent, parent.attachedSheet == nil { parent.beginSheet(window) }
         else { window.center(); showWindow(nil) }
+        let loadingView = webView as? NativeLoadingWebView
+        loadingView?.waitsForContent = true
+        loadingView?.beginContentLoading()
         webView.load(URLRequest(url: URL(string: "leonboard://app/index.html")!))
     }
 
@@ -61,14 +64,21 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
         switch type {
         case "ready":
             NativeWebLocalization.apply(NativeLocalization.currentLanguage, to: webView)
+            let loadingID = (webView as? NativeLoadingWebView)?.loadingRequestID
             webView.callAsyncJavaScript("window.LeonWhiteboard.load(scene)", arguments: ["scene": scene], in: nil, in: .page) { [weak self] result in
-                if case .failure(let error) = result { self?.showError(error.localizedDescription) }
+                if case .failure(let error) = result {
+                    (self?.webView as? NativeLoadingWebView)?.showLoadingFailure(error.localizedDescription)
+                    self?.showError(error.localizedDescription)
+                } else {
+                    (self?.webView as? NativeLoadingWebView)?.finishContentLoading(loadingID)
+                }
             }
         case "dirty": dirty = payload["value"] as? Bool ?? true
         case "cancel": requestClose()
         case "save":
             guard !saving, let source = payload["scene"] as? String, let preview = payload["preview"] as? String else { return }
             saving = true
+            (webView as? NativeLoadingWebView)?.beginContentLoading(title: NativeLocalization.text("正在保存…"))
             Task { [weak self] in
                 guard let self else { return }
                 do {
@@ -76,6 +86,7 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
                     finish()
                 } catch {
                     saving = false
+                    (webView as? NativeLoadingWebView)?.cancelLoadingFeedback()
                     showError(error.localizedDescription)
                 }
             }
@@ -105,6 +116,7 @@ final class ArticleWhiteboardWindow: NSWindowController, WKScriptMessageHandler,
         languageObserver = nil
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "whiteboard")
         webView.stopLoading()
+        (webView as? NativeLoadingWebView)?.cancelLoadingFeedback()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
         if let window {

@@ -5,6 +5,7 @@ struct ArticleHistoryView: View {
     @ObservedObject var model: NativeAppModel
     @Environment(\.dismiss) private var dismiss
     @State private var selectedRevisionID: Int?
+    @State private var hasRequestedHistory = false
 
     private var selectedRevision: NativeArticleRevision? {
         guard let selectedRevisionID else { return model.articleRevisions.first }
@@ -32,7 +33,9 @@ struct ArticleHistoryView: View {
 
             Divider()
 
-            if model.articleRevisions.isEmpty {
+            if model.articleRevisions.isEmpty && (!hasRequestedHistory || model.loadingOperations.contains(.history)) {
+                NativeLoadingPlaceholder(title: NativeLoadingOperations.Kind.history.title)
+            } else if model.articleRevisions.isEmpty {
                 EmptyState(
                     title: "还没有历史版本",
                     message: "停止输入 3 秒后会生成第一份自动保存；再次正式保存文章时，也会保留保存前的版本。",
@@ -63,9 +66,12 @@ struct ArticleHistoryView: View {
                 }
             }
         }
+        .nativeLoadingFeedback(model.loadingOperations.contains(.history) && !model.articleRevisions.isEmpty
+            ? NativeLoadingOperations.Kind.history.title : nil)
         .frame(minWidth: 980, minHeight: 640)
         .task {
             model.refreshArticleHistory()
+            hasRequestedHistory = true
             selectNewestRevisionIfNeeded()
         }
         .onChange(of: model.articleRevisions.map(\.id)) { _ in

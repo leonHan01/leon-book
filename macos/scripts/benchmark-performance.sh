@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 MACOS_DIR="${SCRIPT_DIR:h}"
-BUILD_ROOT="${TMPDIR%/}/leon-book-swiftpm-performance"
+source "${SCRIPT_DIR}/swift-cache.sh"
+BUILD_ROOT="$(leonbook_build_root performance)"
 
 mkdir -p \
     "${BUILD_ROOT}/cache" \

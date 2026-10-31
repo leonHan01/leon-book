@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 public struct ContentView: View {
@@ -21,6 +22,11 @@ public struct ContentView: View {
     public var body: some View {
         HStack(spacing: 0) {
             NativeWorkspaceRail(model: model, navigation: model.navigation)
+                // Optional toolbar items change the window's top safe area.
+                // Anchor global navigation to the window, with a stable inset
+                // below its title-bar controls, instead of following that area.
+                .padding(.top, NativeWorkspaceRail.titlebarClearance)
+                .ignoresSafeArea(.container, edges: .top)
 
             NativeNavigationWorkspace(
                 model: model,
@@ -31,7 +37,9 @@ public struct ContentView: View {
                 isPresentingNewUser: $isPresentingNewUser
             )
         }
+        .nativeLoadingFeedback(model.loadingFeedbackTitle)
         .frame(minWidth: 1_080, minHeight: 680)
+        .background(appPalette.rail)
         .toolbarBackground(appPalette.rail, for: .windowToolbar)
         .toolbarBackground(.visible, for: .windowToolbar)
         .disabled(model.isRestoringBackup)
@@ -241,38 +249,112 @@ private struct NativeNavigationWorkspace: View {
     @ObservedObject var readingPreferences: NativeReadingPreferences
     @ObservedObject var pageStateCache: NativeNavigationPageStateCache
     @Binding var isPresentingNewUser: Bool
+    @State private var isSidebarVisible = true
+    @State private var sidebarDragStart: Double?
+    @State private var isSidebarDividerHovered = false
 
     var body: some View {
-        if navigation.section.hasNavigationSidebar {
-            NavigationSplitView {
-                NativeSidebar(model: model, navigation: model.navigation, isPresentingNewUser: $isPresentingNewUser)
-                    .navigationSplitViewColumnWidth(
-                        min: 210,
-                        ideal: CGFloat(workspaceLayout.navigationSidebarWidth),
-                        max: 380
-                    )
-            } detail: {
-                detail
+        NativeDeferredNavigationContent(
+            request: NativeNavigationPageRequest(
+                section: navigation.section,
+                revision: navigation.revision,
+                workspaceGeneration: model.workspaceGeneration
+            ),
+            sidebarWidth: navigation.section.hasNavigationSidebar && isSidebarVisible
+                ? CGFloat(workspaceLayout.navigationSidebarWidth) : nil
+        ) { mountedRequest in
+            workspaceContent(for: mountedRequest.section)
+        }
+        .toolbar {
+            if navigation.section.hasNavigationSidebar {
+                ToolbarItem(placement: .navigation) {
+                    Button { isSidebarVisible.toggle() } label: {
+                        NativeIcon.image("sidebar.left", size: NativeIcon.Size.toolbar)
+                    }
+                    .help("导航侧栏")
+                    .accessibilityLabel("导航侧栏")
+                }
             }
-            .navigationSplitViewStyle(.balanced)
-        } else {
+        }
+        .onChange(of: navigation.section) { _ in sidebarDragStart = nil }
+    }
+
+    private func workspaceContent(for section: NativeSection) -> some View {
+        // These destinations do not use stack navigation. A stable SwiftUI
+        // shell avoids constructing and measuring a NavigationSplitView's
+        // AppKit controllers whenever the selected destination changes.
+        HStack(spacing: 0) {
+            if section.hasNavigationSidebar && isSidebarVisible {
+                NativeSidebar(model: model, section: section, isPresentingNewUser: $isPresentingNewUser)
+                    .frame(width: CGFloat(workspaceLayout.navigationSidebarWidth))
+                    .clipShape(NativeWorkspaceSurfaceShape())
+                sidebarDivider
+            }
+
             VStack(spacing: 0) {
-                NativeWorkspaceHeader(
-                    model: model,
-                    isPresentingNewUser: $isPresentingNewUser,
-                    showsWorkspaceStatus: true
-                )
-                .background(appPalette.sidebar)
-                Divider()
-                detail
+                if !section.hasNavigationSidebar {
+                    NativeWorkspaceHeader(
+                        model: model,
+                        isPresentingNewUser: $isPresentingNewUser,
+                        showsWorkspaceStatus: true
+                    )
+                    .background(appPalette.sidebar)
+                    .clipShape(NativeWorkspaceSurfaceShape())
+                    Divider()
+                }
+                detail(for: section)
             }
         }
     }
 
-    private var detail: some View {
+    private var sidebarDivider: some View {
+        Rectangle()
+            .fill(appPalette.sidebar)
+            .frame(width: 6)
+            .overlay { appPalette.border.frame(width: 1) }
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                guard hovering != isSidebarDividerHovered else { return }
+                isSidebarDividerHovered = hovering
+                if hovering { NSCursor.resizeLeftRight.push() }
+                else { NSCursor.pop() }
+            }
+            .onDisappear {
+                if isSidebarDividerHovered {
+                    NSCursor.pop()
+                    isSidebarDividerHovered = false
+                }
+                sidebarDragStart = nil
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        if sidebarDragStart == nil {
+                            sidebarDragStart = workspaceLayout.navigationSidebarWidth
+                        }
+                        let width = (sidebarDragStart ?? workspaceLayout.navigationSidebarWidth)
+                            + Double(value.translation.width)
+                        workspaceLayout.navigationSidebarWidth = min(max(width, 210), 380)
+                    }
+                    .onEnded { _ in sidebarDragStart = nil }
+            )
+            .accessibilityLabel("导航侧栏")
+            .accessibilityValue("\(Int(workspaceLayout.navigationSidebarWidth)) pt")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment:
+                    workspaceLayout.navigationSidebarWidth = min(workspaceLayout.navigationSidebarWidth + 10, 380)
+                case .decrement:
+                    workspaceLayout.navigationSidebarWidth = max(workspaceLayout.navigationSidebarWidth - 10, 210)
+                @unknown default: break
+                }
+            }
+    }
+
+    private func detail(for section: NativeSection) -> some View {
         NativeNavigationDetail(
             model: model,
-            navigation: navigation,
+            section: section,
             workspaceLayout: workspaceLayout,
             readingPreferences: readingPreferences,
             pageStateCache: pageStateCache
@@ -284,13 +366,13 @@ private struct NativeNavigationWorkspace: View {
 
 private struct NativeNavigationDetail: View {
     let model: NativeAppModel
-    @ObservedObject var navigation: NativeNavigationState
+    let section: NativeSection
     @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
     @ObservedObject var readingPreferences: NativeReadingPreferences
     @ObservedObject var pageStateCache: NativeNavigationPageStateCache
 
     var body: some View {
-        switch navigation.section {
+        switch section {
         case .dashboard: DashboardView(model: model).id(model.workspaceGeneration)
         case .articles: ArticleListView(model: model)
         case .graph: ArticleGraphView(model: model, pageState: pageStateCache.graph)
@@ -342,6 +424,7 @@ private struct NewUserSheet: View {
                     .foregroundStyle(.red)
             }
             HStack {
+                if model.isSwitchingWorkspace { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("取消") { isPresented = false }
                     .keyboardShortcut(.cancelAction)
@@ -352,6 +435,7 @@ private struct NewUserSheet: View {
         }
         .padding(24)
         .frame(width: 420)
+        .interactiveDismissDisabled(model.isSwitchingWorkspace)
     }
 
     private func createUser() {
@@ -369,8 +453,16 @@ struct ActivityHeatmapView: View {
     let activity: [NativeActivityDay]
     var showsTitle = true
 
-    private let cellSize: CGFloat = 12
+    @State private var heatmapWidth: CGFloat = 0
+
+    private let minimumCellSize: CGFloat = 12
     private let cellSpacing: CGFloat = 3
+
+    private func cellSize(weekCount: Int) -> CGFloat {
+        guard weekCount > 0 else { return minimumCellSize }
+        let availableCellsWidth = heatmapWidth - 18 - 8 - CGFloat(weekCount - 1) * cellSpacing
+        return max(minimumCellSize, availableCellsWidth / CGFloat(weekCount))
+    }
 
     private var total: Int { activity.reduce(0) { $0 + $1.count } }
 
@@ -398,7 +490,9 @@ struct ActivityHeatmapView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let heatmapWeeks = weeks
+        let size = cellSize(weekCount: heatmapWeeks.count)
+        return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
                     if showsTitle {
@@ -417,14 +511,14 @@ struct ActivityHeatmapView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 8) {
-                    weekdayLabels
+                    weekdayLabels(cellSize: size)
                     HStack(alignment: .top, spacing: cellSpacing) {
-                        ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                        ForEach(Array(heatmapWeeks.enumerated()), id: \.offset) { _, week in
                             VStack(spacing: cellSpacing) {
                                 ForEach(week) { day in
                                     RoundedRectangle(cornerRadius: 2)
                                         .fill(color(for: day.count))
-                                        .frame(width: cellSize, height: cellSize)
+                                        .frame(width: size, height: size)
                                         .opacity(day.tracked ? 1 : 0)
                                         .help(day.tracked ? Text(NativeLocalization.text("\(day.date)：\(day.count) 次创作活动")) : Text(""))
                                         .accessibilityLabel(day.tracked ? Text(NativeLocalization.text("\(day.date)，\(day.count) 次创作活动")) : Text(""))
@@ -435,6 +529,13 @@ struct ActivityHeatmapView: View {
                 }
                 .padding(.vertical, 2)
             }
+            .background {
+                GeometryReader { geometry in
+                    Color.clear
+                        .onAppear { heatmapWidth = geometry.size.width }
+                        .onChange(of: geometry.size.width) { heatmapWidth = $0 }
+                }
+            }
 
             HStack(spacing: 5) {
                 Spacer()
@@ -442,7 +543,7 @@ struct ActivityHeatmapView: View {
                 ForEach(0..<5, id: \.self) { level in
                     RoundedRectangle(cornerRadius: 2)
                         .fill(color(for: level == 4 ? 5 : level))
-                        .frame(width: cellSize, height: cellSize)
+                        .frame(width: minimumCellSize, height: minimumCellSize)
                 }
                 Text("多")
             }
@@ -452,7 +553,7 @@ struct ActivityHeatmapView: View {
         .padding(.vertical, 4)
     }
 
-    private var weekdayLabels: some View {
+    private func weekdayLabels(cellSize: CGFloat) -> some View {
         VStack(spacing: cellSpacing) {
             ForEach(Array(heatmapWeekdaySymbols.enumerated()), id: \.offset) { _, label in
                 Text(label)

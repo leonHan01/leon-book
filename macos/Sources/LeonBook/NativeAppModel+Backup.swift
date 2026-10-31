@@ -242,6 +242,8 @@ extension NativeAppModel {
     }
 
     func refreshBackupOverview() async {
+        let loadingID = loadingOperations.begin(.backupOverview)
+        defer { loadingOperations.end(loadingID) }
         guard authorizeFirstPartyModule(
             BackupFirstPartyModule.id,
             permission: .backupRead,

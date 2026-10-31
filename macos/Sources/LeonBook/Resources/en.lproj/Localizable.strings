@@ -1663,6 +1663,8 @@
 " · 冲突副本" = " · Conflict Copy";
 "选择一个 MP4 视频" = "Choose an MP4 Video";
 "微博视频仅支持 MP4 格式。" = "Post videos must use MP4 format.";
+"在正文中输入 #标签 添加标签；也可拖入 MP4 视频。" = "Type #tag in the text to add a tag; you can also drop MP4 videos here.";
+"可从访达拖入 MP4 视频" = "Drop MP4 videos from Finder";
 "发布动态" = "Publish Post";
 "无法读取剪贴板中的图片。" = "Could not read the image from the clipboard.";
 "[图片粘贴失败]" = "[Image paste failed]";
@@ -1890,9 +1892,11 @@
 "图片未能粘贴，请重试" = "The image could not be pasted. Try again.";
 "图片预览" = "Image Preview";
 "在此处添加一列" = "Add a Column Here";
+"在此处添加一行" = "Add a Row Here";
 "在画布中加载网页" = "Load Web Page in Canvas";
 "在画布中预览 PDF" = "Preview PDF in Canvas";
 "在第 %@、%@ 列之间添加一列" = "Add a column between columns %@ and %@";
+"在第 %@、%@ 行之间添加一行" = "Add a row between rows %@ and %@";
 "在表格底部添加一行" = "Add a Row at the Bottom of the Table";
 "复制" = "Duplicate";
 "如网页留白或拒绝嵌入，可点击卡片右上角在浏览器中打开。" = "If the page is blank or refuses embedding, use the card's top-right button to open it in your browser.";
@@ -2151,3 +2155,73 @@
 "恢复失败：%@" = "Restore failed: %@";
 "已在 %@ 篇文章中将“%@”重命名为“%@”" = "Renamed “%2$@” to “%3$@” in %1$@ articles";
 "画板未能加载，请关闭后重试。原画板数据没有改变。" = "The whiteboard could not load. Close it and try again. Your original drawing is unchanged.";
+"当前工作空间暂时不能插入媒体。" = "Media cannot be inserted into this workspace right now.";
+"请拖入图片、视频或 MP3 文件。" = "Drop image, video, or MP3 files.";
+"无法导入媒体。" = "Unable to import media.";
+"当前文章已改变，媒体未插入。" = "The current article changed. The media was not inserted.";
+"无法读取拖入的媒体文件，请从访达重新拖入。" = "Unable to read the dropped media files. Drag them again from Finder.";
+"无法插入媒体" = "Unable to Insert Media";
+"文章中的插入位置已改变，请重新插入媒体。" = "The insertion point in the article changed. Insert the media again.";
+"点击播放；选中媒体块后按 Delete 删除" = "Click to play; select the media block and press Delete to remove it";
+"正在导入媒体…" = "Importing media…";
+
+/* Article export */
+"独立 HTML" = "Standalone HTML";
+"文章包（HTML 与附件）" = "Article package (HTML and attachments)";
+"A4 分页排版，保留正文、图片、表格与代码。" = "A4 pagination with text, images, tables, and code.";
+"将图片与媒体内嵌到 HTML，单个文件即可离线阅读。" = "Embed images and media in one HTML file for offline reading.";
+"HTML 与原始附件一起打包为 ZIP，解压后打开 index.html。" = "Package HTML and original attachments in a ZIP. Extract it and open index.html.";
+"请至少选择一篇文章。" = "Select at least one article.";
+"文章排版失败，请检查图片是否完整后重试。" = "Article layout failed. Check that images are intact and try again.";
+"请选择资料库以外的导出位置，避免覆盖原始文章或附件。" = "Choose a location outside the library to avoid overwriting original articles or attachments.";
+"找不到文章附件：%@" = "Article attachment not found: %@";
+"内嵌媒体超过 256 MB，请改用文章包导出。" = "Embedded media exceeds 256 MB. Export an article package instead.";
+"无法下载远程媒体：%@。请检查网络后重试。" = "Could not download remote media: %@. Check your connection and try again.";
+"无法创建文章压缩包。" = "Could not create the article archive.";
+"导出与分享…" = "Export and share…";
+"导出 PDF、独立 HTML 或包含附件的文章包" = "Export PDF, standalone HTML, or an article package with attachments";
+"导出与分享" = "Export and share";
+"导出已保存的文章。批量导出会生成 ZIP，每篇文章保留为独立文件。" = "Export saved articles. Batch exports create a ZIP with a separate file for each article.";
+"导出完成" = "Export complete";
+"在访达中显示" = "Show in Finder";
+"分享…" = "Share…";
+"导出格式" = "Export format";
+"包含分类、标签、更新时间和摘要" = "Include category, tags, update date, and excerpt";
+"已选择 %@ / %@ 篇文章" = "Selected %@ of %@ articles";
+"全不选" = "Deselect all";
+"筛选要导出的文章" = "Filter articles to export";
+"取消导出" = "Cancel export";
+"导出…" = "Export…";
+"导出文章" = "Export articles";
+"全选" = "Select all";
+
+/* Article column layout */
+"拖动内容块：左右分栏，上下排序" = "Drag blocks sideways for columns, or vertically to reorder";
+"拖动调整分栏宽度" = "Drag to resize article columns";
+"每行最多支持 10 个分栏" = "Each row supports up to 10 columns";
+
+"正在加载微博…" = "Loading posts…";
+"加载时间较长，请重新打开此内容。" = "Loading is taking longer than expected. Reopen this content to try again.";
+"内容加载失败，请重新打开。" = "Could not load this content. Reopen it to try again.";
+"正在加载高清图片…" = "Loading full-resolution image…";
+"正在打开文章…" = "Opening article…";
+"正在加载评论和关联文章…" = "Loading comments and related articles…";
+"正在加载版本历史…" = "Loading version history…";
+"正在加载问题…" = "Loading questions…";
+"正在加载关系图…" = "Loading graph…";
+"正在刷新…" = "Refreshing…";
+"正在处理回收站…" = "Updating Trash…";
+"正在处理文件…" = "Processing files…";
+"正在读取备份快照…" = "Loading backup snapshots…";
+"正在恢复备份…" = "Restoring backup…";
+"正在切换工作区…" = "Switching workspace…";
+"正在扫描文件…" = "Scanning files…";
+"正在备份…" = "Backing up…";
+"正在校验备份…" = "Validating backup…";
+"正在发布…" = "Publishing…";
+"正在保存评论…" = "Saving comment…";
+"正在同步…" = "Syncing…";
+
+"正在更新文章…" = "Updating article…";
+
+"正在加载视频封面…" = "Loading video thumbnail…";

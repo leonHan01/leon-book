@@ -235,7 +235,7 @@ private enum NativeScriptedMarkdownDocument: Equatable {
             <script>
             const source = \(encoded), display = \(display ? "true" : "false");
             const root = document.getElementById('content');
-            function notify() { requestAnimationFrame(() => window.webkit.messageHandlers.leonbookHeight.postMessage(Math.ceil(document.documentElement.scrollHeight))); }
+            function notify() { requestAnimationFrame(() => window.webkit.messageHandlers.leonbookHeight.postMessage({ height: Math.ceil(document.documentElement.scrollHeight), request: window.leonbookRenderRequest })); }
             function render() {
               try {
                 if (display) { katex.render(source, root, {displayMode:true, throwOnError:false, strict:'warn'}); }
@@ -262,7 +262,7 @@ private enum NativeScriptedMarkdownDocument: Equatable {
             <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
             <script>
             const source = \(encoded), root = document.getElementById('diagram'); root.textContent = source;
-            function notify() { requestAnimationFrame(() => window.webkit.messageHandlers.leonbookHeight.postMessage(Math.ceil(document.documentElement.scrollHeight))); }
+            function notify() { requestAnimationFrame(() => window.webkit.messageHandlers.leonbookHeight.postMessage({ height: Math.ceil(document.documentElement.scrollHeight), request: window.leonbookRenderRequest })); }
             async function render() {
               try { mermaid.initialize({startOnLoad:false, securityLevel:'strict', theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'default'}); await mermaid.run({nodes:[root]}); }
               catch (error) { root.className='fallback'; root.textContent=source+'\\n\\n'+String(error); }
@@ -294,28 +294,40 @@ private struct NativeScriptedMarkdownWebView: NSViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.userContentController.add(context.coordinator, name: "leonbookHeight")
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = NativeLoadingWebView(frame: .zero, configuration: configuration)
+        view.waitsForContent = true
+        view.beginContentLoading()
         view.navigationDelegate = context.coordinator
         view.setValue(false, forKey: "drawsBackground")
-        context.coordinator.loadedDocument = document
-        view.loadHTMLString(document.html, baseURL: nil)
+        context.coordinator.load(document, in: view)
         return view
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {
         context.coordinator.onHeightChange = onHeightChange
         guard context.coordinator.loadedDocument != document else { return }
-        context.coordinator.loadedDocument = document
-        view.loadHTMLString(document.html, baseURL: nil)
+        context.coordinator.load(document, in: view)
     }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
         view.stopLoading()
+        (view as? NativeLoadingWebView)?.cancelLoadingFeedback()
         view.configuration.userContentController.removeScriptMessageHandler(forName: "leonbookHeight")
     }
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var loadedDocument: NativeScriptedMarkdownDocument?
+        private var renderRequest = ""
+        private var loadingID: UUID?
+
+        func load(_ document: NativeScriptedMarkdownDocument, in view: WKWebView) {
+            loadedDocument = document
+            renderRequest = UUID().uuidString
+            loadingID = (view as? NativeLoadingWebView)?.beginContentLoading()
+            let html = document.html.replacingOccurrences(of: "<head>",
+                with: "<head><script>window.leonbookRenderRequest = '\(renderRequest)';</script>")
+            view.loadHTMLString(html, baseURL: nil)
+        }
         var onHeightChange: (CGFloat) -> Void
 
         init(onHeightChange: @escaping (CGFloat) -> Void) {
@@ -327,7 +339,13 @@ private struct NativeScriptedMarkdownWebView: NSViewRepresentable {
             didReceive message: WKScriptMessage
         ) {
             guard message.name == "leonbookHeight",
-                  let number = message.body as? NSNumber else { return }
+                  message.frameInfo.isMainFrame,
+                  let payload = message.body as? [String: Any],
+                  payload["request"] as? String == renderRequest,
+                  let number = payload["height"] as? NSNumber else { return }
+            if let view = message.webView as? NativeLoadingWebView {
+                view.finishContentLoading(loadingID)
+            }
             let height = min(max(CGFloat(truncating: number), 36), 900)
             DispatchQueue.main.async { self.onHeightChange(height) }
         }

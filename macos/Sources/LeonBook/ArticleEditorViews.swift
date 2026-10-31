@@ -455,6 +455,7 @@ struct ArticleEditorView: View {
     @State private var editorSidebarDragStart: Double?
     @State private var splitDragStart: Double?
     @State private var blockLinkSuggestions: [EditorArticleLinkSuggestion] = []
+    @State private var blockLinkLoadingRequest: UUID?
     @State private var showsWritingReference = false
 
     init(
@@ -765,8 +766,8 @@ struct ArticleEditorView: View {
             fontSize: readingPreferences.typography.fontSize,
             store: model.store,
             sourceRelativePath: model.editor.isNew ? nil : model.selectedArticle?.sourceRelativePath,
-            onImportAudio: { try await model.importEditorAudio(from: $0) },
-            onAudioInserted: { model.registerEditorAudio($0) },
+            onImportMedia: { try await model.importEditorMedia(from: $0) },
+            onMediaInserted: { model.registerEditorMedia($0) },
             onOpenLink: { url in
                 if url.scheme == "leonbook" { model.handleAutomationURL(url) }
                 else { NSWorkspace.shared.open(url) }
@@ -845,6 +846,9 @@ struct ArticleEditorView: View {
                     onSelect: slashCommandController.completeSuggestion,
                     onDismiss: slashCommandController.dismissSuggestions
                 )
+            } else if blockLinkLoadingRequest != nil, articleLinkController.activeLinkQuery != nil {
+                NativeLoadingStatus(title: NativeLocalization.text("正在搜索…"))
+                    .padding(12)
             } else if let query = articleLinkController.activeLinkQuery, !articleLinkSuggestions.isEmpty {
                 ArticleLinkSuggestionMenu(
                     query: query,
@@ -1396,9 +1400,14 @@ struct ArticleEditorView: View {
     private func reloadBlockLinkSuggestions() async {
         guard let rawQuery = articleLinkController.activeLinkQuery,
               let query = EditorBlockLinkQuery(rawQuery) else {
+            blockLinkLoadingRequest = nil
             blockLinkSuggestions = []
             return
         }
+        let request = UUID()
+        blockLinkLoadingRequest = request
+        blockLinkSuggestions = []
+        defer { if blockLinkLoadingRequest == request { blockLinkLoadingRequest = nil } }
 
         let source: String
         let targetTitle: String
@@ -1417,7 +1426,8 @@ struct ArticleEditorView: View {
             return
         }
 
-        guard articleLinkController.activeLinkQuery == rawQuery else { return }
+        guard !Task.isCancelled, blockLinkLoadingRequest == request,
+              articleLinkController.activeLinkQuery == rawQuery else { return }
         let normalizedSearch = query.searchText.folding(
             options: [.caseInsensitive, .diacriticInsensitive],
             locale: .current

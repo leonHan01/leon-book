@@ -10,7 +10,10 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class NativeNavigationState: ObservableObject {
-    @Published var section: NativeSection
+    @Published var section: NativeSection {
+        didSet { if section != oldValue { revision &+= 1 } }
+    }
+    private(set) var revision: UInt64 = 0
 
     init(section: NativeSection = .dashboard) {
         self.section = section
@@ -175,6 +178,7 @@ public final class NativeAppModel: ObservableObject {
     @Published var selectedMomentTags: Set<String> = []
     @Published var momentDateFilter: NativeMomentDateFilter = .all
     @Published var showsOnlyFavoriteMoments = false
+    @Published var loadingOperations = NativeLoadingOperations()
     @Published var isLoading = true
     @Published private(set) var isPublishingMoment = false
     @Published private(set) var isLoadingMoreMoments = false
@@ -235,7 +239,9 @@ public final class NativeAppModel: ObservableObject {
     @Published var mediaLibrary: NativeMediaLibraryModel
     var trashCleanupTask: Task<Void, Never>?
     private var uploadCount = 0
-    var workspaceGeneration = 0
+    var workspaceGeneration = 0 {
+        didSet { loadingOperations.reset() }
+    }
     var pendingEditorMediaCleanup: [NativeMedia] = []
     var editorOriginalArticle: NativeArticle?
     var backupTask: Task<Void, Never>?
@@ -793,7 +799,7 @@ public final class NativeAppModel: ObservableObject {
         momentFeedGeneration += 1
         let generation = momentFeedGeneration
         isLoadingMoreMoments = true
-        defer { isLoadingMoreMoments = false }
+        defer { if generation == momentFeedGeneration { isLoadingMoreMoments = false } }
 
         let filter = currentMomentFilter
         let filteredTotal = try await store.countMoments(matching: filter)
@@ -820,7 +826,7 @@ public final class NativeAppModel: ObservableObject {
         isLoadingMoreMoments = true
 
         Task {
-            defer { isLoadingMoreMoments = false }
+            defer { if generation == momentFeedGeneration { isLoadingMoreMoments = false } }
             do {
                 let page = try await store.listMomentPage(
                     matching: filter,
@@ -984,10 +990,12 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func refreshArticleHistory() {
+        let loadingID = loadingOperations.begin(.history)
         let recoveryID = editor.recoveryID
         let slug = editor.slug.isEmpty ? selectedArticle?.slug : editor.slug
         let generation = workspaceGeneration
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 let revisions = try await store.listArticleRevisions(
                     articleSlug: slug,
@@ -1214,6 +1222,8 @@ public final class NativeAppModel: ObservableObject {
         alert.addButton(withTitle: NativeLocalization.text("取消"))
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let loadingID = loadingOperations.begin(.trash)
+        defer { loadingOperations.end(loadingID) }
         do {
             try await store.deleteArticle(slug: article.slug, expectedUpdatedAt: article.updatedAt)
             articleTabs.removeAll(where: { $0.slug == article.slug })
@@ -1239,8 +1249,10 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func restoreTrash(_ item: NativeTrashItem) {
-        guard !isBackingUp else { return }
+        guard !isBackingUp, !loadingOperations.contains(.trash) else { return }
+        let loadingID = loadingOperations.begin(.trash)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 try await store.restoreTrash(item)
                 try await reload()
@@ -1253,8 +1265,10 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func permanentlyDeleteTrash(_ item: NativeTrashItem) {
-        guard !isBackingUp else { return }
+        guard !isBackingUp, !loadingOperations.contains(.trash) else { return }
+        let loadingID = loadingOperations.begin(.trash)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 try await store.permanentlyDeleteTrash(item)
                 try await reload()
@@ -1267,8 +1281,10 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func emptyTrash() {
-        guard !isBackingUp else { return }
+        guard !isBackingUp, !loadingOperations.contains(.trash) else { return }
+        let loadingID = loadingOperations.begin(.trash)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 try await store.emptyTrash()
                 try await reload()
@@ -1396,6 +1412,11 @@ public final class NativeAppModel: ObservableObject {
             return
         }
 
+        if !isAudio {
+            uploadMomentVideos([fileURL])
+            return
+        }
+
         let activeStore = store
         Task {
             let generation = beginUpload()
@@ -1412,6 +1433,72 @@ public final class NativeAppModel: ObservableObject {
                     return
                 }
                 momentDraft.images.append(uploaded)
+                try await refreshActivity()
+                scheduleBackup()
+                errorMessage = nil
+            } catch {
+                guard generation == workspaceGeneration else { return }
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func acceptMomentVideoDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard !isBackingUp, !isUploadingMedia else { return false }
+        let files = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !files.isEmpty else { return false }
+        let generation = workspaceGeneration
+        Task {
+            do {
+                var urls: [URL] = []
+                for provider in files {
+                    let data: Data = try await withCheckedThrowingContinuation { continuation in
+                        provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, error in
+                            if let error { continuation.resume(throwing: error) }
+                            else if let data { continuation.resume(returning: data) }
+                            else { continuation.resume(throwing: NativeStoreError.fileSystem(NativeLocalization.text("无法读取拖入的文件。"))) }
+                        }
+                    }
+                    guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL else {
+                        throw NativeStoreError.fileSystem(NativeLocalization.text("无法读取拖入的文件。"))
+                    }
+                    if !urls.contains(url) { urls.append(url) }
+                }
+                guard generation == workspaceGeneration else { return }
+                uploadMomentVideos(urls)
+            } catch {
+                guard generation == workspaceGeneration else { return }
+                errorMessage = error.localizedDescription
+            }
+        }
+        return true
+    }
+
+    func uploadMomentVideos(_ urls: [URL]) {
+        guard !isBackingUp, !isUploadingMedia, !urls.isEmpty else { return }
+        guard urls.allSatisfy({ $0.isFileURL && $0.pathExtension.caseInsensitiveCompare("mp4") == .orderedSame }) else {
+            errorMessage = NativeLocalization.text("微博视频仅支持 MP4 格式。")
+            return
+        }
+        let remaining = max(0, 9 - momentDraft.images.count)
+        guard remaining > 0 else {
+            errorMessage = NativeLocalization.text("每条微博最多添加 9 个图片、视频或音频。")
+            return
+        }
+        let selectedURLs = Array(urls.prefix(remaining))
+        let activeStore = store
+        Task {
+            let generation = beginUpload()
+            defer { endUpload() }
+            do {
+                let uploaded = try await NativeMediaUpload.files(
+                    selectedURLs, kind: .video, destination: .moments, store: activeStore
+                )
+                guard generation == workspaceGeneration else {
+                    try? await activeStore.discardUnreferencedMedia(uploaded)
+                    return
+                }
+                momentDraft.images.append(contentsOf: uploaded)
                 try await refreshActivity()
                 scheduleBackup()
                 errorMessage = nil
@@ -1545,7 +1632,9 @@ public final class NativeAppModel: ObservableObject {
         if editingMomentID == moment.id {
             cancelMomentEditing()
         }
+        let loadingID = loadingOperations.begin(.trash)
         Task {
+            defer { loadingOperations.end(loadingID) }
             do {
                 try await store.deleteMoment(id: moment.id)
                 try await reloadMomentFeed(refreshesFacets: true)

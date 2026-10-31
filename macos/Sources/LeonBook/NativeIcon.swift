@@ -37,7 +37,7 @@ enum NativeIcon {
     }
 
     static func nsImage(_ name: String, size: CGFloat = Size.standard) -> NSImage {
-        let size = min(max(size, 8), 96)
+        let size = min(max(size, 8), 96) * 1.10
         let outline = outlineName(name)
         let key = "\(outline):\(size)" as NSString
         if let cached = images.object(forKey: key) { return cached }
@@ -46,7 +46,8 @@ enum NativeIcon {
             ?? NSImage(systemSymbolName: name, accessibilityDescription: nil)
             ?? NSImage(systemSymbolName: "questionmark", accessibilityDescription: nil)!
         let configured = symbol.withSymbolConfiguration(.init(pointSize: size, weight: .regular)) ?? symbol
-        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+        let logicalSize = NSSize(width: size, height: size)
+        let draw: (NSRect) -> Bool = { rect in
             let factor = min(rect.width / configured.size.width, rect.height / configured.size.height)
             let fitted = NSSize(width: configured.size.width * factor, height: configured.size.height * factor)
             configured.draw(in: NSRect(
@@ -54,6 +55,26 @@ enum NativeIcon {
                 width: fitted.width, height: fitted.height
             ))
             return true
+        }
+        // A drawing-handler image rerenders the symbol's vector parts when
+        // SwiftUI rebuilds a scrolling display list. Cache the finished mask.
+        let image: NSImage
+        let scale: CGFloat = 2
+        if let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(ceil(size * scale)), pixelsHigh: Int(ceil(size * scale)),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ), let context = NSGraphicsContext(bitmapImageRep: bitmap) {
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            context.cgContext.scaleBy(x: scale, y: scale)
+            _ = draw(NSRect(origin: .zero, size: logicalSize))
+            NSGraphicsContext.restoreGraphicsState()
+            bitmap.size = logicalSize
+            image = NSImage(size: logicalSize)
+            image.addRepresentation(bitmap)
+        } else {
+            image = NSImage(size: logicalSize, flipped: false, drawingHandler: draw)
         }
         image.isTemplate = true
         image.accessibilityDescription = symbol.accessibilityDescription

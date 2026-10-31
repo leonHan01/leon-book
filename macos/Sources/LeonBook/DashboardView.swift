@@ -85,6 +85,9 @@ struct DashboardView: View {
                 Label("概览", nativeIcon: "house", iconSize: 12)
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                 Spacer()
+                if model.isSavingDashboard || (model.isDashboardLoaded && model.loadingOperations.contains(.dashboard)) {
+                    ProgressView().controlSize(.small)
+                }
                 if isEditing {
                     Button("取消") {
                         editing.draft = nil

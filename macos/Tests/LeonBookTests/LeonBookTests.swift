@@ -6277,7 +6277,7 @@ final class RichArticleTests {
         let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 3, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
         for x in 0..<4 { for y in 0..<3 { bitmap.setColor(.systemBlue, atX: x, y: y) } }
         pasteboard.setData(bitmap.tiffRepresentation!, forType: .tiff)
-        guard let imageURL = RichArticleClipboard.imageDataURL(from: pasteboard),
+        guard let imageURL = try await RichArticleImageLoader.shared.imageDataURL(from: .clipboard(RichArticleClipboard.imageData(from: pasteboard))),
               let png = Data(base64Encoded: String(imageURL.dropFirst("data:image/png;base64,".count))) else {
             XCTFail("expected native TIFF clipboard image to convert to PNG")
             return
@@ -6285,7 +6285,8 @@ final class RichArticleTests {
         XCTAssertEqual(NSBitmapImageRep(data: png)?.pixelsWide, 4)
         XCTAssertEqual(NSBitmapImageRep(data: png)?.pixelsHigh, 3)
         pasteboard.clearContents(); pasteboard.setString("只有文字", forType: .string)
-        XCTAssertNil(RichArticleClipboard.imageDataURL(from: pasteboard))
+        let textOnlyImage = try await RichArticleImageLoader.shared.imageDataURL(from: .clipboard(RichArticleClipboard.imageData(from: pasteboard)))
+        XCTAssertNil(textOnlyImage)
 
         let messages = RichImagePasteTestHandler()
         var savedBody = ""
@@ -6502,16 +6503,18 @@ final class RichArticleTests {
               const canPreview = !preview.hidden && preview.querySelector('img').src === source;
               document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); const closesPreview = preview.hidden && getComputedStyle(preview).display === 'none';
               image.click(); tools.querySelector('[data-image=replace]').click();
+              tools.querySelector('[data-image=replace]').click();
               return JSON.stringify({imageToolsVisible, resizedImage, undoResize, redoResize, captionCreated, undoCaptionCaret, persistedCaption, canPreview, closesPreview});
             """#, arguments: [:], in: nil, contentWorld: .page)
             let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
             for (key, value) in json { XCTAssertTrue(value, "image controls failed: \(key)") }
-            for _ in 0..<40 where messages.replacements.isEmpty { try await Task.sleep(nanoseconds: 25_000_000) }
-            guard let request = messages.replacements.first else { XCTFail("expected image replacement request"); return }
+            for _ in 0..<40 where messages.replacements.count < 2 { try await Task.sleep(nanoseconds: 25_000_000) }
+            guard messages.replacements.count == 2, let request = messages.replacements.last else { XCTFail("expected image replacement requests"); return }
             let replaced = try await view.callAsyncJavaScript(#"""
               const root = document.getElementById('document'), source = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
               const width = root.querySelector('img').style.width;
               const replacement = LeonArticle.completeImageReplacement(requestID, source) && root.querySelector('img').src === source && root.querySelector('img').style.width === width && root.querySelector('figcaption').textContent === '图片说明';
+              const supersededReplacementRejected = !LeonArticle.completeImageReplacement(oldRequestID, 'data:image/png;base64,AAAA') && root.querySelector('img').src === source;
               document.querySelector('#image-tools [data-image=delete]').click();
               const deleted = !root.querySelector('figure,img,figcaption') && root.textContent === '前缀后缀末尾段落';
               LeonArticle.undo(-1); const undoDelete = root.querySelector('img')?.src === source && root.querySelector('figcaption')?.textContent === '图片说明';
@@ -6519,8 +6522,8 @@ final class RichArticleTests {
               const readOnlyPreview = !document.getElementById('image-preview').hidden && document.getElementById('image-tools').hidden;
               LeonArticle.load('<article data-leon-format="html-v1"><p>另一篇文章</p></article>', 'image-stale', true, 18);
               const staleReplacementRejected = !LeonArticle.completeImageReplacement(requestID, source) && !root.querySelector('img');
-              return JSON.stringify({replacement, deleted, undoDelete, readOnlyPreview, staleReplacementRejected});
-            """#, arguments: ["requestID": request], in: nil, contentWorld: .page)
+              return JSON.stringify({replacement, supersededReplacementRejected, deleted, undoDelete, readOnlyPreview, staleReplacementRejected});
+            """#, arguments: ["requestID": request, "oldRequestID": messages.replacements[0]], in: nil, contentWorld: .page)
             let replacementJSON = try JSONSerialization.jsonObject(with: Data((replaced as! String).utf8)) as! [String: Bool]
             for (key, value) in replacementJSON { XCTAssertTrue(value, "image replacement failed: \(key)") }
         }
@@ -6979,6 +6982,34 @@ private func makeTemporaryDirectory() throws -> URL {
 struct LeonBookUnitTests {
     static func main() async {
         var tests: [(String, () async throws -> Void)] = [
+            ("MediaResourceTests.testCancelledThumbnailRequestsReleaseWhileDecoderIsBusy", { try await MediaResourceTests().testCancelledThumbnailRequestsReleaseWhileDecoderIsBusy() }),
+            ("MediaResourceTests.testThumbnailCacheRetainsAtMost64MiB", { try await MediaResourceTests().testThumbnailCacheRetainsAtMost64MiB() }),
+            ("MediaResourceTests.testCancellingOneSubscriberKeepsSharedDecodeAlive", { try await MediaResourceTests().testCancellingOneSubscriberKeepsSharedDecodeAlive() }),
+            ("MediaResourceTests.testImagesAndVideosShareTwoDecodeSlots", { try await MediaResourceTests().testImagesAndVideosShareTwoDecodeSlots() }),
+            ("MediaResourceTests.testVideoPosterCacheRetainsAtMost32MiB", { try await MediaResourceTests().testVideoPosterCacheRetainsAtMost32MiB() }),
+            ("MediaResourceTests.testCacheEvictsLeastRecentlyUsedAndReleasesOnPressure", { try MediaResourceTests().testCacheEvictsLeastRecentlyUsedAndReleasesOnPressure() }),
+            ("MomentImageLoadingTests.testFeedLoadsOnlyVisibleThumbnailsAtDisplaySize", { try await MomentImageLoadingTests().testFeedLoadsOnlyVisibleThumbnailsAtDisplaySize() }),
+            ("MomentImageLoadingTests.testBrowserLoadsOnlySelectedOriginal", { try await MomentImageLoadingTests().testBrowserLoadsOnlySelectedOriginal() }),
+            ("MomentImageLoadingTests.testLargePhotoThumbnailAndOriginalPreserveSizeAndOrientation", { try await MomentImageLoadingTests().testLargePhotoThumbnailAndOriginalPreserveSizeAndOrientation() }),
+            ("MomentScrollingPerformanceTests.testIdleVideoReentryKeepsPosterWithoutPublishingChanges", { try await MomentScrollingPerformanceTests().testIdleVideoReentryKeepsPosterWithoutPublishingChanges() }),
+            ("MomentScrollingPerformanceTests.testMediaVisibilityOnlyChangesAtViewportBoundary", { try await MomentScrollingPerformanceTests().testMediaVisibilityOnlyChangesAtViewportBoundary() }),
+            ("MomentScrollingPerformanceTests.testVirtualColumnKeepsOnlyVisibleRowsAndUpdatesHeights", { try MomentScrollingPerformanceTests().testVirtualColumnKeepsOnlyVisibleRowsAndUpdatesHeights() }),
+            ("MomentScrollingPerformanceTests.testFastPassingMediaDoesNotMountAndSettledMediaDoes", { try await MomentScrollingPerformanceTests().testFastPassingMediaDoesNotMountAndSettledMediaDoes() }),
+            ("WorkspaceChromeTests.testNavigationRailStaysFixedAcrossEveryDestination", { try await WorkspaceChromeTests().testNavigationRailStaysFixedAcrossEveryDestination() }),
+            ("LoadingFeedbackTests.testRefreshFeedbackPreservesContentAndSkipsFastOperations", { try await LoadingFeedbackTests().testRefreshFeedbackPreservesContentAndSkipsFastOperations() }),
+            ("LoadingFeedbackTests.testOverlappingOperationsAndWorkspaceReset", { try LoadingFeedbackTests().testOverlappingOperationsAndWorkspaceReset() }),
+            ("LoadingFeedbackTests.testRealLoadsExposePendingStateAndClearAfterCancellation", { try await LoadingFeedbackTests().testRealLoadsExposePendingStateAndClearAfterCancellation() }),
+            ("LoadingFeedbackTests.testWebFeedbackIgnoresObsoleteCompletionAndStopsOnFailure", { try LoadingFeedbackTests().testWebFeedbackIgnoresObsoleteCompletionAndStopsOnFailure() }),
+            ("LoadingFeedbackTests.testRichEditorFeedbackTracksDocumentReadiness", { try await LoadingFeedbackTests().testRichEditorFeedbackTracksDocumentReadiness() }),
+            ("WorkspaceNavigationTests.testDeferredNavigationOnlyMountsLatestRequestAndResetsForWorkspace", { try await WorkspaceNavigationTests().testDeferredNavigationOnlyMountsLatestRequestAndResetsForWorkspace() }),
+            ("WorkspaceNavigationTests.testMainNavigationPresentsLoadingBeforeWebKitAndSkipsSupersededPages", { try await WorkspaceNavigationTests().testMainNavigationPresentsLoadingBeforeWebKitAndSkipsSupersededPages() }),
+            ("WorkspaceNavigationTests.testMainNavigationAvoidsSplitControllerRebuilds", { try await WorkspaceNavigationTests().testMainNavigationAvoidsSplitControllerRebuilds() }),
+            ("WorkspaceChromeTests.testArticleHeaderStaysBelowWindowToolbar", { try await WorkspaceChromeTests().testArticleHeaderStaysBelowWindowToolbar() }),
+            ("ArticleExportTests.testStandaloneHTMLIsOfflineAndSanitized", { try await ArticleExportTests().testStandaloneHTMLIsOfflineAndSanitized() }),
+            ("ArticleExportTests.testBatchPackagePreservesAttachmentsAndLinks", { try await ArticleExportTests().testBatchPackagePreservesAttachmentsAndLinks() }),
+            ("ArticleExportTests.testPDFHasA4PagesAndCompleteContent", { try await ArticleExportTests().testPDFHasA4PagesAndCompleteContent() }),
+            ("ArticleExportTests.testFailureCancellationAndSourceProtection", { try await ArticleExportTests().testFailureCancellationAndSourceProtection() }),
+            ("ArticleExportTests.testRemoteImagesAndBatchPDF", { try await ArticleExportTests().testRemoteImagesAndBatchPDF() }),
             ("DashboardTests.testGridSnappingWrappingAndLegacyDimensions", { try DashboardTests().testGridSnappingWrappingAndLegacyDimensions() }),
             ("DashboardTests.testNativeResizeHandlesSnapReflowAndCancel", { try await DashboardTests().testNativeResizeHandlesSnapReflowAndCancel() }),
             ("DashboardTests.testDraggingModuleDownwardReordersDraft", { try await DashboardTests().testDraggingModuleDownwardReordersDraft() }),
@@ -7014,6 +7045,7 @@ struct LeonBookUnitTests {
             ("InfiniteCanvasTests.testCanvasNativeBridgeLoadsAndRefreshesArticleReferences", { try await InfiniteCanvasTests().testCanvasNativeBridgeLoadsAndRefreshesArticleReferences() }),
             ("ArticleAudioTests.testAudioInsertionUndoCancellationAndSanitization", { try await ArticleAudioTests().testAudioInsertionUndoCancellationAndSanitization() }),
             ("ArticleAudioTests.testAudioDropImportsAtDropLocationThroughNativeBridge", { try await ArticleAudioTests().testAudioDropImportsAtDropLocationThroughNativeBridge() }),
+            ("ArticleAudioTests.testMixedMediaDropImportsAtDropLocationThroughNativeBridge", { try await ArticleAudioTests().testAudioDropImportsAtDropLocationThroughNativeBridge(mixedMedia: true) }),
             ("ArticleAudioTests.testAudioPersistsAndPlaysFromWorkspace", { try await ArticleAudioTests().testAudioPersistsAndPlaysFromWorkspace() }),
             ("ArticleWhiteboardTests.testWhiteboardImmutableStorageAndValidation", { try await ArticleWhiteboardTests().testWhiteboardImmutableStorageAndValidation() }),
             ("ArticleWhiteboardTests.testWhiteboardArticleRoundTripUndoAndStaleRequests", { try await ArticleWhiteboardTests().testWhiteboardArticleRoundTripUndoAndStaleRequests() }),
@@ -7021,6 +7053,10 @@ struct LeonBookUnitTests {
             ("TodoTests.testTodoPersistenceCompletionDeletionAndConflicts", { try await TodoTests().testTodoPersistenceCompletionDeletionAndConflicts() }),
             ("TodoTests.testTodoWorkspaceIsolationAndBackup", { try await TodoTests().testTodoWorkspaceIsolationAndBackup() }),
             ("TodoTests.testTodoAppCommandsFilteringAndModuleLifecycle", { try await TodoTests().testTodoAppCommandsFilteringAndModuleLifecycle() }),
+            ("RichArticleTests.testRichArticleColumnsHandleRemainsReachable", { try await RichArticleTests().testRichArticleColumnsHandleRemainsReachable() }),
+            ("RichArticleTests.testRichArticleColumnsPointerWorkIsFrameBounded", { try await RichArticleTests().testRichArticleColumnsPointerWorkIsFrameBounded() }),
+            ("RichArticleTests.testRichArticleColumnsDragResizeAndPersistence", { try await RichArticleTests().testRichArticleColumnsDragResizeAndPersistence() }),
+            ("RichArticleTests.testRichArticleColumnsDragBlocksIntoTableCells", { try await RichArticleTests().testRichArticleColumnsDragBlocksIntoTableCells() }),
             ("RichArticleTests.testRichArticleCaretMatchesTextAndPreservesEditing", { try await RichArticleTests().testRichArticleCaretMatchesTextAndPreservesEditing() }),
             ("RichArticleTests.testRichArticleCaretNavigationAvoidsContentCopies", { try await RichArticleTests().testRichArticleCaretNavigationAvoidsContentCopies() }),
             ("RichArticleTests.testRichArticleSelectionBookmarksPreserveMixedContent", { try await RichArticleTests().testRichArticleSelectionBookmarksPreserveMixedContent() }),
@@ -7036,9 +7072,13 @@ struct LeonBookUnitTests {
             ("RichArticleTests.testRichArticleSlashCommandsAndComposition", { try await RichArticleTests().testRichArticleSlashCommandsAndComposition() }),
             ("RichArticleTests.testRichArticleParagraphPasteAndUndo", { try await RichArticleTests().testRichArticleParagraphPasteAndUndo() }),
             ("RichArticleTests.testRichArticleTableCellsSupportBlocksAndFormatting", { try await RichArticleTests().testRichArticleTableCellsSupportBlocksAndFormatting() }),
+            ("RichArticleImageLoadingTests.testImageConversionIsBackgroundSerialAndCancellable", { try await RichArticleImageLoadingTests().testImageConversionIsBackgroundSerialAndCancellable() }),
+            ("RichArticleImageLoadingTests.testNativeImagePastePreservesSnapshotCaretAndUndo", { try await RichArticleImageLoadingTests().testNativeImagePastePreservesSnapshotCaretAndUndo() }),
+            ("RichArticleImageLoadingTests.testNativeImageRequestsRejectChangedOrClosedEditors", { try await RichArticleImageLoadingTests().testNativeImageRequestsRejectChangedOrClosedEditors() }),
             ("RichArticleTests.testRichArticleTableImagePasteAndNativeClipboard", { try await RichArticleTests().testRichArticleTableImagePasteAndNativeClipboard() }),
             ("RichArticleTests.testRichArticleTableControlsAndColumnWidths", { try await RichArticleTests().testRichArticleTableControlsAndColumnWidths() }),
             ("RichArticleTests.testRichArticleTableQuickAddButtons", { try await RichArticleTests().testRichArticleTableQuickAddButtons() }),
+            ("RichArticleTests.testRichArticleTableInsertBetweenRows", { try await RichArticleTests().testRichArticleTableInsertBetweenRows() }),
             ("RichArticleTests.testRichArticleImageControlsAndCaptions", { try await RichArticleTests().testRichArticleImageControlsAndCaptions() }),
             ("RichArticleTests.testRichArticleUndoRestoresSelectionsAndCaret", { try await RichArticleTests().testRichArticleUndoRestoresSelectionsAndCaret() }),
             ("RichArticleTests.testRichArticleSelectionToolbarFormatsAndPersistsColors", { try await RichArticleTests().testRichArticleSelectionToolbarFormatsAndPersistsColors() }),
@@ -7188,6 +7228,18 @@ struct LeonBookUnitTests {
         ]
 
         if ProcessInfo.processInfo.environment["LEON_BOOK_PERFORMANCE_BENCHMARKS"] == "1" {
+            tests.append((
+                "MomentScrollingPerformanceTests.testMixedFeedScrollingBenchmark",
+                { try await MomentScrollingPerformanceTests().testMixedFeedScrollFramesStayBounded() }
+            ))
+            tests.append((
+                "MomentScrollingPerformanceTests.testImageFeedScrollingBenchmark",
+                { try await MomentScrollingPerformanceTests().testImageFeedScrollFramesStayBounded() }
+            ))
+            tests.append((
+                "MomentScrollingPerformanceTests.testVideoFeedScrollingBenchmark",
+                { try await MomentScrollingPerformanceTests().testVideoFeedScrollFramesStayBounded() }
+            ))
             tests.append((
                 "PerformanceRegressionTests.testRichArticleReaderMetadataReuseBenchmark",
                 { PerformanceRegressionTests().testRichArticleReaderMetadataReuseBenchmark() }

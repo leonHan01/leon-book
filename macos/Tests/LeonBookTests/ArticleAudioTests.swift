@@ -10,29 +10,39 @@ private func audioExpect(_ condition: Bool, _ message: String) throws {
 
 final class ArticleAudioTests {
     @MainActor
-    func testAudioDropImportsAtDropLocationThroughNativeBridge() async throws {
+    func testAudioDropImportsAtDropLocationThroughNativeBridge(mixedMedia: Bool = false) async throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("leon-audio-drop-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let fixture = Bundle.module.url(forResource: "article-audio-silence", withExtension: "mp3", subdirectory: "Fixtures")!
-        let files = [directory.appendingPathComponent("录音 & 一.MP3"), directory.appendingPathComponent("录音二.mp3")]
-        for file in files { try FileManager.default.copyItem(at: fixture, to: file) }
+        let files = (mixedMedia ? ["图片 & 一.PNG", "视频二.MP4", "录音三.mp3"] : ["录音 & 一.MP3", "录音二.mp3"])
+            .map { directory.appendingPathComponent($0) }
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=")!
+        let videoFixture = Bundle.module.url(forResource: "media-library-sample", withExtension: "mp4", subdirectory: "Fixtures")!
+        var originalData: [Data] = []
+        for file in files {
+            let kind = NativeArticleMediaDrop.kind(for: file)!
+            let data: Data
+            if kind == .image { data = png }
+            else { data = try Data(contentsOf: kind == .video ? videoFixture : fixture) }
+            try data.write(to: file); originalData.append(data)
+        }
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         pasteboard.writeObjects(files.map { $0 as NSURL })
-        try audioExpect(NativeArticleAudioDrop.fileURLs(from: pasteboard, matching: files.map(\.lastPathComponent)) == files, "native file URLs must preserve unicode names and drop order")
-        try audioExpect(NativeArticleAudioDrop.fileURLs(from: pasteboard, matching: ["missing.mp3"]) == nil, "reject mismatched drag data")
-        try audioExpect(NativeArticleAudioDrop.fileURLs(from: pasteboard, matching: ["image.png"]) == nil, "reject non-MP3 files")
+        try audioExpect(NativeArticleMediaDrop.fileURLs(from: pasteboard, matching: files.map(\.lastPathComponent)) == files, "native file URLs must preserve unicode names and drop order")
+        try audioExpect(NativeArticleMediaDrop.fileURLs(from: pasteboard, matching: ["missing.mp3"]) == nil, "reject mismatched drag data")
+        try audioExpect(NativeArticleMediaDrop.fileURLs(from: pasteboard, matching: ["document.txt"]) == nil, "reject unsupported files")
         let store = LocalBlogStore(rootURL: directory.appendingPathComponent("workspace"))
         var html = RichArticleDocument.opening + "<p>第一段</p><p>第二段</p><p>第三段</p></article>"
         var inserted: [NativeMedia] = []
         let host = NSHostingView(rootView: RichArticleEditor(
             html: Binding(get: { html }, set: { html = $0 }), documentID: "drop-bridge", store: store,
-            onImportAudio: { url in
-                try await NativeMediaUpload.files([url], kind: .audio, destination: .inbox, store: store)[0]
+            onImportMedia: { url in
+                try await NativeMediaUpload.files([url], kind: NativeArticleMediaDrop.kind(for: url)!, destination: .inbox, store: store)[0]
             },
-            onAudioInserted: { inserted.append($0) }
+            onMediaInserted: { inserted.append($0) }
         ))
         host.frame = NSRect(x: 0, y: 0, width: 700, height: 600)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -46,7 +56,7 @@ final class ArticleAudioTests {
         guard let view = findWebView(host), let coordinator = view.navigationDelegate as? RichArticleEditor.Coordinator else {
             throw AudioTestFailure(description: "native audio editor missing")
         }
-        coordinator.audioDropPasteboard = pasteboard
+        coordinator.mediaDropPasteboard = pasteboard
         var ready = false
         for _ in 0..<200 {
             try await Task.sleep(nanoseconds: 25_000_000)
@@ -57,32 +67,75 @@ final class ArticleAudioTests {
         const root = document.getElementById('document'), block = root.children[1];
         root.focus(); getSelection().setPosition(root.firstElementChild.firstChild, 0);
         const transfer = new DataTransfer();
-        for (const name of names) transfer.items.add(new File(['placeholder'], name, { type:'audio/mpeg' }));
+        for (let i=0; i<names.length; i++) transfer.items.add(new File(['placeholder'], names[i], { type: kinds[i] + '/' + (kinds[i] === 'video' ? 'mp4' : kinds[i] === 'image' ? 'png' : 'mpeg') }));
         const rect = block.getBoundingClientRect(), x = rect.left + 12, y = rect.bottom - 2;
         block.dispatchEvent(new DragEvent('dragover', { bubbles:true, cancelable:true, dataTransfer:transfer, clientX:x, clientY:y }));
-        if (root.dataset.audioDrop !== 'true') throw new Error('MP3 drag hint missing');
+        if (root.dataset.audioDrop !== 'true') throw new Error('media drag hint missing');
         const drop = new DragEvent('drop', { bubbles:true, cancelable:true, dataTransfer:transfer, clientX:x, clientY:y });
         block.dispatchEvent(drop);
         if (!drop.defaultPrevented || root.dataset.audioDrop) throw new Error('native drop must consume event and clear hint');
-        """#, arguments: ["names": files.map(\.lastPathComponent)], in: nil, contentWorld: .page)
-        for _ in 0..<200 { if inserted.count == 2 { break }; try await Task.sleep(nanoseconds: 25_000_000) }
-        try audioExpect(inserted.count == 2 && inserted.map(\.name) == files.map(\.lastPathComponent), "drop must import both native files in order without a picker")
-        try audioExpect(RichArticleDocument.audioURLs(in: html) == inserted.map(\.url), "drop must publish workspace references into the native document")
-        for media in inserted {
+        """#, arguments: ["names": files.map(\.lastPathComponent), "kinds": files.map { NativeArticleMediaDrop.kind(for: $0)!.rawValue }], in: nil, contentWorld: .page)
+        for _ in 0..<200 { if inserted.count == files.count { break }; try await Task.sleep(nanoseconds: 25_000_000) }
+        try audioExpect(inserted.count == files.count && inserted.map(\.name) == files.map(\.lastPathComponent), "drop must import every native file in order without a picker")
+        try audioExpect(RichArticleDocument.audioURLs(in: html) == inserted.filter(\.isAudio).map(\.url), "drop must publish workspace audio references")
+        try audioExpect(RichArticleDocument.videoURLs(in: html) == inserted.filter(\.isVideo).map(\.url), "drop must publish workspace video references")
+        try audioExpect(RichArticleDocument.imageURLs(in: html) == inserted.filter(\.isImage).map(\.url), "drop must publish workspace image references")
+        for (index, media) in inserted.enumerated() {
             let importedURL = await store.mediaURL(for: media.url)!
-            try audioExpect(try Data(contentsOf: importedURL) == Data(contentsOf: fixture), "native importer must copy the actual MP3, not browser placeholder data")
+            try audioExpect(try Data(contentsOf: importedURL) == originalData[index], "native importer must copy actual media, not browser placeholder data")
         }
         _ = try await view.callAsyncJavaScript(#"""
         const root = document.getElementById('document');
-        if (root.children[1].textContent !== '第二段' || !root.children[2].matches('figure[data-type=audio]') || !root.children[3].matches('figure[data-type=audio]') || root.lastElementChild.textContent !== '第三段') throw new Error('drop used old caret instead of drop position');
-        LeonArticle.undo(-1); if (root.querySelector('audio')) throw new Error('batch drop must undo in one step');
-        LeonArticle.undo(1); if (root.querySelectorAll('audio').length !== 2) throw new Error('batch drop must redo in one step');
+        if (root.children[1].textContent !== '第二段' || kinds.some((kind, i) => !root.children[i+2].matches(`figure[data-type=${kind}]`)) || root.lastElementChild.textContent !== '第三段') throw new Error('drop used old caret instead of drop position');
+        LeonArticle.undo(-1); if (root.querySelector('audio,video,img')) throw new Error('batch drop must undo in one step');
+        LeonArticle.undo(1); if (root.querySelectorAll('figure').length !== kinds.length) throw new Error('batch drop must redo in one step');
+        const sanitized = LeonArticle.cleanHTML('<video src="javascript:alert(1)" autoplay onerror="alert(1)"></video><video src="/media/inbox/safe.mp4" autoplay loop onplay="alert(1)"></video>');
+        if (!sanitized.includes('<video') || /javascript:|autoplay|onerror|onplay|loop/.test(sanitized)) throw new Error('unsafe video attributes survived or video was stripped');
         const saved = LeonArticle.serialize(); LeonArticle.load(saved, 'read-only-drop', false, 18);
+        if (root.querySelectorAll('figure').length !== kinds.length) throw new Error('reopen lost media');
         const transfer = new DataTransfer(); transfer.items.add(new File(['ignored'], 'ignored.mp3', { type:'audio/mpeg' }));
         root.dispatchEvent(new DragEvent('drop', { bubbles:true, cancelable:true, dataTransfer:transfer }));
         if (LeonArticle.serialize() !== saved || document.querySelector('[data-command=audio]').disabled) throw new Error('read-only drop changed document');
-        """#, arguments: [:], in: nil, contentWorld: .page)
+        """#, arguments: ["kinds": inserted.map(\.kind)], in: nil, contentWorld: .page)
+        let saved = try await store.saveArticle(NativeSaveArticle(
+            banner: nil, body: html, category: "Notes", excerpt: "", media: inserted, slug: "dropped-media",
+            status: .draft, tags: [], title: "Dropped media", expectedUpdatedAt: nil
+        ))
+        for file in files { try FileManager.default.removeItem(at: file) }
+        try await store.discardUnreferencedMedia(saved.media)
+        let parsed = NativeMarkdownArticleDocument(markdown: saved.body)
+        try audioExpect(Set(saved.media.map(\.url)).isSubset(of: parsed.embeddedAttachmentURLs), "embedded media must not appear twice in attachment footer")
+        let record = try RichArticleFile.read(RichArticleFile.render(saved), relativePath: "media.html", modifiedAt: saved.updatedAt)
+        try audioExpect(record.body == saved.body && record.media == saved.media, "HTML round-trip lost mixed media")
         await store.closeForRestore()
+        let reopened = LocalBlogStore(rootURL: directory.appendingPathComponent("workspace"))
+        let article = try await reopened.getArticle(slug: saved.slug)
+        try audioExpect(article.body == saved.body && article.media == saved.media, "database reopen lost dropped media")
+        for (index, media) in article.media.enumerated() {
+            let url = await reopened.mediaURL(for: media.url)!
+            try audioExpect(try Data(contentsOf: url) == originalData[index], "saved media must survive removal of source and orphan cleanup")
+        }
+        if mixedMedia {
+            try await RichArticleTests().withWebEditor(mediaStore: reopened) { view in
+                _ = try await view.callAsyncJavaScript(#"""
+                LeonArticle.load(body, 'mixed-playback', false, 18);
+                const root = document.getElementById('document'), video = root.querySelector('video'), image = root.querySelector('img');
+                if (!video.controls || video.preload !== 'none' || !video.paused) throw new Error('video must load on demand with playback controls');
+                video.muted = true; video.load();
+                for (let i=0; i<160 && video.readyState<2 && !video.error; i++) await new Promise(resolve => setTimeout(resolve,25));
+                if (video.error || !Number.isFinite(video.duration) || video.duration <= 0) throw new Error('dropped video failed to load: '+video.error?.message);
+                await video.play();
+                for (let i=0; i<80 && video.currentTime<=0; i++) await new Promise(resolve => setTimeout(resolve,25));
+                if (video.currentTime <= 0) throw new Error('dropped video did not play');
+                video.pause(); video.currentTime = video.duration / 2;
+                for (let i=0; i<80 && video.seeking; i++) await new Promise(resolve => setTimeout(resolve,25));
+                if (video.seeking || Math.abs(video.currentTime-video.duration/2)>0.1) throw new Error('dropped video could not seek');
+                for (let i=0; i<80 && !image.complete; i++) await new Promise(resolve => setTimeout(resolve,25));
+                if (!image.naturalWidth) throw new Error('dropped image failed to display');
+                """#, arguments: ["body": article.body], in: nil, contentWorld: .page)
+            }
+        }
+        await reopened.closeForRestore()
     }
 
     @MainActor

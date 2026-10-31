@@ -16,6 +16,7 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 32px; min-height: 30px; font-size: 13px; }
 #tools-toggle { min-height: 30px; padding: 5px 8px; color: var(--muted); }
 #toolbar svg { flex: 0 0 18px; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+#toolbar svg, #commands .icon svg, #selection-headings .heading-icon { scale: 1.1; }
 #tools-toggle[aria-expanded=true] { background: var(--soft); color: var(--text); }
 #toolbar-panel { position: absolute; top: 34px; right: 28px; width: 248px; max-width: calc(100vw - 32px); max-height: calc(100vh - 48px); overflow-y: auto; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 24px #00000012; }
 #toolbar-panel[hidden] { display: none; }
@@ -28,8 +29,8 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #document :is(td, th) > :last-child { margin-bottom: 0; }
 #document[contenteditable=true] > *:focus-within { border-radius: 4px; }
 #document[contenteditable=true] > * { border-radius: 6px; }
-#document[contenteditable=true] > *:hover { background-color: var(--block-hover); border-radius: 6px; outline: 4px solid var(--block-hover); }
-#document[contenteditable=true] :is(th, td):hover { background-color: var(--block-hover); }
+#document[contenteditable=true] > *:hover { border-radius: 6px; outline: 4px solid var(--block-hover); }
+#document[contenteditable=true] > :not(table):hover { background-color: var(--block-hover); }
 #document > p:only-child:has(>br:only-child)::before { content: var(--editor-placeholder); color: var(--muted); pointer-events: none; position: absolute; }
 #document h1 { font-size: 1.8em; line-height: 1.4; font-weight: 720; margin-top: 20px; }
 #document h2 { font-size: 1.4em; line-height: 1.5; margin-top: 16px; }
@@ -55,6 +56,8 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #document figure[data-type=audio] { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); }
 #document figure[data-type=audio]:focus { outline: 2px solid var(--accent); }
 #document audio { display: block; width: 100%; max-width: 100%; }
+#document video { display: block; width: 100%; max-height: 580px; border-radius: 8px; background: #000; }
+#document figure[data-type=video]:focus { outline: 2px solid var(--accent); }
 #document[data-audio-drop=true] { box-shadow: inset 0 0 0 2px var(--accent); background: var(--soft); }
 #document figure[data-type=audio] figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
 #document table { border-collapse: collapse; table-layout: fixed; width: 100%; }
@@ -123,6 +126,7 @@ body.readonly #toolbar { display: none; }
 body.readonly #document { padding: 0 0 12px; min-height: 0; }
 body.readonly #document p:only-child:has(>br:only-child)::before { content: none; }
 /* editor-interactions-style */
+/* editor-columns-style */
 /* editor-caret-style */
 #document figure[data-type=whiteboard] { border:1px solid var(--line); border-radius:9px; padding:10px; cursor:pointer; }
 #document figure[data-type=whiteboard] img { max-height:580px; object-fit:contain; width:100%; }
@@ -229,9 +233,9 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     table: '<rect x="3" y="4" width="14" height="12" rx="2"/><path d="M3 8h14M3 12h14M9 4v12"/>',
     divider: '<path d="M3 10h14M6 5h8M6 15h8"/>'
   };
-  const allowed = new Set('P H1 H2 H3 H4 PRE CODE ASIDE BLOCKQUOTE TABLE TBODY THEAD TFOOT TR TH TD COLGROUP COL FIGURE FIGCAPTION STRONG B EM I U S STRIKE MARK A BR IMG AUDIO HR SPAN UL OL LI'.split(' '));
+  const allowed = new Set('DIV P H1 H2 H3 H4 PRE CODE ASIDE BLOCKQUOTE TABLE TBODY THEAD TFOOT TR TH TD COLGROUP COL FIGURE FIGCAPTION STRONG B EM I U S STRIKE MARK A BR IMG AUDIO VIDEO HR SPAN UL OL LI'.split(' '));
   const attributes = new Set(['data-block-id', 'data-type', 'data-depth', 'data-checked', 'data-number', 'data-language']);
-  const blockTags = new Set('P H1 H2 H3 H4 PRE ASIDE BLOCKQUOTE TABLE FIGURE UL OL LI HR'.split(' '));
+  const blockTags = new Set('DIV P H1 H2 H3 H4 PRE ASIDE BLOCKQUOTE TABLE FIGURE UL OL LI HR'.split(' '));
   const pendingImagePastes = new Map();
   let documentID = '', editable = false, composing = false, pendingLoad = null;
   let matches = [], menuIndex = 0, slashBlock = null, menuQuery = null, history = [], historyIndex = -1, lastEdit = 0;
@@ -270,7 +274,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       for (let node of [...parent.childNodes]) {
         if (node.nodeType === Node.COMMENT_NODE) { node.remove(); continue; }
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
-        if (node.tagName === 'DIV') { const paragraph = document.createElement('p'); paragraph.append(...node.childNodes); node.replaceWith(paragraph); node = paragraph; }
+        if (node.tagName === 'DIV' && !['columns', 'column'].includes(node.dataset.type)) { const paragraph = document.createElement('p'); paragraph.append(...node.childNodes); node.replaceWith(paragraph); node = paragraph; }
         if (node.tagName === 'FONT') {
           const span = document.createElement('span'); const color = safeColor(node.getAttribute('color'));
           if (color) span.style.color = color; span.append(...node.childNodes); node.replaceWith(span); node = span;
@@ -280,7 +284,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
         if (!allowed.has(node.tagName)) { node.replaceWith(...node.childNodes); continue; }
         const foreground = safeColor(node.style.color), background = safeColor(node.style.backgroundColor);
         const normalWeight = node.tagName === 'SPAN' && /^(normal|[1-5]00)$/.test(node.style.fontWeight);
-        const width = ['IMG', 'COL'].includes(node.tagName) && /^(?:\d+(?:\.\d+)?)%$/.test(node.style.width) ? Math.max(2, Math.min(100, parseFloat(node.style.width))) + '%' : '';
+        const width = (['IMG', 'COL'].includes(node.tagName) || node.matches('div[data-type=column]')) && /^(?:\d+(?:\.\d+)?)%$/.test(node.style.width) ? Math.max(2, Math.min(100, parseFloat(node.style.width))) + '%' : '';
         if (node.tagName === 'SPAN') {
           const wrappers = [];
           if (/bold|[6-9]00/.test(node.style.fontWeight)) wrappers.push('strong');
@@ -293,7 +297,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
           const keep = attributes.has(attr.name) || (node.tagName === 'A' && attr.name === 'href')
             || (node.tagName === 'FIGURE' && node.dataset.type === 'whiteboard' && attr.name === 'data-whiteboard-source' && /^\/media\/whiteboards\/[a-f0-9]{64}\.excalidraw$/.test(attr.value))
             || (node.tagName === 'IMG' && ['src', 'alt', 'data-original-src'].includes(attr.name))
-            || (node.tagName === 'AUDIO' && ['src', 'data-original-src'].includes(attr.name));
+            || (['AUDIO', 'VIDEO'].includes(node.tagName) && ['src', 'data-original-src'].includes(attr.name));
           if (!keep) node.removeAttribute(attr.name);
         }
         if (node.tagName === 'A') {
@@ -303,7 +307,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
           const src = safeURL(node.dataset.originalSrc || node.getAttribute('src'), true);
           if (src) { node.setAttribute('src', src); delete node.dataset.originalSrc; } else node.remove();
         }
-        if (node.tagName === 'AUDIO') {
+        if (['AUDIO', 'VIDEO'].includes(node.tagName)) {
           const src = safeAudioURL(node.dataset.originalSrc || node.getAttribute('src'));
           if (src) {
             node.setAttribute('src', src); delete node.dataset.originalSrc;
@@ -324,7 +328,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   const serializedBlocks = new WeakMap();
   const selectionUnits = new WeakMap(), selectionOffsets = new WeakMap();
   let serializedBody = null, needsPreparation = true;
-  const structuralSelector = 'p,h1,h2,h3,h4,pre,aside,blockquote,table,td,th,figure,figcaption,img,audio,ul,ol,li,hr';
+  const structuralSelector = 'div[data-type=columns],div[data-type=column],p,h1,h2,h3,h4,pre,aside,blockquote,table,td,th,figure,figcaption,img,audio,video,ul,ol,li,hr';
   function discardNodeCaches(node) {
     serializedBlocks.delete(node); selectionUnits.delete(node); selectionOffsets.delete(node);
   }
@@ -348,7 +352,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   contentObserver.observe(root, { subtree: true, childList: true, characterData: true, attributes: true });
   // Tables share unchanged row/cell fragments, so a keystroke does not parse
   // hundreds of neighboring cells. Rich text leaves still use the full cleaner.
-  const serializedContainers = new Set('TABLE THEAD TBODY TFOOT TR TD TH COLGROUP'.split(' '));
+  const serializedContainers = new Set('DIV TABLE THEAD TBODY TFOOT TR TD TH COLGROUP'.split(' '));
   function serializeNode(node) {
     let fragment = serializedBlocks.get(node);
     if (fragment !== undefined) return fragment;
@@ -377,17 +381,22 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     let node = selection?.rangeCount ? selection.getRangeAt(0).startContainer : null;
     if (!node || !root.contains(node)) return null;
     if (node.nodeType !== Node.ELEMENT_NODE) node = node.parentElement;
-    if (node.matches('td,th')) return node.children[Math.min(selection.getRangeAt(0).startOffset, node.children.length - 1)] || null;
-    while (node && node.parentElement !== root && !node.parentElement?.matches('td,th')) node = node.parentElement;
+    if (node.matches('td,th,div[data-type=column]')) return node.children[Math.min(selection.getRangeAt(0).startOffset, node.children.length - 1)] || null;
+    while (node && node.parentElement !== root && !node.parentElement?.matches('td,th,div[data-type=column]')) node = node.parentElement;
     return node === root ? null : node;
+  }
+  function columnFor(node) {
+    return (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest('div[data-type=column]') || null;
   }
   function insertionRange() {
     const selection = getSelection(); if (!selection?.rangeCount) return null;
     const range = selection.getRangeAt(0);
-    if (!root.contains(range.startContainer) || !root.contains(range.endContainer) || cellFor(range.startContainer) !== cellFor(range.endContainer)) return null;
+    if (!root.contains(range.startContainer) || !root.contains(range.endContainer) || cellFor(range.startContainer) !== cellFor(range.endContainer) || columnFor(range.startContainer) !== columnFor(range.endContainer)) return null;
     return range.cloneRange();
   }
   function focusBlock(block, atEnd = false) {
+    if (!block) return;
+    while (block?.matches('div[data-type=columns],div[data-type=column]')) block = atEnd ? block.lastElementChild : block.firstElementChild;
     if (!block) return;
     let target = block.tagName === 'TABLE' ? block.querySelector('th,td') : block;
     if (target?.matches('td,th')) target = (atEnd ? target.lastElementChild : target.firstElementChild) || target;
@@ -688,8 +697,9 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   function prepareBlocks() {
     invalidate(contentObserver.takeRecords());
     if (!needsPreparation) return;
+    columnLayout.normalize();
     if (!root.children.length) root.innerHTML = '<p><br></p>';
-    for (const cell of root.querySelectorAll('td,th')) {
+    for (const cell of root.querySelectorAll('td,th,div[data-type=column]')) {
       let paragraph = null;
       for (const node of [...cell.childNodes]) {
         if (blockTags.has(node.nodeName)) { paragraph = null; continue; }
@@ -700,7 +710,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       if (!cell.children.length) cell.innerHTML = '<p><br></p>';
     }
     const ids = new Set();
-    for (const container of [root, ...root.querySelectorAll('td,th')]) {
+    for (const container of [root, ...root.querySelectorAll('td,th,div[data-type=column]')]) {
       let number = 0;
       for (const block of container.children) {
         if (!block.dataset.blockId || ids.has(block.dataset.blockId)) block.dataset.blockId = uuid();
@@ -720,12 +730,12 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       if (board.tabIndex !== 0) board.tabIndex = 0;
       board.title = editable ? t('双击编辑画板，或选中后使用画板操作') : t('Excalidraw 画板');
     }
-    for (const figure of root.querySelectorAll('figure[data-type=audio]')) {
+    for (const figure of root.querySelectorAll('figure[data-type=audio],figure[data-type=video]')) {
       if (figure.contentEditable !== 'false') figure.contentEditable = 'false';
       if (figure.tabIndex !== 0) figure.tabIndex = 0;
-      figure.title = editable ? t('点击播放；选中音频块后按 Delete 删除') : t('音频');
+      figure.title = editable ? t('点击播放；选中媒体块后按 Delete 删除') : t(figure.dataset.type === 'video' ? '视频' : '音频');
     }
-    for (const img of root.querySelectorAll('img,audio')) {
+    for (const img of root.querySelectorAll('img,audio,video')) {
       const src = img.dataset.originalSrc || img.getAttribute('src');
       if (src && !/^(https?:|data:|leonmedia:)/i.test(src)) {
         const resolved = 'leonmedia://asset?path=' + encodeURIComponent(src);
@@ -852,7 +862,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     const command = commands.find(item => item.id === id); const block = slashBlock || blockAtSelection();
     if (!editable || !command || !block) return false;
     if (id === 'whiteboard') return whiteboards.create(block, !!slashBlock || !block.textContent.trim() && !block.querySelector('img'));
-    if (id === 'audio') return audioBlocks.create(block, !!slashBlock || block.tagName === 'P' && !block.textContent.trim() && !block.querySelector('img,audio'));
+    if (id === 'audio') return audioBlocks.create(block, !!slashBlock || block.tagName === 'P' && !block.textContent.trim() && !block.querySelector('img,audio,video'));
     if (id === 'table' && !options.rows) { editorUI.chooseTable(block); return true; }
     checkpoint();
     const selection = window.getSelection(); let content;
@@ -898,7 +908,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   function undo(delta) {
     const index = historyIndex + delta; if (index < 0 || index >= history.length) return;
     history[historyIndex].selection = captureSelection() || history[historyIndex].selection;
-    editorUI.reset(); hideSelectionToolbar(); pendingImagePastes.clear(); historyIndex = index; lastEdit = 0;
+    editorUI.reset(); columnLayout.reset(); hideSelectionToolbar(); pendingImagePastes.clear(); historyIndex = index; lastEdit = 0;
     const parsed = new DOMParser().parseFromString(history[index].body, 'text/html');
     root.innerHTML = parsed.querySelector('article').innerHTML; prepareBlocks(); closeMenu();
     if (!restoreSelection(history[index].selection, true)) focusBlock(root.firstElementChild);
@@ -997,7 +1007,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   function flattenPastedBlocks() {
     // Browsers may nest pasted paragraphs inside the active paragraph. Promote
     // those paragraphs so every paragraph remains a directly addressable block.
-    for (const parent of [...root.children, ...root.querySelectorAll(':is(td,th) > :is(p,h1,h2,h3,h4)')]) {
+    for (const parent of [...root.children, ...root.querySelectorAll(':is(td,th,div[data-type=column]) > :is(p,h1,h2,h3,h4)')]) {
       if (!['P', 'H1', 'H2', 'H3', 'H4'].includes(parent.tagName)) continue;
       const nested = [...parent.querySelectorAll('p,div,h1,h2,h3,h4,pre,aside,table,blockquote')].filter(child => child.parentElement === parent);
       let anchor = parent;
@@ -1082,7 +1092,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (documentID !== id) lastHeight = -1;
     documentID = id; editable = canEdit; document.body.classList.toggle('readonly', !editable);
     root.contentEditable = String(editable); document.documentElement.style.setProperty('--size', size + 'px');
-    if (changed || !editable) { closeTools(); selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); whiteboards.reset(); audioBlocks.reset(); }
+    if (changed || !editable) { closeTools(); selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); columnLayout.reset(); whiteboards.reset(); audioBlocks.reset(); }
     if (changed) {
       const parsed = new DOMParser().parseFromString(body, 'text/html');
       root.innerHTML = cleanHTML(parsed.querySelector('article')?.innerHTML || '<p><br></p>');
@@ -1092,6 +1102,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   }
   /* editor-interactions-script */
   const editorUI = createArticleInteractions({ root, canEdit: () => editable && !composing, checkpoint, notify, focusBlock, blockAtSelection, captureSelection, restoreSelection, execute, send, uuid, closeMenu, frameTask });
+  /* editor-columns-script */
+  const columnLayout = createArticleColumns({ root, canEdit: () => editable && !composing, checkpoint, notify, focusBlock, closeMenu, frameTask });
   /* editor-caret-script */
   const editorCaret = createArticleCaret({ root, canEdit: () => editable && !composing, frameTask });
   /* editor-whiteboards-script */
@@ -1101,6 +1113,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   window.LeonArticle = { load, serialize, execute, commands, cleanHTML, undo, insertPastedImages,
     completeAudio: audioBlocks.complete, cancelAudio: audioBlocks.cancel,
     completeAudios: audioBlocks.completeMany,
+    completeMedia: audioBlocks.completeMedia,
     completeWhiteboard: whiteboards.complete, cancelWhiteboard: whiteboards.cancel,
     completeImageReplacement: editorUI.completeImageReplacement,
     insertLink(url) { const safe = safeURL(url); if (editable && safe) { checkpoint(); document.execCommand('createLink', false, safe); notify(); } },

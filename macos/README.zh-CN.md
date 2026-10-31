@@ -181,7 +181,9 @@ SwiftPM 以 `LeonBookModuleKit` 提供统一第一方模块 seam：模块清单�
 ./scripts/leonblog restart
 ```
 
-`restart` 会优雅关闭当前应用，等待进程退出，再启动。与 `open` 一样，仅在源码、资源或构建脚本发生变化，或必要的可执行文件、资源包缺失时才编译、打包和签名；没有改动时直接重启。需要强制构建时使用 `build`。构建后的应用位于 `macos/dist/leon-book.app`，使用临时签名，适合本机运行。
+`restart` 会优雅关闭当前应用，等待进程退出，再启动。与 `open` 一样，通过文件内容清单判断是否需要更新；没有改动时直接重启。仅编辑器 `RichArticle*.js` / `RichArticle*.css` / `RichArticleEditor.html` 变化时，只复制资源并重新签名，跳过 Swift 编译；其他输入变化或必要的可执行文件、资源包缺失时正常构建。需要强制构建时使用 `build`。构建后的应用位于 `macos/dist/leon-book.app`，使用临时签名，适合本机运行。
+
+所有构建入口共用持久缓存父目录 `~/Library/Caches/leon-book`，内部按项目路径、引擎及测试用途隔离。可设置 `LEON_BOOK_BUILD_CACHE_DIR` 覆盖父目录。旧应用首次升级会正常构建一次，建立输入清单和新位置的缓存；旧临时缓存保留原处，不搬运包含绝对路径的编译产物。资源更新也在独立暂存副本中完成，签名或复制失败不会替换现有应用；更新期间继续编辑的内容会在下次运行时重新检测。
 
 `restart` 默认使用 Debug 增量编译，缩短改代码后的构建时间；首次 Debug 构建要建立独立的模式缓存，仍可能较慢。需要优化后的运行性能时使用 `restart --release`，只生成 Release 而不启动时使用 `build`。`open` / `start` 沿用已安装版本的模式；这四个命令都支持 `--debug` / `--release`，也可通过 `LEON_BOOK_BUILD_CONFIGURATION` 环境变量指定。构建输出会分别显示编译与打包签名的耗时。
 

@@ -164,7 +164,9 @@ struct QAndAView: View {
 
     @ViewBuilder
     private var listContent: some View {
-        if model.questions.isEmpty {
+        if model.questions.isEmpty && (model.isLoading || model.loadingOperations.contains(.questions)) {
+            NativeLoadingPlaceholder(title: NativeLoadingOperations.Kind.questions.title)
+        } else if model.questions.isEmpty {
             VStack(spacing: 12) {
                 NativeIcon.image(model.isFilteringQuestions ? "magnifyingglass" : "questionmark.bubble", size: 32)
                     .foregroundStyle(.secondary)

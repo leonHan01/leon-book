@@ -59,6 +59,16 @@ Editing pauses trigger a recovery snapshot after 3 seconds. Version history supp
 
 Commands support recent items, pins, and configurable shortcuts in **Settings → Commands and Shortcuts**. Search supports filters such as `tag:writing`, `status:draft`, `type:article`, and `[property:value]`.
 
+### Article export and sharing
+
+Use **Export and share** in the article reader or at the top of the article library. The library passes its current filtered results to a selection dialog.
+
+- **PDF**: paginated A4 output with text, images, tables, and code.
+- **Standalone HTML**: images and media embedded for offline reading, with a 256 MB total embedded-media limit.
+- **Article package**: a ZIP containing HTML, original local attachments, and an `index.html` entry point.
+
+Batch PDF and HTML exports also produce a ZIP with separate article files. Links between selected articles are rewritten in batch HTML and article packages. Metadata is optional. Remote images and media are downloaded during export; embedded webpages become source links. Exports use saved content, report missing attachments, and preserve previous output on failure or cancellation. Completed exports can be revealed in Finder or shared through the system share menu.
+
 ## Screenshots
 
 These repository screenshots use a separate demo workspace with sample content. They illustrate the writing, linking, and timeline views; layouts may differ from the current version.
@@ -93,6 +103,10 @@ Run these commands from the repository root:
 | `./scripts/leonblog help` | Show command help |
 
 `open`, `start`, `restart`, and `build` accept `--debug` or `--release`. Debug uses the native build engine when available, with a separate cache from normal Release builds; automatic selection falls back to the toolchain default when needed. Set `LEON_BOOK_BUILD_SYSTEM=default` to select the toolchain default explicitly. The first build for a configuration populates its cache.
+
+When only the article editor's `RichArticle*.js`, `RichArticle*.css`, or `RichArticleEditor.html` changes, `open` / `restart` reuse the executables, update resources, and re-sign without compiling Swift. Content manifests detect additions, deletions, and edits with unchanged timestamps. Swift, configuration, and other resource changes still use a normal build; `build` always forces the Swift build path. Existing apps need one baseline build to create the manifest.
+
+Build caches live in `~/Library/Caches/leon-book/<project-id>/`, separated by engine, tests, coverage, and performance checks. Set `LEON_BOOK_BUILD_CACHE_DIR` to override the parent directory. The first build in the new location warms the cache; old Swift caches containing absolute paths are not relocated.
 
 ## Data and backups
 

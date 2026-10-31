@@ -2,6 +2,8 @@ import Foundation
 
 extension NativeAppModel {
     public func reload() async throws {
+        let loadingID = loadingOperations.begin(.refresh)
+        defer { loadingOperations.end(loadingID) }
         let syncResult = try await store.refreshMarkdownSources()
         try await reloadIndexedState()
         if !syncResult.warnings.isEmpty {

@@ -1,6 +1,7 @@
 import AppKit
 import AVKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 private let momentFeedMaximumWidth: CGFloat = 1_360
 
@@ -33,73 +34,37 @@ struct MomentFeedView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 22) {
-                    HStack(spacing: 15) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [appPalette.brandBlue, appPalette.blue],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                            NativeIcon.image("quote.bubble.fill", size: 24)
-                                .foregroundStyle(.white)
+                HStack(spacing: 10) {
+                    Text("微博")
+                        .font(.title2.weight(.semibold))
+                    Group {
+                        if model.isFilteringMoments {
+                            Text(NativeLocalization.text("已加载 \(model.moments.count) / \(model.filteredMomentCount) 条"))
+                        } else {
+                            Text(NativeLocalization.text("\(model.totalMomentCount) 条"))
                         }
-                        .frame(width: 52, height: 52)
-                        .shadow(color: appPalette.accent.opacity(0.22), radius: 10, y: 5)
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("微博")
-                                .font(.system(size: 31, weight: .bold, design: .rounded))
-                                .foregroundStyle(appPalette.deepBlue)
-                            Text("记下灵感、日常和稍纵即逝的想法")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Label("仅存本机", nativeIcon: "lock.fill", iconSize: 12)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 7)
-                            .background(appPalette.surfaceSecondary, in: Capsule())
                     }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
 
-                    MomentComposerSection(model: model)
+                    Spacer()
+
+                    Button {
+                        isPresentingImmersiveBrowser = true
+                    } label: {
+                        Label("沉浸浏览", nativeIcon: "play.rectangle.fill")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(model.filteredMoments.isEmpty)
+                    .help("像幻灯片一样逐页浏览当前微博，使用方向键翻页")
+                    .accessibilityLabel("进入微博沉浸浏览模式")
                 }
-                .padding(.bottom, 30)
+                .padding(.bottom, 16)
 
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(alignment: .center, spacing: 10) {
-                        Text("历史微博")
-                            .font(.title2.weight(.bold))
-                        Group {
-                            if model.isFilteringMoments {
-                                Text(NativeLocalization.text("已加载 \(model.moments.count) / \(model.filteredMomentCount) 条"))
-                            } else {
-                                Text(NativeLocalization.text("\(model.totalMomentCount) 条"))
-                            }
-                        }
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                MomentComposerSection(model: model)
+                    .padding(.bottom, 22)
 
-                        Spacer()
-
-                        Button {
-                            isPresentingImmersiveBrowser = true
-                        } label: {
-                            Label("沉浸浏览", nativeIcon: "play.rectangle.fill")
-                        }
-                        .nativePrimaryButton()
-                        .disabled(model.filteredMoments.isEmpty)
-                        .help("像幻灯片一样逐页浏览当前微博，使用方向键翻页")
-                        .accessibilityLabel("进入微博沉浸浏览模式")
-                    }
-
+                VStack(alignment: .leading, spacing: 14) {
                     HStack(spacing: 10) {
                         TextField("搜索正文、标签或日期", text: $model.momentSearchText)
                             .textFieldStyle(.roundedBorder)
@@ -202,6 +167,9 @@ struct MomentFeedView: View {
                         }
                         .buttonStyle(.bordered)
                         .tint(model.showsOnlyFavoriteMoments ? appPalette.accent : appPalette.textSecondary)
+                        .labelStyle(.iconOnly)
+                        .accessibilityLabel(LocalizedStringKey(model.showsOnlyFavoriteMoments ? "已筛选收藏" : "仅看收藏"))
+                        .accessibilityValue(Text(LocalizedStringKey(model.showsOnlyFavoriteMoments ? "已选中" : "未选中")))
                         .help("仅显示已收藏的微博")
 
                         if model.isFilteringMoments {
@@ -213,7 +181,7 @@ struct MomentFeedView: View {
 
                         Spacer(minLength: 0)
                     }
-                    .controlSize(.large)
+                    .controlSize(.regular)
 
                     if !availableMomentTagFilters.isEmpty {
                         HStack(spacing: 12) {
@@ -263,7 +231,9 @@ struct MomentFeedView: View {
                         .background(appPalette.surfaceSecondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
 
-                    if model.filteredMoments.isEmpty {
+                    if model.filteredMoments.isEmpty && (model.isLoading || model.isLoadingMoreMoments) {
+                        NativeLoadingPlaceholder(title: NativeLocalization.text("正在加载微博…"))
+                    } else if model.filteredMoments.isEmpty {
                         VStack(spacing: 12) {
                             NativeIcon.image(model.isFilteringMoments ? "line.3.horizontal.decrease.circle" : "quote.bubble", size: 32)
                                 .foregroundStyle(appPalette.accent)
@@ -282,7 +252,7 @@ struct MomentFeedView: View {
                         }
                         .frame(maxWidth: .infinity, minHeight: 280)
                     } else {
-                        LazyVStack(spacing: 28) {
+                        VStack(spacing: 28) {
                             ForEach(momentTimeline) { group in
                                 VStack(alignment: .leading, spacing: 14) {
                                     Button {
@@ -359,21 +329,11 @@ struct MomentFeedView: View {
                 }
             }
             .frame(maxWidth: momentFeedMaximumWidth, alignment: .leading)
-            .padding(.horizontal, 34)
-            .padding(.top, 32)
+            .padding(.horizontal, 28)
+            .padding(.top, 22)
             .padding(.bottom, 44)
         }
-        .background(
-            LinearGradient(
-                colors: [
-                    appPalette.lightBlue,
-                    appPalette.canvas,
-                    appPalette.canvas,
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
+        .background(appPalette.canvas)
         .tint(appPalette.accent)
         .sheet(item: $imageBrowser) { browser in
             MomentImageBrowserView(
@@ -461,16 +421,12 @@ private struct MomentCardsLayout: View, Equatable {
 
     var body: some View {
         if columnCount == 1 {
-            LazyVStack(spacing: 16) {
-                momentCards(for: moments)
-            }
+            momentCards(for: moments)
         } else {
             let columns = NativeMomentColumns.distribute(moments, columnCount: columnCount)
             HStack(alignment: .top, spacing: 16) {
                 ForEach(columns.indices, id: \.self) { index in
-                    LazyVStack(spacing: 16) {
-                        momentCards(for: columns[index])
-                    }
+                    momentCards(for: columns[index])
                     .frame(maxWidth: .infinity, alignment: .top)
                 }
             }
@@ -479,8 +435,9 @@ private struct MomentCardsLayout: View, Equatable {
 
     @ViewBuilder
     private func momentCards(for moments: [NativeMoment]) -> some View {
-        ForEach(moments) { moment in
-            MomentCard(moment: moment, store: store) { imageIndex in
+        MomentVirtualColumn(moments: moments) { moment, width in
+            MomentCard(moment: moment, store: store, availableWidth: width,
+                       videoPosterMaxPixelSize: columnCount == 1 ? 1_280 : columnCount == 2 ? 960 : 640) { imageIndex in
                 imageBrowser = MomentImageBrowserState(
                     images: moment.imageAttachments,
                     initialIndex: imageIndex
@@ -543,6 +500,7 @@ private struct MomentComposerSection: View {
 
     @ObservedObject var model: NativeAppModel
     @State private var isExpanded = false
+    @State private var isDropTargeted = false
 
     private var isEditing: Bool { model.editingMomentID != nil }
 
@@ -553,50 +511,46 @@ private struct MomentComposerSection: View {
                     isExpanded.toggle()
                 }
             } label: {
-                HStack(spacing: 12) {
-                    NativeIcon.image(isEditing ? "pencil" : "square.and.pencil")
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(appPalette.accent, in: Circle())
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(LocalizedStringKey(isEditing ? "继续编辑" : "记录此刻"))
-                            .font(.headline)
-                        Text(LocalizedStringKey(isEditing ? "修改内容后保存更新" : "写点什么，或分享照片、视频与音频"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    if !isExpanded || isEditing {
+                        Text(LocalizedStringKey(isEditing ? "继续编辑" : "这一刻，有什么想记录的？"))
+                            .font(.body)
+                            .foregroundStyle(isEditing ? appPalette.textPrimary : appPalette.textSecondary)
                     }
 
                     Spacer()
 
                     Text(LocalizedStringKey(isExpanded ? "收起" : "开始创作"))
                         .font(.caption)
-                        .foregroundStyle(isExpanded ? Color.secondary : appPalette.accent)
-                    NativeIcon.image(isExpanded ? "chevron.up" : "chevron.down", size: 12)
-                        .foregroundStyle(isExpanded ? Color.secondary : appPalette.accent)
+                        .foregroundStyle(.secondary)
+                    NativeIcon.image(isExpanded ? "chevron.up" : "chevron.down", size: 11)
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 15)
+                .padding(.horizontal, 16)
+                .padding(.vertical, isExpanded ? 10 : 14)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(LocalizedStringKey(isEditing ? "编辑微博" : "发布微博"))
             .accessibilityValue(Text(LocalizedStringKey(isExpanded ? "已展开" : "已折叠")))
+            .background(isDropTargeted ? Color.accentColor.opacity(0.08) : .clear)
+            .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) { providers in
+                guard model.acceptMomentVideoDrop(providers) else { return false }
+                withAnimation(.easeInOut(duration: 0.18)) { isExpanded = true }
+                return true
+            }
 
             if isExpanded {
-                Divider()
-                    .padding(.horizontal, 18)
                 MomentComposerView(model: model)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(appPalette.border)
         }
-        .shadow(color: .black.opacity(0.055), radius: 16, y: 7)
         .onAppear {
             // Do not hide an unsaved draft or an edit session when returning to this page.
             isExpanded = isEditing || !model.momentDraft.isEmpty
@@ -616,6 +570,7 @@ private struct MomentComposerView: View {
 
     @ObservedObject var model: NativeAppModel
     @StateObject private var richTextController = MomentRichTextController()
+    @State private var isDropTargeted = false
 
     private var tags: [String] {
         NativeMomentTag.extract(from: model.momentDraft.text)
@@ -632,54 +587,15 @@ private struct MomentComposerView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                Button {
-                    richTextController.toggleBold()
-                } label: {
-                    NativeIcon.image("bold")
-                }
-                .help("加粗选中的文字")
-                .keyboardShortcut("b", modifiers: .command)
-
-                Menu {
-                    Button("默认颜色") {
-                        richTextController.apply(color: nil)
-                    }
-                    Divider()
-                    ForEach(NativeMomentTextColor.allCases) { color in
-                        Button {
-                            richTextController.apply(color: color)
-                        } label: {
-                            Label(LocalizedStringKey(color.label), nativeIcon: "circle.fill")
-                                .foregroundStyle(color.swiftUIColor)
-                        }
-                    }
-                } label: {
-                    Label("文字颜色", nativeIcon: "paintpalette")
-                }
-                .help("修改选中文字的颜色")
-
-                Spacer()
-
-                Text("\((model.momentDraft.text as NSString).length) / 500")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(
-                        (model.momentDraft.text as NSString).length >= 450
-                            ? appPalette.accent : Color.secondary
-                    )
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Color.primary.opacity(0.04), in: Capsule())
-            }
-
+        VStack(alignment: .leading, spacing: 10) {
             MomentRichTextEditor(
                 text: $model.momentDraft.text,
                 textRuns: $model.momentDraft.textRuns,
                 controller: richTextController,
-                onPasteImages: model.uploadMomentPastedImages
+                onPasteImages: model.uploadMomentPastedImages,
+                onDropVideos: model.uploadMomentVideos
             )
-                .frame(height: 156)
+                .frame(height: 112)
                 .overlay(alignment: .topLeading) {
                     if model.momentDraft.text.isEmpty {
                         Text("这一刻，有什么想记录的？")
@@ -691,12 +607,11 @@ private struct MomentComposerView: View {
                             .accessibilityHidden(true)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .background(appPalette.surface, in: RoundedRectangle(cornerRadius: 12))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(Color.primary.opacity(0.1))
-                }
+                .help("在正文中输入 #标签 添加标签；也可拖入 MP4 视频。")
+
+            Text("可从访达拖入 MP4 视频")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             if let query = richTextController.activeTagQuery, !tagSuggestions.isEmpty {
                 MomentTagSuggestionMenu(
@@ -707,11 +622,7 @@ private struct MomentComposerView: View {
                 )
             }
 
-            if tags.isEmpty {
-                Text("在正文中输入 #标签 添加标签；编辑时直接修改或删除 #标签 即可更新。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
+            if !tags.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         Label("标签", nativeIcon: "tag", iconSize: 12)
@@ -762,7 +673,7 @@ private struct MomentComposerView: View {
                                         MomentImage(
                                             media: media,
                                             store: model.store,
-                                            loadMode: .thumbnail(maxPixelSize: 240)
+                                            maxPixelSize: 240
                                         )
                                     }
                                 }
@@ -795,13 +706,45 @@ private struct MomentComposerView: View {
 
             Divider()
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Button {
+                    richTextController.toggleBold()
+                } label: {
+                    NativeIcon.image("bold")
+                }
+                .accessibilityLabel("加粗选中的文字")
+                .help("加粗选中的文字")
+                .keyboardShortcut("b", modifiers: .command)
+
+                Menu {
+                    Button("默认颜色") {
+                        richTextController.apply(color: nil)
+                    }
+                    Divider()
+                    ForEach(NativeMomentTextColor.allCases) { color in
+                        Button {
+                            richTextController.apply(color: color)
+                        } label: {
+                            Label(LocalizedStringKey(color.label), nativeIcon: "circle.fill")
+                                .foregroundStyle(color.swiftUIColor)
+                        }
+                    }
+                } label: {
+                    Label("文字颜色", nativeIcon: "paintpalette")
+                }
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("文字颜色")
+                .help("修改选中文字的颜色")
+
+
                 Button {
                     model.chooseMomentImages()
                 } label: {
                     Label("添加图片", nativeIcon: "photo.on.rectangle.angled")
                 }
-                .buttonStyle(.bordered)
+                .labelStyle(.iconOnly)
+                .help("添加图片")
+                .accessibilityLabel("添加图片")
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
 
                 Button {
@@ -809,7 +752,9 @@ private struct MomentComposerView: View {
                 } label: {
                     Label("添加视频", nativeIcon: "video.badge.plus")
                 }
-                .buttonStyle(.bordered)
+                .labelStyle(.iconOnly)
+                .help("添加视频")
+                .accessibilityLabel("添加视频")
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
 
                 Button {
@@ -817,7 +762,9 @@ private struct MomentComposerView: View {
                 } label: {
                     Label("添加音频", nativeIcon: "waveform")
                 }
-                .buttonStyle(.bordered)
+                .labelStyle(.iconOnly)
+                .help("添加音频")
+                .accessibilityLabel("添加音频")
                 .disabled(model.momentDraft.images.count >= 9 || model.isUploadingMedia)
 
                 if model.isUploadingMedia {
@@ -828,6 +775,13 @@ private struct MomentComposerView: View {
 
                 Spacer()
 
+                Text("\((model.momentDraft.text as NSString).length) / 500")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(
+                        (model.momentDraft.text as NSString).length >= 450
+                            ? appPalette.accent : Color.secondary
+                    )
+
                 if model.editingMomentID != nil {
                     Button("取消") {
                         model.cancelMomentEditing()
@@ -835,6 +789,9 @@ private struct MomentComposerView: View {
                     .disabled(model.isPublishingMoment)
                 }
 
+                if model.isPublishingMoment {
+                    ProgressView().controlSize(.small)
+                }
                 Button {
                     model.publishMoment()
                 } label: {
@@ -848,27 +805,25 @@ private struct MomentComposerView: View {
                     )
                 }
                 .nativePrimaryButton()
-                .controlSize(.large)
                 .keyboardShortcut(.return, modifiers: .command)
                 .help("⌘ Return 保存微博")
                 .disabled(model.momentDraft.isEmpty || model.isPublishingMoment || model.isUploadingMedia)
             }
 
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    Text("拖入或粘贴图片可直接添加")
-                    Spacer(minLength: 16)
-                    Text("最多 9 个附件 · 视频 MP4 · 音频 MP3")
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("拖入或粘贴图片可直接添加")
-                    Text("最多 9 个附件 · 视频 MP4 · 音频 MP3")
-                }
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
-        .padding(18)
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $isDropTargeted) {
+            model.acceptMomentVideoDrop($0)
+        }
     }
 }
 
@@ -938,6 +893,8 @@ private struct MomentCard: View {
 
     let moment: NativeMoment
     let store: LocalBlogStore
+    let availableWidth: CGFloat
+    let videoPosterMaxPixelSize: Int
     let onOpenImage: (Int) -> Void
     let onEdit: () -> Void
     let onToggleFavorite: () -> Void
@@ -1022,7 +979,9 @@ private struct MomentCard: View {
             }
 
             if !images.isEmpty {
-                MomentImageGrid(images: images, store: store, onOpenImage: onOpenImage)
+                MomentDeferredMedia(height: MomentMediaSizing.imageHeight(count: images.count, width: max(1, min(availableWidth, 860) - 36))) {
+                    MomentImageGrid(images: images, store: store, onOpenImage: onOpenImage)
+                }
             }
 
             ForEach(moment.audioAttachments) { audio in
@@ -1030,9 +989,11 @@ private struct MomentCard: View {
             }
 
             if !videos.isEmpty {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(videos) { video in
-                        MomentInlineVideoPlayer(media: video, store: store)
+                MomentDeferredMedia(height: MomentMediaSizing.videoHeight(count: videos.count, width: max(1, min(availableWidth, 860) - 36))) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(videos) { video in
+                            MomentInlineVideoPlayer(media: video, store: store, posterMaxPixelSize: videoPosterMaxPixelSize)
+                        }
                     }
                 }
             }
@@ -1131,6 +1092,38 @@ private struct MomentCard: View {
     }
 }
 
+/// Do not construct dozens of image/player subviews for a card that flashes
+/// through the viewport during a fast fling. Keep its footprint while waiting;
+/// leaving the virtual column cancels this short, nonblocking warm-up.
+struct MomentDeferredMedia<Content: View>: View {
+    let height: CGFloat
+    @ViewBuilder let content: () -> Content
+    @State private var ready = false
+    @Environment(\.momentMediaIsScrolling) private var isScrolling
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if ready {
+                content()
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.quinary)
+                    .frame(height: height)
+            }
+        }
+        .task(id: isScrolling) {
+            // Keep already-visible media in place. Defer only new cards until
+            // the wheel settles, rather than repeatedly decoding passing rows.
+            guard !isScrolling, !ready else { return }
+            do { try await Task.sleep(nanoseconds: 120_000_000) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            ready = true
+        }
+        .onDisappear { ready = false }
+    }
+}
+
 private struct MomentCardImageAccessibilityModifier: ViewModifier {
     let hasImages: Bool
     let onOpenImage: () -> Void
@@ -1172,12 +1165,10 @@ private struct MomentStyledText: View {
     }
 }
 
-private struct MomentImageGrid: View {
+struct MomentImageGrid: View {
     let images: [NativeMedia]
     let store: LocalBlogStore
     let onOpenImage: (Int) -> Void
-
-    @Environment(\.displayScale) private var displayScale
 
     private let spacing: CGFloat = 6
 
@@ -1193,54 +1184,67 @@ private struct MomentImageGrid: View {
         images.count == 1 ? 240 : imageTileSize
     }
 
-    private var thumbnailMaxPixelSize: Int {
-        MomentThumbnailSizing.maxPixelSize(
-            for: CGSize(width: imageTileSize, height: imageHeight),
-            displayScale: displayScale
-        )
-    }
-
-    private var gridColumns: [GridItem] {
-        Array(
-            repeating: GridItem(.fixed(imageTileSize), spacing: spacing),
-            count: columns
-        )
-    }
-
     var body: some View {
-        LazyVGrid(
-            columns: gridColumns,
-            alignment: .leading,
-            spacing: spacing
-        ) {
-            ForEach(Array(images.enumerated()), id: \.element.id) { index, image in
-                Button {
-                    onOpenImage(index)
-                } label: {
-                    MomentImage(
-                        media: image,
-                        store: store,
-                        loadMode: .thumbnail(maxPixelSize: thumbnailMaxPixelSize)
-                    )
-                        .frame(width: imageTileSize, height: imageHeight)
-                        .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(.primary.opacity(0.18), lineWidth: 1)
-                                .allowsHitTesting(false)
+        // Each post has at most nine attachments. The column already virtualizes
+        // posts, so an additional scroll-aware lazy grid only adds layout work.
+        VStack(alignment: .leading, spacing: spacing) {
+            ForEach(0..<((images.count + columns - 1) / columns), id: \.self) { row in
+                HStack(spacing: spacing) {
+                    ForEach(0..<columns, id: \.self) { column in
+                        let index = row * columns + column
+                        if images.indices.contains(index) {
+                            imageButton(images[index], at: index)
+                        } else {
+                            Color.clear.aspectRatio(1, contentMode: .fit)
                         }
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(NativeLocalization.text("放大浏览图片 \(image.name)"))
-                .accessibilityHint("点按打开图片浏览器")
             }
         }
+        .frame(maxWidth: CGFloat(columns) * imageTileSize + CGFloat(columns - 1) * spacing, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(images.count == 1 ? Text("1 张图片") : Text(NativeLocalization.text("\(images.count) 张图片")))
         .accessibilityHint("打开图片浏览器，可在浏览器中逐张查看")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onOpenImage(0) }
+    }
+
+    private func imageButton(_ image: NativeMedia, at index: Int) -> some View {
+        Button {
+            onOpenImage(index)
+        } label: {
+            MomentSizedThumbnail(media: image, store: store)
+                .aspectRatio(imageTileSize / imageHeight, contentMode: .fit)
+                .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(.primary.opacity(0.18), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(NativeLocalization.text("放大浏览图片 \(image.name)"))
+        .accessibilityHint("点按打开图片浏览器")
+    }
+}
+
+private struct MomentSizedThumbnail: View {
+    let media: NativeMedia
+    let store: LocalBlogStore
+    @Environment(\.displayScale) private var displayScale
+    @State private var pointSize = CGSize.zero
+    @State private var isNearViewport = false
+
+    var body: some View {
+        Color.clear.overlay {
+            if isNearViewport, pointSize.width > 0 {
+                MomentImage(media: media, store: store, maxPixelSize: MomentThumbnailSizing.maxPixelSize(
+                    for: pointSize, displayScale: displayScale
+                ))
+            }
+        }
+        .background(NativeMediaVisibility(onSizeChange: { pointSize = $0 }) { isNearViewport = $0 })
     }
 }
 
@@ -1260,7 +1264,8 @@ private enum MomentThumbnailSizing {
 private struct MomentImage: View {
     let media: NativeMedia
     let store: LocalBlogStore
-    let loadMode: NativeImageLoadMode
+    let maxPixelSize: Int
+    @Environment(\.nativeImagePipeline) private var imagePipeline
 
     @State private var image: NSImage?
     @State private var failedToLoad = false
@@ -1268,11 +1273,11 @@ private struct MomentImage: View {
     init(
         media: NativeMedia,
         store: LocalBlogStore,
-        loadMode: NativeImageLoadMode = .thumbnail(maxPixelSize: 480)
+        maxPixelSize: Int = 480
     ) {
         self.media = media
         self.store = store
-        self.loadMode = loadMode
+        self.maxPixelSize = maxPixelSize
     }
 
     var body: some View {
@@ -1291,18 +1296,21 @@ private struct MomentImage: View {
             }
         }
         .clipped()
-        .task(id: "\(media.url)|\(loadMode.cacheKey)") {
+        .task(id: "\(media.url)|\(maxPixelSize)") {
             image = nil
             failedToLoad = false
             guard let url = await store.mediaURL(for: media.url) else {
+                guard !Task.isCancelled else { return }
                 failedToLoad = true
                 return
             }
-            let decoded = await NativeImagePipeline.shared.image(from: url, mode: loadMode)
+            guard !Task.isCancelled else { return }
+            let decoded = await imagePipeline.image(from: url, mode: .thumbnail(maxPixelSize: maxPixelSize))
             guard !Task.isCancelled else { return }
             image = decoded.image
             failedToLoad = image == nil
         }
+        .onDisappear { image = nil }
         .accessibilityLabel(media.name)
     }
 }
@@ -1312,6 +1320,7 @@ private struct MomentVideoThumbnail: View {
     let store: LocalBlogStore
 
     @State private var poster: NSImage?
+    @State private var isLoadingPoster = true
 
     var body: some View {
         ZStack {
@@ -1335,7 +1344,15 @@ private struct MomentVideoThumbnail: View {
                 .padding(6)
         }
         .clipped()
+        .overlay(alignment: .topTrailing) {
+            if media.isVideo && isLoadingPoster {
+                ProgressView().controlSize(.small).padding(8)
+                    .accessibilityLabel("正在加载视频封面…")
+            }
+        }
         .task(id: media.url) {
+            isLoadingPoster = true
+            defer { if !Task.isCancelled { isLoadingPoster = false } }
             poster = nil
             guard let url = await store.mediaURL(for: media.url) else { return }
             let result = await NativeVideoThumbnailPipeline.shared.thumbnail(for: url, maxPixelSize: 240)
@@ -1349,12 +1366,23 @@ private struct MomentVideoThumbnail: View {
 private struct MomentInlineVideoPlayer: View {
     let media: NativeMedia
     let store: LocalBlogStore
+    let posterMaxPixelSize: Int
+    @Environment(\.displayScale) private var displayScale
 
     @StateObject private var playback: NativeInlineVideoPlayerModel
+    @State private var isNearViewport = false
+    @State private var posterPointSize = CGSize.zero
 
-    init(media: NativeMedia, store: LocalBlogStore) {
+    private var visiblePosterPixelSize: Int? {
+        guard posterPointSize.width > 0 else { return nil }
+        let required = Int(ceil(max(posterPointSize.width, posterPointSize.height) * max(1, displayScale)))
+        return min(posterMaxPixelSize, max(192, ((required + 63) / 64) * 64))
+    }
+
+    init(media: NativeMedia, store: LocalBlogStore, posterMaxPixelSize: Int = 1_280) {
         self.media = media
         self.store = store
+        self.posterMaxPixelSize = posterMaxPixelSize
         _playback = StateObject(
             wrappedValue: NativeInlineVideoPlayerModel(mediaID: media.url)
         )
@@ -1362,41 +1390,48 @@ private struct MomentInlineVideoPlayer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            ZStack {
-                Color.black.opacity(0.92)
-                switch playback.phase {
-                case .resolving:
-                    ProgressView("正在读取视频…")
-                        .foregroundStyle(.white)
-                case .poster:
-                    posterButton
-                case .preparing:
-                    if let player = playback.player {
-                        MomentAVPlayerView(player: player)
-                        loadingOverlay
-                    } else {
-                        ProgressView("正在验证视频…")
-                            .foregroundStyle(.white)
+            // The canvas owns the size. Poster/player intrinsic sizes must not
+            // participate in the waterfall's repeated scroll measurements.
+            Color.black.opacity(0.92)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay {
+                    ZStack {
+                        switch playback.phase {
+                        case .resolving:
+                            if isNearViewport {
+                                ProgressView("正在读取视频…")
+                                    .foregroundStyle(.white)
+                            }
+                        case .poster:
+                            posterButton
+                        case .preparing:
+                            if let player = playback.player {
+                                MomentAVPlayerView(player: player)
+                                loadingOverlay
+                            } else {
+                                ProgressView("正在验证视频…")
+                                    .foregroundStyle(.white)
+                            }
+                        case .ready:
+                            if let player = playback.player {
+                                MomentAVPlayerView(player: player)
+                            } else {
+                                ProgressView("正在准备播放器…")
+                                    .foregroundStyle(.white)
+                            }
+                        case let .failed(message):
+                            failureView(message: message)
+                        }
                     }
-                case .ready:
-                    if let player = playback.player {
-                        MomentAVPlayerView(player: player)
-                    } else {
-                        ProgressView("正在准备播放器…")
-                            .foregroundStyle(.white)
-                    }
-                case let .failed(message):
-                    failureView(message: message)
                 }
-            }
             .frame(maxWidth: 840)
-            .aspectRatio(16 / 9, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(.white.opacity(0.14), lineWidth: 1)
                     .allowsHitTesting(false)
             }
+            .background(NativeMediaVisibility(onSizeChange: { posterPointSize = $0 }) { isNearViewport = $0 })
 
             HStack(spacing: 8) {
                 Label(media.name, nativeIcon: "video")
@@ -1412,11 +1447,15 @@ private struct MomentInlineVideoPlayer: View {
             .frame(maxWidth: 840)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: media.url) {
-            await playback.resolve(using: store)
+        .task(id: "\(media.url)|\(visiblePosterPixelSize ?? 0)|\(isNearViewport)") {
+            guard isNearViewport, let visiblePosterPixelSize else {
+                playback.release(discardPoster: true)
+                return
+            }
+            await playback.resolve(using: store, posterMaxPixelSize: visiblePosterPixelSize)
         }
         .onDisappear {
-            playback.release()
+            playback.release(discardPoster: true)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(NativeLocalization.text("视频 \(media.name)"))
@@ -1932,7 +1971,7 @@ private struct MomentImmersiveImageGrid: View {
                     MomentImage(
                         media: image,
                         store: store,
-                        loadMode: .thumbnail(maxPixelSize: 1_280)
+                        maxPixelSize: 1_280
                     )
                     .frame(maxWidth: .infinity)
                     .frame(height: imageHeight)
@@ -1957,15 +1996,20 @@ private struct MomentImageBrowserState: Identifiable {
     let initialIndex: Int
 }
 
-private struct MomentImageBrowserView: View {
+struct MomentImageBrowserView: View {
     let images: [NativeMedia]
-    let initialIndex: Int
     let store: LocalBlogStore
 
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedIndex = 0
+    @State private var selectedIndex: Int
     @State private var scale: CGFloat = 1
     @State private var keyboardMonitor: Any?
+
+    init(images: [NativeMedia], initialIndex: Int, store: LocalBlogStore) {
+        self.images = images
+        self.store = store
+        _selectedIndex = State(initialValue: min(max(0, initialIndex), max(0, images.count - 1)))
+    }
 
     private var selectedImage: NativeMedia { images[selectedIndex] }
     private var browserSize: CGSize {
@@ -2050,7 +2094,7 @@ private struct MomentImageBrowserView: View {
                             MomentImage(
                                 media: image,
                                 store: store,
-                                loadMode: .thumbnail(maxPixelSize: 180)
+                                maxPixelSize: 180
                             )
                                 .frame(width: 74, height: 74)
                                 .clipShape(RoundedRectangle(cornerRadius: 7))
@@ -2074,7 +2118,6 @@ private struct MomentImageBrowserView: View {
         .frame(width: browserSize.width, height: browserSize.height)
         .background(Color.gray.opacity(0.72).ignoresSafeArea())
         .onAppear {
-            selectedIndex = min(max(0, initialIndex), max(0, images.count - 1))
             installKeyboardMonitor()
         }
         .onDisappear {
@@ -2130,6 +2173,7 @@ private struct MomentZoomableImage: View {
     let media: NativeMedia
     let store: LocalBlogStore
     @Binding var scale: CGFloat
+    @Environment(\.nativeImagePipeline) private var imagePipeline
 
     @State private var image: NSImage?
     @State private var failedToLoad = false
@@ -2172,15 +2216,20 @@ private struct MomentZoomableImage: View {
         }
         .background(Color.gray.opacity(0.48), in: RoundedRectangle(cornerRadius: 12))
         .task(id: media.url) {
+            image = nil
+            failedToLoad = false
             guard let url = await store.mediaURL(for: media.url) else {
+                guard !Task.isCancelled else { return }
                 failedToLoad = true
                 return
             }
-            let decoded = await NativeImagePipeline.shared.image(from: url, mode: .fullSize)
+            guard !Task.isCancelled else { return }
+            let decoded = await imagePipeline.image(from: url, mode: .fullSize)
             guard !Task.isCancelled else { return }
             image = decoded.image
             failedToLoad = image == nil
         }
+        .onDisappear { image = nil }
         .accessibilityLabel(NativeLocalization.text("大图浏览：\(media.name)"))
     }
 }

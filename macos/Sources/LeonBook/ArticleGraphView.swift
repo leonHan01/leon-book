@@ -154,7 +154,9 @@ struct ArticleGraphView: View {
 
             Divider()
 
-            if model.articleGraph.nodes.isEmpty {
+            if model.articleGraph.nodes.isEmpty && (model.isLoading || model.loadingOperations.contains(.graph)) {
+                NativeLoadingPlaceholder(title: NativeLoadingOperations.Kind.graph.title)
+            } else if model.articleGraph.nodes.isEmpty {
                 EmptyState(
                     title: "还没有文章可显示",
                     message: "创建文章并使用 [[文章标题]] 建立引用后，关系图会自动更新。",
