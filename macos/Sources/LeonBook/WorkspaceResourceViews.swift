@@ -8,6 +8,8 @@ struct NativeWorkspaceResourceSection: View {
     @ObservedObject var model: NativeAppModel
     @Binding var expandedFolderIDs: Set<String>
     @Binding var selectedResourceIDs: Set<String>
+    @State private var dropTargetFolderPath: String?
+    @State private var dropTargetRowID: String?
 
     var body: some View {
         let directory = NativeWorkspaceResourceTree.articleDirectory(model.workspaceResources)
@@ -22,7 +24,9 @@ struct NativeWorkspaceResourceSection: View {
                     model: model,
                     resources: directory,
                     expandedFolderIDs: $expandedFolderIDs,
-                    selectedResourceIDs: $selectedResourceIDs
+                    selectedResourceIDs: $selectedResourceIDs,
+                    dropTargetFolderPath: $dropTargetFolderPath,
+                    dropTargetRowID: $dropTargetRowID
                 )
             }
         } header: {
@@ -78,6 +82,8 @@ private struct NativeWorkspaceResourceBranch: View {
     let resources: [NativeWorkspaceResourceNode]
     @Binding var expandedFolderIDs: Set<String>
     @Binding var selectedResourceIDs: Set<String>
+    @Binding var dropTargetFolderPath: String?
+    @Binding var dropTargetRowID: String?
     @State private var hoveredResourceID: String?
 
     var body: some View {
@@ -90,7 +96,9 @@ private struct NativeWorkspaceResourceBranch: View {
                             model: model,
                             resources: resource.children,
                             expandedFolderIDs: $expandedFolderIDs,
-                            selectedResourceIDs: $selectedResourceIDs
+                            selectedResourceIDs: $selectedResourceIDs,
+                            dropTargetFolderPath: $dropTargetFolderPath,
+                            dropTargetRowID: $dropTargetRowID
                         )
                     },
                     label: {
@@ -98,15 +106,22 @@ private struct NativeWorkspaceResourceBranch: View {
                     }
                 )
                 .id(resource.id)
-                .onDrop(of: [UTType.fileURL.identifier, UTType.utf8PlainText.identifier], isTargeted: nil) { providers in
-                    acceptResourceDrop(providers, destinationFolder: resource.pageContainerPath)
+                .overlay {
+                    if dropTargetFolderPath == resource.pageContainerPath {
+                        RoundedRectangle(cornerRadius: 7)
+                            .stroke(appPalette.deepBlue, lineWidth: 2)
+                            .allowsHitTesting(false)
+                    }
                 }
             } else {
                 resourceRow(resource)
                     .id(resource.id)
-                    .onDrop(of: [UTType.fileURL.identifier, UTType.utf8PlainText.identifier], isTargeted: nil) { providers in
-                        guard resource.canContainPages else { return false }
-                        return acceptResourceDrop(providers, destinationFolder: resource.pageContainerPath)
+                    .overlay {
+                        if resource.canContainPages && dropTargetFolderPath == resource.pageContainerPath {
+                            RoundedRectangle(cornerRadius: 7)
+                                .stroke(appPalette.deepBlue, lineWidth: 2)
+                                .allowsHitTesting(false)
+                        }
                     }
             }
         }
@@ -155,6 +170,8 @@ private struct NativeWorkspaceResourceBranch: View {
                 .disabled(model.isMarkdownSourceReadOnly)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+        .contentShape(Rectangle())
         .onHover { hovering in
             if hovering { hoveredResourceID = resource.id }
             else if hoveredResourceID == resource.id { hoveredResourceID = nil }
@@ -167,6 +184,11 @@ private struct NativeWorkspaceResourceBranch: View {
             return NSItemProvider(
                 object: NativeWorkspaceResourceDragPayload.encode(ids) as NSString
             )
+        }
+        .onDrop(of: [UTType.fileURL.identifier, UTType.utf8PlainText.identifier],
+                isTargeted: dropTargetBinding(for: resource)) { providers in
+            guard !model.isMarkdownSourceReadOnly else { return false }
+            return acceptResourceDrop(providers, destinationFolder: NativeWorkspaceResourceDropTarget.folderPath(for: resource))
         }
     }
 
@@ -260,6 +282,22 @@ private struct NativeWorkspaceResourceBranch: View {
                     expandedFolderIDs.insert(resourceID)
                 } else {
                     expandedFolderIDs.remove(resourceID)
+                }
+            }
+        )
+    }
+
+    private func dropTargetBinding(for resource: NativeWorkspaceResourceNode) -> Binding<Bool> {
+        let path = NativeWorkspaceResourceDropTarget.folderPath(for: resource)
+        return Binding(
+            get: { dropTargetRowID == resource.id },
+            set: { targeted in
+                if targeted && !model.isMarkdownSourceReadOnly {
+                    dropTargetRowID = resource.id
+                    dropTargetFolderPath = path
+                } else if dropTargetRowID == resource.id {
+                    dropTargetRowID = nil
+                    dropTargetFolderPath = nil
                 }
             }
         )

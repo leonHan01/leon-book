@@ -60,6 +60,12 @@ final class ArticleDirectoryTests {
         try directoryExpect(items.filter { $0.kind == .folder }.allSatisfy { NativeArticleDirectoryPolicy.depth(of: $0.relativePath) <= 5 }, "navigation must have at most five directory levels")
         try directoryExpect(roots.first { $0.relativePath == "Docs" }?.children.count == 2, "index pages must stay inside their directory")
         try directoryExpect(roots.first { $0.relativePath == "未分类" }?.children.first?.sourceRelativePath == "Project.md", "legacy root articles must appear in Uncategorized without losing source identity")
+        let rootArticle = items.first { $0.kind == .article && $0.sourceRelativePath == "Project.md" }!
+        let nestedArticle = items.first { $0.kind == .article && $0.sourceRelativePath == "Docs/Guide.md" }!
+        let targetFolder = items.first { $0.kind == .folder && $0.relativePath == "Docs" }!
+        try directoryExpect(NativeWorkspaceResourceDropTarget.folderPath(for: rootArticle) == "未分类", "dropping on a root article targets its displayed folder")
+        try directoryExpect(NativeWorkspaceResourceDropTarget.folderPath(for: nestedArticle) == "Docs", "dropping on an article targets its immediate folder")
+        try directoryExpect(NativeWorkspaceResourceDropTarget.folderPath(for: targetFolder) == "Docs", "dropping on a folder targets that folder")
         try directoryExpect(NativeWorkspaceResourceTree.folderPaths(in: roots).contains("Project/Child") == false, "articles must not become destination directories")
         try directoryExpect(NativeWorkspaceResourceTree.ancestors(of: "workspace-article:note-4", in: roots).count == 5, "deep legacy articles must be reachable at the fifth directory")
         let summaries = try await store.listArticles()

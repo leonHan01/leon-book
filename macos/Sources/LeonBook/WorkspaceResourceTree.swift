@@ -43,6 +43,12 @@ struct NativeWorkspaceResourceMove: Hashable, Sendable {
     let destinationRelativePath: String
 }
 
+enum NativeWorkspaceResourceDropTarget {
+    static func folderPath(for resource: NativeWorkspaceResourceNode) -> String {
+        NativeArticleDirectoryPolicy.displayFolderPath(resource.pageContainerPath)
+    }
+}
+
 struct NativeWorkspaceResourceNode: Identifiable, Hashable, Sendable {
     enum Kind: String, Hashable, Sendable {
         case folder
