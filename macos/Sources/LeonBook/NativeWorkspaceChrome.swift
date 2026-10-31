@@ -34,11 +34,11 @@ struct NativeWorkspaceRail: View {
     var body: some View {
         VStack(spacing: 10) {
             destination(.dashboard, title: "概览", icon: "house")
+            destination(.moments, title: "微博", icon: "quote.bubble")
             destination(.articles, title: "全部文章", icon: "doc")
             destination(.canvas, title: "无限画布", icon: "square.dashed")
             destination(.photos, title: "相册", icon: "photo.on.rectangle")
             destination(.mediaLibrary, title: "影音库", icon: "play.rectangle")
-            destination(.moments, title: "微博", icon: "quote.bubble")
             destination(.qAndA, title: "问答", icon: "questionmark.bubble")
             if model.isTodoModuleEnabled {
                 destination(.todos, title: "待办", icon: "checklist")

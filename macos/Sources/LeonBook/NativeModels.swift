@@ -1278,15 +1278,71 @@ public enum NativeMomentTextColor: String, Codable, CaseIterable, Hashable, Iden
     }
 }
 
+public enum NativeMomentHighlightColor: String, Codable, CaseIterable, Hashable, Identifiable {
+    case yellow, green, blue, pink, purple, orange
+
+    public var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .yellow: return "淡黄色"
+        case .green: return "淡绿色"
+        case .blue: return "淡蓝色"
+        case .pink: return "淡粉色"
+        case .purple: return "淡紫色"
+        case .orange: return "淡橙色"
+        }
+    }
+
+    var rgb: UInt32 {
+        switch self {
+        case .yellow: return 0xF4C34F
+        case .green: return 0x6BCC9B
+        case .blue: return 0x70A7EB
+        case .pink: return 0xE898B3
+        case .purple: return 0xB194DC
+        case .orange: return 0xF0AF79
+        }
+    }
+}
+
 public struct NativeMomentTextRun: Codable, Hashable {
     public let text: String
     public let bold: Bool
     public let color: NativeMomentTextColor?
+    public let highlighted: Bool?
+    public let highlightColor: NativeMomentHighlightColor?
+    public let headingLevel: Int?
+    public let italic: Bool?
+    public let strikethrough: Bool?
+    public let code: Bool?
 
-    public init(text: String, bold: Bool, color: NativeMomentTextColor?) {
+    public init(text: String, bold: Bool, color: NativeMomentTextColor?, highlighted: Bool? = nil,
+                headingLevel: Int? = nil, italic: Bool? = nil, strikethrough: Bool? = nil, code: Bool? = nil,
+                highlightColor: NativeMomentHighlightColor? = nil) {
         self.text = text
         self.bold = bold
         self.color = color
+        self.highlighted = highlighted == true || highlightColor != nil ? true : nil
+        // Yellow remains the legacy representation, avoiding rewrites of old runs.
+        self.highlightColor = highlightColor == .yellow ? nil : highlightColor
+        self.headingLevel = headingLevel.flatMap { (1...4).contains($0) ? $0 : nil }
+        self.italic = italic == true ? true : nil
+        self.strikethrough = strikethrough == true ? true : nil
+        self.code = code == true ? true : nil
+    }
+
+    public var resolvedHighlightColor: NativeMomentHighlightColor? {
+        highlighted == true ? (highlightColor ?? .yellow) : nil
+    }
+
+    func replacingText(_ text: String) -> Self {
+        Self(text: text, bold: bold, color: color, highlighted: highlighted, headingLevel: headingLevel,
+             italic: italic, strikethrough: strikethrough, code: code, highlightColor: highlightColor)
+    }
+
+    func hasSameStyle(as other: Self) -> Bool {
+        replacingText("") == other.replacingText("")
     }
 }
 
@@ -1329,8 +1385,7 @@ public enum NativeMomentTag {
                 if retainedIndexSet.contains(position) {
                     append(
                         character,
-                        bold: run.bold,
-                        color: run.color,
+                        style: run,
                         to: &bodyRuns
                     )
                 }
@@ -1396,21 +1451,15 @@ public enum NativeMomentTag {
 
     private static func append(
         _ character: Character,
-        bold: Bool,
-        color: NativeMomentTextColor?,
+        style: NativeMomentTextRun,
         to runs: inout [NativeMomentTextRun]
     ) {
         guard let previous = runs.last,
-              previous.bold == bold,
-              previous.color == color else {
-            runs.append(NativeMomentTextRun(text: String(character), bold: bold, color: color))
+              previous.hasSameStyle(as: style) else {
+            runs.append(style.replacingText(String(character)))
             return
         }
-        runs[runs.count - 1] = NativeMomentTextRun(
-            text: previous.text + String(character),
-            bold: bold,
-            color: color
-        )
+        runs[runs.count - 1] = style.replacingText(previous.text + String(character))
     }
 
     private static func isTagMarker(_ character: Character) -> Bool {

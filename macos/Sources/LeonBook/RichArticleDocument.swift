@@ -1,7 +1,7 @@
 import Foundation
 
 /// The authoritative article body is semantic HTML. Markdown is only consumed
-/// by the one-way importer below; editing and saving never reconstruct Markdown.
+/// by the one-way importer below and editor input shortcuts; saving never reconstructs Markdown.
 enum RichArticleDocument {
     static let opening = "<article data-leon-format=\"html-v1\">"
     static let empty = opening + "<p><br></p></article>"

@@ -607,9 +607,9 @@ private struct MomentComposerView: View {
                             .accessibilityHidden(true)
                     }
                 }
-                .help("在正文中输入 #标签 添加标签；也可拖入 MP4 视频。")
+                .help("支持 # 标题、**加粗**、*斜体*、~~删除线~~、==高亮== 和 `代码`；#标签 可添加标签。")
 
-            Text("可从访达拖入 MP4 视频")
+            Text("按回车分段；可从访达拖入 MP4 视频")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -715,6 +715,8 @@ private struct MomentComposerView: View {
                 .accessibilityLabel("加粗选中的文字")
                 .help("加粗选中的文字")
                 .keyboardShortcut("b", modifiers: .command)
+
+                MomentHighlightPicker(controller: richTextController)
 
                 Menu {
                     Button("默认颜色") {
@@ -1140,6 +1142,80 @@ private struct MomentCardImageAccessibilityModifier: ViewModifier {
     }
 }
 
+private struct MomentHighlightPicker: View {
+    @ObservedObject var controller: MomentRichTextController
+    @State private var isPresented = false
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Button {
+                controller.toggleHighlight()
+            } label: {
+                VStack(spacing: 1) {
+                    NativeIcon.image("highlighter")
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(Color(controller.highlightColor.nsColor.withAlphaComponent(1)))
+                        .frame(width: 14, height: 3)
+                }
+            }
+            .accessibilityLabel("高亮文字")
+            .help("使用所选颜色高亮；再次点击可取消")
+
+            Button {
+                isPresented.toggle()
+            } label: {
+                NativeIcon.image("chevron.down", size: 9)
+                    .frame(width: 14, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("选择高亮颜色")
+            .help("选择高亮颜色")
+            .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("高亮颜色").font(.headline)
+                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(60), spacing: 8), count: 3), spacing: 10) {
+                        ForEach(NativeMomentHighlightColor.allCases) { color in
+                            Button {
+                                controller.apply(highlight: color)
+                                isPresented = false
+                            } label: {
+                                VStack(spacing: 5) {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color(color.nsColor))
+                                        .frame(width: 54, height: 30)
+                                        .overlay {
+                                            if color == controller.highlightColor {
+                                                NativeIcon.image("checkmark", size: 12)
+                                                    .foregroundStyle(.primary)
+                                            }
+                                        }
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .strokeBorder(color == controller.highlightColor ? Color.accentColor : Color.primary.opacity(0.1))
+                                        }
+                                    Text(LocalizedStringKey(color.label)).font(.caption)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(Text(LocalizedStringKey(color.label)))
+                            .accessibilityAddTraits(color == controller.highlightColor ? .isSelected : [])
+                        }
+                    }
+                    Divider()
+                    Button("取消高亮") {
+                        controller.apply(highlight: nil)
+                        isPresented = false
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(16)
+            }
+        }
+    }
+}
+
 private struct MomentStyledText: View {
     let text: String
     let runs: [NativeMomentTextRun]
@@ -1155,11 +1231,18 @@ private struct MomentStyledText: View {
             ? runs
             : [NativeMomentTextRun(text: text, bold: false, color: nil)]
         return resolvedRuns.reduce(Text("")) { partial, run in
-            partial + styled(Text(run.text), run: run)
+            partial + styled(run)
         }
     }
 
-    private func styled(_ text: Text, run: NativeMomentTextRun) -> Text {
+    private func styled(_ run: NativeMomentTextRun) -> Text {
+        var attributed = AttributedString(run.text)
+        if let color = run.resolvedHighlightColor { attributed.backgroundColor = Color(color.nsColor) }
+        var text = Text(attributed)
+        if let level = run.headingLevel { text = text.font(.system(size: MomentMarkdownInput.fontSize(for: level))) }
+        if run.code == true { text = text.font(.system(.body, design: .monospaced)) }
+        if run.italic == true { text = text.italic() }
+        if run.strikethrough == true { text = text.strikethrough() }
         let weighted = run.bold ? text.bold() : text
         return run.color.map { weighted.foregroundColor($0.swiftUIColor) } ?? weighted
     }

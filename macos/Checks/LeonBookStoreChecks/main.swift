@@ -827,11 +827,45 @@ func testMomentHashtagTagsArePersistedAndUpdated() async throws {
     }
 }
 
+func testMomentHighlightPersistence() async throws {
+    try await withWorkspace { workspace in
+        let store = LocalBlogStore(rootURL: workspace)
+        let runs = [
+            NativeMomentTextRun(text: "  重点", bold: true, color: .red, highlighted: true, headingLevel: 2, italic: true),
+            NativeMomentTextRun(text: "\n第二段 #标签  ", bold: false, color: nil, strikethrough: true, code: true),
+        ]
+        let saved = try await store.saveMoment(text: runs.map(\.text).joined(), textRuns: runs, images: [])
+        expect(saved.text == "重点\n第二段", "saving should preserve paragraphs and remove tags")
+        expect(saved.textRuns.first?.highlighted == true, "saving should preserve highlight after trimming")
+        let restored = try await store.listMoments()
+        expect(restored.first?.textRuns == saved.textRuns, "highlight should survive storage round trip")
+        let updated = try await store.updateMoment(id: saved.id, text: saved.text, textRuns: saved.textRuns, images: [])
+        expect(updated.displayContent.runs == saved.textRuns, "editing and display should retain all rich text styles")
+        let oldJSON = Data(#"{"text":"旧内容","bold":false,"color":null}"#.utf8)
+        let oldRun = try JSONDecoder().decode(NativeMomentTextRun.self, from: oldJSON)
+        expect(oldRun.highlighted == nil, "old text runs should decode without highlight")
+        let legacyHighlight = try JSONDecoder().decode(NativeMomentTextRun.self, from: Data(#"{"text":"旧高亮","bold":false,"highlighted":true}"#.utf8))
+        expect(legacyHighlight.resolvedHighlightColor == .yellow, "legacy yellow highlights should remain compatible")
+        let coloredRuns = NativeMomentHighlightColor.allCases.map {
+            NativeMomentTextRun(text: "\($0.rawValue) ", bold: false, color: nil, highlightColor: $0)
+        }
+        let colored = try await store.saveMoment(text: coloredRuns.map(\.text).joined(), textRuns: coloredRuns, images: [])
+        expect(colored.textRuns.map(\.resolvedHighlightColor) == NativeMomentHighlightColor.allCases,
+               "normalization must preserve all highlight colors")
+        let reopened = try await store.listMoments()
+        expect(reopened.first { $0.id == colored.id }?.textRuns == colored.textRuns, "all colors should persist in storage")
+        let edited = try await store.updateMoment(id: colored.id, text: colored.text + " #颜色", textRuns: colored.textRuns + [
+            NativeMomentTextRun(text: " #颜色", bold: false, color: nil),
+        ], images: [])
+        expect(edited.displayContent.runs == colored.textRuns, "editing and removing tags should preserve highlight colors")
+    }
+}
+
 func testMomentTagRemovalPreservesTextRunStyles() {
     let content = NativeMomentTag.content(
         from: "重点 #新闻 正文",
         textRuns: [
-            NativeMomentTextRun(text: "重点 ", bold: true, color: .red),
+            NativeMomentTextRun(text: "重点 ", bold: true, color: .red, highlighted: true),
             NativeMomentTextRun(text: "#新闻", bold: false, color: .blue),
             NativeMomentTextRun(text: " 正文", bold: false, color: .green),
         ]
@@ -840,7 +874,7 @@ func testMomentTagRemovalPreservesTextRunStyles() {
     expect(content.tags == ["新闻"], "removing hashtag markup should retain the tag")
     expect(
         content.runs == [
-            NativeMomentTextRun(text: "重点", bold: true, color: .red),
+            NativeMomentTextRun(text: "重点", bold: true, color: .red, highlighted: true),
             NativeMomentTextRun(text: " 正文", bold: false, color: .green),
         ],
         "removing hashtag markup should preserve the styles of surrounding text"
@@ -1171,6 +1205,7 @@ let checks: [(String, () async throws -> Void)] = [
     ("backup snapshot copies complete data and skips lock", testBackupSnapshotCopiesCompleteDataAndSkipsLock),
     ("backup destination cannot be inside source", testBackupDestinationCannotBeInsideSource),
     ("moment hashtags persist and update", testMomentHashtagTagsArePersistedAndUpdated),
+    ("moment highlight persists", testMomentHighlightPersistence),
     ("removing hashtags preserves moment text styling", { testMomentTagRemovalPreservesTextRunStyles() }),
     ("moment search matches text, tags, and dates", { testMomentSearchMatchesTextTagsAndDates() }),
     ("moment date filters select the expected ranges", { testMomentDateFilters() }),

@@ -240,6 +240,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   let documentID = '', editable = false, composing = false, pendingLoad = null;
   let matches = [], menuIndex = 0, slashBlock = null, menuQuery = null, history = [], historyIndex = -1, lastEdit = 0;
   let formatRange = null, formatDocumentID = '', formatBackward = false, colorMode = null, selectingWithPointer = false;
+  let markdownTail = null;
   const send = payload => window.webkit?.messageHandlers?.richArticle?.postMessage({ ...payload, documentID });
   // Visual work consumes only the latest event in a display frame. Content
   // publication stays synchronous so save/navigation never miss the last edit.
@@ -751,7 +752,10 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     prepareBlocks(); const body = serialize(); const now = Date.now();
     if (history[historyIndex]?.body !== body) {
       history.splice(historyIndex + 1);
-      const entry = { body, selection: captureSelection() };
+      const entry = { body, selection: captureSelection(), markdownExit: markdownTail && {
+        point: selectionPoint(markdownTail.node, markdownTail.node.childNodes.length),
+        tag: markdownTail.node.tagName, text: markdownTail.text
+      } };
       if (coalesce && now - lastEdit < 600 && historyIndex > 0) history[historyIndex] = entry;
       else { history.push(entry); historyIndex++; }
       if (history.length > 100) { history.shift(); historyIndex--; }
@@ -911,18 +915,124 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     editorUI.reset(); columnLayout.reset(); hideSelectionToolbar(); pendingImagePastes.clear(); historyIndex = index; lastEdit = 0;
     const parsed = new DOMParser().parseFromString(history[index].body, 'text/html');
     root.innerHTML = parsed.querySelector('article').innerHTML; prepareBlocks(); closeMenu();
+    markdownTail = null;
     if (!restoreSelection(history[index].selection, true)) focusBlock(root.firstElementChild);
+    const exit = history[index].markdownExit;
+    if (exit?.point) {
+      const block = root.querySelector(`[data-block-id="${CSS.escape(exit.point.id)}"]`);
+      const node = [...(block?.querySelectorAll(exit.tag) || [])].find(node => node.textContent === exit.text &&
+        selectionPoint(node, node.childNodes.length)?.offset === exit.point.offset);
+      if (node) setMarkdownExit(node);
+    }
     send({ type: 'change', body: serialize() }); scheduleResize();
   }
   function updateLanguage() { const block = blockAtSelection(); language.hidden = block?.tagName !== 'PRE'; if (!language.hidden) language.value = block.dataset.language || 'text'; }
+  const markdownInlineRules = [
+    ['strong', /(?<![\\*])\*\*([^*\n]+)\*\*$/], ['strong', /(?<![\\_])__([^_\n]+)__$/],
+    ['em', /(?<![\\*])\*([^*\n]+)\*$/], ['s', /(?<![\\~])~~([^~\n]+)~~$/],
+    ['mark', /(?<![\\=])==([^=\n]+)==$/], ['code', /(?<![\\`])`([^`\n]+)`$/]
+  ];
+  function setMarkdownExit(node) {
+    markdownTail = { node, text: node.textContent };
+    const after = document.createTextNode(''); node.after(after); getSelection().setPosition(after, 0);
+  }
+  function finishMarkdownTyping() {
+    const tail = markdownTail; markdownTail = null;
+    const selection = getSelection();
+    if (!tail || !root.contains(tail.node) || !selection?.isCollapsed || !tail.node.contains(selection.anchorNode)) return;
+    // WebKit can place the first native keystroke back inside the preceding
+    // inline element, even when the caret is in an empty text sibling. Move
+    // only the newly committed text out; never touch an active IME composition.
+    const text = tail.node.textContent;
+    if (!text.startsWith(tail.text) || text.length <= tail.text.length) return;
+    const range = markdownTextRange(tail.node, tail.text.length, text.length - tail.text.length);
+    if (!range) return;
+    const after = document.createTextNode(range.toString()); range.deleteContents(); tail.node.after(after);
+    selection.setPosition(after, after.length);
+  }
+  function markdownTextRange(block, start, length) {
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT), range = document.createRange();
+    let offset = 0, began = false;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!began && start <= offset + node.length) { range.setStart(node, start - offset); began = true; }
+      if (began && start + length <= offset + node.length) { range.setEnd(node, start + length - offset); return range; }
+      offset += node.length;
+    }
+    return null;
+  }
+  function applyMarkdownShortcut(paragraphBreak = false) {
+    if (!editable || composing) return false;
+    const selection = getSelection();
+    if (!selection?.isCollapsed || !selection.rangeCount) return false;
+    const caret = selection.getRangeAt(0), element = caret.startContainer.nodeType === Node.ELEMENT_NODE ? caret.startContainer : caret.startContainer.parentElement;
+    const block = element?.closest('p,h1,h2,h3,h4,blockquote,aside');
+    if (!block || !root.contains(block) || element.closest('pre,code,a,figure')) return false;
+    const before = caret.cloneRange(); before.selectNodeContents(block); before.setEnd(caret.startContainer, caret.startOffset);
+    // WebKit uses NBSP for a trailing typed space in contenteditable.
+    // Normalizing it keeps Markdown's marker offsets unchanged.
+    const prefix = before.toString().replace(/\u00a0/g, ' ');
+    let match, tag = '', type = '', codeLanguage = '';
+    if (block.tagName === 'P' && !block.dataset.type) {
+      if ((match = prefix.match(/^(#{1,4}) /))) tag = 'h' + match[1].length;
+      else if ((match = prefix.match(/^> /))) tag = 'blockquote';
+      else if ((match = prefix.match(/^[-*+] /))) { tag = 'p'; type = 'bullet'; }
+      else if ((match = prefix.match(/^(\d{1,6})[.)] /))) { tag = 'p'; type = 'number'; }
+      else if (paragraphBreak && (match = prefix.match(/^```([\w+-]*)$/))) { tag = 'pre'; codeLanguage = match[1] || 'text'; }
+    }
+    if (!tag && block.tagName === 'P' && (!block.dataset.type || block.dataset.type === 'bullet') &&
+        (match = prefix.match(/^\[([ xX])\] /))) { tag = 'p'; type = 'task'; }
+    if (tag) {
+      const marker = markdownTextRange(block, 0, match[0].length); if (!marker) return false;
+      notify(); // Preserve the literal shortcut as a separate undo step.
+      marker.deleteContents();
+      const next = document.createElement(tag); next.dataset.blockId = block.dataset.blockId || uuid();
+      if (block.dataset.depth) next.dataset.depth = block.dataset.depth;
+      if (type) next.dataset.type = type;
+      if (type === 'task') next.dataset.checked = String(match[1].toLowerCase() === 'x');
+      if (type === 'number') next.dataset.number = match[1];
+      if (tag === 'pre') {
+        const code = document.createElement('code'); code.textContent = block.textContent;
+        if (!code.textContent) code.append(document.createElement('br'));
+        next.dataset.language = codeLanguage; next.append(code);
+      } else { next.append(...block.childNodes); if (!next.hasChildNodes()) next.append(document.createElement('br')); }
+      block.replaceWith(next);
+      const position = markdownTextRange(next, Math.max(0, prefix.length - match[0].length), 0);
+      if (position) { selection.removeAllRanges(); selection.addRange(position); }
+      else focusBlock(next);
+      closeMenu(); updateLanguage(); return true;
+    }
+    if (paragraphBreak) return false;
+    for (const [tag, rule] of markdownInlineRules) {
+      const match = prefix.match(rule); if (!match || match[1].trim() !== match[1]) continue;
+      const markerLength = tag === 'em' || tag === 'code' ? 1 : 2;
+      const range = markdownTextRange(block, match.index, match[0].length);
+      const inner = markdownTextRange(block, match.index + markerLength, match[1].length);
+      if (!range || !inner) continue;
+      notify();
+      const formatted = document.createElement(tag); formatted.append(inner.cloneContents());
+      range.deleteContents(); range.insertNode(formatted);
+      // A text sibling keeps subsequent typing outside the new inline style.
+      setMarkdownExit(formatted);
+      closeMenu(); return true;
+    }
+    return false;
+  }
   root.addEventListener('compositionstart', () => { checkpoint(); composing = true; closeMenu(); hideSelectionToolbar(); });
-  root.addEventListener('compositionend', () => { composing = false; notify(true); updateMenu(); if (pendingLoad) { const args = pendingLoad; pendingLoad = null; load(...args); } });
-  root.addEventListener('input', event => { if (!event.isComposing) { notify(true); menuIndex = 0; updateMenu(); } });
+  root.addEventListener('compositionend', () => { composing = false; finishMarkdownTyping(); const converted = applyMarkdownShortcut(); notify(!converted); updateMenu(); if (pendingLoad) { const args = pendingLoad; pendingLoad = null; load(...args); } });
+  root.addEventListener('input', event => {
+    if (!event.isComposing && !composing) {
+      finishMarkdownTyping();
+      const converted = event.inputType === 'insertText' && /[ *_~=`]/.test(event.data || '') && applyMarkdownShortcut();
+      notify(!converted); menuIndex = 0; updateMenu();
+    }
+  });
   root.addEventListener('beforeinput', event => {
     if (!editable || composing || event.isComposing) return;
     checkpoint();
+    if (event.inputType !== 'insertText') markdownTail = null;
     const block = blockAtSelection();
     if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') { event.preventDefault(); undo(event.inputType === 'historyUndo' ? -1 : 1); }
+    if (event.inputType === 'insertParagraph' && applyMarkdownShortcut(true)) { event.preventDefault(); notify(); return; }
     if (event.inputType === 'insertParagraph' && block && block.tagName !== 'PRE' && block.tagName !== 'TABLE') { event.preventDefault(); newParagraph(block); }
   });
   root.addEventListener('keydown', event => {
@@ -1094,6 +1204,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     root.contentEditable = String(editable); document.documentElement.style.setProperty('--size', size + 'px');
     if (changed || !editable) { closeTools(); selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); columnLayout.reset(); whiteboards.reset(); audioBlocks.reset(); }
     if (changed) {
+      markdownTail = null;
       const parsed = new DOMParser().parseFromString(body, 'text/html');
       root.innerHTML = cleanHTML(parsed.querySelector('article')?.innerHTML || '<p><br></p>');
       prepareBlocks(); history = [{ body: serialize(), selection: null }]; historyIndex = 0; lastEdit = 0; closeMenu();

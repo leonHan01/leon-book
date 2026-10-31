@@ -2225,3 +2225,19 @@
 "正在更新文章…" = "Updating article…";
 
 "正在加载视频封面…" = "Loading video thumbnail…";
+
+"按回车分段；可从访达拖入 MP4 视频" = "Press Return to start a new paragraph; drop MP4 videos from Finder";
+"高亮选中的文字；再次点击可取消" = "Highlight selected text; click again to remove highlighting";
+
+"支持 # 标题、**加粗**、*斜体*、~~删除线~~、==高亮== 和 `代码`；#标签 可添加标签。" = "Use # heading, **bold**, *italic*, ~~strikethrough~~, ==highlight== and `code`; use #tag to add tags.";
+
+"淡黄色" = "Pale Yellow";
+"淡绿色" = "Pale Green";
+"淡蓝色" = "Pale Blue";
+"淡粉色" = "Pale Pink";
+"淡紫色" = "Pale Purple";
+"淡橙色" = "Pale Orange";
+"高亮颜色" = "Highlight Color";
+"选择高亮颜色" = "Choose Highlight Color";
+"取消高亮" = "Remove Highlight";
+"使用所选颜色高亮；再次点击可取消" = "Highlight with the selected color; click again to remove";

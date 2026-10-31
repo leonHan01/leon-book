@@ -4355,7 +4355,7 @@ public actor LocalBlogStore {
             let length = selectionEnd - selectionStart
             let segment = String(runCharacters.dropFirst(startOffset).prefix(length))
             appendMomentTextRun(
-                NativeMomentTextRun(text: segment, bold: run.bold, color: run.color),
+                run.replacingText(segment),
                 to: &normalizedRuns
             )
             remaining -= length
@@ -4369,16 +4369,11 @@ public actor LocalBlogStore {
     private func appendMomentTextRun(_ run: NativeMomentTextRun, to runs: inout [NativeMomentTextRun]) {
         guard !run.text.isEmpty else { return }
         guard let previous = runs.last,
-              previous.bold == run.bold,
-              previous.color == run.color else {
+              previous.hasSameStyle(as: run) else {
             runs.append(run)
             return
         }
-        runs[runs.count - 1] = NativeMomentTextRun(
-            text: previous.text + run.text,
-            bold: run.bold,
-            color: run.color
-        )
+        runs[runs.count - 1] = run.replacingText(previous.text + run.text)
     }
 
     private func normalizeBody(_ body: String) -> String {

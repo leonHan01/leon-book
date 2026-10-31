@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 final class MomentRichTextController: ObservableObject {
     private weak var textView: NSTextView?
     @Published private(set) var activeTagQuery: String?
+    @Published private(set) var highlightColor: NativeMomentHighlightColor = .yellow
 
     func attach(to textView: NSTextView) {
         self.textView = textView
@@ -53,6 +54,42 @@ final class MomentRichTextController: ObservableObject {
 
         textView.textStorage?.addAttribute(.foregroundColor, value: nsColor, range: range)
         textView.didChangeText()
+    }
+
+    func toggleHighlight() {
+        guard let textView else { return }
+        let range = textView.selectedRange()
+        guard range.length > 0, let storage = textView.textStorage else {
+            let isHighlighted = MomentTextRuns.isHighlighted(textView.typingAttributes)
+            apply(highlight: isHighlighted ? nil : highlightColor)
+            return
+        }
+        var allHighlighted = true
+        storage.enumerateAttributes(in: range) { attributes, _, _ in
+            if !MomentTextRuns.isHighlighted(attributes) { allHighlighted = false }
+        }
+        apply(highlight: allHighlighted ? nil : highlightColor)
+    }
+
+    func apply(highlight color: NativeMomentHighlightColor?) {
+        guard let textView else { return }
+        if let color { highlightColor = color }
+        let range = textView.selectedRange()
+        if range.length == 0 {
+            for key in [NSAttributedString.Key.backgroundColor, .momentHighlighted, .momentHighlightColor] {
+                textView.typingAttributes.removeValue(forKey: key)
+            }
+            if let color {
+                textView.typingAttributes.merge(MomentTextRuns.highlightAttributes(for: color)) { _, next in next }
+            }
+        } else if let storage = textView.textStorage {
+            for key in [NSAttributedString.Key.backgroundColor, .momentHighlighted, .momentHighlightColor] {
+                storage.removeAttribute(key, range: range)
+            }
+            if let color { storage.addAttributes(MomentTextRuns.highlightAttributes(for: color), range: range) }
+            textView.didChangeText()
+        }
+        textView.window?.makeFirstResponder(textView)
     }
 
     func completeTagSuggestion(_ tag: String) {
@@ -190,6 +227,8 @@ struct MomentRichTextEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: MomentRichTextEditor
+        private var applyingShortcut = false
+        private var pendingInsertion: String?
 
         init(parent: MomentRichTextEditor) {
             self.parent = parent
@@ -197,6 +236,16 @@ struct MomentRichTextEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
+            guard !applyingShortcut else { return }
+            let insertion = pendingInsertion
+            pendingInsertion = nil
+            if insertion != nil, !textView.hasMarkedText(), textView.undoManager?.isUndoing != true,
+               textView.undoManager?.isRedoing != true {
+                applyingShortcut = true
+                MomentMarkdownInput.convert(in: textView)
+                if insertion == "\n" { MomentMarkdownInput.resetParagraphTyping(in: textView) }
+                applyingShortcut = false
+            }
             parent.text = textView.string
             parent.textRuns = MomentTextRuns.runs(from: textView.attributedString())
             parent.controller.updateTagQuery(from: textView)
@@ -214,7 +263,9 @@ struct MomentRichTextEditor: NSViewRepresentable {
         ) -> Bool {
             let replacementLength = ((replacementString ?? "") as NSString).length
             let currentLength = (textView.string as NSString).length
-            return currentLength - affectedCharRange.length + replacementLength <= parent.maximumLength
+            let allowed = currentLength - affectedCharRange.length + replacementLength <= parent.maximumLength
+            if allowed, !applyingShortcut { pendingInsertion = replacementString }
+            return allowed
         }
     }
 }
@@ -323,7 +374,24 @@ private final class MomentTextView: NSTextView {
     }
 }
 
-private enum MomentTextRuns {
+enum MomentTextRuns {
+    // Clipboard RTF/HTML can carry white, transparent or other page backgrounds.
+    // Only an explicit editor action represents our persisted highlight.
+    static let highlightAttributes = highlightAttributes(for: .yellow)
+
+    static func highlightAttributes(for color: NativeMomentHighlightColor) -> [NSAttributedString.Key: Any] {
+        [.backgroundColor: color.nsColor, .momentHighlighted: true, .momentHighlightColor: color.rawValue]
+    }
+
+    static func isHighlighted(_ attributes: [NSAttributedString.Key: Any]) -> Bool {
+        attributes[.momentHighlighted] as? Bool == true && attributes[.backgroundColor] != nil
+    }
+
+    static func highlightColor(in attributes: [NSAttributedString.Key: Any]) -> NativeMomentHighlightColor? {
+        guard isHighlighted(attributes) else { return nil }
+        return (attributes[.momentHighlightColor] as? String).flatMap(NativeMomentHighlightColor.init(rawValue:)) ?? .yellow
+    }
+
     static let defaultAttributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: 16, weight: .regular),
         .foregroundColor: NSColor.labelColor,
@@ -336,8 +404,17 @@ private enum MomentTextRuns {
         let result = NSMutableAttributedString()
         for run in resolvedRuns where !run.text.isEmpty {
             var attributes = defaultAttributes
-            attributes[.font] = NSFont.systemFont(ofSize: 16, weight: run.bold ? .bold : .regular)
+            var font = run.code == true ? NSFont.monospacedSystemFont(ofSize: 16, weight: run.bold ? .bold : .regular)
+                : NSFont.systemFont(ofSize: MomentMarkdownInput.fontSize(for: run.headingLevel), weight: run.bold ? .bold : .regular)
+            if run.italic == true { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
+            attributes[.font] = font
+            attributes[.momentHeadingLevel] = run.headingLevel
+            attributes[.momentCode] = run.code
+            if run.strikethrough == true { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             attributes[.foregroundColor] = run.color?.nsColor ?? NSColor.labelColor
+            if let color = run.resolvedHighlightColor {
+                attributes.merge(highlightAttributes(for: color)) { _, next in next }
+            }
             result.append(NSAttributedString(string: run.text, attributes: attributes))
         }
         return result
@@ -355,7 +432,13 @@ private enum MomentTextRuns {
             let run = NativeMomentTextRun(
                 text: text,
                 bold: font.fontDescriptor.symbolicTraits.contains(.bold),
-                color: NativeMomentTextColor.resolve(attributes[.foregroundColor] as? NSColor)
+                color: NativeMomentTextColor.resolve(attributes[.foregroundColor] as? NSColor),
+                highlighted: isHighlighted(attributes) ? true : nil,
+                headingLevel: attributes[.momentHeadingLevel] as? Int,
+                italic: font.fontDescriptor.symbolicTraits.contains(.italic) ? true : nil,
+                strikethrough: (attributes[.strikethroughStyle] as? Int ?? 0) != 0 ? true : nil,
+                code: attributes[.momentCode] as? Bool,
+                highlightColor: highlightColor(in: attributes)
             )
             append(run, to: &result)
         }
@@ -365,16 +448,19 @@ private enum MomentTextRuns {
     private static func append(_ run: NativeMomentTextRun, to runs: inout [NativeMomentTextRun]) {
         guard !run.text.isEmpty else { return }
         guard let previous = runs.last,
-              previous.bold == run.bold,
-              previous.color == run.color else {
+              previous.hasSameStyle(as: run) else {
             runs.append(run)
             return
         }
-        runs[runs.count - 1] = NativeMomentTextRun(
-            text: previous.text + run.text,
-            bold: run.bold,
-            color: run.color
-        )
+        runs[runs.count - 1] = run.replacingText(previous.text + run.text)
+    }
+}
+
+extension NativeMomentHighlightColor {
+    var nsColor: NSColor {
+        NSColor(srgbRed: CGFloat((rgb >> 16) & 0xff) / 255,
+                green: CGFloat((rgb >> 8) & 0xff) / 255,
+                blue: CGFloat(rgb & 0xff) / 255, alpha: 0.28)
     }
 }
 
