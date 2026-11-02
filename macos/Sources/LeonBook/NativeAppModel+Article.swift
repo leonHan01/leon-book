@@ -48,7 +48,7 @@ extension NativeAppModel {
         }
     }
 
-    func schedulePostSaveArticleRefresh(_ saved: NativeArticle, recoveryID: String) {
+    func schedulePostSaveArticleRefresh(_ saved: NativeArticle, resourcesChanged: Bool) {
         articlePostSaveTask?.cancel()
         let activeStore = store
         let workspace = workspaceGeneration
@@ -73,15 +73,12 @@ extension NativeAppModel {
                 self.updateArticleListSearch(self.searchText, debounce: false)
             }
             do {
-                self.workspaceResources = try await activeStore.listWorkspaceResources()
-                let revisions = try await activeStore.listArticleRevisions(
-                    articleSlug: saved.slug,
-                    draftKey: recoveryID
-                )
+                if resourcesChanged {
+                    self.workspaceResources = try await activeStore.listWorkspaceResources()
+                }
                 guard !Task.isCancelled,
                       workspace == self.workspaceGeneration,
                       self.selectedSlug == saved.slug else { return }
-                self.articleRevisions = revisions
                 try await self.refreshActivity()
             } catch {
                 guard !Task.isCancelled, workspace == self.workspaceGeneration else { return }
@@ -92,6 +89,7 @@ extension NativeAppModel {
 
     func toggleArticleTask(article: NativeArticle, lineIndex: Int, completed: Bool) {
         let loadingID = loadingOperations.begin(.articleEdit)
+        let workspace = workspaceGeneration
         Task {
             defer { loadingOperations.end(loadingID) }
             do {
@@ -101,14 +99,35 @@ extension NativeAppModel {
                     lineIndex: lineIndex,
                     completed: completed
                 )
-                guard selectedArticle?.slug == updated.slug else { return }
-                selectedArticle = updated
-                await replaceArticleSummaries(try await store.listArticles())
-                try await reloadKnowledgeGraph()
-                selectedArticleRelations = try await store.articleRelations(for: updated.slug)
+                guard workspace == workspaceGeneration else { return }
+                if let current = selectedArticle, current.slug == updated.slug,
+                   current.updatedAt == article.updatedAt {
+                    selectedArticle = updated
+                }
+                var summaries = articles
+                if let index = summaries.firstIndex(where: { $0.slug == updated.slug }) {
+                    summaries[index] = updated.summary
+                    summaries.sort {
+                        $0.updatedAt == $1.updatedAt ? $0.slug < $1.slug : $0.updatedAt > $1.updatedAt
+                    }
+                    await replaceArticleSummaries(summaries)
+                }
+                guard workspace == workspaceGeneration else { return }
+                if isKnowledgeGraphModuleEnabled {
+                    let updatedSummary = updated.summary
+                    var nodes: [NativeArticleSummary] = articleGraph.nodes.map { node in
+                        node.slug == updated.slug ? updatedSummary : node
+                    }
+                    nodes.sort { left, right in
+                        if left.updatedAt != right.updatedAt { return left.updatedAt > right.updatedAt }
+                        return left.slug < right.slug
+                    }
+                    articleGraph = NativeArticleGraph(nodes: nodes, edges: articleGraph.edges)
+                }
                 scheduleBackup()
                 errorMessage = nil
             } catch {
+                guard workspace == workspaceGeneration else { return }
                 errorMessage = NativeLocalization.text("更新任务失败：\(error.localizedDescription)")
             }
         }
@@ -470,9 +489,7 @@ extension NativeAppModel {
         defer { loadingOperations.end(loadingID) }
         let workspace = workspaceGeneration
         let selected: NativeArticle
-        if recordsPageView {
-            selected = try await store.incrementArticlePageViews(slug: summary.slug)
-        } else if let cached = articleSelectionCache.article(
+        if let cached = articleSelectionCache.article(
             matching: summary,
             workspaceGeneration: workspace
         ) {
@@ -482,9 +499,6 @@ extension NativeAppModel {
         }
         guard navigationGeneration == articleNavigationGeneration,
               workspace == workspaceGeneration else { return false }
-        if recordsPageView {
-            updateArticleSummaryPageViews(slug: summary.slug, pageViews: selected.pageViews)
-        }
         if selectedSlug != summary.slug {
             articleRevisions = []
         }
@@ -505,6 +519,23 @@ extension NativeAppModel {
             navigationGeneration: navigationGeneration,
             workspaceGeneration: workspace
         )
+        if recordsPageView {
+            let activeStore = store
+            Task { [weak self] in
+                do {
+                    let count = try await activeStore.incrementArticlePageViewCount(slug: summary.slug)
+                    guard let self, self.workspaceGeneration == workspace else { return }
+                    self.updateArticleSummaryPageViews(slug: summary.slug, pageViews: count)
+                    if let current = self.selectedArticle, current.slug == summary.slug {
+                        self.selectedArticle = current.withPageViews(max(current.pageViews, count))
+                    }
+                } catch {
+                    guard let self, self.workspaceGeneration == workspace,
+                          self.articleNavigationGeneration == navigationGeneration else { return }
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
         return true
     }
 
@@ -527,13 +558,6 @@ extension NativeAppModel {
                       self.selectedSlug == slug else { return }
                 self.articleComments = comments
 
-                let relations = try await activeStore.articleRelations(for: slug)
-                guard !Task.isCancelled,
-                      navigationGeneration == self.articleNavigationGeneration,
-                      workspaceGeneration == self.workspaceGeneration,
-                      self.selectedSlug == slug else { return }
-                self.selectedArticleRelations = relations
-
             } catch is CancellationError {
                 return
             } catch {
@@ -542,6 +566,25 @@ extension NativeAppModel {
                       workspaceGeneration == self.workspaceGeneration else { return }
                 self.errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    func loadArticleRelations(for article: NativeArticle) async {
+        let generation = workspaceGeneration
+        let navigation = articleNavigationGeneration
+        do {
+            let relations = try await store.articleRelations(for: article.slug)
+            guard !Task.isCancelled, generation == workspaceGeneration,
+                  navigation == articleNavigationGeneration,
+                  selectedArticle?.slug == article.slug,
+                  selectedArticle?.updatedAt == article.updatedAt else { return }
+            selectedArticleRelations = relations
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled, generation == workspaceGeneration,
+                  navigation == articleNavigationGeneration else { return }
+            errorMessage = error.localizedDescription
         }
     }
 

@@ -196,6 +196,13 @@ extension NativeAppModel {
             }
         }
         guard generation == workspaceGeneration else { return }
+        // A full verification can wait while the user is opening or editing an
+        // article. Keep the merged events so the verification is retried.
+        if pendingMarkdownSourceChanges.requiresFullScan,
+           (loadingOperations.contains(.article) || (section == .editor && isEditorDirty)) {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            return
+        }
         let changes = pendingMarkdownSourceChanges
         pendingMarkdownSourceChanges = NativeMarkdownSourceChangeSet()
         guard !changes.isEmpty else { return }

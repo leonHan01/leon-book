@@ -967,6 +967,16 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
 
     public var id: String { slug }
 
+    func withPageViews(_ count: Int) -> NativeArticle {
+        NativeArticle(
+            banner: banner, body: body, category: category, excerpt: excerpt, media: media,
+            slug: slug, status: status, tags: tags, title: title, updatedAt: updatedAt,
+            publishedAt: publishedAt, wordCount: wordCount, pageViews: count,
+            properties: properties, sourceRelativePath: sourceRelativePath,
+            sourceContentHash: sourceContentHash, sourceImportedAt: sourceImportedAt
+        )
+    }
+
     public init(
         banner: NativeBanner?,
         body: String,
@@ -1473,6 +1483,8 @@ public enum NativeMomentTag {
 }
 
 public struct NativeMoment: Codable, Hashable, Identifiable {
+    static let maximumTextLength = 5_000
+
     public var commentCount: Int
     public let createdAt: String
     public let id: String

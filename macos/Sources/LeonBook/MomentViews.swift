@@ -593,7 +593,8 @@ private struct MomentComposerView: View {
                 textRuns: $model.momentDraft.textRuns,
                 controller: richTextController,
                 onPasteImages: model.uploadMomentPastedImages,
-                onDropVideos: model.uploadMomentVideos
+                onDropVideos: model.uploadMomentVideos,
+                removesBlankLines: true
             )
                 .frame(height: 112)
                 .overlay(alignment: .topLeading) {
@@ -777,10 +778,10 @@ private struct MomentComposerView: View {
 
                 Spacer()
 
-                Text("\((model.momentDraft.text as NSString).length) / 500")
+                Text("\((model.momentDraft.text as NSString).length) / \(NativeMoment.maximumTextLength)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(
-                        (model.momentDraft.text as NSString).length >= 450
+                        (model.momentDraft.text as NSString).length >= NativeMoment.maximumTextLength * 9 / 10
                             ? appPalette.accent : Color.secondary
                     )
 

@@ -584,6 +584,9 @@ private struct ArticleInspectorView: View {
             }
         }
         .background(appPalette.sidebar)
+        .task(id: "\(article.slug):\(article.updatedAt):\(selectedPane.rawValue)") {
+            if selectedPane == .context { await model.loadArticleRelations(for: article) }
+        }
         .onChange(of: model.articleCommentSelectionRevision) { _ in
             if model.pendingArticleCommentSelection != nil {
                 selectedPane = .comments

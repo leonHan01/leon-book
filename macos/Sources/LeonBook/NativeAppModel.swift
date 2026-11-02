@@ -951,7 +951,6 @@ public final class NativeAppModel: ObservableObject {
         editorAutosaveStatus = NativeLocalization.text("已载入正式版本")
         section = .editor
         restoreLatestAutosaveIfNeeded(for: article)
-        refreshArticleHistory()
     }
 
     func acceptArticleRefactor(_ article: NativeArticle) {
@@ -1106,6 +1105,14 @@ public final class NativeAppModel: ObservableObject {
         do {
             let saved = try await store.saveArticle(payload)
             try await store.attachArticleRevisions(draftKey: recoveryID, toArticleSlug: saved.slug)
+            let previous = editorOriginalArticle
+            let resourcesChanged = previous == nil
+                || previous?.sourceRelativePath != saved.sourceRelativePath
+                || previous?.title != saved.title
+                || previous?.banner != saved.banner
+                || previous?.media != saved.media
+                || (previous?.body != saved.body
+                    && (previous?.body.contains("/media/") == true || saved.body.contains("/media/")))
             let cleanupCandidates = pendingEditorMediaCleanup
             pendingEditorMediaCleanup = []
             editor.slug = saved.slug
@@ -1128,7 +1135,7 @@ public final class NativeAppModel: ObservableObject {
             section = .reader
             persistArticleNavigationState()
             errorMessage = nil
-            schedulePostSaveArticleRefresh(saved, recoveryID: recoveryID)
+            schedulePostSaveArticleRefresh(saved, resourcesChanged: resourcesChanged)
             loadArticleAncillaryState(
                 slug: saved.slug,
                 navigationGeneration: articleNavigationGeneration,
@@ -1888,14 +1895,7 @@ public final class NativeAppModel: ObservableObject {
             )
             guard !Task.isCancelled, generation == workspaceGeneration,
                   editor.recoveryID == recoveryID, editorRevisionSnapshot == snapshot else { return }
-            let revisions = try await activeStore.listArticleRevisions(
-                articleSlug: slug,
-                draftKey: recoveryID
-            )
-            guard !Task.isCancelled, generation == workspaceGeneration,
-                  editor.recoveryID == recoveryID, editorRevisionSnapshot == snapshot else { return }
             editorAutosaveStatus = NativeLocalization.text("已自动保存：\(revision.updatedAt.nativeDateLabel)")
-            articleRevisions = revisions
             scheduleCompatibilityExportVerification(for: activeStore)
             errorMessage = nil
         } catch {
@@ -1932,7 +1932,6 @@ public final class NativeAppModel: ObservableObject {
                     expectedUpdatedAt: article.updatedAt
                 )
                 editorAutosaveStatus = NativeLocalization.text("已恢复自动保存：\(revision.updatedAt.nativeDateLabel)")
-                refreshArticleHistory()
             } catch {
                 guard !Task.isCancelled, generation == workspaceGeneration,
                       navigationGeneration == articleNavigationGeneration,

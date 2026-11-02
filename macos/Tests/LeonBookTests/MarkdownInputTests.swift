@@ -85,7 +85,8 @@ extension RichArticleTests {
         var text = "", runs: [NativeMomentTextRun] = []
         let controller = MomentRichTextController()
         let editor = MomentRichTextEditor(text: Binding(get: { text }, set: { text = $0 }),
-            textRuns: Binding(get: { runs }, set: { runs = $0 }), controller: controller, onPasteImages: { _ in })
+            textRuns: Binding(get: { runs }, set: { runs = $0 }), controller: controller, onPasteImages: { _ in },
+            removesBlankLines: true)
         let coordinator = editor.makeCoordinator()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -99,6 +100,25 @@ extension RichArticleTests {
             view.undoManager?.removeAllActions(); text = ""; runs = []
         }
         func type(_ string: String) { for character in string { view.insertText(String(character), replacementRange: view.selectedRange()) } }
+        reset()
+        view.insertText("第一行\n\n \t\n第二行", replacementRange: view.selectedRange())
+        try markdownExpect(text == "第一行\n第二行", "pasted blank and whitespace-only lines should be removed")
+        try markdownExpect(view.selectedRange().location == (text as NSString).length, "cursor follows the cleaned paste")
+        reset(); type("第一行\n\n第二行")
+        try markdownExpect(text == "第一行\n第二行", "repeated Return should not leave a blank line")
+        reset()
+        let styled = NSMutableAttributedString(string: "粗体\n\n正文", attributes: MomentTextRuns.defaultAttributes)
+        styled.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: 16), range: NSRange(location: 0, length: 2))
+        view.insertText(styled, replacementRange: view.selectedRange())
+        try markdownExpect(text == "粗体\n正文" && runs.first?.bold == true, "cleaning blank lines preserves rich text")
+        reset()
+        view.undoManager?.beginUndoGrouping()
+        view.insertText("一\n\n二", replacementRange: view.selectedRange())
+        view.undoManager?.endUndoGrouping()
+        view.undoManager?.undo()
+        try markdownExpect(view.string.isEmpty, "undo should revert both paste and blank line cleanup")
+        view.undoManager?.redo()
+        try markdownExpect(view.string == "一\n二", "redo should restore the cleaned paste")
         for level in 1...4 {
             reset(); type(String(repeating: "#", count: level) + " 标题")
             try markdownExpect(text == "标题" && runs.first?.headingLevel == level, "native headings should convert and publish runs")
@@ -121,6 +141,14 @@ extension RichArticleTests {
         }
         reset(); type("#旅行 ")
         try markdownExpect(text == "#旅行 " && NativeMomentTag.extract(from: text) == ["旅行"], "hashtags stay compatible")
+        reset()
+        view.insertText(String(repeating: "文", count: 4_990) + " #旅", replacementRange: view.selectedRange())
+        controller.completeTagSuggestion("旅行")
+        try markdownExpect(view.string.hasSuffix("#旅行 "), "tag completion works beyond 500 characters")
+        view.insertText(String(repeating: "文", count: 5), replacementRange: view.selectedRange())
+        try markdownExpect((view.string as NSString).length == 5_000, "moment editor accepts 5000 characters")
+        view.insertText("文", replacementRange: view.selectedRange())
+        try markdownExpect((view.string as NSString).length == 5_000, "moment editor rejects text beyond 5000 characters")
         reset(); type("\\**原文**")
         try markdownExpect(text == "\\**原文**", "escaped native syntax stays literal")
         reset(); view.setMarkedText("# 标题", selectedRange: NSRange(location: 4, length: 0), replacementRange: NSRange(location: 0, length: 0))

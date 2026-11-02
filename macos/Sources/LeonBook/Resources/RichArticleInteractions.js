@@ -8,6 +8,13 @@ function createArticleInteractions(api) {
   const picker = panel('table-picker', '<div class="tool-label">插入表格 · <span class="size-label">2 × 2</span></div><div class="table-grid"></div><div class="table-dimensions"><input type="number" min="1" max="30" value="2" aria-label="行数">行<input type="number" min="1" max="12" value="2" aria-label="列数">列<button class="insert-table">插入</button></div>', '选择表格行列数');
   picker.setAttribute('role', 'dialog');
   const tableTools = panel('table-tools', '<div class="tool-label"></div><div class="tool-actions"><button data-table="row-before" title="上方插入行"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V4m-6 6 6-6 6 6"/></svg>加行</button><button data-table="row-after" title="下方插入行"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v16m-6-6 6 6 6-6"/></svg>加行</button><button data-table="row-delete" class="danger">删行</button><button data-table="column-before" title="左侧插入列"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12H4m6-6-6 6 6 6"/></svg>加列</button><button data-table="column-after" title="右侧插入列"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg>加列</button><button data-table="column-delete" class="danger">删列</button></div>', '表格操作');
+  const cellColors = document.createElement('div'); cellColors.className = 'cell-colors'; cellColors.setAttribute('role', 'group'); cellColors.setAttribute('aria-label', t('单元格背景颜色'));
+  for (const [name, color] of [['恢复默认', ''], ['灰色', '#e9edf3'], ['红色', '#fce2e6'], ['橙色', '#ffe9d4'], ['黄色', '#fff0bb'], ['绿色', '#def2e7'], ['青色', '#dff3f4'], ['蓝色', '#e3efff'], ['紫色', '#eee4ff'], ['粉色', '#f8e2ef']]) {
+    const button = document.createElement('button'); button.type = 'button'; button.dataset.cellColor = color; button.className = 'cell-color';
+    button.title = t(name); button.setAttribute('aria-label', t(name)); button.style.backgroundColor = color || '#fff';
+    if (!color) button.classList.add('reset'); cellColors.append(button);
+  }
+  tableTools.append(cellColors);
   const imageTools = panel('image-tools', '<output></output><button data-image="preview">放大</button><button data-image="caption">说明</button><button data-image="replace">替换</button><button data-image="delete" class="danger">删除</button>', '图片操作');
   const grip = document.createElement('div'); grip.id = 'column-grip'; grip.hidden = true; grip.setAttribute('role', 'separator'); grip.setAttribute('aria-label', '拖动调整列宽'); document.body.append(grip);
   function quickAdd(id, label) {
@@ -113,6 +120,7 @@ function createArticleInteractions(api) {
     if (!canEdit() || !owns(cell) || !getSelection().isCollapsed || selectedImage) { tableTools.hidden = true; hideQuickAdds(); return; }
     clearTimeout(tableTimer); activeCell = cell; const table = cell.closest('table');
     tableTools.querySelector('.tool-label').textContent = t('表格 · 第 %@ 行，第 %@ 列', cell.parentElement.rowIndex + 1, cell.cellIndex + 1);
+    for (const button of cellColors.children) button.setAttribute('aria-pressed', String(button.dataset.cellColor ? button.style.backgroundColor === cell.style.backgroundColor : !cell.style.backgroundColor));
     tableTools.hidden = false; place(tableTools, table.getBoundingClientRect(), 16); showQuickAdds(cell);
   }
   rowAdd.addEventListener('click', () => {
@@ -150,7 +158,16 @@ function createArticleInteractions(api) {
   picker.querySelector('.insert-table').addEventListener('click', insertTable);
   for (const [index, input] of [...picker.querySelectorAll('input')].entries()) input.addEventListener('change', () => { const value = Math.max(1, Math.min(index ? 12 : 30, +input.value || 1)); if (index) pickerColumns = value; else pickerRows = value; drawPicker(); });
   tableTools.addEventListener('mousedown', event => event.preventDefault());
-  tableTools.addEventListener('click', event => { const action = event.target.closest('[data-table]')?.dataset.table; if (action) editTable(action); });
+  tableTools.addEventListener('click', event => {
+    const color = event.target.closest('[data-cell-color]');
+    if (color && canEdit() && owns(activeCell)) {
+      if (activeCell.style.backgroundColor !== (color.dataset.cellColor ? color.style.backgroundColor : '')) {
+        checkpoint(); activeCell.style.backgroundColor = color.dataset.cellColor; notify();
+      }
+      showTable(activeCell); return;
+    }
+    const action = event.target.closest('[data-table]')?.dataset.table; if (action) editTable(action);
+  });
   picker.addEventListener('mousedown', event => { if (!event.target.matches('input')) event.preventDefault(); });
   function contentWidth(image) { const parent = image.parentElement, style = getComputedStyle(parent); return Math.max(1, parent.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)); }
   function positionImage() {

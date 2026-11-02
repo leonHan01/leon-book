@@ -3731,6 +3731,14 @@ final class LocalBlogStoreTests {
 
         let activity = try await store.listActivity(since: Date().addingTimeInterval(-60))
         XCTAssertEqual(activity.reduce(0) { $0 + $1.count }, 1)
+
+        let longText = String(repeating: "文", count: 5_000)
+        let longRun = NativeMomentTextRun(text: longText, bold: true, color: nil)
+        let longMoment = try await store.saveMoment(text: longText, textRuns: [longRun], images: [])
+        XCTAssertEqual(longMoment.text, longText)
+        XCTAssertEqual(try await store.getMoment(id: longMoment.id).textRuns, [longRun])
+        let updated = try await store.updateMoment(id: longMoment.id, text: longText + "多", textRuns: [], images: [])
+        XCTAssertEqual(updated.text, longText)
     }
 
     func testMomentAudioUploadAndPersistence() async throws {
@@ -6413,6 +6421,33 @@ final class RichArticleTests {
     }
 
     @MainActor
+    func testRichArticleTableCellBackground() async throws {
+        try await withWebEditor { view in
+            let result = try await view.callAsyncJavaScript(#"""
+              const root = document.getElementById('document'), tools = document.getElementById('table-tools');
+              const source = '<article data-leon-format="html-v1"><table><tr><th>标题</th><td>内容</td></tr></table></article>';
+              LeonArticle.load(source, 'cell-color', true, 18);
+              const select = cell => { root.focus(); getSelection().setPosition(cell.firstElementChild, 0); cell.click(); };
+              let cells = root.querySelectorAll('th,td'); select(cells[1]);
+              const color = tools.querySelector('[data-cell-color="#fff0bb"]'); color.click();
+              const applied = cells[1].style.backgroundColor === 'rgb(255, 240, 187)' && !cells[0].style.backgroundColor;
+              const saved = LeonArticle.serialize(); LeonArticle.undo(-1);
+              const undone = !root.querySelector('td').style.backgroundColor;
+              LeonArticle.undo(1); const redone = root.querySelector('td').style.backgroundColor === 'rgb(255, 240, 187)';
+              LeonArticle.load(saved, 'cell-color-reopen', true, 18); cells = root.querySelectorAll('th,td');
+              const reopened = cells[1].style.backgroundColor === 'rgb(255, 240, 187)';
+              select(cells[1]); tools.querySelector('[data-cell-color=""]').click(); const reset = !cells[1].style.backgroundColor;
+              select(cells[0]); color.click(); const header = cells[0].style.backgroundColor === 'rgb(255, 240, 187)';
+              LeonArticle.load(source, 'cell-color-readonly', false, 18); root.querySelector('td').click(); color.click();
+              const readOnly = !root.querySelector('td').style.backgroundColor;
+              return JSON.stringify({applied, undone, redone, reopened, reset, header, readOnly});
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            let json = try JSONSerialization.jsonObject(with: Data((result as! String).utf8)) as! [String: Bool]
+            for (key, value) in json { XCTAssertTrue(value, "table cell background failed: \(key)") }
+        }
+    }
+
+    @MainActor
     func testRichArticleTableControlsAndColumnWidths() async throws {
         try await withWebEditor { view in
             let result = try await view.callAsyncJavaScript(#"""
@@ -7015,6 +7050,8 @@ struct LeonBookUnitTests {
             ("WorkspaceNavigationTests.testMainNavigationPresentsLoadingBeforeWebKitAndSkipsSupersededPages", { try await WorkspaceNavigationTests().testMainNavigationPresentsLoadingBeforeWebKitAndSkipsSupersededPages() }),
             ("WorkspaceNavigationTests.testMainNavigationAvoidsSplitControllerRebuilds", { try await WorkspaceNavigationTests().testMainNavigationAvoidsSplitControllerRebuilds() }),
             ("WorkspaceChromeTests.testArticleHeaderStaysBelowWindowToolbar", { try await WorkspaceChromeTests().testArticleHeaderStaysBelowWindowToolbar() }),
+            ("ArticlePerformanceRegressionTests.testPageViewsDeferSidecarWritesUntilBackup", { try await ArticlePerformanceRegressionTests().testPageViewsDeferSidecarWritesUntilBackup() }),
+            ("ArticlePerformanceRegressionTests.testCachedArticleOpensWhileStoreIsBusy", { try await ArticlePerformanceRegressionTests().testCachedArticleOpensWhileStoreIsBusy() }),
             ("ArticleExportTests.testStandaloneHTMLIsOfflineAndSanitized", { try await ArticleExportTests().testStandaloneHTMLIsOfflineAndSanitized() }),
             ("ArticleExportTests.testBatchPackagePreservesAttachmentsAndLinks", { try await ArticleExportTests().testBatchPackagePreservesAttachmentsAndLinks() }),
             ("ArticleExportTests.testPDFHasA4PagesAndCompleteContent", { try await ArticleExportTests().testPDFHasA4PagesAndCompleteContent() }),
@@ -7089,6 +7126,7 @@ struct LeonBookUnitTests {
             ("RichArticleImageLoadingTests.testNativeImagePastePreservesSnapshotCaretAndUndo", { try await RichArticleImageLoadingTests().testNativeImagePastePreservesSnapshotCaretAndUndo() }),
             ("RichArticleImageLoadingTests.testNativeImageRequestsRejectChangedOrClosedEditors", { try await RichArticleImageLoadingTests().testNativeImageRequestsRejectChangedOrClosedEditors() }),
             ("RichArticleTests.testRichArticleTableImagePasteAndNativeClipboard", { try await RichArticleTests().testRichArticleTableImagePasteAndNativeClipboard() }),
+            ("RichArticleTests.testRichArticleTableCellBackground", { try await RichArticleTests().testRichArticleTableCellBackground() }),
             ("RichArticleTests.testRichArticleTableControlsAndColumnWidths", { try await RichArticleTests().testRichArticleTableControlsAndColumnWidths() }),
             ("RichArticleTests.testRichArticleTableQuickAddButtons", { try await RichArticleTests().testRichArticleTableQuickAddButtons() }),
             ("RichArticleTests.testRichArticleTableInsertBetweenRows", { try await RichArticleTests().testRichArticleTableInsertBetweenRows() }),

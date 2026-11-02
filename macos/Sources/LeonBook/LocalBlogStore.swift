@@ -105,10 +105,11 @@ public actor LocalBlogStore {
 
     public func prepareForBackup() throws {
         try prepare()
-        try db().execute("PRAGMA wal_checkpoint(TRUNCATE)")
         if activityExportDirty { try writeActivityEvents() }
         try exportJsonBackupIfNeeded()
+        try flushArticlePageViewExports()
         try exportPortableSidecarIfEnabled()
+        try db().execute("PRAGMA wal_checkpoint(TRUNCATE)")
     }
 
     /// Prepares only the database state required for the first interactive
@@ -122,6 +123,7 @@ public actor LocalBlogStore {
         try prepare()
         if activityExportDirty { try writeActivityEvents() }
         try exportJsonBackupIfNeeded()
+        try flushArticlePageViewExports()
         try exportPortableSidecarIfEnabled()
     }
 
@@ -323,17 +325,13 @@ public actor LocalBlogStore {
             try restoreDeletedArticlesPresentInSelectedSource(records)
         }
         let activeArticles = try allArticles()
-        let allStoredArticles = try allArticles(includingDeleted: true)
-        let activeSlugs = Set(activeArticles.map(\.slug))
-        let deletedArticles = allStoredArticles.filter { article in
-            !activeSlugs.contains(article.slug)
-        }
+        let deletedIdentities = try deletedArticleSourceIdentities()
         return try reconcileMarkdownSources(
             records: records,
             activeArticles: activeArticles,
-            knownSlugs: Set(allStoredArticles.map(\.slug)),
-            deletedSlugs: Set(deletedArticles.map(\.slug)),
-            deletedPaths: Set(deletedArticles.map(\.sourceRelativePath)),
+            knownSlugs: try storedArticleSlugs(),
+            deletedSlugs: deletedIdentities.slugs,
+            deletedPaths: deletedIdentities.paths,
             affectedPaths: nil
         )
     }
@@ -631,8 +629,10 @@ public actor LocalBlogStore {
         try db().query(
             "SELECT slug, source_relative_path FROM articles WHERE deleted_at IS NOT NULL"
         ) { row in
-            if let slug = row.text(at: 0) { slugs.insert(slug) }
-            if let path = row.text(at: 1) { paths.insert(path) }
+            if let slug = row.text(at: 0) {
+                slugs.insert(slug)
+                paths.insert(row.text(at: 1) ?? "\(slug).md")
+            }
         }
         return (slugs, paths)
     }
@@ -1843,21 +1843,48 @@ public actor LocalBlogStore {
         return finalMovedArticle
     }
 
-    public func incrementArticlePageViews(slug: String) throws -> NativeArticle {
+    public func incrementArticlePageViewCount(slug: String) throws -> Int {
         try prepare()
         let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
-        try db().execute(
-            "UPDATE articles SET page_views = page_views + 1 WHERE slug = ? AND deleted_at IS NULL",
-            values: [.text(safeSlug)]
-        )
-        guard let updated = try storedArticle(withSlug: safeSlug) else { throw NativeStoreError.notFound }
-        do {
-            try writeArticleJSONSidecars(updated)
-            try rebuildIndex()
-        } catch {
-            markJSONBackupNeedsRebuild()
+        let database = try db()
+        var count = 0
+        try database.transaction {
+            try database.execute(
+                "UPDATE articles SET page_views = page_views + 1 WHERE slug = ? AND deleted_at IS NULL",
+                values: [.text(safeSlug)]
+            )
+            guard let value = try database.integer(
+                "SELECT page_views FROM articles WHERE slug = ? AND deleted_at IS NULL",
+                values: [.text(safeSlug)]
+            ) else { throw NativeStoreError.notFound }
+            count = value
+            try database.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES(?, 'dirty')",
+                values: [.text("article_page_views_dirty:" + safeSlug)]
+            )
         }
-        return updated
+        return count
+    }
+
+    public func incrementArticlePageViews(slug: String) throws -> NativeArticle {
+        _ = try incrementArticlePageViewCount(slug: slug)
+        guard let article = try storedArticle(withSlug: slug) else { throw NativeStoreError.notFound }
+        return article
+    }
+
+    private func flushArticlePageViewExports() throws {
+        let prefix = "article_page_views_dirty:"
+        var keys: [String] = []
+        try db().query("SELECT key FROM metadata WHERE key LIKE 'article_page_views_dirty:%'") { row in
+            if let key = row.text(at: 0), key.hasPrefix(prefix) { keys.append(key) }
+        }
+        for key in keys {
+            let slug = String(key.dropFirst(prefix.count))
+            if let article = try storedArticle(withSlug: slug) {
+                try writeArticleJSONSidecars(article)
+            }
+            try db().execute("DELETE FROM metadata WHERE key = ?", values: [.text(key)])
+        }
     }
 
     public func saveArticleAutosave(
@@ -3538,28 +3565,42 @@ public actor LocalBlogStore {
     func mentionCandidates(
         containing title: String,
         excluding slug: String
-    ) throws -> [NativeArticle] {
+    ) throws -> [(slug: String, body: String)] {
         let target = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard target.count >= 2 else { return [] }
         let predicate: String
-        let value: SQLiteValue
+        let values: [SQLiteValue]
         if target.count >= 3 {
             predicate = "article_mention_search MATCH ?"
-            value = .text("\"\(target.replacingOccurrences(of: "\"", with: "\"\""))\"")
+            values = [.text("\"\(target.replacingOccurrences(of: "\"", with: "\"\""))\"")]
+        } else if target.allSatisfy({ $0.isLetter || $0.isNumber }),
+                  let token = shortSearchToken(for: target), token.count == 2 {
+            // The short index includes the same visible body used by the
+            // mention index; confirm the match to exclude metadata hits.
+            predicate = """
+            (candidate.slug IN (
+                SELECT document_id FROM content_short_search
+                WHERE document_type = 'article' AND content_short_search MATCH ?
+            ) OR substr(ltrim(article_mention_search.body, char(9) || char(10) || char(13) || ' '), 1, 8) = '<article')
+            AND instr(lower(article_mention_search.body), lower(?)) > 0
+            """
+            values = [.text("\"\(token.replacingOccurrences(of: "\"", with: "\"\""))\""), .text(target)]
         } else {
             predicate = "instr(lower(article_mention_search.body), lower(?)) > 0"
-            value = .text(target)
+            values = [.text(target)]
         }
-        var candidates: [NativeArticle] = []
+        var candidates: [(slug: String, body: String)] = []
         try db().query("""
-        \(qualifiedArticleSelect("candidate"))
+        SELECT candidate.slug, candidate.body FROM articles AS candidate
         JOIN article_mention_search ON article_mention_search.source_slug = candidate.slug
         WHERE candidate.deleted_at IS NULL
           AND candidate.slug <> ?
           AND \(predicate)
         ORDER BY candidate.updated_at DESC, candidate.slug
-        """, values: [.text(slug), value]) { row in
-            candidates.append(try decodeArticle(row))
+        """, values: [.text(slug)] + values, checkingCancellation: true) { row in
+            if let slug = row.text(at: 0), let body = row.text(at: 1) {
+                candidates.append((slug: slug, body: body))
+            }
         }
         return candidates
     }
@@ -4329,7 +4370,7 @@ public actor LocalBlogStore {
         let leadingWhitespace = characters.prefix { $0.isWhitespace }.count
         let trailingWhitespace = characters.reversed().prefix { $0.isWhitespace }.count
         let availableCount = max(0, characters.count - leadingWhitespace - trailingWhitespace)
-        let retainedCount = min(500, availableCount)
+        let retainedCount = min(NativeMoment.maximumTextLength, availableCount)
         let normalizedText = String(characters.dropFirst(leadingWhitespace).prefix(retainedCount))
 
         guard !normalizedText.isEmpty, textRuns.map(\.text).joined() == text else {

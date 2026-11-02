@@ -99,9 +99,6 @@ final class MomentRichTextController: ObservableObject {
         }
 
         let replacement = "#\(tag) "
-        let currentLength = (textView.string as NSString).length
-        guard currentLength - context.range.length + (replacement as NSString).length <= 500 else { return }
-
         let attributes: [NSAttributedString.Key: Any]
         if let storage = textView.textStorage, storage.length > 0 {
             attributes = storage.attributes(at: min(context.range.location, storage.length - 1), effectiveRange: nil)
@@ -168,7 +165,8 @@ struct MomentRichTextEditor: NSViewRepresentable {
     let controller: MomentRichTextController
     let onPasteImages: ([NSImage]) -> Void
     var onDropVideos: (([URL]) -> Void)? = nil
-    var maximumLength = 500
+    var maximumLength = NativeMoment.maximumTextLength
+    var removesBlankLines = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -226,6 +224,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
+        private static let blankLine = try! NSRegularExpression(pattern: #"(?m)^[^\S\r\n]*\r?\n"#)
         var parent: MomentRichTextEditor
         private var applyingShortcut = false
         private var pendingInsertion: String?
@@ -242,6 +241,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
             if insertion != nil, !textView.hasMarkedText(), textView.undoManager?.isUndoing != true,
                textView.undoManager?.isRedoing != true {
                 applyingShortcut = true
+                if parent.removesBlankLines { removeBlankLines(in: textView) }
                 MomentMarkdownInput.convert(in: textView)
                 if insertion == "\n" { MomentMarkdownInput.resetParagraphTyping(in: textView) }
                 applyingShortcut = false
@@ -249,6 +249,24 @@ struct MomentRichTextEditor: NSViewRepresentable {
             parent.text = textView.string
             parent.textRuns = MomentTextRuns.runs(from: textView.attributedString())
             parent.controller.updateTagQuery(from: textView)
+        }
+
+        private func removeBlankLines(in textView: NSTextView) {
+            let text = textView.string as NSString
+            let matches = Self.blankLine.matches(in: text as String, range: NSRange(location: 0, length: text.length))
+            guard !matches.isEmpty else { return }
+            let selection = textView.selectedRange()
+            func adjusted(_ position: Int) -> Int {
+                position - matches.reduce(0) { removed, match in
+                    removed + min(max(position - match.range.location, 0), match.range.length)
+                }
+            }
+            for match in matches.reversed() {
+                textView.insertText("", replacementRange: match.range)
+            }
+            let start = adjusted(selection.location)
+            let end = adjusted(NSMaxRange(selection))
+            textView.setSelectedRange(NSRange(location: start, length: end - start))
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
