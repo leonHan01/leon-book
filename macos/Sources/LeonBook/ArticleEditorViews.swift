@@ -7,9 +7,13 @@ import WebKit
 
 private enum ArticleEditorLayout {
     static let contentInset: CGFloat = 20
-    static let titleVerticalInset: CGFloat = 20
+    static let titleTopInset: CGFloat = 20
+    static let titleBottomInset: CGFloat = 4
     static let writingInset: CGFloat = 28
-    static let writingWidth: CGFloat = 860
+    static let writingWidth: CGFloat = 1040
+    static let outlineWidth: CGFloat = 168
+    static let outlineGap: CGFloat = 16
+    static let outlineMinimumWidth: CGFloat = 760
 }
 
 enum NativeBodyEditorAppearance {
@@ -449,6 +453,8 @@ struct ArticleEditorView: View {
     @StateObject private var slashCommandController = EditorSlashCommandController()
     @StateObject private var documentAnalysis = EditorDocumentAnalysisModel()
     @StateObject private var pageTemplateLibrary = NativeArticlePageTemplateLibrary()
+    @StateObject private var outlineController = RichArticleOutlineController()
+    @State private var showsDocumentOutline = false
     @State private var isPresentingHistory = false
     @State private var propertyRows: [EditorPropertyRow] = []
     @State private var propertyRenameRequest: EditorPropertyRenameRequest?
@@ -487,19 +493,7 @@ struct ArticleEditorView: View {
                 let dividerWidth: CGFloat = 7
 
                 HStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        titleSection
-                            .disabled(model.isMarkdownSourceReadOnly)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, ArticleEditorLayout.titleVerticalInset)
-
-                        writingSection
-                    }
-                    .frame(maxWidth: ArticleEditorLayout.writingWidth, maxHeight: .infinity, alignment: .topLeading)
-                    .frame(
-                        width: showsSidebar ? max(0, proxy.size.width - settingsWidth - dividerWidth) : proxy.size.width,
-                        alignment: .top
-                    )
+                    writingCanvas(width: showsSidebar ? max(0, proxy.size.width - settingsWidth - dividerWidth) : proxy.size.width)
 
                     if showsSidebar {
                         Rectangle()
@@ -554,6 +548,7 @@ struct ArticleEditorView: View {
             await reloadBlockLinkSuggestions()
         }
         .onChange(of: model.editor.recoveryID) { _ in
+            showsDocumentOutline = false
             model.editor.body = RichArticleDocument.convertingLegacyBody(model.editor.body)
             synchronizePropertyRows()
         }
@@ -733,7 +728,30 @@ struct ArticleEditorView: View {
         .keyboardShortcut(shortcut, modifiers: [.command, .option])
     }
 
-    private var titleSection: some View {
+    private func writingCanvas(width: CGFloat) -> some View {
+        let showsOutline = editorMode != .focus && width >= ArticleEditorLayout.outlineMinimumWidth
+        let leadingWidth = showsOutline ? ArticleEditorLayout.outlineWidth + ArticleEditorLayout.outlineGap : 0
+        let contentWidth = min(ArticleEditorLayout.writingWidth, max(0, width - leadingWidth))
+        return VStack(alignment: .leading, spacing: 0) {
+            titleSection(showsCompactOutline: !showsOutline)
+                .frame(width: contentWidth, alignment: .leading)
+                .padding(.leading, leadingWidth)
+                .padding(.top, ArticleEditorLayout.titleTopInset)
+                .padding(.bottom, ArticleEditorLayout.titleBottomInset)
+
+            HStack(alignment: .top, spacing: showsOutline ? ArticleEditorLayout.outlineGap : 0) {
+                if showsOutline {
+                    editorDocumentDirectory
+                        .frame(width: ArticleEditorLayout.outlineWidth)
+                }
+                writingSection.frame(width: contentWidth)
+            }
+        }
+        .frame(width: contentWidth + leadingWidth, alignment: .topLeading)
+        .frame(width: width, alignment: .top)
+    }
+
+    private func titleSection(showsCompactOutline: Bool) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
                 ArticlePathBreadcrumb(
@@ -744,9 +762,25 @@ struct ArticleEditorView: View {
                     onSelectFolder: { model.showArticleFolder($0) },
                     onCreateArticle: { model.newArticle(inFolder: $0) }
                 )
+                .disabled(model.isMarkdownSourceReadOnly)
                 Spacer()
+                if showsCompactOutline {
+                    Button {
+                        showsDocumentOutline.toggle()
+                    } label: {
+                        Label("文档目录", nativeIcon: "list.bullet.indent", iconSize: 13)
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .popover(isPresented: $showsDocumentOutline, arrowEdge: .bottom) {
+                        editorDocumentDirectory
+                            .frame(width: 240, height: 320)
+                            .padding(12)
+                    }
+                }
                 if model.editor.isNew {
                     ArticlePageTemplatePicker(model: model, library: pageTemplateLibrary)
+                        .disabled(model.isMarkdownSourceReadOnly)
                 }
             }
 
@@ -754,6 +788,7 @@ struct ArticleEditorView: View {
                 .font(.system(size: 30, weight: .semibold))
                 .textFieldStyle(.plain)
                 .accessibilityLabel("文章标题")
+                .disabled(model.isMarkdownSourceReadOnly)
         }
         .padding(.horizontal, ArticleEditorLayout.writingInset)
     }
@@ -771,7 +806,8 @@ struct ArticleEditorView: View {
             onOpenLink: { url in
                 if url.scheme == "leonbook" { model.handleAutomationURL(url) }
                 else { NSWorkspace.shared.open(url) }
-            }
+            },
+            outlineController: outlineController
         )
         .frame(minHeight: 280, maxHeight: .infinity)
     }
@@ -1220,16 +1256,7 @@ struct ArticleEditorView: View {
                 ArticleInspectorEmpty(message: "使用 /h1、/h2 或 /h3 添加标题后会在这里生成大纲")
             } else {
                 ForEach(editorOutline) { item in
-                    HStack(spacing: 8) {
-                        NativeIcon.image("textformat.size")
-                            .foregroundStyle(.secondary)
-                        Text(item.title)
-                            .lineLimit(2)
-                        Spacer(minLength: 0)
-                    }
-                    .font(item.level <= 2 ? .subheadline.weight(.semibold) : .subheadline)
-                    .padding(.leading, CGFloat(max(0, item.level - 1)) * 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    outlineEntry(item)
                 }
             }
         }
@@ -1300,7 +1327,67 @@ struct ArticleEditorView: View {
     }
 
     private var editorOutline: [MarkdownOutlineItem] {
-        documentAnalysis.value.document.outline
+        outlineController.snapshot.documentID == model.editor.recoveryID ? outlineController.snapshot.items : []
+    }
+
+    private var editorDocumentDirectory: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("文档目录")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(appPalette.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+
+            if editorOutline.isEmpty {
+                Text("添加标题后会在这里显示目录")
+                    .font(.caption)
+                    .foregroundStyle(appPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10)
+                Spacer(minLength: 0)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 3) {
+                            ForEach(editorOutline) { item in
+                                outlineEntry(item).id(item.id)
+                            }
+                        }
+                        .padding(.bottom, 16)
+                    }
+                    .onChange(of: outlineController.snapshot.activeID) { id in
+                        if let id { proxy.scrollTo(id, anchor: .center) }
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("文档目录")
+    }
+
+    private func outlineEntry(_ item: MarkdownOutlineItem) -> some View {
+        let selected = outlineController.snapshot.documentID == model.editor.recoveryID && outlineController.snapshot.activeID == item.id
+        let title = item.title.isEmpty ? NativeLocalization.text("无标题") : item.title
+        return Button {
+            outlineController.navigate(to: item, documentID: model.editor.recoveryID)
+            showsDocumentOutline = false
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: selected || item.level == 1 ? .medium : .regular))
+                .foregroundStyle(selected ? appPalette.accent : appPalette.textSecondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .padding(.leading, CGFloat(max(0, item.level - 1)) * 12)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(selected ? appPalette.lightBlue : .clear, in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var editorWikiLinks: [EditorWikiLink] {

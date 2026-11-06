@@ -43,6 +43,25 @@ private final class MediaResourceProbe: @unchecked Sendable {
 }
 
 final class MediaResourceTests {
+    func testArticleMediaReadsCompleteBytesAndHonorsCancellation() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("article-media-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let bytes = Data((0..<(600 * 1024)).map { UInt8(truncatingIfNeeded: $0) })
+        try bytes.write(to: file)
+        let loaded = try await RichArticleMediaReader.data(from: file)
+        guard loaded == bytes else {
+            throw MediaResourceFailure(description: "chunked media reads must return the original bytes")
+        }
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await RichArticleMediaReader.data(from: file)
+        }
+        do {
+            _ = try await cancelled.value
+            throw MediaResourceFailure(description: "a cancelled article media request returned bytes")
+        } catch is CancellationError { }
+    }
+
     func testCancellingOneSubscriberKeepsSharedDecodeAlive() async throws {
         let probe = MediaResourceProbe()
         let pipeline = NativeImagePipeline(decoder: { _, _ in probe.decode(blocking: true) })

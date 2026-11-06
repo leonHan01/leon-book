@@ -12,6 +12,17 @@
 #table-tools .cell-color:hover, #table-tools .cell-color:focus-visible, #table-tools .cell-color[aria-pressed=true] { outline: 2px solid #8db2e5; outline-offset: 1px; }
 #table-tools .cell-color.reset { background: linear-gradient(135deg, transparent 46%, #bd535c 47%, #bd535c 53%, transparent 54%), #fff !important; }
 #table-tools .tool-label { padding: 0 8px 0 2px; border-right: 1px solid #e7ebf1; white-space: nowrap; }
+#table-tools[data-axis=row] [data-table^="column-"], #table-tools[data-axis=column] [data-table^="row-"] { display: none; }
+#table-axis-controls { position: fixed; inset: 0; z-index: 13; pointer-events: none; }
+#table-axis-controls[hidden], #table-axis-selection[hidden], .table-axis-handle[hidden] { display: none; }
+.table-axis-handle { position: absolute; padding: 0; border: 1px solid #dce5f1; border-radius: 4px; background: #edf2f8; pointer-events: auto; cursor: pointer; }
+.table-axis-handle::after { content: ''; position: absolute; inset: -3px; }
+.table-axis-handle:hover, .table-axis-handle:focus-visible { outline: 1px solid #8db2e5; outline-offset: 0; background: #dceaff; }
+.table-axis-handle[aria-pressed=true] { border-color: #3976cf; background: #79a5e5; }
+#table-axis-selection { position: fixed; z-index: 9; border: 2px solid #6e9fe2; border-radius: 3px; background: #3976cf18; pointer-events: none; }
+body:has(#table-tools[data-axis]) #article-caret { visibility: hidden; }
+body:has(#table-tools[data-axis]) #document, body:has(#table-tools[data-axis]) #document * { caret-color: transparent !important; }
+.article-layout-dragging :is(#table-axis-controls, #table-axis-selection), body.readonly :is(#table-axis-controls, #table-axis-selection) { display: none; }
 @media (max-width: 500px) { #table-tools .tool-label { display: none; } }
 #table-picker { width: 272px; padding: 12px; }
 #table-picker .table-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin: 10px 0 12px; }

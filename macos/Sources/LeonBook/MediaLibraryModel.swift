@@ -7,13 +7,21 @@ final class NativeMediaLibraryModel: ObservableObject {
     let store: LocalBlogStore
     let workspace: String
     @Published private(set) var groups: [NativeMediaGroup] = []
-    @Published private(set) var items: [NativeLibraryMedia] = []
+    @Published private(set) var items: [NativeLibraryMedia] = [] {
+        didSet {
+            groupCounts = items.reduce(into: [:]) { $0[$1.groupID, default: 0] += 1 }
+            cachedVisibleItems = nil
+        }
+    }
     @Published private(set) var isBusy = false
     @Published var errorMessage: String?
-    @Published var filter: NativeMediaLibraryFilter = .all
-    @Published var search = ""
-    @Published var sort: NativeMediaLibrarySort = .newest
-    @Published var scope: NativeMediaLibraryScope = .all
+    @Published var filter: NativeMediaLibraryFilter = .all { didSet { cachedVisibleItems = nil } }
+    @Published var search = "" { didSet { cachedVisibleItems = nil } }
+    @Published var sort: NativeMediaLibrarySort = .newest { didSet { cachedVisibleItems = nil } }
+    @Published var scope: NativeMediaLibraryScope = .all { didSet { cachedVisibleItems = nil } }
+    private var groupCounts: [String?: Int] = [:]
+    private var cachedVisibleItems: [NativeLibraryMedia]?
+    private var hasLoaded = false
 
     init(store: LocalBlogStore) {
         self.store = store
@@ -21,7 +29,14 @@ final class NativeMediaLibraryModel: ObservableObject {
     }
 
     var visibleItems: [NativeLibraryMedia] {
-        NativeMediaLibraryProjection.items(items, scope: scope, filter: filter, search: search, sort: sort)
+        if let cachedVisibleItems { return cachedVisibleItems }
+        let visible = NativeMediaLibraryProjection.items(items, scope: scope, filter: filter, search: search, sort: sort)
+        cachedVisibleItems = visible
+        return visible
+    }
+
+    func itemCount(in scope: NativeMediaLibraryScope) -> Int {
+        scope == .all ? items.count : groupCounts[scope.groupID, default: 0]
     }
 
     var title: String {
@@ -113,7 +128,7 @@ final class NativeMediaLibraryModel: ObservableObject {
                 self.scope = .group(created.id)
             }
             onChange()
-            try await self.reload()
+            try await self.reload(reuseFiles: true)
         }
     }
 
@@ -132,7 +147,7 @@ final class NativeMediaLibraryModel: ObservableObject {
         await perform {
             try await self.store.deleteMediaGroup(id: group.id)
             onChange()
-            try await self.reload()
+            try await self.reload(reuseFiles: true)
         }
     }
 
@@ -140,7 +155,8 @@ final class NativeMediaLibraryModel: ObservableObject {
         await perform {
             try await self.store.moveLibraryMedia(media, toGroup: groupID)
             onChange()
-            try await self.reload()
+            let ids = Set(self.items.map(\.id))
+            try await self.reload(reuseFiles: media.allSatisfy { ids.contains($0.url) })
         }
     }
 
@@ -164,11 +180,12 @@ final class NativeMediaLibraryModel: ObservableObject {
         onChange()
     }
 
-    private func reload() async throws {
-        let snapshot = try await store.mediaLibrarySnapshot()
+    private func reload(reuseFiles: Bool = false) async throws {
+        let snapshot = try await store.mediaLibrarySnapshot(reusing: reuseFiles && hasLoaded ? items : nil)
         try Task.checkCancellation()
-        groups = snapshot.groups
-        items = snapshot.items
+        if groups != snapshot.groups { groups = snapshot.groups }
+        if items != snapshot.items { items = snapshot.items }
+        hasLoaded = true
         if let id = scope.groupID, !groups.contains(where: { $0.id == id }) { scope = .defaultGroup }
     }
 

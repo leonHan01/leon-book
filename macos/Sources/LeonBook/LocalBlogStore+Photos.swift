@@ -2,26 +2,40 @@ import Foundation
 import ImageIO
 
 extension LocalBlogStore {
-    func photoLibrarySnapshot() throws -> NativePhotoLibrarySnapshot {
+    /// Organization edits can reuse the displayed file list and read only album metadata.
+    func photoLibrarySnapshot(reusing files: [NativeLibraryPhoto]? = nil) throws -> NativePhotoLibrarySnapshot {
         try prepare()
         var albums: [NativePhotoAlbum] = []
         try db().query("SELECT id, name FROM photo_albums ORDER BY created_at, id") { row in
             albums.append(NativePhotoAlbum(id: row.text(at: 0) ?? "", name: row.text(at: 1) ?? ""))
         }
         var names: [String: String] = [:]
-        try db().query("""
-        SELECT media_json FROM articles UNION ALL SELECT images_json FROM moments
-        UNION ALL SELECT images_json FROM question_answers
-        """) { row in
-            guard let json = row.text(at: 0), let data = json.data(using: .utf8),
-                  let media = try? JSONDecoder().decode([NativeMedia].self, from: data) else { return }
-            for item in media where item.isImage { names[normalizeMediaURL(item.url)] = item.name }
+        if files == nil {
+            try db().query("""
+            SELECT media_json FROM articles WHERE media_json <> '[]'
+            UNION ALL SELECT images_json FROM moments WHERE images_json <> '[]'
+            UNION ALL SELECT images_json FROM question_answers WHERE images_json <> '[]'
+            """, checkingCancellation: true) { row in
+                guard let json = row.text(at: 0), let data = json.data(using: .utf8),
+                      let media = try? JSONDecoder().decode([NativeMedia].self, from: data) else { return }
+                for item in media where item.isImage { names[normalizeMediaURL(item.url)] = item.name }
+            }
         }
         var memberships: [String: String] = [:]
         try db().query("SELECT url, name, album_id FROM photo_library_items") { row in
             guard let url = row.text(at: 0) else { return }
             names[url] = row.text(at: 1)
             memberships[url] = row.text(at: 2)
+        }
+        if let files {
+            let photos = files.map { photo in
+                let name = names[photo.id] ?? photo.media.name
+                let albumID = memberships[photo.id]
+                guard name != photo.media.name || albumID != photo.albumID else { return photo }
+                let media = NativeMedia(kind: photo.media.kind, name: name, size: photo.media.size, url: photo.id)
+                return NativeLibraryPhoto(media: media, modifiedAt: photo.modifiedAt, albumID: albumID)
+            }
+            return NativePhotoLibrarySnapshot(albums: albums, photos: photos)
         }
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
         var photos: [NativeLibraryPhoto] = []
@@ -36,6 +50,7 @@ extension LocalBlogStore {
                 at: directory, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]
             )
             for file in files where Self.photoExtensions.contains(file.pathExtension.lowercased()) {
+                try Task.checkCancellation()
                 guard let values = try? file.resourceValues(forKeys: keys),
                       values.isRegularFile == true, values.isSymbolicLink != true else { continue }
                 let url = "/media/\(directory.lastPathComponent)/\(file.lastPathComponent)"

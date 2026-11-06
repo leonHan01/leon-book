@@ -4814,6 +4814,10 @@ final class LocalBlogStoreTests {
             try await store.search("性", restrictingTo: [.article]).map(\.documentID),
             [saved.slug]
         )
+        XCTAssertEqual(
+            try await store.search("性能 性 article", restrictingTo: [.article]).map(\.documentID),
+            [saved.slug]
+        )
         try await store.discardUnreferencedMedia([media])
         let storedURL = await store.mediaURL(for: uploaded.url)
         XCTAssertTrue(storedURL.map { FileManager.default.fileExists(atPath: $0.path) } == true)
@@ -6651,8 +6655,10 @@ final class RichArticleTests {
               choose('p'); const resetsToText = root.firstElementChild.tagName === 'P' && !!root.querySelector('p strong');
               load('<p>第一段</p><p data-type="task" data-checked="true">第二段</p><p>第三段</p>', 'heading-multiple');
               select(root.children[0].firstChild, 1, root.children[2].firstChild, 0);
-              const multipleText = selection.toString(); choose('h2');
-              const multipleBlocks = [...root.children].map(block => block.tagName).join(',') === 'H2,H2,P' && !root.querySelector('[data-type],[data-checked]') && selection.toString() === multipleText;
+              // Selection.toString() adds visual line breaks based on block spacing and font size.
+              // Compare the actual DOM range so heading layout does not look like content loss.
+              const multipleText = selection.getRangeAt(0).toString(); choose('h2');
+              const multipleBlocks = [...root.children].map(block => block.tagName).join(',') === 'H2,H2,P' && !root.querySelector('[data-type],[data-checked]') && selection.getRangeAt(0).toString() === multipleText;
               load('<table><tbody><tr><td><p>单元格文字</p></td><td><p>保留单元格</p></td></tr></tbody></table>', 'heading-table');
               const cellText = root.querySelector('td p').firstChild; select(cellText, 0, cellText, cellText.length); choose('h4');
               const tablePreserved = root.querySelectorAll('td').length === 2 && root.querySelector('td h4').textContent === '单元格文字' && root.querySelectorAll('td')[1].firstElementChild.tagName === 'P';
@@ -7029,6 +7035,7 @@ struct LeonBookUnitTests {
         var tests: [(String, () async throws -> Void)] = [
             ("MediaResourceTests.testCancelledThumbnailRequestsReleaseWhileDecoderIsBusy", { try await MediaResourceTests().testCancelledThumbnailRequestsReleaseWhileDecoderIsBusy() }),
             ("MediaResourceTests.testThumbnailCacheRetainsAtMost64MiB", { try await MediaResourceTests().testThumbnailCacheRetainsAtMost64MiB() }),
+            ("MediaResourceTests.testArticleMediaReadsCompleteBytesAndHonorsCancellation", { try await MediaResourceTests().testArticleMediaReadsCompleteBytesAndHonorsCancellation() }),
             ("MediaResourceTests.testCancellingOneSubscriberKeepsSharedDecodeAlive", { try await MediaResourceTests().testCancellingOneSubscriberKeepsSharedDecodeAlive() }),
             ("MediaResourceTests.testImagesAndVideosShareTwoDecodeSlots", { try await MediaResourceTests().testImagesAndVideosShareTwoDecodeSlots() }),
             ("MediaResourceTests.testVideoPosterCacheRetainsAtMost32MiB", { try await MediaResourceTests().testVideoPosterCacheRetainsAtMost32MiB() }),
@@ -7130,6 +7137,12 @@ struct LeonBookUnitTests {
             ("RichArticleTests.testRichArticleTableControlsAndColumnWidths", { try await RichArticleTests().testRichArticleTableControlsAndColumnWidths() }),
             ("RichArticleTests.testRichArticleTableQuickAddButtons", { try await RichArticleTests().testRichArticleTableQuickAddButtons() }),
             ("RichArticleTests.testRichArticleTableInsertBetweenRows", { try await RichArticleTests().testRichArticleTableInsertBetweenRows() }),
+            ("RichArticleTests.testRichArticleTableAxisSelection", { try await RichArticleTests().testRichArticleTableAxisSelection() }),
+            ("RichArticleTests.testRichArticleOutlineNavigationAndUpdates", { try await RichArticleTests().testRichArticleOutlineNavigationAndUpdates() }),
+            ("RichArticleTests.testRichArticleOutlineNativeBridge", { try await RichArticleTests().testRichArticleOutlineNativeBridge() }),
+            ("RichArticleTests.testRichArticleBlockGapSelectionPreservesContent", { try await RichArticleTests().testRichArticleBlockGapSelectionPreservesContent() }),
+            ("RichArticleTests.testRichArticleNumberingRestartsAtEachIndent", { try await RichArticleTests().testRichArticleNumberingRestartsAtEachIndent() }),
+            ("RichArticleTests.testRichArticleDeletesAllHighlightedBlocks", { try await RichArticleTests().testRichArticleDeletesAllHighlightedBlocks() }),
             ("RichArticleTests.testRichArticleImageControlsAndCaptions", { try await RichArticleTests().testRichArticleImageControlsAndCaptions() }),
             ("RichArticleTests.testRichArticleUndoRestoresSelectionsAndCaret", { try await RichArticleTests().testRichArticleUndoRestoresSelectionsAndCaret() }),
             ("RichArticleTests.testRichArticleSelectionToolbarFormatsAndPersistsColors", { try await RichArticleTests().testRichArticleSelectionToolbarFormatsAndPersistsColors() }),

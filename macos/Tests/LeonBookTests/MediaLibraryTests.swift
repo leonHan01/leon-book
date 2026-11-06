@@ -154,7 +154,8 @@ final class MediaLibraryTests {
     func testMediaGroupsShareSelectionRefreshAndResetForWorkspace() async throws {
         let fixture = try fixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let store = LocalBlogStore(rootURL: fixture.root.appendingPathComponent("workspace"))
+        let workspace = fixture.root.appendingPathComponent("workspace")
+        let store = LocalBlogStore(rootURL: workspace)
         let app = NativeAppModel(navigationScopeID: "media-group-tests", startsAutomatically: false, store: store)
         let library = app.mediaLibrary
         app.section = .mediaLibrary
@@ -176,8 +177,11 @@ final class MediaLibraryTests {
         try mediaExpect(library.visibleItems.count == 1, "group scope and introduction search must compose")
         library.scope = .defaultGroup
         try mediaExpect(library.visibleItems.isEmpty, "default must exclude manually grouped media")
+        let externalFile = workspace.appendingPathComponent("media/media-library/external.wav")
+        try FileManager.default.copyItem(at: fixture.audio, to: externalFile)
         await library.move([item.media], to: nil) { changes += 1 }
-        try mediaExpect(library.visibleItems.count == 1, "moving to default must refresh both sidebar and cards")
+        try mediaExpect(library.visibleItems.count == 1 && library.itemCount(in: .defaultGroup) == 1,
+                        "moving to default must refresh both sidebar and cards using the current file list")
         await library.saveGroup(name: "音乐", group: group) { changes += 1 }
         try mediaExpect(library.groups.first?.name == "音乐", "renaming must refresh sidebar labels")
         await library.move([item.media], to: group.id) { changes += 1 }
@@ -191,6 +195,8 @@ final class MediaLibraryTests {
         app.section = .articles
         app.section = .mediaLibrary
         try mediaExpect(app.mediaLibrary === library && library.scope == .defaultGroup, "navigating away and back must preserve the selected media group")
+        await library.load()
+        try mediaExpect(library.items.count == 2, "an explicit refresh must discover newly added files")
         let other = LocalBlogStore(rootURL: fixture.root.appendingPathComponent("other"))
         app.store = other
         await app.mediaLibrary.load()

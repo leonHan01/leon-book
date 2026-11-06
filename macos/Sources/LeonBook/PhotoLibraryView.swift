@@ -58,11 +58,11 @@ struct NativePhotoLibraryView: View {
             ScrollView {
                 VStack(spacing: 4) {
                     albumRow("全部图片", icon: "photo.on.rectangle", scope: .all, count: library.photos.count)
-                    albumRow("未分类", icon: "tray", scope: .unfiled, count: library.photos.filter { $0.albumID == nil }.count)
+                    albumRow("未分类", icon: "tray", scope: .unfiled, count: library.photoCount(in: nil))
                     Divider().padding(.vertical, 10)
                     ForEach(library.albums) { album in
                         albumRow(album.name, icon: "rectangle.stack", scope: .album(album.id),
-                                 count: library.photos.filter { $0.albumID == album.id }.count)
+                                 count: library.photoCount(in: album.id))
                             .contextMenu {
                                 Button("重命名相册…") { library.editAlbum(album, onChange: changed) }
                                 Button("删除相册…", role: .destructive) { library.deleteAlbum(album, onChange: changed) }
@@ -130,7 +130,7 @@ struct NativePhotoLibraryView: View {
     private var photoGrid: some View {
         let photos = visiblePhotos
         return ScrollView {
-            if photos.isEmpty && library.isBusy {
+            if photos.isEmpty && (library.isBusy || library.isProjecting) {
                 ProgressView("正在加载图片…")
                     .frame(maxWidth: .infinity, minHeight: 350)
             } else if photos.isEmpty {

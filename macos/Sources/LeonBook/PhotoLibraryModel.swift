@@ -16,22 +16,64 @@ final class NativePhotoLibraryModel: ObservableObject {
     let store: LocalBlogStore
     let workspace: String
     @Published private(set) var albums: [NativePhotoAlbum] = []
-    @Published private(set) var photos: [NativeLibraryPhoto] = []
+    @Published private(set) var photos: [NativeLibraryPhoto] = [] {
+        didSet {
+            albumCounts = photos.reduce(into: [:]) { $0[$1.albumID, default: 0] += 1 }
+            rebuildProjection(clearResults: false)
+        }
+    }
     @Published private(set) var isBusy = false
+    @Published private(set) var isProjecting = false
+    @Published private(set) var visiblePhotos: [NativeLibraryPhoto] = []
     @Published var errorMessage: String?
-    @Published var scope: NativePhotoScope = .all
-    @Published var search = ""
-    @Published var sort: NativePhotoSort = .newest
+    @Published var scope: NativePhotoScope = .all {
+        didSet { if scope != oldValue { rebuildProjection() } }
+    }
+    @Published var search = "" {
+        didSet { if search != oldValue { rebuildProjection() } }
+    }
+    @Published var sort: NativePhotoSort = .newest {
+        didSet { if sort != oldValue { rebuildProjection(clearResults: false) } }
+    }
     @Published var selection: Set<String> = []
     private var selectionAnchor: String?
+    private var albumCounts: [String?: Int] = [:]
+    private var projectionTask: Task<Void, Never>?
+    private var hasLoaded = false
 
     init(store: LocalBlogStore, workspace: String) {
         self.store = store
         self.workspace = workspace
     }
 
-    var visiblePhotos: [NativeLibraryPhoto] {
-        NativePhotoLibraryProjection.photos(photos, scope: scope, search: search, sort: sort)
+    deinit { projectionTask?.cancel() }
+
+    func photoCount(in albumID: String?) -> Int {
+        albumCounts[albumID, default: 0]
+    }
+
+    private func rebuildProjection(clearResults: Bool = true) {
+        projectionTask?.cancel()
+        if clearResults || photos.isEmpty { visiblePhotos = [] }
+        isProjecting = !photos.isEmpty
+        guard isProjecting else {
+            projectionTask = nil
+            return
+        }
+        let worker = Task.detached(priority: .userInitiated) { [photos, scope, search, sort] in
+            try? NativePhotoLibraryProjection.photos(photos, scope: scope, search: search, sort: sort)
+        }
+        projectionTask = Task { [weak self] in
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.visiblePhotos = result ?? []
+            self.isProjecting = false
+            self.projectionTask = nil
+        }
     }
 
     var title: String {
@@ -46,13 +88,16 @@ final class NativePhotoLibraryModel: ObservableObject {
         await perform { try await self.reload() }
     }
 
-    private func reload() async throws {
-        let snapshot = try await store.photoLibrarySnapshot()
+    private func reload(reuseFiles: Bool = false) async throws {
+        let snapshot = try await store.photoLibrarySnapshot(reusing: reuseFiles && hasLoaded ? photos : nil)
         try Task.checkCancellation()
-        albums = snapshot.albums
-        photos = snapshot.photos
+        if albums != snapshot.albums { albums = snapshot.albums }
         if let id = scope.albumID, !albums.contains(where: { $0.id == id }) { scope = .all }
-        selection.formIntersection(Set(photos.map(\.id)))
+        if photos != snapshot.photos {
+            photos = snapshot.photos
+            if !selection.isEmpty { selection.formIntersection(Set(photos.map(\.id))) }
+        }
+        hasLoaded = true
     }
 
     func show(_ scope: NativePhotoScope) {
@@ -134,7 +179,7 @@ final class NativePhotoLibraryModel: ObservableObject {
             }
             onChange()
             self.selection = []
-            try await self.reload()
+            try await self.reload(reuseFiles: !internalProviders.isEmpty)
         }
     }
 
@@ -177,7 +222,7 @@ final class NativePhotoLibraryModel: ObservableObject {
                     self.show(.album(created.id))
                 }
                 onChange()
-                try await self.reload()
+                try await self.reload(reuseFiles: true)
             }
         }
     }
@@ -194,7 +239,7 @@ final class NativePhotoLibraryModel: ObservableObject {
             await perform {
                 try await self.store.deletePhotoAlbum(id: album.id)
                 onChange()
-                try await self.reload()
+                try await self.reload(reuseFiles: true)
             }
         }
     }
@@ -205,7 +250,8 @@ final class NativePhotoLibraryModel: ObservableObject {
                 try await self.store.movePhotos(media, toAlbum: albumID)
                 onChange()
                 self.selection = []
-                try await self.reload()
+                let ids = Set(self.photos.map(\.id))
+                try await self.reload(reuseFiles: media.allSatisfy { ids.contains($0.url) })
             }
         }
     }

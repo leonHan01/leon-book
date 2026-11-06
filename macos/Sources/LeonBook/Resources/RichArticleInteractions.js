@@ -25,10 +25,14 @@ function createArticleInteractions(api) {
   }
   const rowAdd = quickAdd('table-add-row', '在表格底部添加一行'), columnAdd = quickAdd('table-add-column', '在此处添加一列');
   const rowInsert = quickAdd('table-insert-row', '在此处添加一行');
+  // Selection chrome lives outside the article so it never enters saved HTML or undo snapshots.
+  const tableAxes = document.createElement('div'); tableAxes.id = 'table-axis-controls'; tableAxes.hidden = true; document.body.append(tableAxes);
+  const tableHighlight = document.createElement('div'); tableHighlight.id = 'table-axis-selection'; tableHighlight.hidden = true; tableHighlight.setAttribute('aria-hidden', 'true'); document.body.append(tableHighlight);
   const frame = document.createElement('div'); frame.id = 'image-frame'; frame.className = 'editor-overlay'; frame.hidden = true; frame.innerHTML = '<span class="image-resize" data-side="-1" role="separator" aria-label="拖动调整图片宽度"></span><span class="image-resize" data-side="1" role="separator" aria-label="拖动调整图片宽度"></span>'; document.body.append(frame);
   const preview = document.createElement('div'); preview.id = 'image-preview'; preview.className = 'editor-overlay'; preview.hidden = true; preview.setAttribute('role', 'dialog'); preview.setAttribute('aria-label', '图片预览'); preview.setAttribute('aria-modal', 'true'); preview.innerHTML = '<button title="关闭预览" aria-label="关闭预览"><svg class="popover-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button><img alt="">'; document.body.append(preview);
   const progress = document.createElement('div'); progress.id = 'image-progress'; progress.hidden = true; progress.setAttribute('role', 'status'); document.body.append(progress);
   let activeCell = null, quickRowTable = null, quickRowCell = null, quickColumnCell = null, selectedImage = null, insertion = null, drag = null, tableTimer, progressTimer, pickerRows = 2, pickerColumns = 2, previewFocus = null;
+  let axisTable = null, tableSelection = null;
   const replacements = new Map();
   for (const chrome of [grip, rowAdd, rowInsert, columnAdd, frame, preview]) window.LeonL10n.bindChrome(chrome);
   function place(element, rect, gap = 7) {
@@ -39,10 +43,73 @@ function createArticleInteractions(api) {
   }
   function owns(element) { return element && root.contains(element); }
   function hideQuickAdds() { rowAdd.hidden = rowInsert.hidden = columnAdd.hidden = true; quickRowTable = quickRowCell = quickColumnCell = null; }
-  function tableControl(target) { return tableTools.contains(target) || rowAdd.contains(target) || rowInsert.contains(target) || columnAdd.contains(target) || target === grip; }
-  function scheduleTableHide() { if (tableTools.hidden && grip.hidden && rowAdd.hidden && rowInsert.hidden && columnAdd.hidden) return; clearTimeout(tableTimer); tableTimer = setTimeout(() => { tableTools.hidden = grip.hidden = true; hideQuickAdds(); }, 180); }
+  function tableControl(target) { return tableTools.contains(target) || tableAxes.contains(target) || rowAdd.contains(target) || rowInsert.contains(target) || columnAdd.contains(target) || target === grip; }
+  function hideTableAxes() { tableAxes.hidden = tableHighlight.hidden = true; axisTable = null; }
+  function clearTableSelection() {
+    if (!tableSelection) return;
+    tableSelection = null; tableHighlight.hidden = true; delete tableTools.dataset.axis;
+    for (const button of tableAxes.children) button.setAttribute('aria-pressed', 'false');
+  }
+  function selectedCells() {
+    if (!tableSelection || !owns(tableSelection.cell)) return [];
+    const { table, axis, index, cell } = tableSelection;
+    return axis === 'row' ? [...cell.parentElement.cells] : rows(table).map(row => row.cells[index]).filter(Boolean);
+  }
+  function positionTableAxes() {
+    if (!canEdit() || !owns(axisTable) || selectedImage || drag || !picker.hidden || !preview.hidden || !getSelection().isCollapsed) { hideTableAxes(); return; }
+    const table = axisTable, rect = table.getBoundingClientRect(), rowList = rows(table);
+    const minimum = Math.max(0, document.getElementById('toolbar').getBoundingClientRect().bottom);
+    tableAxes.hidden = rect.bottom <= minimum || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth;
+    if (tableAxes.hidden) { tableHighlight.hidden = true; return; }
+    const count = columns(table), firstRow = rowList.find(row => row.cells.length === count);
+    if (+tableAxes.dataset.columns !== count || +tableAxes.dataset.rows !== rowList.length) {
+      tableAxes.dataset.columns = count; tableAxes.dataset.rows = rowList.length;
+      tableAxes.replaceChildren(...['column', 'row'].flatMap(axis => Array.from({ length: axis === 'column' ? count : rowList.length }, (_, index) => {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'table-axis-handle'; button.dataset.axis = axis; button.dataset.index = index;
+        return button;
+      })));
+    }
+    for (const button of tableAxes.children) {
+      const axis = button.dataset.axis, index = +button.dataset.index;
+      const box = (axis === 'column' ? firstRow?.cells[index] : rowList[index])?.getBoundingClientRect();
+      button.hidden = !box || (axis === 'column' ? rect.top < minimum || rect.top > innerHeight - 10 : box.bottom <= minimum || box.top >= innerHeight);
+      if (button.hidden) continue;
+      const label = axis === 'column' ? t('选择第 %@ 列', index + 1) : t('选择第 %@ 行', index + 1);
+      button.title = label; button.setAttribute('aria-label', label);
+      button.setAttribute('aria-pressed', String(tableSelection?.table === table && tableSelection.axis === axis && tableSelection.index === index));
+      Object.assign(button.style, axis === 'column'
+        ? { left: box.left + 6 + 'px', top: Math.max(minimum, rect.top - 12) + 'px', width: Math.max(6, box.width - 12) + 'px', height: '9px' }
+        : { left: Math.max(0, rect.left - 11) + 'px', top: Math.max(minimum, box.top + 6) + 'px', width: '8px', height: Math.max(6, Math.min(innerHeight, box.bottom - 6) - Math.max(minimum, box.top + 6)) + 'px' });
+    }
+    const cells = selectedCells(); tableHighlight.hidden = !cells.length;
+    if (cells.length) {
+      const boxes = cells.map(cell => cell.getBoundingClientRect());
+      const left = Math.min(...boxes.map(box => box.left)), right = Math.max(...boxes.map(box => box.right));
+      const top = Math.max(minimum, Math.min(...boxes.map(box => box.top))), bottom = Math.min(innerHeight, Math.max(...boxes.map(box => box.bottom)));
+      tableHighlight.hidden = bottom <= top;
+      Object.assign(tableHighlight.style, { left: left + 'px', top: top + 'px', width: right - left + 'px', height: Math.max(0, bottom - top) + 'px' });
+    }
+  }
+  function selectTableAxis(axis, index) {
+    if (!canEdit() || !owns(axisTable) || tableAxes.hidden) return;
+    const table = axisTable, rowList = rows(table);
+    const cell = axis === 'row' ? rowList[index]?.cells[0] : rowList.find(row => row.cells[index])?.cells[index];
+    if (!cell) return;
+    hoverTable.cancel(); scheduleSelectionTools.cancel(); clearTimeout(tableTimer); closeMenu();
+    selectedImage = null; frame.hidden = imageTools.hidden = grip.hidden = true; focusBlock(cell);
+    const selection = getSelection();
+    tableSelection = { table, axis, index, cell, anchor: selection.anchorNode, offset: selection.anchorOffset };
+    showTable(cell);
+  }
+  tableAxes.addEventListener('mousedown', event => event.preventDefault());
+  tableAxes.addEventListener('pointerenter', () => clearTimeout(tableTimer));
+  tableAxes.addEventListener('click', event => {
+    const button = event.target.closest('.table-axis-handle');
+    if (button && !button.hidden) selectTableAxis(button.dataset.axis, +button.dataset.index);
+  });
+  function scheduleTableHide() { if (tableSelection || (tableTools.hidden && tableAxes.hidden && grip.hidden && rowAdd.hidden && rowInsert.hidden && columnAdd.hidden)) return; clearTimeout(tableTimer); tableTimer = setTimeout(() => { tableTools.hidden = grip.hidden = true; hideQuickAdds(); hideTableAxes(); }, 180); }
   function positionQuickAdds() {
-    if (!canEdit() || selectedImage || !picker.hidden || !preview.hidden || !getSelection().isCollapsed) { hideQuickAdds(); return; }
+    if (!canEdit() || tableSelection || selectedImage || !picker.hidden || !preview.hidden || !getSelection().isCollapsed) { hideQuickAdds(); return; }
     const minimum = Math.max(8, document.getElementById('toolbar').getBoundingClientRect().bottom + 5);
     if (owns(quickRowTable)) {
       const rect = quickRowTable.getBoundingClientRect();
@@ -81,15 +148,18 @@ function createArticleInteractions(api) {
   function emptyCell(header = false) { const cell = document.createElement(header ? 'th' : 'td'); cell.innerHTML = '<p><br></p>'; return cell; }
   function appendRow(table) {
     if (!canEdit() || !owns(table)) return;
+    clearTableSelection();
     checkpoint(); const section = table.tBodies[0] || table.createTBody(), row = section.insertRow();
     row.append(...Array.from({ length: columns(table) }, () => emptyCell()));
     focusBlock(row.cells[0]); notify(); showTable(row.cells[0]);
   }
   function removeTable(table) {
-    const paragraph = document.createElement('p'); paragraph.innerHTML = '<br>'; table.replaceWith(paragraph); activeCell = null; tableTools.hidden = grip.hidden = true; hideQuickAdds(); focusBlock(paragraph);
+    const paragraph = document.createElement('p'); paragraph.innerHTML = '<br>'; table.replaceWith(paragraph); activeCell = null; tableTools.hidden = grip.hidden = true; hideQuickAdds(); hideTableAxes(); focusBlock(paragraph);
   }
   function editTable(action) {
     if (!canEdit() || !owns(activeCell)) return;
+    if (tableSelection && !action.startsWith(tableSelection.axis + '-')) return;
+    clearTableSelection();
     checkpoint(); const cell = activeCell, row = cell.parentElement, table = cell.closest('table'), rowList = rows(table), index = rowList.indexOf(row), column = cell.cellIndex;
     if (action.startsWith('row-')) {
       if (action === 'row-delete') {
@@ -117,11 +187,16 @@ function createArticleInteractions(api) {
     notify(); if (owns(activeCell)) showTable(activeCell);
   }
   function showTable(cell) {
-    if (!canEdit() || !owns(cell) || !getSelection().isCollapsed || selectedImage) { tableTools.hidden = true; hideQuickAdds(); return; }
+    if (!canEdit() || !owns(cell) || !getSelection().isCollapsed || selectedImage) { tableTools.hidden = true; hideQuickAdds(); hideTableAxes(); return; }
+    if (tableSelection) cell = tableSelection.cell;
     clearTimeout(tableTimer); activeCell = cell; const table = cell.closest('table');
-    tableTools.querySelector('.tool-label').textContent = t('表格 · 第 %@ 行，第 %@ 列', cell.parentElement.rowIndex + 1, cell.cellIndex + 1);
-    for (const button of cellColors.children) button.setAttribute('aria-pressed', String(button.dataset.cellColor ? button.style.backgroundColor === cell.style.backgroundColor : !cell.style.backgroundColor));
-    tableTools.hidden = false; place(tableTools, table.getBoundingClientRect(), 16); showQuickAdds(cell);
+    const axis = tableSelection?.axis;
+    if (axis) tableTools.dataset.axis = axis; else delete tableTools.dataset.axis;
+    tableTools.querySelector('.tool-label').textContent = axis === 'column' ? t('已选中第 %@ 列', cell.cellIndex + 1)
+      : axis === 'row' ? t('已选中第 %@ 行', cell.parentElement.rowIndex + 1) : t('表格 · 第 %@ 行，第 %@ 列', cell.parentElement.rowIndex + 1, cell.cellIndex + 1);
+    const cells = axis ? selectedCells() : [cell];
+    for (const button of cellColors.children) button.setAttribute('aria-pressed', String(cells.every(item => button.dataset.cellColor ? button.style.backgroundColor === item.style.backgroundColor : !item.style.backgroundColor)));
+    tableTools.hidden = false; place(tableTools, table.getBoundingClientRect(), 16); showQuickAdds(cell); axisTable = table; positionTableAxes();
   }
   rowAdd.addEventListener('click', () => {
     if (rowAdd.hidden || !owns(quickRowTable)) return;
@@ -141,6 +216,7 @@ function createArticleInteractions(api) {
     for (const button of picker.querySelectorAll('.table-grid button')) button.classList.toggle('active', +button.dataset.row <= pickerRows && +button.dataset.column <= pickerColumns);
   }
   function chooseTable(block) {
+    clearTableSelection(); hideTableAxes();
     insertion = { block, selection: captureSelection() }; closeMenu(); pickerRows = pickerColumns = 2; drawPicker();
     picker.hidden = false; tableTools.hidden = true; hideQuickAdds(); place(picker, block.getBoundingClientRect());
   }
@@ -161,8 +237,9 @@ function createArticleInteractions(api) {
   tableTools.addEventListener('click', event => {
     const color = event.target.closest('[data-cell-color]');
     if (color && canEdit() && owns(activeCell)) {
-      if (activeCell.style.backgroundColor !== (color.dataset.cellColor ? color.style.backgroundColor : '')) {
-        checkpoint(); activeCell.style.backgroundColor = color.dataset.cellColor; notify();
+      const cells = tableSelection ? selectedCells() : [activeCell];
+      if (cells.some(cell => cell.style.backgroundColor !== (color.dataset.cellColor ? color.style.backgroundColor : ''))) {
+        checkpoint(); for (const cell of cells) cell.style.backgroundColor = color.dataset.cellColor; notify();
       }
       showTable(activeCell); return;
     }
@@ -179,6 +256,7 @@ function createArticleInteractions(api) {
     imageTools.querySelector('output').textContent = Math.round(rect.width / contentWidth(selectedImage) * 100) + '%';
   }
   function selectImage(image) {
+    clearTableSelection(); hideTableAxes();
     selectedImage = image; tableTools.hidden = grip.hidden = true; hideQuickAdds();
     const range = document.createRange(); range.selectNode(image); getSelection().removeAllRanges(); getSelection().addRange(range); checkpoint(); positionImage();
   }
@@ -234,7 +312,7 @@ function createArticleInteractions(api) {
     clearTimeout(progressTimer); progress.hidden = !count && !failed; progress.textContent = failed ? t('图片未能粘贴，请重试') : t('正在处理图片…');
     if (failed) progressTimer = setTimeout(() => { progress.hidden = true; }, 2500);
   }
-  function beginDrag(event, data) { hoverTable.cancel(); checkpoint(); drag = data; hideQuickAdds(); event.preventDefault(); try { event.target.setPointerCapture(event.pointerId); } catch {} }
+  function beginDrag(event, data) { hoverTable.cancel(); clearTableSelection(); hideTableAxes(); checkpoint(); drag = data; hideQuickAdds(); event.preventDefault(); try { event.target.setPointerCapture(event.pointerId); } catch {} }
   grip.addEventListener('pointerdown', event => {
     if (!canEdit() || !owns(activeCell)) return;
     const table = activeCell.closest('table'), index = activeCell.cellIndex, width = table.getBoundingClientRect().width;
@@ -271,11 +349,11 @@ function createArticleInteractions(api) {
   }
   document.addEventListener('pointerup', () => endDrag()); document.addEventListener('pointercancel', () => endDrag(true));
   const hoverTable = frameTask(event => {
-    if (drag || !canEdit() || !owns(event.target)) return;
-    if (event.buttons || !getSelection().isCollapsed) { tableTools.hidden = grip.hidden = true; hideQuickAdds(); return; }
+    if (drag || tableSelection || !canEdit() || !owns(event.target)) return;
+    if (event.buttons || !getSelection().isCollapsed) { tableTools.hidden = grip.hidden = true; hideQuickAdds(); hideTableAxes(); return; }
     const cell = event.target.closest('td,th');
     if (cell) {
-      if (cell !== activeCell || tableTools.hidden) showTable(cell);
+      if (cell !== activeCell || tableTools.hidden || tableAxes.hidden) showTable(cell);
       const rect = cell.getBoundingClientRect(), index = cell.cellIndex, siblings = cell.parentElement.cells;
       const row = cell.parentElement, tableRows = cell.closest('table').rows;
       quickRowCell = row.rowIndex < tableRows.length - 1 && Math.abs(event.clientY - rect.bottom) < 14 ? row.cells[0]
@@ -299,10 +377,11 @@ function createArticleInteractions(api) {
   root.addEventListener('pointermove', event => { if (!drag && canEdit() && (event.target.closest('td,th') || !tableTools.hidden || !grip.hidden || quickRowTable)) hoverTable(event); }, { passive: true });
   tableTools.addEventListener('pointerenter', () => clearTimeout(tableTimer));
   root.addEventListener('pointerleave', event => { hoverTable.cancel(); if (!tableControl(event.relatedTarget)) scheduleTableHide(); });
-  for (const control of [tableTools, rowAdd, rowInsert, columnAdd, grip]) control.addEventListener('pointerleave', event => {
+  for (const control of [tableTools, tableAxes, rowAdd, rowInsert, columnAdd, grip]) control.addEventListener('pointerleave', event => {
     if (!root.contains(event.relatedTarget) && !tableControl(event.relatedTarget)) scheduleTableHide();
   });
   root.addEventListener('click', event => {
+    clearTableSelection();
     const image = event.target.closest('img');
     if (canEdit() && event.target.closest('figure[data-type=whiteboard]')) { selectedImage = null; frame.hidden = imageTools.hidden = true; return; }
     if (image) { event.preventDefault(); if (canEdit()) selectImage(image); else showPreview(image); }
@@ -314,12 +393,22 @@ function createArticleInteractions(api) {
   const scheduleSelectionTools = frameTask(showQuickAdds);
   document.addEventListener('selectionchange', () => {
     const selection = getSelection();
-    if (!selection.isCollapsed) { scheduleSelectionTools.cancel(); tableTools.hidden = true; hideQuickAdds(); return; }
+    if (tableSelection) {
+      if (owns(tableSelection.cell) && selection.isCollapsed && selection.anchorNode === tableSelection.anchor && selection.anchorOffset === tableSelection.offset) return;
+      clearTableSelection(); tableTools.hidden = true; hideTableAxes();
+    }
+    if (!selection.isCollapsed) { scheduleSelectionTools.cancel(); tableTools.hidden = true; hideQuickAdds(); hideTableAxes(); return; }
     const element = selection.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode?.parentElement;
     const cell = element && root.contains(element) ? element.closest('td,th') : null;
     if (cell) scheduleSelectionTools(cell); else { scheduleSelectionTools.cancel(); hideQuickAdds(); }
   });
   root.addEventListener('beforeinput', event => {
+    if (tableSelection && canEdit() && !event.isComposing) {
+      if (event.inputType === 'deleteContentBackward' || event.inputType === 'deleteContentForward') {
+        event.preventDefault(); event.stopImmediatePropagation(); editTable(tableSelection.axis + '-delete'); return;
+      }
+      clearTableSelection();
+    }
     const selection = getSelection(), caption = selection?.anchorNode && (selection.anchorNode.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode.parentElement).closest('figcaption');
     if (!canEdit() || event.inputType !== 'insertParagraph' || !caption) return;
     event.preventDefault(); event.stopImmediatePropagation(); checkpoint();
@@ -327,6 +416,15 @@ function createArticleInteractions(api) {
     selectedImage = null; frame.hidden = imageTools.hidden = true; notify();
   }, true);
   document.addEventListener('keydown', event => {
+    if (tableSelection && canEdit() && !event.isComposing && event.keyCode !== 229 && (root.contains(event.target) || tableControl(event.target))) {
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault(); event.stopImmediatePropagation(); editTable(tableSelection.axis + '-delete'); return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopImmediatePropagation(); clearTableSelection(); showTable(activeCell); return;
+      }
+      if (!['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) { clearTableSelection(); showTable(activeCell); }
+    }
     if (!preview.hidden) {
       if (event.key === 'Escape') { event.preventDefault(); closePreview(); }
       if (event.key === 'Tab') { event.preventDefault(); preview.querySelector('button').focus(); }
@@ -344,13 +442,17 @@ function createArticleInteractions(api) {
     else if (event.key === 'Escape' && selectedImage) { selectedImage = null; frame.hidden = imageTools.hidden = true; }
   }, true);
   document.addEventListener('pointerdown', event => {
+    if (!tableAxes.contains(event.target) && !tableTools.contains(event.target)) {
+      clearTableSelection();
+      if (!event.target.closest('td,th') || !root.contains(event.target)) { tableTools.hidden = true; hideTableAxes(); }
+    }
     if (!picker.hidden && !picker.contains(event.target) && !document.getElementById('commands').contains(event.target)) { picker.hidden = true; insertion = null; }
     if (!root.contains(event.target) && !imageTools.contains(event.target) && !frame.contains(event.target) && !preview.contains(event.target)) { selectedImage = null; frame.hidden = imageTools.hidden = true; }
   });
-  function position() { if (!tableTools.hidden && owns(activeCell)) place(tableTools, activeCell.closest('table').getBoundingClientRect(), 16); if (!picker.hidden && owns(insertion?.block)) place(picker, insertion.block.getBoundingClientRect()); positionImage(); positionQuickAdds(); if (!grip.hidden && owns(activeCell)) { const rect = activeCell.getBoundingClientRect(); Object.assign(grip.style, { left: rect.right - 4 + 'px', top: rect.top + 'px', height: rect.height + 'px' }); } }
+  function position() { if (!tableTools.hidden && owns(activeCell)) place(tableTools, activeCell.closest('table').getBoundingClientRect(), 16); if (!picker.hidden && owns(insertion?.block)) place(picker, insertion.block.getBoundingClientRect()); positionImage(); positionQuickAdds(); positionTableAxes(); if (!grip.hidden && owns(activeCell)) { const rect = activeCell.getBoundingClientRect(); Object.assign(grip.style, { left: rect.right - 4 + 'px', top: rect.top + 'px', height: rect.height + 'px' }); } }
   const schedulePosition = frameTask(position);
   window.addEventListener('scroll', schedulePosition, { passive: true }); window.addEventListener('resize', schedulePosition);
   new ResizeObserver(schedulePosition).observe(root);
-  function reset() { hoverTable.cancel(); schedulePosition.cancel(); scheduleSelectionTools.cancel(); endDrag(true); picker.hidden = tableTools.hidden = imageTools.hidden = frame.hidden = grip.hidden = progress.hidden = true; hideQuickAdds(); if (!preview.hidden) closePreview(); activeCell = selectedImage = insertion = null; replacements.clear(); clearTimeout(tableTimer); clearTimeout(progressTimer); }
+  function reset() { hoverTable.cancel(); schedulePosition.cancel(); scheduleSelectionTools.cancel(); endDrag(true); clearTableSelection(); hideTableAxes(); picker.hidden = tableTools.hidden = imageTools.hidden = frame.hidden = grip.hidden = progress.hidden = true; hideQuickAdds(); if (!preview.hidden) closePreview(); activeCell = selectedImage = insertion = null; replacements.clear(); clearTimeout(tableTimer); clearTimeout(progressTimer); }
   return { chooseTable, appendRow, imageProgress, completeImageReplacement, reset };
 }

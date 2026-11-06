@@ -199,6 +199,8 @@
 "还没有图片、视频或文件附件" = "No image, video, or file attachments";
 "最多 9 个图片或视频 · 视频仅支持 MP4" = "Up to 9 images or videos · MP4 video only";
 "正文大纲" = "Document Outline";
+"文档目录" = "Document Contents";
+"添加标题后会在这里显示目录" = "Add headings to build your document contents.";
 "专注写作" = "Focus Mode";
 "专注写作模式会隐藏右侧面板" = "Focus mode hides the right panel";
 "撤销" = "Undo";
@@ -1994,6 +1996,10 @@
 "行" = "Rows";
 "行数" = "Number of Rows";
 "表格 · 第 %@ 行，第 %@ 列" = "Table · Row %@, Column %@";
+"选择第 %@ 列" = "Select column %@";
+"选择第 %@ 行" = "Select row %@";
+"已选中第 %@ 列" = "Column %@ selected";
+"已选中第 %@ 行" = "Row %@ selected";
 "表格操作" = "Table Controls";
 "让内容自由连接" = "Connect Your Content Freely";
 "设置标题" = "Set Heading";
@@ -2007,6 +2013,7 @@
 "选择 MP3，在文章中直接播放" = "Choose an MP3 to play directly in the article";
 "选择 MP3，或将 MP3 文件拖入正文" = "Choose an MP3, or drag an MP3 file into the body";
 "选择画布" = "Select Canvas";
+"画布列表" = "Canvases";
 "选择行列数，插入可编辑表格" = "Choose rows and columns to insert an editable table";
 "选择表格行列数" = "Choose Table Rows and Columns";
 "选择颜色" = "Choose Color";

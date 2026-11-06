@@ -2,28 +2,32 @@ import AVFoundation
 import Foundation
 
 extension LocalBlogStore {
-    func mediaLibrarySnapshot() throws -> NativeMediaLibrarySnapshot {
+    /// Organization edits can reuse the displayed file list and read only group metadata.
+    func mediaLibrarySnapshot(reusing files: [NativeLibraryMedia]? = nil) throws -> NativeMediaLibrarySnapshot {
         try prepare()
         var groups: [NativeMediaGroup] = []
         try db().query("SELECT id, name FROM media_library_groups ORDER BY created_at, id") { row in
             groups.append(NativeMediaGroup(id: row.text(at: 0) ?? "", name: row.text(at: 1) ?? ""))
         }
-        return NativeMediaLibrarySnapshot(groups: groups, items: try mediaLibraryItems())
+        return NativeMediaLibrarySnapshot(groups: groups, items: try mediaLibraryItems(reusing: files))
     }
 
-    func mediaLibraryItems() throws -> [NativeLibraryMedia] {
+    func mediaLibraryItems(reusing files: [NativeLibraryMedia]? = nil) throws -> [NativeLibraryMedia] {
         try prepare()
         var names: [String: String] = [:]
         var introductions: [String: String] = [:]
         var memberships: [String: String] = [:]
-        try db().query("""
-        SELECT media_json FROM articles UNION ALL SELECT images_json FROM moments
-        UNION ALL SELECT images_json FROM question_answers
-        """) { row in
-            guard let json = row.text(at: 0), let data = json.data(using: .utf8),
-                  let media = try? JSONDecoder().decode([NativeMedia].self, from: data) else { return }
-            for item in media where item.isVideo || item.isAudio {
-                names[normalizeMediaURL(item.url)] = item.name
+        if files == nil {
+            try db().query("""
+            SELECT media_json FROM articles WHERE media_json <> '[]'
+            UNION ALL SELECT images_json FROM moments WHERE images_json <> '[]'
+            UNION ALL SELECT images_json FROM question_answers WHERE images_json <> '[]'
+            """, checkingCancellation: true) { row in
+                guard let json = row.text(at: 0), let data = json.data(using: .utf8),
+                      let media = try? JSONDecoder().decode([NativeMedia].self, from: data) else { return }
+                for item in media where item.isVideo || item.isAudio {
+                    names[normalizeMediaURL(item.url)] = item.name
+                }
             }
         }
         try db().query("SELECT url, name, introduction, group_id FROM media_library_items") { row in
@@ -31,6 +35,16 @@ extension LocalBlogStore {
                 names[url] = row.text(at: 1)
                 introductions[url] = row.text(at: 2)
                 memberships[url] = row.text(at: 3)
+            }
+        }
+        if let files {
+            return files.map { item in
+                let name = names[item.id] ?? item.media.name
+                let introduction = introductions[item.id] ?? ""
+                let groupID = memberships[item.id]
+                guard name != item.media.name || introduction != item.introduction || groupID != item.groupID else { return item }
+                let media = NativeMedia(kind: item.media.kind, name: name, size: item.media.size, url: item.id)
+                return NativeLibraryMedia(media: media, modifiedAt: item.modifiedAt, introduction: introduction, groupID: groupID)
             }
         }
 

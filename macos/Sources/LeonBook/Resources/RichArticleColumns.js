@@ -134,7 +134,7 @@ function createArticleColumns({ root, canEdit, checkpoint, notify, focusBlock, c
     const boxes = cells.map(cell => cell.getBoundingClientRect()), values = row ? weights(row) : [];
     hidden(handle, !handleRect || handleRect.bottom < 0 || handleRect.top > innerHeight);
     handleArea = handleRect && !handle.hidden ? {
-      left: Math.max(0, handleRect.left - 28), right: handleRect.left,
+      left: Math.max(0, handleRect.left - 34), right: handleRect.left,
       top: Math.max(0, handleRect.top) - 4, bottom: Math.max(0, handleRect.top) + 36
     } : null;
     if (handleRect) rectStyle(handle, { left: Math.max(0, handleRect.left - 28), top: Math.max(0, handleRect.top) });

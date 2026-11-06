@@ -75,37 +75,49 @@ final class NativeMediaImageCache: @unchecked Sendable {
     deinit { pressure.cancel() }
 }
 
-/// Image and video workers share a CPU/decoder budget. Each subscriber owns a
-/// continuation, so an offscreen view can leave immediately even when another
-/// subscriber still needs the same decode. Running synchronous work keeps its
-/// slot until it really exits; cancellation cannot oversubscribe the decoders.
-actor NativeMediaDecodeScheduler {
+struct NativeMediaDecodeScheduler: Sendable {
     static let shared = NativeMediaDecodeScheduler(maximumConcurrentDecodes: 2)
-
-    private struct Job {
-        let id = UUID()
-        let priority: TaskPriority
-        let operation: @Sendable () -> NSImage?
-        var subscribers: [UUID: CheckedContinuation<NativeImageDecodeResult, Never>]
-        var task: Task<Void, Never>?
-    }
-
-    private let maximumConcurrentDecodes: Int
-    private var active = 0
-    private var jobs: [String: Job] = [:]
-    private var pending: [String] = []
+    private let scheduler: NativeMediaWorkScheduler<NativeImageDecodeResult>
 
     init(maximumConcurrentDecodes: Int = 2) {
-        self.maximumConcurrentDecodes = max(1, maximumConcurrentDecodes)
+        scheduler = NativeMediaWorkScheduler(maximumConcurrentJobs: maximumConcurrentDecodes)
     }
 
     func decode(key: String, priority: TaskPriority = .utility,
                 operation: @escaping @Sendable () -> NSImage?) async -> NativeImageDecodeResult {
+        await scheduler.run(key: key, priority: priority) {
+            NativeImageDecodeResult(image: operation())
+        } ?? NativeImageDecodeResult(image: nil)
+    }
+}
+
+/// Coalesces concurrent requests for the same resource. A cancelled subscriber
+/// can leave independently, while running work holds its slot until it exits.
+actor NativeMediaWorkScheduler<Output: Sendable> {
+    private struct Job {
+        let id = UUID()
+        let priority: TaskPriority
+        let operation: @Sendable () -> Output
+        var subscribers: [UUID: CheckedContinuation<Output?, Never>]
+        var task: Task<Void, Never>?
+    }
+
+    private let maximumConcurrentJobs: Int
+    private var active = 0
+    private var jobs: [String: Job] = [:]
+    private var pending: [String] = []
+
+    init(maximumConcurrentJobs: Int) {
+        self.maximumConcurrentJobs = max(1, maximumConcurrentJobs)
+    }
+
+    func run(key: String, priority: TaskPriority = .utility,
+             operation: @escaping @Sendable () -> Output) async -> Output? {
         let subscriber = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 guard !Task.isCancelled else {
-                    continuation.resume(returning: NativeImageDecodeResult(image: nil))
+                    continuation.resume(returning: nil)
                     return
                 }
                 if jobs[key] != nil {
@@ -125,7 +137,7 @@ actor NativeMediaDecodeScheduler {
 
     private func cancel(key: String, subscriber: UUID) {
         guard let continuation = jobs[key]?.subscribers.removeValue(forKey: subscriber) else { return }
-        continuation.resume(returning: NativeImageDecodeResult(image: nil))
+        continuation.resume(returning: nil)
         if jobs[key]?.subscribers.isEmpty == true {
             let job = jobs.removeValue(forKey: key)
             pending.removeAll { $0 == key }
@@ -134,20 +146,20 @@ actor NativeMediaDecodeScheduler {
     }
 
     private func startPending() {
-        while active < maximumConcurrentDecodes, !pending.isEmpty {
+        while active < maximumConcurrentJobs, !pending.isEmpty {
             let key = pending.removeFirst()
             guard let job = jobs[key] else { continue }
             active += 1
             jobs[key]?.task = Task.detached(priority: job.priority) { [operation = job.operation, id = job.id] in
-                let result = autoreleasepool {
-                    NativeImageDecodeResult(image: Task.isCancelled ? nil : operation())
+                let result: Output? = autoreleasepool {
+                    Task.isCancelled ? nil : operation()
                 }
                 await self.finish(key: key, id: id, result: result)
             }
         }
     }
 
-    private func finish(key: String, id: UUID, result: NativeImageDecodeResult) {
+    private func finish(key: String, id: UUID, result: Output?) {
         if let job = jobs[key], job.id == id {
             jobs[key] = nil
             for subscriber in job.subscribers.values { subscriber.resume(returning: result) }

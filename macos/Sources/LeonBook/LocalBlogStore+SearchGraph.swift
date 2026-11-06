@@ -36,11 +36,10 @@ extension LocalBlogStore {
         for term in shortTerms {
             if let token = shortSearchToken(for: term) {
                 predicates.append("""
-                EXISTS (
-                    SELECT 1 FROM content_short_search AS short_index
-                    WHERE short_index.document_type = content_search.document_type
-                      AND short_index.document_id = content_search.document_id
-                      AND content_short_search MATCH ?
+                (document_type, document_id) IN (
+                    SELECT document_type, document_id
+                    FROM content_short_search
+                    WHERE content_short_search MATCH ?
                 )
                 """)
                 values.append(.text("\"\(token.replacingOccurrences(of: "\"", with: "\"\""))\""))

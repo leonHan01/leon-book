@@ -16,6 +16,7 @@
   let selection = new Set(), selectedEdge = null, connecting = null, gesture = null, space = false;
   let undo = [], redo = [], frame = 0, libraryKind = 'article', queryTimer, titleEditing = false, busy = false;
   const elements = new Map(), contentCache = new Map(), requested = new Set(), activated = new Set();
+  const boardButtons = new Map();
   let v = doc.leonbook.viewport;
   function local(event) { const r = viewport.getBoundingClientRect(); return { x: event.clientX - r.left, y: event.clientY - r.top }; }
   function point(event) { const p = local(event); return { x: (p.x - v.x) / v.zoom, y: (p.y - v.y) / v.zoom }; }
@@ -27,9 +28,30 @@
     busy = value;
     if (value) setStatus('正在加载…');
     $('viewport').setAttribute('aria-busy', String(value));
-    $('boards').disabled = value; $('new-board').disabled = value; $('start').disabled = value;
+    $('boards').disabled = value; $('new-board').disabled = value; $('sidebar-new-board').disabled = value; $('start').disabled = value;
+    updateBoardList();
     $('viewport').style.pointerEvents = value ? 'none' : ''; $('library').style.pointerEvents = value ? 'none' : '';
     $('title').disabled = value || !boardID;
+  }
+  function updateBoardTitle() {
+    if (!boardID) return;
+    const option = [...$('boards').options].find(item => item.value === boardID);
+    if (option) option.textContent = doc.leonbook.title;
+    const row = boardButtons.get(boardID);
+    if (row) { row.querySelector('.board-item-title').textContent = doc.leonbook.title; row.title = doc.leonbook.title; }
+  }
+  function updateBoardList() {
+    for (const [id, row] of boardButtons) {
+      if (id === boardID) row.setAttribute('aria-current', 'page'); else row.removeAttribute('aria-current');
+      row.disabled = busy;
+    }
+    $('board-list').setAttribute('aria-busy', String(busy));
+    $('boards').value = boardID;
+    updateBoardTitle();
+  }
+  function openBoard(id) {
+    if (!id || id === boardID || busy) return;
+    save(); setBusy(true); post('open', { id });
   }
   function checkpoint() {
     undo.push(JSON.stringify(doc));
@@ -39,6 +61,7 @@
   }
   function save() {
     if (!boardID || busy) return;
+    updateBoardTitle();
     doc.leonbook.viewport = { ...v };
     setStatus('正在保存…');
     post('save', { id: boardID, document: JSON.stringify(doc) });
@@ -367,7 +390,7 @@
   viewport.addEventListener('gesturechange', event => { event.preventDefault(); zoomTo(pinchZoom * event.scale, local(event)); }, { passive: false });
   viewport.addEventListener('gestureend', event => { event.preventDefault(); save(); }, { passive: false });
   document.addEventListener('keydown', event => {
-    if (!boardID || busy || isEditing(event.target) || $('url-dialog').open) return;
+    if (!boardID || busy || isEditing(event.target) || event.target.closest('#canvas-sidebar') || $('url-dialog').open) return;
     const cmd = event.metaKey || event.ctrlKey, key = event.key.toLowerCase();
     if (key === ' ') { event.preventDefault(); space = true; }
     else if (key === 'escape') { connecting = null; selection.clear(); selectedEdge = null; render(); }
@@ -398,8 +421,8 @@
   });
   function showURL() { $('url-input').value = ''; $('url-dialog').showModal(); $('url-input').focus(); }
   function requestLibrary() { $('results').classList.add('is-loading'); $('results').setAttribute('aria-busy', 'true'); $('results').textContent = t('正在搜索…'); post('library', { kind: libraryKind, query: $('search').value }); }
-  $('new-board').onclick = $('start').onclick = () => { save(); setBusy(true); post('create'); };
-  $('boards').onchange = () => { if ($('boards').value) { save(); setBusy(true); post('open', { id: $('boards').value }); } };
+  $('new-board').onclick = $('sidebar-new-board').onclick = $('start').onclick = () => { if (busy) return; save(); setBusy(true); post('create'); };
+  $('boards').onchange = () => openBoard($('boards').value);
   $('title').onfocus = () => { if (!titleEditing) checkpoint(); titleEditing = true; };
   $('title').oninput = () => { doc.leonbook.title = $('title').value || t('未命名画布'); save(); };
   $('title').onblur = () => titleEditing = false;
@@ -427,9 +450,17 @@
     receive(action, payload) {
       if (action === 'catalog') {
         $('boards').replaceChildren();
+        $('board-list').replaceChildren(); boardButtons.clear();
         if (!payload.items.length) $('boards').add(new Option(t('尚无画布'), ''));
-        for (const item of payload.items) $('boards').add(new Option(item.title, item.id));
-        $('boards').value = boardID;
+        for (const item of payload.items) {
+          $('boards').add(new Option(item.title, item.id));
+          const row = document.createElement('button'); row.type = 'button'; row.className = 'board-item'; row.title = item.title;
+          row.innerHTML = '<svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/></svg>';
+          const title = document.createElement('span'); title.className = 'board-item-title'; title.textContent = item.title; row.append(title);
+          row.onclick = () => openBoard(item.id); boardButtons.set(item.id, row); $('board-list').append(row);
+        }
+        $('board-count').textContent = String(payload.items.length); $('board-list-empty').hidden = !!payload.items.length;
+        updateBoardList();
       } else if (action === 'load') {
         boardID = payload.id; doc = JSON.parse(payload.document); v = doc.leonbook.viewport;
         selection.clear(); selectedEdge = null; connecting = null; gesture = null; undo = []; redo = []; titleEditing = false;
@@ -439,11 +470,11 @@
       } else if (action === 'empty') {
         boardID = ''; doc.nodes = []; doc.edges = []; selection.clear(); selectedEdge = null; resetCards(); render(); $('welcome').hidden = false;
         for (const id of ['tools', 'navigation', 'hint', 'selection-tools', 'library']) $(id).hidden = true;
-        $('title').value = ''; $('title').disabled = true; setStatus('本地工作区');
+        $('title').value = ''; setBusy(false); setStatus('本地工作区');
       } else if (action === 'saved') {
         if (payload.forked) { boardID = payload.id; doc.leonbook.title = payload.title; $('title').value = payload.title; toast(t('检测到其他窗口的修改，已将本次内容另存为冲突副本。')); }
         if (payload.id !== boardID) return;
-        const option = [...$('boards').options].find(o => o.value === boardID); if (option) option.textContent = doc.leonbook.title;
+        updateBoardList();
         setStatus(payload.pending ? '正在保存…' : '已保存到本地'); $('retry').hidden = true;
       } else if (action === 'library') {
         if (payload.kind !== libraryKind || payload.query !== $('search').value) return;

@@ -22,6 +22,7 @@ struct RichArticleEditor: NSViewRepresentable {
     var onOpenLink: ((URL) -> Void)? = nil
     var onSelectText: ((String) -> Void)? = nil
     var onOutlinePositions: (([CGFloat]) -> Void)? = nil
+    var outlineController: RichArticleOutlineController? = nil
 
     static let pageHTML: String = {
         guard let url = Bundle.leonBookResources.url(forResource: "RichArticleEditor", withExtension: "html"),
@@ -42,6 +43,8 @@ struct RichArticleEditor: NSViewRepresentable {
               let columnsStyleURL = Bundle.leonBookResources.url(forResource: "RichArticleColumns", withExtension: "css"),
               let columnsScript = try? String(contentsOf: columnsURL, encoding: .utf8),
               let columnsStyle = try? String(contentsOf: columnsStyleURL, encoding: .utf8) else { return "" }
+        guard let outlineURL = Bundle.leonBookResources.url(forResource: "RichArticleOutline", withExtension: "js"),
+              let outlineScript = try? String(contentsOf: outlineURL, encoding: .utf8) else { return "" }
         return html.replacingOccurrences(of: "/* editor-interactions-script */", with: script)
             .replacingOccurrences(of: "/* editor-interactions-style */", with: style)
             .replacingOccurrences(of: "/* editor-columns-script */", with: columnsScript)
@@ -50,6 +53,7 @@ struct RichArticleEditor: NSViewRepresentable {
             .replacingOccurrences(of: "/* editor-caret-style */", with: caretStyle)
             .replacingOccurrences(of: "/* editor-whiteboards-script */", with: boardScript)
             .replacingOccurrences(of: "/* editor-audio-script */", with: audioScript)
+            .replacingOccurrences(of: "/* editor-outline-script */", with: outlineScript)
     }()
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -67,12 +71,14 @@ struct RichArticleEditor: NSViewRepresentable {
         view.beginContentLoading()
         view.setValue(false, forKey: "drawsBackground")
         view.navigationDelegate = context.coordinator
+        outlineController?.attach(to: view, documentID: documentID)
         view.loadHTMLString(Self.pageHTML, baseURL: nil)
         return view
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {
         context.coordinator.parent = self
+        outlineController?.attach(to: view, documentID: documentID)
         if context.coordinator.mediaHandler?.store !== store {
             context.coordinator.mediaHandler?.cancelAll()
             context.coordinator.mediaHandler?.store = store
@@ -83,6 +89,7 @@ struct RichArticleEditor: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
+        coordinator.parent.outlineController?.detach(from: view)
         view.configuration.userContentController.removeScriptMessageHandler(forName: "richArticle")
         view.navigationDelegate = nil
         view.stopLoading()
@@ -115,6 +122,7 @@ struct RichArticleEditor: NSViewRepresentable {
         private var lastFontSize: CGFloat?
         private var lastPalette: NativeAppPalette?
         private var lastLanguage: NativeAppLanguage?
+        private var lastOutlineEnabled: Bool?
         private var whiteboard: ArticleWhiteboardWindow?
         private var whiteboardRequestID: String?
         private weak var readerClipView: NSClipView?
@@ -166,6 +174,12 @@ struct RichArticleEditor: NSViewRepresentable {
 
         func synchronize(_ webView: WKWebView) {
             guard isReady else { return }
+            let outlineEnabled = parent.outlineController != nil
+            if lastOutlineEnabled != outlineEnabled {
+                lastOutlineEnabled = outlineEnabled
+                webView.callAsyncJavaScript("window.LeonArticle.setOutlineEnabled(enabled)",
+                    arguments: ["enabled": outlineEnabled], in: nil, in: .page) { _ in }
+            }
             if lastLanguage != parent.language {
                 lastLanguage = parent.language
                 NativeWebLocalization.apply(parent.language, to: webView)
@@ -250,6 +264,10 @@ struct RichArticleEditor: NSViewRepresentable {
                 if !parent.isEditable, let text = payload["text"] as? String { parent.onSelectText?(text) }
             case "outline":
                 if let offsets = payload["offsets"] as? [Double] { parent.onOutlinePositions?(offsets.map { CGFloat($0) }) }
+            case "editorOutline":
+                if let items = payload["items"] as? [[String: Any]] { parent.outlineController?.receive(items: items, documentID: parent.documentID) }
+            case "editorOutlineActive":
+                if let id = payload["id"] as? String { parent.outlineController?.receive(activeID: id, documentID: parent.documentID) }
             case "link":
                 if let raw = payload["url"] as? String, let url = URL(string: raw) { open(url) }
             case "pasteImage":
@@ -468,6 +486,32 @@ enum RichArticleClipboard {
     }
 }
 
+enum RichArticleMediaReader {
+    private static let reads = NativeMediaWorkScheduler<Result<Data, Error>>(maximumConcurrentJobs: 2)
+
+    static func data(from fileURL: URL) async throws -> Data {
+        let file = fileURL.standardizedFileURL
+        let result = await reads.run(key: file.path) {
+            Result {
+                try Task.checkCancellation()
+                let handle = try FileHandle(forReadingFrom: file)
+                defer { try? handle.close() }
+
+                var data = Data()
+                while true {
+                    try Task.checkCancellation()
+                    guard let chunk = try handle.read(upToCount: 256 * 1024), !chunk.isEmpty else { break }
+                    data.append(chunk)
+                }
+                return data
+            }
+        }
+        try Task.checkCancellation()
+        guard let result else { throw CancellationError() }
+        return try result.get()
+    }
+}
+
 final class RichArticleMediaHandler: NSObject, WKURLSchemeHandler {
     var store: LocalBlogStore?
     var sourceRelativePath: String?
@@ -488,21 +532,21 @@ final class RichArticleMediaHandler: NSObject, WKURLSchemeHandler {
         }
         let relativePath = sourceRelativePath
         tasks[key] = Task { @MainActor [weak self] in
-            guard let fileURL = await store.mediaURL(for: path, relativeToMarkdownSource: relativePath),
-                  !Task.isCancelled else {
-                if !Task.isCancelled { urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist)) }
-                self?.tasks.removeValue(forKey: key)
-                return
-            }
+            defer { self?.tasks.removeValue(forKey: key) }
             do {
-                let data = try await Task.detached(priority: .utility) { try Data(contentsOf: fileURL) }.value
-                guard !Task.isCancelled else { return }
+                try Task.checkCancellation()
+                guard let fileURL = await store.mediaURL(for: path, relativeToMarkdownSource: relativePath) else {
+                    throw URLError(.fileDoesNotExist)
+                }
+                let data = try await RichArticleMediaReader.data(from: fileURL)
+                try Task.checkCancellation()
                 let mime = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
                 urlSchemeTask.didReceive(URLResponse(url: url, mimeType: mime, expectedContentLength: data.count, textEncodingName: nil))
+                try Task.checkCancellation()
                 urlSchemeTask.didReceive(data)
+                try Task.checkCancellation()
                 urlSchemeTask.didFinish()
             } catch { if !Task.isCancelled { urlSchemeTask.didFailWithError(error) } }
-            self?.tasks.removeValue(forKey: key)
         }
     }
 

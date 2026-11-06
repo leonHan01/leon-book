@@ -135,13 +135,13 @@ final class PhotoLibraryTests {
             NativeLibraryPhoto(media: NativeMedia(kind: "image", name: "Beach 2.png", size: 0, url: "a"), modifiedAt: Date(timeIntervalSince1970: 1), albumID: nil),
             NativeLibraryPhoto(media: NativeMedia(kind: "image", name: "山.png", size: 0, url: "b"), modifiedAt: Date(timeIntervalSince1970: 3), albumID: "trip"),
         ]
-        let sorted = NativePhotoLibraryProjection.photos(photos, scope: .all, search: "", sort: .newest)
+        let sorted = try NativePhotoLibraryProjection.photos(photos, scope: .all, search: "", sort: .newest)
         try photoExpect(sorted.map(\.id) == ["b", "c", "a"], "equal timestamps need deterministic ordering")
-        let search = NativePhotoLibraryProjection.photos(photos, scope: .all, search: " beach ", sort: .name)
+        let search = try NativePhotoLibraryProjection.photos(photos, scope: .all, search: " beach ", sort: .name)
         try photoExpect(search.map(\.id) == ["a", "c"], "search must trim whitespace, ignore case, and naturally sort names")
-        let album = NativePhotoLibraryProjection.photos(photos, scope: .album("trip"), search: "", sort: .oldest)
+        let album = try NativePhotoLibraryProjection.photos(photos, scope: .album("trip"), search: "", sort: .oldest)
         try photoExpect(album.map(\.id) == ["b", "c"], "album filters must exclude other scopes")
-        let unfiled = NativePhotoLibraryProjection.photos(photos, scope: .unfiled, search: "", sort: .newest)
+        let unfiled = try NativePhotoLibraryProjection.photos(photos, scope: .unfiled, search: "", sort: .newest)
         try photoExpect(unfiled.map(\.id) == ["a"], "unfiled must exclude album photos")
     }
 
@@ -177,6 +177,15 @@ final class PhotoLibraryTests {
         try photoExpect(model.errorMessage == nil && changes == 3, "Finder file URL drops must import the image")
         try photoExpect(model.photos.count == 3 && model.photos.filter { $0.albumID == album.id }.count == 1,
                         "external drop must import directly into the target album")
+        try photoExpect(model.photoCount(in: album.id) == 1 && model.photoCount(in: nil) == 2,
+                        "cached counts must follow moves and imports")
+        model.search = "no matching photo"
+        model.sort = .name
+        model.show(.album(album.id))
+        model.search = ""
+        for _ in 0..<100 where model.isProjecting { try await Task.sleep(nanoseconds: 5_000_000) }
+        try photoExpect(model.visiblePhotos.map(\.albumID) == [album.id],
+                        "superseded projections must not replace the latest album and search")
         await store.closeForRestore()
         await other.closeForRestore()
     }

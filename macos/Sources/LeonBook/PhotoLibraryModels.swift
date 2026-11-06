@@ -17,7 +17,7 @@ struct NativePhotoLibrarySnapshot {
     let photos: [NativeLibraryPhoto]
 }
 
-enum NativePhotoScope: Hashable {
+enum NativePhotoScope: Hashable, Sendable {
     case all
     case unfiled
     case album(String)
@@ -28,7 +28,7 @@ enum NativePhotoScope: Hashable {
     }
 }
 
-enum NativePhotoSort: String, CaseIterable, Identifiable {
+enum NativePhotoSort: String, CaseIterable, Identifiable, Sendable {
     case newest, oldest, name
     var id: String { rawValue }
     var label: String {
@@ -44,9 +44,10 @@ enum NativePhotoLibraryProjection {
     static func photos(
         _ photos: [NativeLibraryPhoto], scope: NativePhotoScope,
         search: String, sort: NativePhotoSort
-    ) -> [NativeLibraryPhoto] {
+    ) throws -> [NativeLibraryPhoto] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        return photos.filter { photo in
+        return try photos.filter { photo in
+            try Task.checkCancellation()
             let matchesScope: Bool
             switch scope {
             case .all: matchesScope = true
@@ -55,6 +56,7 @@ enum NativePhotoLibraryProjection {
             }
             return matchesScope && (query.isEmpty || photo.media.name.localizedStandardContains(query))
         }.sorted { left, right in
+            try Task.checkCancellation()
             if sort == .name {
                 let order = left.media.name.localizedStandardCompare(right.media.name)
                 if order != .orderedSame { return order == .orderedAscending }

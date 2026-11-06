@@ -9,28 +9,28 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: transparent; color: var(--text); font: var(--size)/1.75 -apple-system, BlinkMacSystemFont, sans-serif; }
 body:not(.readonly) { color-scheme: light; min-height: 100vh; background: #fff; --surface: #fff; --text: #303238; --muted: #72737a; --line: #e9e9eb; --accent: #3976cf; --soft: #f5f5f6; --block-hover: #e5f1ff; }
-#toolbar { position: sticky; top: 0; z-index: 3; display: flex; justify-content: flex-end; padding: 0 28px 6px; background: var(--surface); font: 12px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
+#toolbar { position: sticky; top: 0; z-index: 3; display: flex; justify-content: flex-end; padding: 0 28px; background: var(--surface); font: 12px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; }
 button, select, input { font: inherit; color: inherit; }
 button { border: 0; border-radius: 6px; background: transparent; padding: 4px 9px; cursor: pointer; }
 button:hover, button:focus-visible { background: var(--soft); outline: 2px solid var(--accent); outline-offset: -2px; }
 #toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 32px; min-height: 30px; font-size: 13px; }
-#tools-toggle { min-height: 30px; padding: 5px 8px; color: var(--muted); }
+#toolbar #tools-toggle { min-height: 26px; padding: 3px 8px; color: var(--muted); }
 #toolbar svg { flex: 0 0 18px; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 #toolbar svg, #commands .icon svg, #selection-headings .heading-icon { scale: 1.1; }
-#tools-toggle[aria-expanded=true] { background: var(--soft); color: var(--text); }
+#toolbar #tools-toggle[aria-expanded=true] { background: var(--soft); color: var(--text); }
 #toolbar-panel { position: absolute; top: 34px; right: 28px; width: 248px; max-width: calc(100vw - 32px); max-height: calc(100vh - 48px); overflow-y: auto; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 24px #00000012; }
 #toolbar-panel[hidden] { display: none; }
 .toolbar-group { display: flex; flex-wrap: wrap; gap: 4px; }
 .toolbar-group + .toolbar-group { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .toolbar-group .group-title { flex-basis: 100%; margin-bottom: 2px; color: var(--muted); font-size: 11px; }
 #language { max-width: 130px; font-size: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--soft); padding: 4px; }
-#document { padding: 10px 28px 120px; min-height: 280px; outline: none; overflow-wrap: anywhere; }
-#document > *, #document :is(td, th) > * { position: relative; margin: 0 0 14px; min-height: 1.75em; outline: none; }
+#document { padding: 0 28px 120px; min-height: 280px; outline: none; overflow-wrap: anywhere; }
+#document > *, #document :is(td, th) > * { position: relative; margin: 0 0 10px; min-height: 1.75em; outline: none; }
 #document :is(td, th) > :last-child { margin-bottom: 0; }
 #document[contenteditable=true] > *:focus-within { border-radius: 4px; }
 #document[contenteditable=true] > * { border-radius: 6px; }
-#document[contenteditable=true] > *:hover { border-radius: 6px; outline: 2px solid var(--block-hover); }
-#document .article-multiselected { outline: 2px solid #9fc5f5 !important; border-radius: 6px; }
+#document[contenteditable=true] > *:hover { border-radius: 6px; outline: 2px solid var(--block-hover); outline-offset: 4px; }
+#document .article-multiselected { outline: 2px solid #9fc5f5 !important; outline-offset: 4px; border-radius: 6px; }
 #document.article-multiselect::selection, #document.article-multiselect *::selection { background: transparent; }
 #document > p:only-child:has(>br:only-child)::before { content: var(--editor-placeholder); color: var(--muted); pointer-events: none; position: absolute; }
 #document h1 { font-size: 1.8em; line-height: 1.4; font-weight: 720; margin-top: 20px; }
@@ -696,8 +696,31 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   }
   const scheduleReaderSelection = frameTask(publishReaderSelection);
   function resetReaderSelection() { scheduleReaderSelection.cancel(); lastReaderSelection = ''; }
+  function collapseBlockGapSelection() {
+    const selection = getSelection();
+    if (!editable || composing || !selection?.rangeCount || selection.isCollapsed) return;
+    const range = selection.getRangeAt(0);
+    if (!root.contains(range.startContainer) || !root.contains(range.endContainer) || range.toString() !== '') return;
+    const textBlocks = 'p,h1,h2,h3,h4,pre,aside,blockquote';
+    function boundaryBlock(node, offset, start) {
+      const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+      if (element === root || element.matches('td,th,div[data-type=column]')) {
+        const child = element.childNodes[offset - (start ? 1 : 0)];
+        return child?.nodeType === Node.ELEMENT_NODE && child.matches(textBlocks) ? child : null;
+      }
+      return element.closest(textBlocks);
+    }
+    const first = boundaryBlock(range.startContainer, range.startOffset, true);
+    const last = boundaryBlock(range.endContainer, range.endOffset, false);
+    if (!first || !last || first.nextElementSibling !== last) return;
+    // WebKit paints a paragraph separator across the margin even when the
+    // range contains no content. Keep real BRs, media, empty blocks and spaces.
+    if (range.cloneContents().querySelector('br,hr,img,table,figure,audio,video')) return;
+    selection.collapse(selection.focusNode, selection.focusOffset);
+  }
   root.addEventListener('pointerdown', () => { selectingWithPointer = true; resetReaderSelection(); hideSelectionToolbar(false); });
-  document.addEventListener('pointerup', () => {
+  document.addEventListener('pointerup', event => {
+    if (selectingWithPointer && event.button === 0) collapseBlockGapSelection();
     selectingWithPointer = false; updateSelectionToolbar();
     // Native comment preparation scans the article and refreshes SwiftUI.
     // Publish the final range once, after the pointer has finished selecting.
@@ -748,12 +771,17 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     }
     const ids = new Set();
     for (const container of [root, ...root.querySelectorAll('td,th,div[data-type=column]')]) {
-      let number = 0;
+      const numbers = [];
       for (const block of container.children) {
         if (!block.dataset.blockId || ids.has(block.dataset.blockId)) block.dataset.blockId = uuid();
         ids.add(block.dataset.blockId);
-        if (block.dataset.type === 'number') { const value = String(++number); if (block.dataset.number !== value) block.dataset.number = value; } else number = 0;
         const depth = Math.max(0, Math.min(12, parseInt(block.dataset.depth || '0') || 0));
+        if (block.dataset.type === 'number') {
+          // Returning to a parent resumes its sequence and starts fresh child lists.
+          numbers.length = depth + 1;
+          numbers[depth] = (numbers[depth] || 0) + 1;
+          const value = String(numbers[depth]); if (block.dataset.number !== value) block.dataset.number = value;
+        } else numbers.length = 0;
         const margin = depth ? `${depth * 24}px` : '';
         if (block.style.marginLeft !== margin) block.style.marginLeft = margin;
       }
@@ -804,6 +832,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   function resize() {
     const height = Math.ceil(root.getBoundingClientRect().height);
     if (height !== lastHeight) { lastHeight = height; send({ type: 'height', height }); }
+    editorOutline.refresh();
     if (!editable) {
       const top = root.getBoundingClientRect().top;
       const headings = [...root.querySelectorAll('h1,h2,h3,h4')].map(heading => heading.getBoundingClientRect().top - top);
@@ -1064,6 +1093,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   });
   root.addEventListener('beforeinput', event => {
     if (!editable || composing || event.isComposing) return;
+    if (!event.defaultPrevented && event.cancelable && event.inputType.startsWith('delete') &&
+        !['deleteByCut', 'deleteByDrag'].includes(event.inputType) && deleteSelectedBlocks()) { event.preventDefault(); return; }
     checkpoint();
     if (event.inputType !== 'insertText') markdownTail = null;
     const block = blockAtSelection();
@@ -1087,6 +1118,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   }
   root.addEventListener('keydown', event => {
     if (composing || event.isComposing || event.keyCode === 229 || !editable) return;
+    if (!event.defaultPrevented && ['Backspace', 'Delete'].includes(event.key) && deleteSelectedBlocks()) { event.preventDefault(); return; }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); undo(event.shiftKey ? 1 : -1); return; }
     if (!menu.hidden) {
       if (event.key === 'Escape') { event.preventDefault(); closeMenu(); return; }
@@ -1197,24 +1229,53 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (block && !event.target.closest('img') && event.clientX - block.getBoundingClientRect().left < 26 && editable) { checkpoint(); block.dataset.checked = String(block.dataset.checked !== 'true'); notify(); }
   });
   let highlightedBlocks = new Set();
-  function updateBlockSelection() {
+  function selectableBlocks() {
+    return [...root.children].flatMap(block => block.matches('div[data-type=columns]')
+      ? [...block.querySelectorAll('div[data-type=column] > *')] : [block]);
+  }
+  function selectedBlocks() {
     const selection = getSelection();
     let blocks = [];
     if (editable && selection?.rangeCount && !selection.isCollapsed) {
       const range = selection.getRangeAt(0);
       if (root.contains(range.startContainer) && root.contains(range.endContainer)) {
-        const candidates = [...root.children].flatMap(block => block.matches('div[data-type=columns]')
-          ? [...block.querySelectorAll('div[data-type=column] > *')] : [block]);
-        blocks = candidates.filter(block => {
+        blocks = selectableBlocks().filter(block => {
           if (!range.intersectsNode(block)) return false;
-          const overlap = document.createRange(); overlap.selectNodeContents(block);
+          const overlap = document.createRange(); overlap.selectNode(block);
+          // Whole nodes include empty paragraphs and atomic blocks such as dividers.
+          if (range.compareBoundaryPoints(Range.START_TO_START, overlap) <= 0 &&
+              range.compareBoundaryPoints(Range.END_TO_END, overlap) >= 0) return true;
+          overlap.selectNodeContents(block);
           if (range.compareBoundaryPoints(Range.START_TO_START, overlap) > 0) overlap.setStart(range.startContainer, range.startOffset);
           if (range.compareBoundaryPoints(Range.END_TO_END, overlap) < 0) overlap.setEnd(range.endContainer, range.endOffset);
-          return !overlap.collapsed;
+          // Merely touching the previous text's end or next text's start selects no content.
+          return !overlap.collapsed && (overlap.toString().length > 0 || !!overlap.cloneContents().querySelector('br,img,hr,table,figure,audio,video,svg,canvas'));
         });
       }
     }
-    const next = new Set(blocks.length > 1 ? blocks : []);
+    return blocks.length > 1 ? blocks : [];
+  }
+  function deleteSelectedBlocks() {
+    // Recompute from the live range: selectionchange may not have painted the blue outlines yet.
+    const blocks = selectedBlocks(); if (!blocks.length) return false;
+    checkpoint(); closeMenu(); hideSelectionToolbar(); markdownTail = null;
+    const candidates = selectableBlocks(), parent = blocks[0].parentElement;
+    const next = candidates[candidates.indexOf(blocks[blocks.length - 1]) + 1];
+    const previous = candidates[candidates.indexOf(blocks[0]) - 1];
+    for (const block of blocks) { block.querySelectorAll('audio,video').forEach(media => media.pause()); block.remove(); }
+    for (const row of root.querySelectorAll(':scope > div[data-type=columns]')) {
+      if ([...row.children].every(column => !column.children.length)) row.remove();
+    }
+    const emptyColumn = root.contains(parent) && parent.matches('div[data-type=column]') && !parent.children.length;
+    prepareBlocks();
+    if (emptyColumn) focusBlock(parent.firstElementChild);
+    else if (next && root.contains(next)) focusBlock(next);
+    else if (previous && root.contains(previous)) focusBlock(previous, true);
+    else focusBlock(root.firstElementChild);
+    updateBlockSelection(); notify(); return true;
+  }
+  function updateBlockSelection() {
+    const next = new Set(selectedBlocks());
     for (const block of highlightedBlocks) if (!next.has(block)) block.classList.remove('article-multiselected');
     for (const block of next) if (!highlightedBlocks.has(block)) block.classList.add('article-multiselected');
     highlightedBlocks = next;
@@ -1309,7 +1370,10 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   const whiteboards = createArticleWhiteboards({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, frameTask });
   /* editor-audio-script */
   const audioBlocks = createArticleAudio({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu });
+  /* editor-outline-script */
+  const editorOutline = createArticleOutline({ root, documentID: () => documentID, send, frameTask });
   window.LeonArticle = { load, serialize, execute, commands, cleanHTML, undo, insertPastedImages,
+    setOutlineEnabled: editorOutline.setEnabled, navigateOutline: editorOutline.navigate,
     setReaderViewport(top) { readerViewportTop = Math.max(0, Number(top) || 0); updateStickyAudio(); },
     completeAudio: audioBlocks.complete, cancelAudio: audioBlocks.cancel,
     completeAudios: audioBlocks.completeMany,

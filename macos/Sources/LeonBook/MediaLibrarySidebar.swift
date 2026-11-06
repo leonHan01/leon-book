@@ -38,7 +38,7 @@ struct NativeMediaLibrarySidebar: View {
                 } icon: { NativeIcon.image(icon) }
                 .lineLimit(1)
                 Spacer(minLength: 4)
-                Text("\(library.items.filter { scope.contains($0) }.count)")
+                Text("\(library.itemCount(in: scope))")
                     .font(.caption).monospacedDigit().foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
