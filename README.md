@@ -45,6 +45,12 @@ Without this override, the app uses your remembered directory, then the reposito
 
 Article **Publish** and posting to the timeline update your local library. They do not publish content to an internet service. Embedded remote webpages require a network connection.
 
+### AI-assisted reading
+
+Open the sparkles button or **AI Chat** in the article reader, or use the assistant beside a question. Choose DeepSeek `deepseek-flash` or OpenAI. Configure each provider's API key in **Settings → AI Reading Settings**; OpenAI automatically loads available text models into a dropdown, with a refresh button to update the list. Keys are scoped to the workspace and stored in the local macOS Keychain.
+
+Sending a message includes the current article text or question title and body, together with that content's conversation history. Replies stream into the panel and can be stopped or copied. Histories persist separately for each article, question, and workspace. Save a reply or the entire conversation as a local article comment or question answer with one click; content exceeding the 2,000-character comment or 10,000-character answer limit opens an editor first. Existing manual answer drafts are preserved.
+
 ### Writing and navigation
 
 Type `/` at the start of a paragraph for commands such as `/h1`, `/code`, `/callout`, `/task`, `/table`, and `/whiteboard`. Whiteboards are saved as editable scene files with article previews; double-click a preview to continue drawing.
@@ -68,6 +74,14 @@ Use **Export and share** in the article reader or at the top of the article libr
 - **Article package**: a ZIP containing HTML, original local attachments, and an `index.html` entry point.
 
 Batch PDF and HTML exports also produce a ZIP with separate article files. Links between selected articles are rewritten in batch HTML and article packages. Metadata is optional. Remote images and media are downloaded during export; embedded webpages become source links. Exports use saved content, report missing attachments, and preserve previous output on failure or cancellation. Completed exports can be revealed in Finder or shared through the system share menu.
+
+### Send email
+
+Configure the SMTP server, port, username, sender address, and app password in **Settings → Email Settings**. TLS (typically port 465) and STARTTLS (typically 587) are supported, with optional default recipients. Settings are isolated by workspace; passwords stay in the local macOS Keychain and are excluded from workspace backups.
+
+Use the moment card menu, a to-do item's menu, **Email List** for the currently filtered tasks, the envelope button in the article reader, or the question detail page. Questions include their saved answers. Review and edit recipients, subject, and plain-text body before sending, and optionally include local media. Separate multiple recipients with commas or semicolons. Remote media remains linked; the encoded email is limited to 25 MB.
+
+Sending uses your configured SMTP service directly and requires a network connection. Success means the server accepted the message; the provider handles final delivery. If delivery is unconfirmed, check the recipient inbox before retrying to avoid duplicates.
 
 ## Screenshots
 

@@ -7,6 +7,8 @@ extension NativeAppModel {
         questionSession.isFiltering
     }
 
+    var hotQuestions: [NativeQuestion] { questionSession.hotQuestions }
+
     func reloadQuestionList(selecting questionID: String? = nil) async throws {
         guard !Task.isCancelled else { return }
         let loadingID = loadingOperations.begin(.questions)
@@ -31,9 +33,11 @@ extension NativeAppModel {
         guard requestIsCurrent() else { return }
         let loadedFacets = try await activeStore.listQuestionTagFacets()
         let loadedTotal = try await activeStore.countQuestions()
+        let loadedHotQuestions = try await activeStore.listHotQuestions()
         guard requestIsCurrent() else { return }
         let nextSelection = preferredQuestionID.flatMap { preferredID in
             loadedQuestions.first(where: { $0.id == preferredID })
+                ?? loadedHotQuestions.first(where: { $0.id == preferredID })
         }
         let loadedAnswers: [NativeQuestionAnswer]
         if let nextSelection {
@@ -49,13 +53,15 @@ extension NativeAppModel {
         let wouldDiscardAnswer = hasAnswerDraft && nextSelection?.id != selectedQuestion?.id
         if selectionChangedWhileLoading || wouldDiscardAnswer {
             questionSession.applyList(
-                questions: loadedQuestions, totalCount: loadedTotal, tagFacets: loadedFacets
+                questions: loadedQuestions, hotQuestions: loadedHotQuestions,
+                totalCount: loadedTotal, tagFacets: loadedFacets
             )
             return
         }
 
         let discardedMedia = questionSession.applyReload(
             questions: loadedQuestions,
+            hotQuestions: loadedHotQuestions,
             totalCount: loadedTotal,
             tagFacets: loadedFacets,
             selectedQuestion: nextSelection,
@@ -82,7 +88,10 @@ extension NativeAppModel {
 
     @discardableResult
     func selectQuestion(_ question: NativeQuestion) -> Bool {
-        guard question.id != selectedQuestion?.id else { return true }
+        if question.id == selectedQuestion?.id {
+            recordQuestionView(questionID: question.id)
+            return true
+        }
         if !questionAnswerDraft.isEmpty || editingQuestionAnswerID != nil {
             guard confirmDiscardQuestionAnswerDraft() else { return false }
         }
@@ -90,6 +99,7 @@ extension NativeAppModel {
         discardUnreferencedMedia(discardedMedia)
         let generation = workspaceGeneration
         let activeStore = store
+        recordQuestionView(questionID: question.id)
         Task {
             defer {
                 if generation == workspaceGeneration, selectedQuestion?.id == question.id {
@@ -107,6 +117,29 @@ extension NativeAppModel {
             }
         }
         return true
+    }
+
+    @discardableResult
+    func recordQuestionView(questionID: String) -> Task<Void, Never> {
+        let generation = workspaceGeneration
+        let activeStore = store
+        return Task { [weak self] in
+            do {
+                let viewed = try await activeStore.recordQuestionView(id: questionID)
+                let hotQuestions = try await activeStore.listHotQuestions()
+                guard let self, generation == workspaceGeneration else { return }
+                questionSession.hotQuestions = hotQuestions
+                if let index = questions.firstIndex(where: { $0.id == questionID }) {
+                    questions[index] = questions[index].withViewCount(viewed.viewCount)
+                }
+                if let selected = selectedQuestion, selected.id == questionID {
+                    selectedQuestion = selected.withViewCount(viewed.viewCount)
+                }
+            } catch {
+                guard let self, generation == workspaceGeneration else { return }
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     func selectQuestionTag(_ tag: String?) {

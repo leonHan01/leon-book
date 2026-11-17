@@ -189,7 +189,8 @@ extension LocalBlogStore {
             body TEXT NOT NULL,
             tags_json TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            view_count INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS questions_updated_at_idx
             ON questions(updated_at DESC, id DESC);
@@ -227,6 +228,19 @@ extension LocalBlogStore {
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS activity_created_at_idx ON activity_events(created_at);
+        CREATE TABLE IF NOT EXISTS ai_reading_messages (
+            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT NOT NULL UNIQUE,
+            context_kind TEXT NOT NULL CHECK(context_kind IN ('article', 'question')),
+            context_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+            content TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            is_complete INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE INDEX IF NOT EXISTS ai_reading_context_idx ON ai_reading_messages(context_kind, context_id, sequence);
         """)
         try ensureColumn("introduction", in: "media_library_items", database: database, definition: "TEXT NOT NULL DEFAULT ''")
         try ensureColumn("group_id", in: "media_library_items", database: database,
@@ -256,6 +270,7 @@ extension LocalBlogStore {
         try ensureColumn("delete_expires_at", in: "moments", database: database)
         try ensureColumn("tags_json", in: "moments", database: database)
         try ensureColumn("is_favorite", in: "moments", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
+        try ensureColumn("view_count", in: "questions", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
         try ensureColumn(
             "images_json",
             in: "question_answers",

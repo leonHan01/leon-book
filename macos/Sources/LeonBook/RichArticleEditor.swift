@@ -45,6 +45,10 @@ struct RichArticleEditor: NSViewRepresentable {
               let columnsStyle = try? String(contentsOf: columnsStyleURL, encoding: .utf8) else { return "" }
         guard let outlineURL = Bundle.leonBookResources.url(forResource: "RichArticleOutline", withExtension: "js"),
               let outlineScript = try? String(contentsOf: outlineURL, encoding: .utf8) else { return "" }
+        guard let bridgeURL = Bundle.leonBookResources.url(forResource: "RichArticleBodyBridge", withExtension: "js"),
+              let bridgeScript = try? String(contentsOf: bridgeURL, encoding: .utf8),
+              let imagesURL = Bundle.leonBookResources.url(forResource: "RichArticleImages", withExtension: "js"),
+              let imagesScript = try? String(contentsOf: imagesURL, encoding: .utf8) else { return "" }
         return html.replacingOccurrences(of: "/* editor-interactions-script */", with: script)
             .replacingOccurrences(of: "/* editor-interactions-style */", with: style)
             .replacingOccurrences(of: "/* editor-columns-script */", with: columnsScript)
@@ -54,6 +58,8 @@ struct RichArticleEditor: NSViewRepresentable {
             .replacingOccurrences(of: "/* editor-whiteboards-script */", with: boardScript)
             .replacingOccurrences(of: "/* editor-audio-script */", with: audioScript)
             .replacingOccurrences(of: "/* editor-outline-script */", with: outlineScript)
+            .replacingOccurrences(of: "/* editor-body-bridge-script */", with: bridgeScript)
+            .replacingOccurrences(of: "/* editor-images-script */", with: imagesScript)
     }()
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -117,6 +123,8 @@ struct RichArticleEditor: NSViewRepresentable {
         private var imageGeneration = UUID()
         private var isReady = false
         private var lastBody: String?
+        private var bodyState: RichArticleBodyState?
+        private var bodySnapshotRequested = false
         private var lastID: String?
         private var lastEditable: Bool?
         private var lastFontSize: CGFloat?
@@ -167,8 +175,8 @@ struct RichArticleEditor: NSViewRepresentable {
                 guard let webView, self.parent.onHeightChange != nil else { return }
                 let visible = webView.visibleRect
                 let top = webView.isFlipped ? visible.minY : webView.bounds.height - visible.maxY
-                webView.callAsyncJavaScript("window.LeonArticle.setReaderViewport(top)",
-                    arguments: ["top": max(0, top)], in: nil, in: .page) { _ in }
+                webView.callAsyncJavaScript("window.LeonArticle.setReaderViewport(top, height)",
+                    arguments: ["top": max(0, top), "height": max(0, visible.height)], in: nil, in: .page) { _ in }
             }
         }
 
@@ -190,6 +198,14 @@ struct RichArticleEditor: NSViewRepresentable {
             }
             if lastID != parent.documentID || !parent.isEditable { closeWhiteboard() }
             let html = RichArticleDocument.convertingLegacyBody(parent.html)
+            if lastBody == html, lastID == parent.documentID, lastEditable == parent.isEditable {
+                if lastFontSize != parent.fontSize {
+                    lastFontSize = parent.fontSize
+                    webView.callAsyncJavaScript("window.LeonArticle.setFontSize(size)",
+                        arguments: ["size": parent.fontSize], in: nil, in: .page) { _ in }
+                }
+                return
+            }
             guard lastBody != html || lastID != parent.documentID
                 || lastEditable != parent.isEditable || lastFontSize != parent.fontSize else { return }
             let changesDocument = lastID != parent.documentID
@@ -199,10 +215,14 @@ struct RichArticleEditor: NSViewRepresentable {
             lastID = parent.documentID
             lastEditable = parent.isEditable
             lastFontSize = parent.fontSize
+            let sessionID = UUID().uuidString
+            bodyState = RichArticleBodyState(sessionID: sessionID, body: html)
+            bodySnapshotRequested = false
             webView.callAsyncJavaScript(
-                "return window.LeonArticle.load(body, id, editable, size, embeddedReader)",
+                "return window.LeonArticle.load(body, id, editable, size, embeddedReader, sessionID)",
                 arguments: ["body": html, "id": parent.documentID, "editable": parent.isEditable,
-                            "size": parent.fontSize, "embeddedReader": parent.onHeightChange != nil],
+                            "size": parent.fontSize, "embeddedReader": parent.onHeightChange != nil,
+                            "sessionID": sessionID],
                 in: nil, in: .page
             ) { [weak self, weak webView, weak loadingView] result in
                 guard let loadingView, loadingView.loadingRequestID == loadingID else { return }
@@ -243,8 +263,20 @@ struct RichArticleEditor: NSViewRepresentable {
                       let source = payload["source"] as? String, let view = message.webView else { return }
                 openWhiteboard(requestID: requestID, source: source, in: view)
             case "change":
-                guard parent.isEditable, let html = payload["body"] as? String,
-                      RichArticleDocument.isHTML(html) else { return }
+                guard parent.isEditable,
+                      payload["sessionID"] as? String == bodyState?.sessionID,
+                      let revision = payload["revision"] as? Int,
+                      revision > (bodyState?.revision ?? 0) else { return }
+                guard let html = bodyState?.accept(payload) else {
+                    if !bodySnapshotRequested, let view = message.webView {
+                        bodySnapshotRequested = true
+                        view.callAsyncJavaScript("window.LeonArticle.publishSnapshot()", arguments: [:], in: nil, in: .page) { [weak self] _ in
+                            self?.bodySnapshotRequested = false
+                        }
+                    }
+                    return
+                }
+                bodySnapshotRequested = false
                 lastBody = html
                 if parent.html != html { parent.html = html }
             case "height":
@@ -538,12 +570,8 @@ final class RichArticleMediaHandler: NSObject, WKURLSchemeHandler {
                 guard let fileURL = await store.mediaURL(for: path, relativeToMarkdownSource: relativePath) else {
                     throw URLError(.fileDoesNotExist)
                 }
-                let data = try await RichArticleMediaReader.data(from: fileURL)
-                try Task.checkCancellation()
-                let mime = UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-                urlSchemeTask.didReceive(URLResponse(url: url, mimeType: mime, expectedContentLength: data.count, textEncodingName: nil))
-                try Task.checkCancellation()
-                urlSchemeTask.didReceive(data)
+                try await RichArticleMediaResponse.send(fileURL: fileURL, request: urlSchemeTask.request,
+                    onResponse: { urlSchemeTask.didReceive($0) }, onData: { urlSchemeTask.didReceive($0) })
                 try Task.checkCancellation()
                 urlSchemeTask.didFinish()
             } catch { if !Task.isCancelled { urlSchemeTask.didFailWithError(error) } }

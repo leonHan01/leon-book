@@ -196,7 +196,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 4
         textView.textContainer?.widthTracksTextView = true
         textView.registerForDraggedTypes([.fileURL, .png, .tiff])
-        textView.textStorage?.setAttributedString(MomentTextRuns.attributedString(text: text, runs: textRuns))
+        context.coordinator.synchronizeText(in: textView)
         textView.onPasteImages = { [weak coordinator = context.coordinator] images in
             coordinator?.parent.onPasteImages(images)
         }
@@ -218,9 +218,7 @@ struct MomentRichTextEditor: NSViewRepresentable {
         textView.backgroundColor = NSColor(appPalette.surface)
         textView.insertionPointColor = appPalette.nsColor(.accent)
 
-        let currentRuns = MomentTextRuns.runs(from: textView.attributedString())
-        guard textView.string != text || currentRuns != textRuns else { return }
-        textView.textStorage?.setAttributedString(MomentTextRuns.attributedString(text: text, runs: textRuns))
+        context.coordinator.synchronizeText(in: textView)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -228,14 +226,31 @@ struct MomentRichTextEditor: NSViewRepresentable {
         var parent: MomentRichTextEditor
         private var applyingShortcut = false
         private var pendingInsertion: String?
+        private var synchronizedText: String?
+        private var synchronizedRuns: [NativeMomentTextRun] = []
+        private var isPublishingChanges = false
+        private var isApplyingExternalText = false
 
         init(parent: MomentRichTextEditor) {
             self.parent = parent
         }
 
+        func synchronizeText(in textView: NSTextView) {
+            guard !isPublishingChanges else { return }
+            let text = parent.text, runs = parent.textRuns
+            guard synchronizedText != text || synchronizedRuns != runs else { return }
+            isApplyingExternalText = true
+            defer { isApplyingExternalText = false }
+            if textView.hasMarkedText() { textView.unmarkText() }
+            pendingInsertion = nil
+            synchronizedText = text
+            synchronizedRuns = runs
+            textView.textStorage?.setAttributedString(MomentTextRuns.attributedString(text: text, runs: runs))
+        }
+
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
-            guard !applyingShortcut else { return }
+            guard !applyingShortcut, !isApplyingExternalText else { return }
             let insertion = pendingInsertion
             pendingInsertion = nil
             if insertion != nil, !textView.hasMarkedText(), textView.undoManager?.isUndoing != true,
@@ -246,8 +261,16 @@ struct MomentRichTextEditor: NSViewRepresentable {
                 if insertion == "\n" { MomentMarkdownInput.resetParagraphTyping(in: textView) }
                 applyingShortcut = false
             }
-            parent.text = textView.string
-            parent.textRuns = MomentTextRuns.runs(from: textView.attributedString())
+            let text = textView.string
+            let runs = MomentTextRuns.runs(from: textView.attributedString())
+            // The next SwiftUI update echoes this native edit. Remember it before
+            // publishing either binding so it need not read the attributed text again.
+            synchronizedText = text
+            synchronizedRuns = runs
+            isPublishingChanges = true
+            parent.text = text
+            parent.textRuns = runs
+            isPublishingChanges = false
             parent.controller.updateTagQuery(from: textView)
         }
 
@@ -288,10 +311,12 @@ struct MomentRichTextEditor: NSViewRepresentable {
     }
 }
 
-private final class MomentTextView: NSTextView {
+final class MomentTextView: NSTextView {
+    private static let imageTypeIdentifiers = Set(NSImage.imageTypes)
     var onPasteImages: (([NSImage]) -> Void)?
     var onDropVideos: (([URL]) -> Void)?
     var acceptsVideoDrops = false
+    private var dragAcceptance: (name: NSPasteboard.Name, changeCount: Int, acceptsVideo: Bool, operation: NSDragOperation)?
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         var types = super.readablePasteboardTypes
@@ -320,12 +345,41 @@ private final class MomentTextView: NSTextView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        if acceptsVideoDrops && !videoURLs(from: sender.draggingPasteboard).isEmpty { return .copy }
-        return images(from: sender.draggingPasteboard).isEmpty ? [] : .copy
+        dragOperation(for: sender.draggingPasteboard)
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         draggingEntered(sender)
+    }
+
+    func dragOperation(for pasteboard: NSPasteboard) -> NSDragOperation {
+        if let cached = dragAcceptance, cached.name == pasteboard.name,
+           cached.changeCount == pasteboard.changeCount, cached.acceptsVideo == acceptsVideoDrops {
+            return cached.operation
+        }
+        // Hover only examines metadata. Reading an NSImage here loads its payload
+        // on every draggingUpdated callback, even if the user never drops it.
+        let types = pasteboard.pasteboardItems?.flatMap(\.types) ?? pasteboard.types ?? []
+        let hasImageType = types.contains { type in
+            UTType(type.rawValue).map(Self.isImageType) == true
+        }
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        let urls = hasImageType ? [] : pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
+        let hasMediaURL = urls.contains { url in
+            // Extensionless/unknown files may still be readable images. Validate
+            // their contents on drop, without opening them during hover.
+            guard let type = UTType(filenameExtension: url.pathExtension.lowercased()) else { return true }
+            if type.isDynamic { return true }
+            return Self.isImageType(type) || (acceptsVideoDrops && type.conforms(to: .movie))
+        }
+        let operation: NSDragOperation = hasImageType || hasMediaURL ? .copy : []
+        dragAcceptance = (pasteboard.name, pasteboard.changeCount, acceptsVideoDrops, operation)
+        return operation
+    }
+
+    private static func isImageType(_ type: UTType) -> Bool {
+        // NSImage also accepts formats such as PDF that do not conform to public.image.
+        type.conforms(to: .image) || imageTypeIdentifiers.contains(type.identifier)
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {

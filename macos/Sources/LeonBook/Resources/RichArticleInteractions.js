@@ -33,6 +33,17 @@ function createArticleInteractions(api) {
   const progress = document.createElement('div'); progress.id = 'image-progress'; progress.hidden = true; progress.setAttribute('role', 'status'); document.body.append(progress);
   let activeCell = null, quickRowTable = null, quickRowCell = null, quickColumnCell = null, selectedImage = null, insertion = null, drag = null, tableTimer, progressTimer, pickerRows = 2, pickerColumns = 2, previewFocus = null;
   let axisTable = null, tableSelection = null;
+  let axisMetrics = null;
+  const axisButtons = new Map();
+  function invalidateTableAxes(changes) {
+    if (!axisMetrics || !changes.length) return;
+    axisMetrics.rowBoxes.clear(); axisMetrics.cellBoxes = new WeakMap(); axisMetrics.selection = null;
+    if (changes.some(change => change.type === 'childList' &&
+        (change.target.matches?.('table,thead,tbody,tfoot,tr,colgroup') ||
+         [...change.addedNodes, ...change.removedNodes].some(node => node.nodeType === Node.ELEMENT_NODE &&
+           (node.matches('table,thead,tbody,tfoot,tr,td,th,colgroup,col') || node.querySelector('tr,td,th,col')))))) axisMetrics.structureDirty = true;
+  }
+  const axisObserver = new MutationObserver(changes => { invalidateTableAxes(changes); schedulePosition(); });
   const replacements = new Map();
   for (const chrome of [grip, rowAdd, rowInsert, columnAdd, frame, preview]) window.LeonL10n.bindChrome(chrome);
   function place(element, rect, gap = 7) {
@@ -44,7 +55,7 @@ function createArticleInteractions(api) {
   function owns(element) { return element && root.contains(element); }
   function hideQuickAdds() { rowAdd.hidden = rowInsert.hidden = columnAdd.hidden = true; quickRowTable = quickRowCell = quickColumnCell = null; }
   function tableControl(target) { return tableTools.contains(target) || tableAxes.contains(target) || rowAdd.contains(target) || rowInsert.contains(target) || columnAdd.contains(target) || target === grip; }
-  function hideTableAxes() { tableAxes.hidden = tableHighlight.hidden = true; axisTable = null; }
+  function hideTableAxes() { tableAxes.hidden = tableHighlight.hidden = true; axisTable = null; axisMetrics = null; axisObserver.disconnect(); }
   function clearTableSelection() {
     if (!tableSelection) return;
     tableSelection = null; tableHighlight.hidden = true; delete tableTools.dataset.axis;
@@ -57,35 +68,88 @@ function createArticleInteractions(api) {
   }
   function positionTableAxes() {
     if (!canEdit() || !owns(axisTable) || selectedImage || drag || !picker.hidden || !preview.hidden || !getSelection().isCollapsed) { hideTableAxes(); return; }
-    const table = axisTable, rect = table.getBoundingClientRect(), rowList = rows(table);
+    const table = axisTable, rect = table.getBoundingClientRect();
     const minimum = Math.max(0, document.getElementById('toolbar').getBoundingClientRect().bottom);
     tableAxes.hidden = rect.bottom <= minimum || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth;
     if (tableAxes.hidden) { tableHighlight.hidden = true; return; }
-    const count = columns(table), firstRow = rowList.find(row => row.cells.length === count);
-    if (+tableAxes.dataset.columns !== count || +tableAxes.dataset.rows !== rowList.length) {
-      tableAxes.dataset.columns = count; tableAxes.dataset.rows = rowList.length;
-      tableAxes.replaceChildren(...['column', 'row'].flatMap(axis => Array.from({ length: axis === 'column' ? count : rowList.length }, (_, index) => {
-        const button = document.createElement('button'); button.type = 'button'; button.className = 'table-axis-handle'; button.dataset.axis = axis; button.dataset.index = index;
-        return button;
-      })));
+    if (axisMetrics?.table !== table) {
+      axisObserver.disconnect();
+      axisMetrics = { table, structureDirty: true, rowBoxes: new Map(), cellBoxes: new WeakMap(), selection: null };
+      axisObserver.observe(table, { subtree: true, childList: true, characterData: true, attributes: true });
     }
-    for (const button of tableAxes.children) {
-      const axis = button.dataset.axis, index = +button.dataset.index;
-      const box = (axis === 'column' ? firstRow?.cells[index] : rowList[index])?.getBoundingClientRect();
-      button.hidden = !box || (axis === 'column' ? rect.top < minimum || rect.top > innerHeight - 10 : box.bottom <= minimum || box.top >= innerHeight);
-      if (button.hidden) continue;
+    invalidateTableAxes(axisObserver.takeRecords());
+    const metrics = axisMetrics;
+    if (metrics.structureDirty) {
+      metrics.rows = rows(table);
+      metrics.columns = metrics.rows.reduce((count, row) => Math.max(count, row.cells.length), 1);
+      metrics.firstRow = metrics.rows.find(row => row.cells.length === metrics.columns);
+      metrics.structureDirty = false;
+    }
+    if (metrics.width !== rect.width || metrics.height !== rect.height) {
+      metrics.width = rect.width; metrics.height = rect.height;
+      metrics.rowBoxes.clear(); metrics.cellBoxes = new WeakMap(); metrics.selection = null;
+    }
+    // Cache table-relative geometry: scrolling moves the table, not its rows.
+    const measure = node => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left - rect.left, right: box.right - rect.left, top: box.top - rect.top, bottom: box.bottom - rect.top, width: box.width };
+    };
+    const viewport = box => box && { ...box, left: box.left + rect.left, right: box.right + rect.left, top: box.top + rect.top, bottom: box.bottom + rect.top };
+    const rowBox = index => {
+      if (!metrics.rowBoxes.has(index)) metrics.rowBoxes.set(index, measure(metrics.rows[index]));
+      return viewport(metrics.rowBoxes.get(index));
+    };
+    const cellBox = cell => {
+      if (!cell) return null;
+      if (!metrics.cellBoxes.has(cell)) metrics.cellBoxes.set(cell, measure(cell));
+      return metrics.cellBoxes.get(cell);
+    };
+    const handles = [];
+    for (let index = 0; index < metrics.columns; index++) {
+      handles.push({ axis: 'column', index, box: rect.top < minimum || rect.top > innerHeight - 10 ? null : viewport(cellBox(metrics.firstRow?.cells[index])) });
+    }
+    // Rows are ordered vertically. Find the visible interval without measuring every row.
+    let low = 0, high = metrics.rows.length;
+    while (low < high) { const middle = (low + high) >>> 1; if (rowBox(middle).bottom <= minimum) low = middle + 1; else high = middle; }
+    for (let index = low; index < metrics.rows.length; index++) {
+      const box = rowBox(index); if (box.top >= innerHeight) break;
+      handles.push({ axis: 'row', index, box });
+    }
+    // A selected column can contain irregular cells. Measure its complete bounds once,
+    // then reuse that exact union on scroll instead of reading every cell each frame.
+    if (tableSelection && metrics.selection !== tableSelection) {
+      const boxes = selectedCells().map(cellBox).filter(Boolean);
+      metrics.highlight = boxes.length ? boxes.reduce((union, box) => ({
+        left: Math.min(union.left, box.left), right: Math.max(union.right, box.right),
+        top: Math.min(union.top, box.top), bottom: Math.max(union.bottom, box.bottom)
+      })) : null;
+      metrics.selection = tableSelection;
+    }
+    const highlight = tableSelection ? viewport(metrics.highlight) : null;
+    // Complete geometry reads before changing handle styles or the visible handle set.
+    const wanted = new Set(handles.map(({ axis, index }) => axis + ':' + index));
+    for (const [key, button] of axisButtons) if (!wanted.has(key)) { button.remove(); axisButtons.delete(key); }
+    for (const { axis, index, box } of handles) {
+      const key = axis + ':' + index;
+      let button = axisButtons.get(key);
+      if (!button) {
+        button = document.createElement('button'); button.type = 'button'; button.className = 'table-axis-handle';
+        button.dataset.axis = axis; button.dataset.index = index; axisButtons.set(key, button); tableAxes.append(button);
+      }
+      button.hidden = !box;
       const label = axis === 'column' ? t('选择第 %@ 列', index + 1) : t('选择第 %@ 行', index + 1);
-      button.title = label; button.setAttribute('aria-label', label);
-      button.setAttribute('aria-pressed', String(tableSelection?.table === table && tableSelection.axis === axis && tableSelection.index === index));
-      Object.assign(button.style, axis === 'column'
+      if (button.title !== label) { button.title = label; button.setAttribute('aria-label', label); }
+      const pressed = String(tableSelection?.table === table && tableSelection.axis === axis && tableSelection.index === index);
+      if (button.getAttribute('aria-pressed') !== pressed) button.setAttribute('aria-pressed', pressed);
+      if (!box) continue;
+      const styles = axis === 'column'
         ? { left: box.left + 6 + 'px', top: Math.max(minimum, rect.top - 12) + 'px', width: Math.max(6, box.width - 12) + 'px', height: '9px' }
-        : { left: Math.max(0, rect.left - 11) + 'px', top: Math.max(minimum, box.top + 6) + 'px', width: '8px', height: Math.max(6, Math.min(innerHeight, box.bottom - 6) - Math.max(minimum, box.top + 6)) + 'px' });
+        : { left: Math.max(0, rect.left - 11) + 'px', top: Math.max(minimum, box.top + 6) + 'px', width: '8px', height: Math.max(6, Math.min(innerHeight, box.bottom - 6) - Math.max(minimum, box.top + 6)) + 'px' };
+      for (const [property, value] of Object.entries(styles)) if (button.style[property] !== value) button.style[property] = value;
     }
-    const cells = selectedCells(); tableHighlight.hidden = !cells.length;
-    if (cells.length) {
-      const boxes = cells.map(cell => cell.getBoundingClientRect());
-      const left = Math.min(...boxes.map(box => box.left)), right = Math.max(...boxes.map(box => box.right));
-      const top = Math.max(minimum, Math.min(...boxes.map(box => box.top))), bottom = Math.min(innerHeight, Math.max(...boxes.map(box => box.bottom)));
+    tableHighlight.hidden = !highlight;
+    if (highlight) {
+      const { left, right } = highlight, top = Math.max(minimum, highlight.top), bottom = Math.min(innerHeight, highlight.bottom);
       tableHighlight.hidden = bottom <= top;
       Object.assign(tableHighlight.style, { left: left + 'px', top: top + 'px', width: right - left + 'px', height: Math.max(0, bottom - top) + 'px' });
     }
@@ -261,7 +325,16 @@ function createArticleInteractions(api) {
     const range = document.createRange(); range.selectNode(image); getSelection().removeAllRanges(); getSelection().addRange(range); checkpoint(); positionImage();
   }
   function showPreview(image) {
-    previewFocus = document.activeElement; preview.querySelector('img').src = image.src; preview.querySelector('img').alt = image.alt;
+    let source = (image.dataset.originalSrc || image.getAttribute('src') || '').trim();
+    if (!source) return;
+    if (!/^(https?:|data:)/i.test(source)) {
+      try {
+        const local = /^leonmedia:/i.test(source) ? new URL(source)
+          : new URL('leonmedia://asset?path=' + encodeURIComponent(source));
+        local.searchParams.delete('maxPixelSize'); source = local.href;
+      } catch { return; }
+    }
+    previewFocus = document.activeElement; preview.querySelector('img').src = source; preview.querySelector('img').alt = image.alt;
     preview.hidden = false; preview.querySelector('button').focus({ preventScroll: true });
   }
   function closePreview() { preview.hidden = true; preview.querySelector('img').removeAttribute('src'); previewFocus?.focus({ preventScroll: true }); }

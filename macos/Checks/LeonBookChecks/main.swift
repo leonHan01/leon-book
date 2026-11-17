@@ -277,7 +277,8 @@ if let playback = try? String(contentsOfFile: sourcePath("NativeVideoPlayback.sw
     failures.append("video playback lifecycle module should be readable")
 }
 
-if let store = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8) {
+if var store = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8) {
+    store += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Media.swift"), encoding: .utf8)) ?? ""
     expect(store.contains("func uploadMedia(fileURL: URL, kind: String, slug: String? = nil) async throws"), "media uploads should yield the store actor while copying")
     expect(store.contains("Task.detached(priority: .utility)"), "large media copies should run outside the store actor")
 } else {
@@ -518,6 +519,12 @@ if var localStore = try? String(contentsOfFile: sourcePath("LocalBlogStore.swift
     localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+SearchGraph.swift"), encoding: .utf8)) ?? ""
     localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Schema.swift"), encoding: .utf8)) ?? ""
     localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Indexes.swift"), encoding: .utf8)) ?? ""
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Moments.swift"), encoding: .utf8)) ?? ""
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Questions.swift"), encoding: .utf8)) ?? ""
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Trash.swift"), encoding: .utf8)) ?? ""
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+Media.swift"), encoding: .utf8)) ?? ""
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+MarkdownSync.swift"), encoding: .utf8)) ?? ""
+    localStore += (try? String(contentsOfFile: sourcePath("LocalBlogStore+ArticleRevisions.swift"), encoding: .utf8)) ?? ""
     let coreLineCount = ((try? String(contentsOfFile: sourcePath("LocalBlogStore.swift"), encoding: .utf8)) ?? "")
         .split(separator: "\n").count
     expect(coreLineCount < 4_500, "LocalBlogStore core should remain below the former monolithic size")

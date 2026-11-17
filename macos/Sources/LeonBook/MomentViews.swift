@@ -906,6 +906,7 @@ private struct MomentCard: View {
     let onDelete: () -> Void
     @State private var isHovered = false
     @State private var isCollapsed = false
+    @State private var emailContent: EmailContent?
 
     var body: some View {
         let displayContent = moment.displayContent
@@ -945,6 +946,9 @@ private struct MomentCard: View {
                 Menu {
                     Button(action: onEdit) {
                         Label("编辑微博", nativeIcon: "pencil")
+                    }
+                    Button { emailContent = .moment(moment) } label: {
+                        Label("发送邮件…", nativeIcon: "envelope")
                     }
                     Button(action: onToggleFavorite) {
                         Label(
@@ -1049,6 +1053,7 @@ private struct MomentCard: View {
         .animation(.easeOut(duration: 0.16), value: isHovered)
         .onHover { isHovered = $0 }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(EmailComposerPresenter(content: $emailContent, store: store))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilitySummary(text: displayContent.text, dateLabel: dateLabel))
         .accessibilityHint("可执行收藏、编辑、删除、筛选标签和查看媒体操作")

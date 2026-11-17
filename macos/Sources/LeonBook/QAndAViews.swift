@@ -22,12 +22,79 @@ struct QAndAView: View {
                 header
                 filters
                 Divider()
-                listContent
+                HStack(alignment: .top, spacing: 0) {
+                    hotQuestionsSidebar
+                        .frame(width: 260)
+                    Divider()
+                    listContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .background(appPalette.canvas)
         .sheet(isPresented: $isPresentingQuestionComposer) {
             QuestionComposerSheet(model: model)
+        }
+    }
+
+    private var hotQuestionsSidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Label("热点问答", nativeIcon: "flame", iconSize: 16)
+                    .font(.headline)
+                Spacer()
+                Text("TOP 10")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(appPalette.canvas, in: Capsule())
+            }
+            .padding(.bottom, 6)
+            Text("按回答与浏览热度排序")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help("每个回答计 20 分，每次打开问题详情计 1 分；同分时优先显示最近活跃的问题。")
+                .padding(.bottom, 16)
+
+            if model.hotQuestions.isEmpty {
+                if model.isLoading || model.loadingOperations.contains(.questions) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 20)
+                } else {
+                    Text("发布问题后，这里将展示热门问题。")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 12)
+                }
+                Spacer(minLength: 0)
+            } else {
+                ScrollView {
+                    VStack(spacing: 4) {
+                        ForEach(Array(model.hotQuestions.enumerated()), id: \.element.id) { index, question in
+                            Button {
+                                openQuestion(question)
+                            } label: {
+                                HotQuestionRow(question: question, rank: index + 1)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 22)
+        .padding(.bottom, 16)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(appPalette.surface.opacity(0.5))
+    }
+
+    private func openQuestion(_ question: NativeQuestion) {
+        if model.selectQuestion(question) {
+            detailQuestionID = question.id
         }
     }
 
@@ -200,9 +267,7 @@ struct QAndAView: View {
 
                 ForEach(model.questions) { question in
                     Button {
-                        if model.selectQuestion(question) {
-                            detailQuestionID = question.id
-                        }
+                        openQuestion(question)
                     } label: {
                         QuestionListRow(question: question)
                     }
@@ -215,6 +280,53 @@ struct QAndAView: View {
             .frame(maxWidth: .infinity)
         }
         .background(appPalette.surface.opacity(0.32))
+    }
+}
+
+private struct HotQuestionRow: View {
+    let question: NativeQuestion
+    let rank: Int
+    @State private var isHovered = false
+
+    private var rankColor: Color {
+        switch rank {
+        case 1: return .red
+        case 2: return .orange
+        case 3: return Color(red: 0.68, green: 0.47, blue: 0.25)
+        default: return .secondary
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Text("\(rank)")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(rankColor)
+                .frame(width: 22, height: 22)
+                .background(rankColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(question.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(isHovered ? Color.accentColor : .primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 10) {
+                    Label(NativeLocalization.text("\(question.answerCount) 个回答"), nativeIcon: "text.bubble", iconSize: 10)
+                    Label(NativeLocalization.text("\(question.viewCount) 次浏览"), nativeIcon: "eye", iconSize: 10)
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            }
+            .padding(.top, 2)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 11)
+        .background(Color.accentColor.opacity(isHovered ? 0.07 : 0), in: RoundedRectangle(cornerRadius: 9))
+        .contentShape(RoundedRectangle(cornerRadius: 9))
+        .onHover { isHovered = $0 }
+        .help(question.title)
     }
 }
 
@@ -257,6 +369,9 @@ private struct QuestionListRow: View {
                     Text(question.createdAt.nativeDateLabel)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                    Label(NativeLocalization.text("\(question.viewCount) 次浏览"), nativeIcon: "eye", iconSize: 12)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Label(NativeLocalization.text("\(question.answerCount) 个回答"), nativeIcon: "text.bubble", iconSize: 12)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -298,18 +413,26 @@ private struct QuestionDetailView: View {
     let onSelectTag: (String) -> Void
     @StateObject private var answerEditorController = MomentRichTextController()
     @State private var answerComposerMode = QuestionAnswerComposerMode.edit
+    @State private var showsAIChat = true
 
     var body: some View {
         if let question = model.selectedQuestion {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    questionHeader(question)
-                    Divider()
-                    answersSection
-                    answerComposer
+            GeometryReader { proxy in
+                if showsAIChat && proxy.size.width >= 900 {
+                    HStack(spacing: 0) {
+                        questionContent(question)
+                        Divider()
+                        aiChat(question).frame(width: 350)
+                    }
+                } else if showsAIChat {
+                    VStack(spacing: 0) {
+                        questionContent(question)
+                        Divider()
+                        aiChat(question).frame(height: min(380, proxy.size.height * 0.5))
+                    }
+                } else {
+                    questionContent(question)
                 }
-                .padding(26)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         } else {
             Text("选择一个问题查看答案")
@@ -318,8 +441,33 @@ private struct QuestionDetailView: View {
         }
     }
 
+    private func questionContent(_ question: NativeQuestion) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                questionHeader(question)
+                Divider()
+                answersSection
+                answerComposer
+            }
+            .padding(26)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func aiChat(_ question: NativeQuestion) -> some View {
+        AIReadingChatView(model: model, context: .question(question))
+            .id("\(model.workspaceGeneration):question:\(question.id)")
+    }
+
     private func questionHeader(_ question: NativeQuestion) -> some View {
         VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Spacer()
+                Button { showsAIChat.toggle() } label: {
+                    Label("AI 阅读助手", nativeIcon: "sparkles", iconSize: 13)
+                }
+                .buttonStyle(.borderless)
+            }
             Text(question.title)
                 .font(.system(size: 26, weight: .bold))
                 .textSelection(.enabled)
@@ -341,7 +489,12 @@ private struct QuestionDetailView: View {
                     ))
                 }
                 Spacer()
+                EmailContentButton(content: { .question(question, answers: model.questionAnswers) }, store: model.store)
+                    .disabled(model.isLoadingQuestionAnswers)
                 Text(question.createdAt.nativeDateLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Label(NativeLocalization.text("\(question.viewCount) 次浏览"), nativeIcon: "eye", iconSize: 12)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

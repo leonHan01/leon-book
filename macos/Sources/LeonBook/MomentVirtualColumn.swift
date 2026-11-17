@@ -40,7 +40,7 @@ struct MomentVirtualColumn<Content: View>: View {
                 viewport.update(ids: ids, viewport: rect) {
                     moments.map { Self.estimatedHeight($0, width: rect.width) }
                 }
-            }, onScrollChange: { viewport.beginScrolling() }) { _ in })
+            }, onScrollingChange: { viewport.setScrolling($0) }) { _ in })
     }
 
     private static func estimatedHeight(_ moment: NativeMoment, width: CGFloat) -> CGFloat {
@@ -68,7 +68,6 @@ final class MomentColumnViewport: ObservableObject {
 
     @Published private(set) var layout = Layout()
     @Published private(set) var isScrolling = false
-    private var settleTask: Task<Void, Never>?
     private var ids: [String] = []
     private var estimates: [CGFloat] = []
     private var measured: [String: CGFloat] = [:]
@@ -76,18 +75,9 @@ final class MomentColumnViewport: ObservableObject {
     private var viewport = CGRect.zero
     private var measuredWidth: CGFloat = 0
 
-    func beginScrolling() {
-        if !isScrolling { isScrolling = true }
-        settleTask?.cancel()
-        settleTask = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: 100_000_000) }
-            catch { return }
-            guard !Task.isCancelled else { return }
-            self?.isScrolling = false
-        }
+    func setScrolling(_ scrolling: Bool) {
+        if isScrolling != scrolling { isScrolling = scrolling }
     }
-
-    deinit { settleTask?.cancel() }
 
     func update(ids: [String], viewport: CGRect, estimates: () -> [CGFloat]) {
         guard viewport.width > 0 else { return }

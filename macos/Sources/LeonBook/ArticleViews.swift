@@ -83,7 +83,9 @@ struct ArticleReaderView: View {
                                         onOpenArticle: model.openArticleLink,
                                         onConvertUnlinkedMention: model.convertUnlinkedMention
                                     )
-                                    .frame(width: CGFloat(workspaceLayout.readerInspectorWidth))
+                                    .frame(width: CGFloat(workspaceLayout.readerInspectorPane == .ai
+                                                         ? max(workspaceLayout.readerInspectorWidth, 340)
+                                                         : workspaceLayout.readerInspectorWidth))
                                 }
                             }
                             .onChange(of: model.articleScrollRevision) { _ in
@@ -322,6 +324,19 @@ struct ArticleReaderView: View {
                         .buttonStyle(NativeChromeIconButtonStyle())
                 }
 
+                EmailContentButton(content: { .article(article) }, store: model.store, compact: true)
+                    .buttonStyle(NativeChromeIconButtonStyle())
+
+                Button {
+                    workspaceLayout.readerInspectorPane = .ai
+                    if usesCompactInspector { isPresentingCompactInspector = true }
+                    else { workspaceLayout.isReaderInspectorVisible = true }
+                } label: {
+                    NativeIcon.image("sparkles", size: 14).frame(width: 30, height: 30).contentShape(Rectangle())
+                }
+                .buttonStyle(NativeChromeIconButtonStyle(isSelected: isInspectorVisible && workspaceLayout.readerInspectorPane == .ai))
+                .help("AI 阅读助手").accessibilityLabel("AI 阅读助手")
+
                 Button {
                     if usesCompactInspector { isPresentingCompactInspector = true }
                     else { workspaceLayout.isReaderInspectorVisible.toggle() }
@@ -557,13 +572,14 @@ private struct ArticleInspectorView: View {
                     Label("阅读面板", nativeIcon: "sidebar.right")
                         .font(.headline)
                     Spacer()
-                    Text(LocalizedStringKey(selectedPane == .comments ? "划词评论" : "上下文导航"))
+                    Text(LocalizedStringKey(selectedPane == .comments ? "划词评论" : selectedPane == .ai ? "AI 阅读助手" : "上下文导航"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Picker("阅读面板", selection: $selectedPane) {
                     Text(NativeLocalization.text("评论 \(model.articleComments.count)")).tag(ArticleInspectorPane.comments)
                     Text("文章").tag(ArticleInspectorPane.context)
+                    Text("AI 聊天").tag(ArticleInspectorPane.ai)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -580,7 +596,12 @@ private struct ArticleInspectorView: View {
                     onSelectAnchor: onSelectCommentAnchor
                 )
             } else {
-                contextNavigation
+                if selectedPane == .ai {
+                    AIReadingChatView(model: model, context: .article(article))
+                        .id("\(model.workspaceGeneration):article:\(article.slug)")
+                } else {
+                    contextNavigation
+                }
             }
         }
         .background(appPalette.sidebar)

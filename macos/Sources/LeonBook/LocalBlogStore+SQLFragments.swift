@@ -39,7 +39,8 @@ extension LocalBlogStore {
     var questionSelect: String {
         """
         SELECT q.id, q.title, q.body, q.tags_json, q.created_at, q.updated_at,
-               (SELECT COUNT(*) FROM question_answers AS a WHERE a.question_id = q.id)
+               (SELECT COUNT(*) FROM question_answers AS a WHERE a.question_id = q.id) AS answer_count,
+               q.view_count
         FROM questions AS q
         """
     }

@@ -17,7 +17,7 @@ function editor({ editable = true } = {}) {
     addEventListener: (name, listener) => listeners.set(name, listener),
   };
   block.parentElement = root;
-  const button = { querySelector: () => null };
+  const button = { querySelector: () => null, classList: { toggle() {} }, setAttribute() {} };
   const context = vm.createContext({
     window: { addEventListener() {}, LeonL10n: { text: value => value } },
     document: { querySelector: () => button },

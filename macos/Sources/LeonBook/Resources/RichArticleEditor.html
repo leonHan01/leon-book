@@ -54,6 +54,7 @@ button:hover, button:focus-visible { background: var(--soft); outline: 2px solid
 #document mark { background: #f2ce5e70; color: inherit; border-radius: 3px; }
 #document a { color: var(--accent); text-decoration: underline; }
 #document img { display: block; max-width: 100%; height: auto; border-radius: 8px; }
+#document img.article-image-pending { min-height: 180px; min-width: min(100%, 280px); background: var(--soft); }
 #document figure[data-type=audio] { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); }
 #document[data-sticky-audio=true] > figure[data-type=audio]:first-child { z-index: 2; }
 body:not(.readonly) #document[data-sticky-audio=true] > figure[data-type=audio]:first-child { position: sticky; top: 40px; }
@@ -246,6 +247,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   let formatRange = null, formatDocumentID = '', formatBackward = false, colorMode = null, selectingWithPointer = false;
   let markdownTail = null;
   const send = payload => window.webkit?.messageHandlers?.richArticle?.postMessage({ ...payload, documentID });
+  /* editor-body-bridge-script */
+  const bodyBridge = createArticleBodyBridge(send);
   // The reader expands this web view to the document height inside a native
   // scroll view. WebKit otherwise consumes wheel events over the article.
   document.addEventListener('wheel', event => {
@@ -326,7 +329,13 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
         }
         if (node.tagName === 'IMG') {
           const src = safeURL(node.dataset.originalSrc || node.getAttribute('src'), true);
-          if (src) { node.setAttribute('src', src); delete node.dataset.originalSrc; } else node.remove();
+          if (src) {
+            // Deferred images temporarily remove src. Canonical attribute order
+            // keeps snapshots byte-identical after load/undo/redo.
+            const alt = node.getAttribute('alt');
+            node.removeAttribute('src'); node.removeAttribute('alt'); delete node.dataset.originalSrc;
+            node.setAttribute('src', src); if (alt !== null) node.setAttribute('alt', alt);
+          } else node.remove();
         }
         if (['AUDIO', 'VIDEO'].includes(node.tagName)) {
           const src = safeAudioURL(node.dataset.originalSrc || node.getAttribute('src'));
@@ -348,7 +357,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   // input/commands can serialize before MutationObserver's microtask runs.
   const serializedBlocks = new WeakMap();
   const selectionUnits = new WeakMap(), selectionOffsets = new WeakMap();
-  let serializedBody = null, needsPreparation = true;
+  let serializedBody = null, serializedParts = [], needsPreparation = true;
   const structuralSelector = 'div[data-type=columns],div[data-type=column],p,h1,h2,h3,h4,pre,aside,blockquote,table,td,th,figure,figcaption,img,audio,video,ul,ol,li,hr';
   function discardNodeCaches(node) {
     serializedBlocks.delete(node); selectionUnits.delete(node); selectionOffsets.delete(node);
@@ -390,8 +399,15 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   }
   function serialize() {
     invalidate(contentObserver.takeRecords());
-    if (serializedBody === null) serializedBody = opening + [...root.childNodes].map(serializeNode).join('') + '</article>';
+    if (serializedBody === null) {
+      serializedParts = [opening, ...[...root.childNodes].map(serializeNode), '</article>'];
+      serializedBody = serializedParts.join('');
+    }
     return serializedBody;
+  }
+  function publishBody(forceFull = false) {
+    const body = serialize();
+    bodyBridge.publish(body, serializedParts, forceFull);
   }
   function cellFor(node) {
     const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
@@ -632,6 +648,9 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       document.execCommand('styleWithCSS', false, previousCSS);
     } else if (['bold', 'italic', 'underline', 'strikeThrough', 'removeFormat'].includes(command)) {
       document.execCommand(command, false);
+      // WebKit can synthesize a FONT wrapper while removing nested color/format
+      // spans. A second native pass clears that residue without touching unselected text.
+      if (command === 'removeFormat') document.execCommand(command, false);
     } else return;
     const selection = getSelection();
     if (backward && selection.rangeCount && !selection.isCollapsed) {
@@ -759,15 +778,35 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (!needsPreparation) return;
     columnLayout.normalize();
     if (!root.children.length) root.innerHTML = '<p><br></p>';
+    const selection = getSelection();
+    const caretPoint = (node, offset) => ({ node, offset, next: node.childNodes[offset], previous: node.childNodes[offset - 1] });
+    const caret = selection?.rangeCount ? {
+      anchor: caretPoint(selection.anchorNode, selection.anchorOffset),
+      focus: caretPoint(selection.focusNode, selection.focusOffset)
+    } : null;
+    let movedCaret = false;
     for (const cell of root.querySelectorAll('td,th,div[data-type=column]')) {
       let paragraph = null;
       for (const node of [...cell.childNodes]) {
         if (blockTags.has(node.nodeName)) { paragraph = null; continue; }
         if (!paragraph && node.nodeType === Node.TEXT_NODE && !node.textContent.trim()) { node.remove(); continue; }
         if (!paragraph) { paragraph = document.createElement('p'); node.before(paragraph); }
+        // WebKit may commit IME text directly in the cell. Reparenting that
+        // text moves the live selection outside the paragraph; retain its points.
+        if (caret && (node.contains(caret.anchor.node) || node.contains(caret.focus.node))) movedCaret = true;
         paragraph.append(node);
       }
       if (!cell.children.length) cell.innerHTML = '<p><br></p>';
+    }
+    if (movedCaret && root.contains(caret.anchor.node) && root.contains(caret.focus.node)) {
+      const resolve = point => {
+        // Element offsets must follow the original neighboring nodes too: a
+        // backward selection can end at the cell boundary outside the wrapper.
+        if (point.next?.parentNode && root.contains(point.next)) return [point.next.parentNode, [...point.next.parentNode.childNodes].indexOf(point.next)];
+        if (point.previous?.parentNode && root.contains(point.previous)) return [point.previous.parentNode, [...point.previous.parentNode.childNodes].indexOf(point.previous) + 1];
+        return [point.node, point.offset];
+      };
+      selection.setBaseAndExtent(...resolve(caret.anchor), ...resolve(caret.focus));
     }
     const ids = new Set();
     for (const container of [root, ...root.querySelectorAll('td,th,div[data-type=column]')]) {
@@ -800,7 +839,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       if (figure.tabIndex !== 0) figure.tabIndex = 0;
       figure.title = editable ? t('点击播放；选中媒体块后按 Delete 删除') : t(figure.dataset.type === 'video' ? '视频' : '音频');
     }
-    for (const img of root.querySelectorAll('img,audio,video')) {
+    articleImages.prepare();
+    for (const img of root.querySelectorAll('audio,video')) {
       const src = img.dataset.originalSrc || img.getAttribute('src');
       if (src && !/^(https?:|data:|leonmedia:)/i.test(src)) {
         const resolved = 'leonmedia://asset?path=' + encodeURIComponent(src);
@@ -825,11 +865,12 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       if (history.length > 100) { history.shift(); historyIndex--; }
     } else if (history[historyIndex]) history[historyIndex].selection = captureSelection() || history[historyIndex].selection;
     lastEdit = coalesce ? now : 0;
-    send({ type: 'change', body }); scheduleResize();
+    bodyBridge.publish(body, serializedParts); scheduleResize();
   }
   let lastHeight = -1;
   const scheduleResize = frameTask(resize);
   function resize() {
+    articleImages.invalidate();
     const height = Math.ceil(root.getBoundingClientRect().height);
     if (height !== lastHeight) { lastHeight = height; send({ type: 'height', height }); }
     editorOutline.refresh();
@@ -978,8 +1019,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     const index = historyIndex + delta; if (index < 0 || index >= history.length) return;
     history[historyIndex].selection = captureSelection() || history[historyIndex].selection;
     editorUI.reset(); columnLayout.reset(); hideSelectionToolbar(); pendingImagePastes.clear(); historyIndex = index; lastEdit = 0;
-    const parsed = new DOMParser().parseFromString(history[index].body, 'text/html');
-    root.innerHTML = parsed.querySelector('article').innerHTML; prepareBlocks(); closeMenu();
+    const parsed = document.createElement('template'); parsed.innerHTML = history[index].body;
+    articleImages.reset(); root.replaceChildren(articleImages.stageHTML(parsed.content.querySelector('article').innerHTML)); prepareBlocks(); closeMenu();
     markdownTail = null;
     if (!restoreSelection(history[index].selection, true)) focusBlock(root.firstElementChild);
     const exit = history[index].markdownExit;
@@ -989,7 +1030,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
         selectionPoint(node, node.childNodes.length)?.offset === exit.point.offset);
       if (node) setMarkdownExit(node);
     }
-    send({ type: 'change', body: serialize() }); scheduleResize();
+    publishBody(); scheduleResize();
   }
   function updateLanguage() { const block = blockAtSelection(); language.hidden = block?.tagName !== 'PRE'; if (!language.hidden) language.value = block.dataset.language || 'text'; }
   const markdownInlineRules = [
@@ -1229,9 +1270,39 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (block && !event.target.closest('img') && event.clientX - block.getBoundingClientRect().left < 26 && editable) { checkpoint(); block.dataset.checked = String(block.dataset.checked !== 'true'); notify(); }
   });
   let highlightedBlocks = new Set();
-  function selectableBlocks() {
-    return [...root.children].flatMap(block => block.matches('div[data-type=columns]')
-      ? [...block.querySelectorAll('div[data-type=column] > *')] : [block]);
+  function selectableEdge(node, forward) {
+    if (node?.nodeType !== Node.ELEMENT_NODE) return null;
+    if (node.matches('div[data-type=columns],div[data-type=column]')) {
+      for (let child = forward ? node.firstElementChild : node.lastElementChild; child;
+           child = forward ? child.nextElementSibling : child.previousElementSibling) {
+        const block = selectableEdge(child, forward); if (block) return block;
+      }
+      return null;
+    }
+    return node.parentElement === root || node.parentElement?.matches('div[data-type=column]') ? node : null;
+  }
+  function adjacentSelectableBlock(node, forward) {
+    for (let current = node; current && current !== root; current = current.parentElement) {
+      for (let sibling = forward ? current.nextSibling : current.previousSibling; sibling;
+           sibling = forward ? sibling.nextSibling : sibling.previousSibling) {
+        const block = selectableEdge(sibling, forward); if (block) return block;
+      }
+    }
+    return null;
+  }
+  function selectableBoundary(node, offset, forward) {
+    for (let current = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+         current && current !== root; current = current.parentElement) {
+      if (!current.matches('div[data-type=columns],div[data-type=column]') &&
+          (current.parentElement === root || current.parentElement?.matches('div[data-type=column]'))) return current;
+    }
+    // Element offsets are child-node boundaries, including whitespace between blocks.
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      for (let index = forward ? offset : offset - 1; index >= 0 && index < node.childNodes.length; index += forward ? 1 : -1) {
+        const block = selectableEdge(node.childNodes[index], forward); if (block) return block;
+      }
+    }
+    return adjacentSelectableBlock(node, forward);
   }
   function selectedBlocks() {
     const selection = getSelection();
@@ -1239,18 +1310,24 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (editable && selection?.rangeCount && !selection.isCollapsed) {
       const range = selection.getRangeAt(0);
       if (root.contains(range.startContainer) && root.contains(range.endContainer)) {
-        blocks = selectableBlocks().filter(block => {
-          if (!range.intersectsNode(block)) return false;
+        const first = selectableBoundary(range.startContainer, range.startOffset, true);
+        const last = selectableBoundary(range.endContainer, range.endOffset, false);
+        // Most selections are inside one paragraph. Do not walk unrelated document blocks.
+        if (!first || !last || first === last || (first.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_PRECEDING)) return [];
+        for (let block = first; block; block = adjacentSelectableBlock(block, true)) {
           const overlap = document.createRange(); overlap.selectNode(block);
           // Whole nodes include empty paragraphs and atomic blocks such as dividers.
           if (range.compareBoundaryPoints(Range.START_TO_START, overlap) <= 0 &&
-              range.compareBoundaryPoints(Range.END_TO_END, overlap) >= 0) return true;
-          overlap.selectNodeContents(block);
-          if (range.compareBoundaryPoints(Range.START_TO_START, overlap) > 0) overlap.setStart(range.startContainer, range.startOffset);
-          if (range.compareBoundaryPoints(Range.END_TO_END, overlap) < 0) overlap.setEnd(range.endContainer, range.endOffset);
-          // Merely touching the previous text's end or next text's start selects no content.
-          return !overlap.collapsed && (overlap.toString().length > 0 || !!overlap.cloneContents().querySelector('br,img,hr,table,figure,audio,video,svg,canvas'));
-        });
+              range.compareBoundaryPoints(Range.END_TO_END, overlap) >= 0) blocks.push(block);
+          else {
+            overlap.selectNodeContents(block);
+            if (range.compareBoundaryPoints(Range.START_TO_START, overlap) > 0) overlap.setStart(range.startContainer, range.startOffset);
+            if (range.compareBoundaryPoints(Range.END_TO_END, overlap) < 0) overlap.setEnd(range.endContainer, range.endOffset);
+            // Merely touching the previous text's end or next text's start selects no content.
+            if (!overlap.collapsed && (overlap.toString().length > 0 || !!overlap.cloneContents().querySelector('br,img,hr,table,figure,audio,video,svg,canvas'))) blocks.push(block);
+          }
+          if (block === last) break;
+        }
       }
     }
     return blocks.length > 1 ? blocks : [];
@@ -1259,9 +1336,9 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     // Recompute from the live range: selectionchange may not have painted the blue outlines yet.
     const blocks = selectedBlocks(); if (!blocks.length) return false;
     checkpoint(); closeMenu(); hideSelectionToolbar(); markdownTail = null;
-    const candidates = selectableBlocks(), parent = blocks[0].parentElement;
-    const next = candidates[candidates.indexOf(blocks[blocks.length - 1]) + 1];
-    const previous = candidates[candidates.indexOf(blocks[0]) - 1];
+    const parent = blocks[0].parentElement;
+    const next = adjacentSelectableBlock(blocks[blocks.length - 1], true);
+    const previous = adjacentSelectableBlock(blocks[0], false);
     for (const block of blocks) { block.querySelectorAll('audio,video').forEach(media => media.pause()); block.remove(); }
     for (const row of root.querySelectorAll(':scope > div[data-type=columns]')) {
       if ([...row.children].every(column => !column.children.length)) row.remove();
@@ -1345,8 +1422,8 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (block?.tagName === 'PRE') { checkpoint(); block.dataset.language = value; notify(); }
     closeTools();
   });
-  function load(body, id, canEdit, size, isEmbeddedReader = false) {
-    if (composing) { pendingLoad = [body, id, canEdit, size, isEmbeddedReader]; return false; }
+  function load(body, id, canEdit, size, isEmbeddedReader = false, sessionID = '') {
+    if (composing) { pendingLoad = [body, id, canEdit, size, isEmbeddedReader, sessionID]; return false; }
     const changed = documentID !== id || serialize() !== body;
     if (documentID !== id) lastHeight = -1;
     documentID = id; editable = canEdit; embeddedReader = isEmbeddedReader; document.body.classList.toggle('readonly', !editable);
@@ -1354,12 +1431,17 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (changed || !editable) { closeTools(); selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); columnLayout.reset(); whiteboards.reset(); audioBlocks.reset(); }
     if (changed) {
       markdownTail = null;
-      const parsed = new DOMParser().parseFromString(body, 'text/html');
-      root.innerHTML = cleanHTML(parsed.querySelector('article')?.innerHTML || '<p><br></p>');
+      const parsed = document.createElement('template'); parsed.innerHTML = body;
+      articleImages.reset();
+      root.replaceChildren(articleImages.stageHTML(cleanHTML(parsed.content.querySelector('article')?.innerHTML || '<p><br></p>')));
       prepareBlocks(); history = [{ body: serialize(), selection: null }]; historyIndex = 0; lastEdit = 0; closeMenu();
     }
+    bodyBridge.reset(body, serialize(), serializedParts, sessionID);
+    if (!changed) articleImages.prepare();
     editorCaret.refresh(); resize(); return true;
   }
+  /* editor-images-script */
+  const articleImages = createArticleImages({ root, canEdit: () => editable, isEmbeddedReader: () => embeddedReader, frameTask });
   /* editor-interactions-script */
   const editorUI = createArticleInteractions({ root, canEdit: () => editable && !composing, checkpoint, notify, focusBlock, blockAtSelection, captureSelection, restoreSelection, execute, send, uuid, closeMenu, frameTask });
   /* editor-columns-script */
@@ -1367,14 +1449,16 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   /* editor-caret-script */
   const editorCaret = createArticleCaret({ root, canEdit: () => editable && !composing, frameTask });
   /* editor-whiteboards-script */
-  const whiteboards = createArticleWhiteboards({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, frameTask });
+  const whiteboards = createArticleWhiteboards({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, frameTask, cleanHTML });
   /* editor-audio-script */
-  const audioBlocks = createArticleAudio({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu });
+  const audioBlocks = createArticleAudio({ root, canEdit: () => editable && !composing, documentID: () => documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, cleanHTML });
   /* editor-outline-script */
   const editorOutline = createArticleOutline({ root, documentID: () => documentID, send, frameTask });
   window.LeonArticle = { load, serialize, execute, commands, cleanHTML, undo, insertPastedImages,
     setOutlineEnabled: editorOutline.setEnabled, navigateOutline: editorOutline.navigate,
-    setReaderViewport(top) { readerViewportTop = Math.max(0, Number(top) || 0); updateStickyAudio(); },
+    publishSnapshot() { publishBody(true); },
+    setFontSize(size) { document.documentElement.style.setProperty('--size', size + 'px'); resize(); },
+    setReaderViewport(top, height) { readerViewportTop = Math.max(0, Number(top) || 0); updateStickyAudio(); articleImages.setViewport(top, height); },
     completeAudio: audioBlocks.complete, cancelAudio: audioBlocks.cancel,
     completeAudios: audioBlocks.completeMany,
     completeMedia: audioBlocks.completeMedia,
@@ -1385,7 +1469,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   };
   new ResizeObserver(scheduleResize).observe(root);
   window.addEventListener('resize', frameTask(() => { resize(); positionMenu(); positionSelectionToolbar(); }));
-  window.addEventListener('scroll', frameTask(() => { positionMenu(); positionSelectionToolbar(); }), { passive: true });
+  window.addEventListener('scroll', frameTask(() => { positionMenu(); positionSelectionToolbar(); articleImages.schedule(); }), { passive: true });
   window.addEventListener('blur', () => { selectingWithPointer = false; scheduleReaderSelection.cancel(); hideSelectionToolbar(); });
   window.addEventListener('leonlanguagechange', () => { closeMenu(); colorPanel.hidden = headingPanel.hidden = true; });
   send({ type: 'ready' });

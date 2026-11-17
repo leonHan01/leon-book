@@ -68,6 +68,7 @@ enum NativeEditorSidebarPane: String, CaseIterable, Identifiable, Codable {
 enum ArticleInspectorPane: String, CaseIterable, Identifiable, Codable {
     case comments
     case context
+    case ai
 
     var id: String { rawValue }
 }

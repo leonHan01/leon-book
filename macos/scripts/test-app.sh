@@ -11,6 +11,7 @@ python3 "${SCRIPT_DIR}/check-localization.py"
 if command -v node >/dev/null 2>&1; then
     node "${SCRIPT_DIR}/test-web-localization.mjs"
     node "${SCRIPT_DIR}/test-article-media-drop.mjs"
+    node "${SCRIPT_DIR}/test-article-body-bridge.mjs"
 else
     print -- 'SKIP: web localization runtime checks require Node.js.'
 fi

@@ -154,6 +154,7 @@ public final class NativeAppModel: ObservableObject {
     @Published var articleSourceConflict: NativeArticleSourceConflict?
     @Published var selectedSlug: String?
     let editorSession = NativeEditorSessionState()
+    let articleLibraryUpdateCoordinator = NativeArticleLibraryUpdateCoordinator()
     var editor: NativeEditorDraft {
         get { editorSession.draft }
         set { editorSession.draft = newValue }
@@ -240,7 +241,11 @@ public final class NativeAppModel: ObservableObject {
     var trashCleanupTask: Task<Void, Never>?
     private var uploadCount = 0
     var workspaceGeneration = 0 {
-        didSet { loadingOperations.reset() }
+        didSet {
+            loadingOperations.reset()
+            articleLibraryUpdateCoordinator.cancel()
+            articleGraphLoadGeneration += 1
+        }
     }
     var pendingEditorMediaCleanup: [NativeMedia] = []
     var editorOriginalArticle: NativeArticle?
@@ -272,6 +277,7 @@ public final class NativeAppModel: ObservableObject {
     var globalSearchGeneration = 0
     var articleListSearchTask: Task<Void, Never>?
     var knowledgeGraphTask: Task<Void, Never>?
+    var articleGraphLoadGeneration = 0
     var obsidianScanTask: Task<Void, Never>?
     var markdownSourceEventMonitor: MarkdownSourceEventMonitor?
     var markdownSourceSyncTask: Task<Void, Never>?
@@ -430,6 +436,37 @@ public final class NativeAppModel: ObservableObject {
         applyPageViewOverrides(to: &projection, prunesResolvedOverrides: true)
         articleLibraryProjection = projection
         articles = projection.articles
+    }
+
+    func mergeArticleSummaries(_ updates: [NativeArticleSummary], workspaceGeneration expectedWorkspace: Int) async {
+        guard !updates.isEmpty else { return }
+        while !Task.isCancelled, workspaceGeneration == expectedWorkspace {
+            let baseline = articles
+            let batch = NativeProjectionBatch([baseline, updates])
+            let rebuilt = await rebuildProjection(.articleLibrary, input: batch) { batch in
+                var replacements: [String: NativeArticleSummary] = [:]
+                for summary in batch.elements[1] {
+                    if let newer = replacements[summary.slug], newer.updatedAt > summary.updatedAt { continue }
+                    replacements[summary.slug] = summary
+                }
+                // These mutations update existing records. Do not resurrect a
+                // record that disappeared during an overlapping delete/reload.
+                let merged = batch.elements[0].map { current in
+                    guard let updated = replacements[current.slug], updated.updatedAt >= current.updatedAt else { return current }
+                    return updated
+                }.sorted {
+                    if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+                    return $0.slug < $1.slug
+                }
+                return NativeArticleLibraryProjection(articles: merged)
+            }
+            guard !Task.isCancelled, workspaceGeneration == expectedWorkspace else { return }
+            guard var projection = rebuilt, articles == baseline else { continue }
+            applyPageViewOverrides(to: &projection, prunesResolvedOverrides: true)
+            articleLibraryProjection = projection
+            articles = projection.articles
+            return
+        }
     }
 
     func updateArticleSummaryPageViews(slug: String, pageViews: Int) {
@@ -1600,18 +1637,39 @@ public final class NativeAppModel: ObservableObject {
         refreshMomentFeed()
     }
 
-    func toggleMomentFavorite(_ moment: NativeMoment) {
-        guard !isBackingUp else { return }
-        Task {
+    @discardableResult
+    func toggleMomentFavorite(_ moment: NativeMoment) -> Task<Void, Never>? {
+        guard !isBackingUp, !isRestoringBackup, !isSwitchingWorkspace else { return nil }
+        let activeStore = store
+        let generation = workspaceGeneration
+        let feedGeneration = momentFeedGeneration
+        let wasLoadingFeed = isLoadingMoreMoments
+        return Task {
             do {
-                let updated = try await store.setMomentFavorite(id: moment.id, isFavorite: !moment.isFavorite)
-                if let index = moments.firstIndex(where: { $0.id == updated.id }) {
-                    moments[index] = updated
+                let updated = try await activeStore.setMomentFavorite(id: moment.id, isFavorite: !moment.isFavorite)
+                guard generation == workspaceGeneration, store === activeStore else { return }
+                if wasLoadingFeed || isLoadingMoreMoments || feedGeneration != momentFeedGeneration {
+                    // A concurrent refresh may have read its count or page before
+                    // this write. Invalidate that snapshot and read a consistent feed.
+                    try await reloadMomentFeed()
+                    guard generation == workspaceGeneration, store === activeStore else { return }
+                } else if let index = moments.firstIndex(where: { $0.id == updated.id }) {
+                    // Stable feeds retain loaded history and their exclusive cursor,
+                    // including when the cursor's row is no longer a favorite.
+                    if showsOnlyFavoriteMoments && !updated.isFavorite {
+                        moments.remove(at: index)
+                        filteredMomentCount = max(0, filteredMomentCount - 1)
+                        // The empty-state view has no "load more" button. Pull
+                        // the next page if the last loaded favorite was removed.
+                        if moments.isEmpty, hasMoreMoments { loadMoreMoments() }
+                    } else {
+                        moments[index] = updated
+                    }
                 }
-                try await reloadMomentFeed()
                 scheduleBackup()
                 errorMessage = nil
             } catch {
+                guard generation == workspaceGeneration, store === activeStore else { return }
                 errorMessage = error.localizedDescription
             }
         }

@@ -2,119 +2,169 @@ import Foundation
 import LeonBookPublishingModule
 
 extension NativeAppModel {
+    @discardableResult
     func updateArticleProperty(
         article: NativeArticleSummary,
         key: String,
         kind: NativeArticlePropertyKind,
         text: String
-    ) {
-        Task {
-            do {
-                let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                let value = normalized.isEmpty
-                    ? nil : NativeArticlePropertyValue.fromEditor(kind: kind, text: text)
-                let updated = try await store.setArticleProperty(
-                    slug: article.slug,
-                    expectedUpdatedAt: article.updatedAt,
-                    key: key,
-                    value: value
-                )
-                await replaceArticleSummaries(try await store.listArticles())
-                if selectedArticle?.slug == updated.slug { selectedArticle = updated }
-                try await reloadKnowledgeGraph()
-                scheduleBackup()
-                errorMessage = nil
-            } catch {
-                errorMessage = NativeLocalization.text("更新 Property 失败：\(error.localizedDescription)")
-                try? await reload()
-            }
+    ) -> Task<Void, Never>? {
+        updateArticleProperties(articles: [article], key: key, kind: kind, text: text)
+    }
+
+    @discardableResult
+    func updateArticleProperties(
+        articles: [NativeArticleSummary],
+        key: String,
+        kind: NativeArticlePropertyKind,
+        text: String
+    ) -> Task<Void, Never>? {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = normalized.isEmpty ? nil : NativeArticlePropertyValue.fromEditor(kind: kind, text: text)
+        return mutateLibraryArticles(articles, failureMessage: {
+            NativeLocalization.text("更新 Property 失败：\($0.localizedDescription)")
+        }) { article, activeStore in
+            try await activeStore.setArticleProperty(
+                slug: article.slug,
+                expectedUpdatedAt: article.updatedAt,
+                key: key,
+                value: value
+            )
         }
     }
 
+    @discardableResult
     func moveArticle(
         _ article: NativeArticleSummary,
         toGroup label: String,
         field: NativeArticleGroupField
-    ) {
+    ) -> Task<Void, Never>? {
+        moveArticles([article], toGroup: label, field: field)
+    }
+
+    @discardableResult
+    func moveArticles(
+        _ articles: [NativeArticleSummary],
+        toGroup label: String,
+        field: NativeArticleGroupField
+    ) -> Task<Void, Never>? {
         guard field != .updatedMonth, field != .none else {
             errorMessage = field == .updatedMonth ? NativeLocalization.text("更新时间分组不可通过拖动修改。") : nil
-            return
+            return nil
         }
-        Task {
-            do {
-                let stored = try await store.getArticle(slug: article.slug)
-                var status = stored.status
-                var category = stored.category
-                var tags = stored.tags
+        let workspace = workspaceGeneration
+        return mutateLibraryArticles(articles, failureMessage: {
+            NativeLocalization.text("移动看板卡片失败：\($0.localizedDescription)")
+        }) { article, activeStore in
+            let stored = try await activeStore.getArticle(slug: article.slug)
+            guard !Task.isCancelled, workspace == self.workspaceGeneration else { return nil }
+            var status = stored.status
+            var category = stored.category
+            var tags = stored.tags
 
-                switch field {
-                case .status:
-                    if label == NativeArticleStatus.published.label || label == NativeArticleStatus.published.rawValue {
-                        status = .published
-                    } else if label == NativeArticleStatus.draft.label || label == NativeArticleStatus.draft.rawValue {
-                        status = .draft
-                    } else {
-                        throw NativeStoreError.fileSystem(NativeLocalization.text("不支持的文章状态：\(label)"))
-                    }
-                case .category:
-                    category = label == "未分类" ? "Notes" : label
-                case .tag:
-                    if label == "无标签" {
-                        tags = []
-                    } else {
-                        let tag = label.trimmingCharacters(in: CharacterSet(charactersIn: "#＃"))
-                        tags = [tag] + tags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame }
-                    }
-                case .none, .updatedMonth:
-                    return
+            switch field {
+            case .status:
+                if label == NativeArticleStatus.published.label || label == NativeArticleStatus.published.rawValue {
+                    status = .published
+                } else if label == NativeArticleStatus.draft.label || label == NativeArticleStatus.draft.rawValue {
+                    status = .draft
+                } else {
+                    throw NativeStoreError.fileSystem(NativeLocalization.text("不支持的文章状态：\(label)"))
                 }
-
-                if stored.status != .published, status == .published {
-                    guard authorizeFirstPartyModule(
-                        PublishingFirstPartyModule.id,
-                        permission: .contentPublish,
-                        action: "通过看板发布文章"
-                    ) else { return }
-                    do {
-                        try FirstPartyPublicationPolicy.validate(.init(
-                            kind: .article,
-                            title: stored.title,
-                            body: stored.body,
-                            attachmentCount: stored.media.count
-                        ))
-                    } catch {
-                        errorMessage = error.localizedDescription
-                        return
-                    }
-                    recordFirstPartyModuleEvent(
-                        moduleID: PublishingFirstPartyModule.id,
-                        name: "publishing.requested",
-                        payload: ["kind": "article", "source": "board"]
-                    )
+            case .category:
+                category = label == "未分类" ? "Notes" : label
+            case .tag:
+                if label == "无标签" {
+                    tags = []
+                } else {
+                    let tag = label.trimmingCharacters(in: CharacterSet(charactersIn: "#＃"))
+                    tags = [tag] + tags.filter { $0.caseInsensitiveCompare(tag) != .orderedSame }
                 }
-
-                let updated = try await store.saveArticle(NativeSaveArticle(
-                    banner: stored.banner,
-                    body: stored.body,
-                    category: category,
-                    excerpt: stored.excerpt,
-                    media: stored.media,
-                    slug: stored.slug,
-                    status: status,
-                    tags: tags,
-                    title: stored.title,
-                    expectedUpdatedAt: stored.updatedAt,
-                    properties: stored.properties
-                ))
-                await replaceArticleSummaries(try await store.listArticles())
-                if selectedArticle?.slug == updated.slug { selectedArticle = updated }
-                try await reloadKnowledgeGraph()
-                scheduleBackup()
-                errorMessage = nil
-            } catch {
-                errorMessage = NativeLocalization.text("移动看板卡片失败：\(error.localizedDescription)")
-                try? await reload()
+            case .none, .updatedMonth:
+                return nil
             }
+
+            if stored.status != .published, status == .published {
+                guard self.authorizeFirstPartyModule(
+                    PublishingFirstPartyModule.id,
+                    permission: .contentPublish,
+                    action: "通过看板发布文章"
+                ) else { return nil }
+                try FirstPartyPublicationPolicy.validate(.init(
+                    kind: .article,
+                    title: stored.title,
+                    body: stored.body,
+                    attachmentCount: stored.media.count
+                ))
+                self.recordFirstPartyModuleEvent(
+                    moduleID: PublishingFirstPartyModule.id,
+                    name: "publishing.requested",
+                    payload: ["kind": "article", "source": "board"]
+                )
+            }
+
+            guard status != stored.status || category != stored.category || tags != stored.tags else { return nil }
+            return try await activeStore.saveArticle(NativeSaveArticle(
+                banner: stored.banner,
+                body: stored.body,
+                category: category,
+                excerpt: stored.excerpt,
+                media: stored.media,
+                slug: stored.slug,
+                status: status,
+                tags: tags,
+                title: stored.title,
+                expectedUpdatedAt: stored.updatedAt,
+                properties: stored.properties
+            ))
+        }
+    }
+
+    /// Keep a drop batch together: saves remain individually conflict checked,
+    /// while list projections, graph reads, and backup scheduling are shared.
+    private func mutateLibraryArticles(
+        _ summaries: [NativeArticleSummary],
+        failureMessage: @escaping (Error) -> String,
+        mutation: @escaping @MainActor (NativeArticleSummary, LocalBlogStore) async throws -> NativeArticle?
+    ) -> Task<Void, Never>? {
+        guard !summaries.isEmpty else { return nil }
+        let activeStore = store
+        let workspace = workspaceGeneration
+        return Task {
+            guard !Task.isCancelled, workspace == workspaceGeneration else { return }
+            var seen = Set<String>()
+            var updatedArticles: [NativeArticle] = []
+            errorMessage = nil
+            for summary in summaries where seen.insert(summary.slug).inserted {
+                guard !Task.isCancelled, workspace == workspaceGeneration else { return }
+                do {
+                    if let updated = try await mutation(summary, activeStore) {
+                        updatedArticles.append(updated)
+                    }
+                } catch {
+                    guard !Task.isCancelled, workspace == workspaceGeneration else { return }
+                    errorMessage = failureMessage(error)
+                    // Refresh only the conflicting record, preserving successful
+                    // members of a batch without reloading the whole workspace.
+                    if let current = try? await activeStore.getArticle(slug: summary.slug) {
+                        updatedArticles.append(current)
+                    }
+                }
+            }
+            guard !Task.isCancelled, workspace == workspaceGeneration, !updatedArticles.isEmpty else { return }
+            for article in updatedArticles {
+                articleSelectionCache.insert(article, workspaceGeneration: workspace)
+                if let selected = selectedArticle, selected.slug == article.slug,
+                   selected.updatedAt <= article.updatedAt {
+                    selectedArticle = article.withPageViews(max(selected.pageViews, article.pageViews))
+                }
+            }
+            let refresh = articleLibraryUpdateCoordinator.enqueue(
+                updatedArticles.map(\.summary), model: self,
+                store: activeStore, workspaceGeneration: workspace
+            )
+            scheduleBackup()
+            await refresh.value
         }
     }
 

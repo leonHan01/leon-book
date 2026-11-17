@@ -1,6 +1,8 @@
 import Foundation
 
 public struct NativeQuestion: Codable, Hashable, Identifiable {
+    public static let answerHeatWeight = 20
+
     public let id: String
     public let title: String
     public let body: String
@@ -8,6 +10,17 @@ public struct NativeQuestion: Codable, Hashable, Identifiable {
     public let createdAt: String
     public let updatedAt: String
     public let answerCount: Int
+    public let viewCount: Int
+
+    public var heatScore: Int { answerCount * Self.answerHeatWeight + viewCount }
+
+    func withViewCount(_ count: Int) -> NativeQuestion {
+        NativeQuestion(
+            id: id, title: title, body: body, tags: tags,
+            createdAt: createdAt, updatedAt: updatedAt,
+            answerCount: answerCount, viewCount: max(viewCount, count)
+        )
+    }
 
     public init(
         id: String,
@@ -16,7 +29,8 @@ public struct NativeQuestion: Codable, Hashable, Identifiable {
         tags: [String],
         createdAt: String,
         updatedAt: String,
-        answerCount: Int = 0
+        answerCount: Int = 0,
+        viewCount: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -25,6 +39,19 @@ public struct NativeQuestion: Codable, Hashable, Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.answerCount = answerCount
+        self.viewCount = viewCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        body = try container.decode(String.self, forKey: .body)
+        tags = try container.decode([String].self, forKey: .tags)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        answerCount = try container.decodeIfPresent(Int.self, forKey: .answerCount) ?? 0
+        viewCount = try container.decodeIfPresent(Int.self, forKey: .viewCount) ?? 0
     }
 }
 
@@ -77,6 +104,7 @@ struct NativeQuestionAnswerDraft: Equatable {
 /// selection, answer draft, and editing identity aligned live at this seam.
 struct NativeQuestionSessionState: Equatable {
     var questions: [NativeQuestion] = []
+    var hotQuestions: [NativeQuestion] = []
     var totalCount = 0
     var tagFacets: [NativeQuestionTagFacet] = []
     var selectedQuestion: NativeQuestion?
@@ -97,16 +125,26 @@ struct NativeQuestionSessionState: Equatable {
 
     mutating func applyList(
         questions: [NativeQuestion],
+        hotQuestions: [NativeQuestion],
         totalCount: Int,
         tagFacets: [NativeQuestionTagFacet]
     ) {
-        self.questions = questions
+        // A background list snapshot may predate a detail visit completed meanwhile.
+        var viewCounts: [String: Int] = [:]
+        for source in [self.questions, self.hotQuestions, questions, hotQuestions, selectedQuestion.map { [$0] } ?? []] {
+            for question in source {
+                viewCounts[question.id] = max(viewCounts[question.id] ?? 0, question.viewCount)
+            }
+        }
+        self.questions = questions.map { $0.withViewCount(viewCounts[$0.id] ?? 0) }
+        self.hotQuestions = hotQuestions.map { $0.withViewCount(viewCounts[$0.id] ?? 0) }
         self.totalCount = totalCount
         self.tagFacets = tagFacets
     }
 
     mutating func applyReload(
         questions: [NativeQuestion],
+        hotQuestions: [NativeQuestion],
         totalCount: Int,
         tagFacets: [NativeQuestionTagFacet],
         selectedQuestion: NativeQuestion?,
@@ -114,8 +152,13 @@ struct NativeQuestionSessionState: Equatable {
     ) -> [NativeMedia] {
         let changesSelection = selectedQuestion?.id != self.selectedQuestion?.id
         let discardedMedia = changesSelection ? discardAnswerDraft() : []
-        applyList(questions: questions, totalCount: totalCount, tagFacets: tagFacets)
-        self.selectedQuestion = selectedQuestion
+        applyList(questions: questions, hotQuestions: hotQuestions, totalCount: totalCount, tagFacets: tagFacets)
+        self.selectedQuestion = selectedQuestion.map { question in
+            let priorViews = self.selectedQuestion?.id == question.id ? self.selectedQuestion?.viewCount ?? 0 : 0
+            let listViews = self.questions.first(where: { $0.id == question.id })?.viewCount ?? 0
+            let hotViews = self.hotQuestions.first(where: { $0.id == question.id })?.viewCount ?? 0
+            return question.withViewCount(max(priorViews, listViews, hotViews))
+        }
         self.answers = answers
         isLoadingAnswers = false
         return discardedMedia

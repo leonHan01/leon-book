@@ -1,4 +1,4 @@
-function createArticleWhiteboards({ root, canEdit, documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, frameTask }) {
+function createArticleWhiteboards({ root, canEdit, documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, frameTask, cleanHTML = html => html }) {
   const t = (...args) => window.LeonL10n.text(...args);
   const pending = new Map();
   let selected = null;
@@ -21,7 +21,7 @@ function createArticleWhiteboards({ root, canEdit, documentID, send, uuid, check
     const source = isNew ? '' : block.dataset.whiteboardSource;
     if (!isNew && !validSource(source)) return false;
     const requestID = uuid();
-    pending.set(requestID, { block, isNew, replace, source, documentID: documentID(), original: block.outerHTML });
+    pending.set(requestID, { block, isNew, replace, source, documentID: documentID(), original: cleanHTML(block.outerHTML) });
     closeMenu(); tools.hidden = true;
     send({ type: 'editWhiteboard', requestID, source });
     return true;
@@ -29,7 +29,7 @@ function createArticleWhiteboards({ root, canEdit, documentID, send, uuid, check
   function complete(requestID, source, preview) {
     const request = pending.get(requestID);
     if (!request || !canEdit() || request.documentID !== documentID() || !root.contains(request.block)
-        || request.block.outerHTML !== request.original || !validSource(source)
+        || cleanHTML(request.block.outerHTML) !== request.original || !validSource(source)
         || preview !== source.replace(/\.excalidraw$/, '.png')) return false;
     pending.delete(requestID);
     checkpoint();

@@ -318,14 +318,28 @@ extension NativeAppModel {
     }
 
     func reloadKnowledgeGraph() async throws {
+        guard !Task.isCancelled else { return }
+        articleGraphLoadGeneration += 1
+        let generation = articleGraphLoadGeneration
+        let workspace = workspaceGeneration
+        let activeStore = store
         let loadingID = loadingOperations.begin(.graph)
         defer { loadingOperations.end(loadingID) }
         guard isKnowledgeGraphModuleEnabled else {
             articleGraph = .empty
             return
         }
-        let graph = try await store.articleGraph()
-        guard !Task.isCancelled, isKnowledgeGraphModuleEnabled else { return }
+        let graph: NativeArticleGraph
+        do {
+            graph = try await activeStore.articleGraph()
+        } catch {
+            guard !Task.isCancelled, workspace == workspaceGeneration,
+                  generation == articleGraphLoadGeneration else { return }
+            throw error
+        }
+        guard !Task.isCancelled, isKnowledgeGraphModuleEnabled,
+              workspace == workspaceGeneration,
+              generation == articleGraphLoadGeneration else { return }
         articleGraph = graph
     }
 

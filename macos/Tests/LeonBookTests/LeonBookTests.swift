@@ -6988,6 +6988,11 @@ final class RichArticleTests {
         }
         let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 700, height: 600), configuration: configuration)
         window.contentView = view
+        // Long timer-driven interaction suites can be suspended by WebKit's
+        // hidden-page throttling. Opt in only for those local test runs.
+        if ProcessInfo.processInfo.environment["LEON_BOOK_TEST_VISIBLE_WEBKIT"] == "1" {
+            window.orderFront(nil)
+        }
         defer { view.stopLoading(); window.close() }
         let page = try ProcessInfo.processInfo.environment["LEON_RICH_EDITOR_PAGE_PATH"].map { try String(contentsOfFile: $0, encoding: .utf8) } ?? RichArticleEditor.pageHTML
         view.loadHTMLString(page, baseURL: nil)
@@ -7033,6 +7038,21 @@ private func makeTemporaryDirectory() throws -> URL {
 struct LeonBookUnitTests {
     static func main() async {
         var tests: [(String, () async throws -> Void)] = [
+            ("MomentFavoritePerformanceTests.testFavoriteReconcilesConcurrentFeedReload", { try await MomentFavoritePerformanceTests().testFavoriteReconcilesConcurrentFeedReload() }),
+            ("MomentViewportPerformanceTests.testHistoricalColumnsShareScrollingAndSkipOffscreenCallbacks", { try await MomentViewportPerformanceTests().testHistoricalColumnsShareScrollingAndSkipOffscreenCallbacks() }),
+            ("MomentViewportPerformanceTests.testActualMultiDateFeedUsesOneObserverAndRetainsHistoryHeight", { try await MomentViewportPerformanceTests().testActualMultiDateFeedUsesOneObserverAndRetainsHistoryHeight() }),
+            ("MomentFavoritePerformanceTests.testRemovingAllLoadedFavoritesRevealsNextPage", { try await MomentFavoritePerformanceTests().testRemovingAllLoadedFavoritesRevealsNextPage() }),
+            ("MomentFavoritePerformanceTests.testFavoritePreservesLoadedHistoryAndCursor", { try await MomentFavoritePerformanceTests().testFavoritePreservesLoadedHistoryAndCursor() }),
+            ("MomentFavoritePerformanceTests.testUnfavoritePreservesFilteredPagination", { try await MomentFavoritePerformanceTests().testUnfavoritePreservesFilteredPagination() }),
+            ("MomentPaginationPerformanceTests.testMomentPagesPreserveTimestampTiesAndFilters", { try await MomentPaginationPerformanceTests().testMomentPagesPreserveTimestampTiesAndFilters() }),
+            ("MomentPaginationPerformanceTests.testMomentCursorUsesIndexedRangeSearch", { try await MomentPaginationPerformanceTests().testMomentCursorUsesIndexedRangeSearch() }),
+            ("MomentEditorPerformanceTests.testTypingEchoSkipsRunExportAndPreservesComposition", { try MomentEditorPerformanceTests().testTypingEchoSkipsRunExportAndPreservesComposition() }),
+            ("MomentEditorPerformanceTests.testDragHoverDoesNotReadImagePayloads", { try MomentEditorPerformanceTests().testDragHoverDoesNotReadImagePayloads() }),
+            ("EmailTests.testSMTPRefusesPlaintextWithoutSendingCredentials", { try await EmailTests().testSMTPRefusesPlaintextWithoutSendingCredentials() }),
+            ("EmailTests.testValidationAndCredentialConfigEscaping", { try EmailTests().testValidationAndCredentialConfigEscaping() }),
+            ("EmailTests.testUnicodeMIMERoundTripAndSizeLimit", { try EmailTests().testUnicodeMIMERoundTripAndSizeLimit() }),
+            ("EmailTests.testContentIncludesTasksMomentsAndAnswers", { try EmailTests().testContentIncludesTasksMomentsAndAnswers() }),
+            ("EmailTests.testAttachmentsRejectMissingFilesAndEscapingSymlinks", { try await EmailTests().testAttachmentsRejectMissingFilesAndEscapingSymlinks() }),
             ("MediaResourceTests.testCancelledThumbnailRequestsReleaseWhileDecoderIsBusy", { try await MediaResourceTests().testCancelledThumbnailRequestsReleaseWhileDecoderIsBusy() }),
             ("MediaResourceTests.testThumbnailCacheRetainsAtMost64MiB", { try await MediaResourceTests().testThumbnailCacheRetainsAtMost64MiB() }),
             ("MediaResourceTests.testArticleMediaReadsCompleteBytesAndHonorsCancellation", { try await MediaResourceTests().testArticleMediaReadsCompleteBytesAndHonorsCancellation() }),
@@ -7097,6 +7117,25 @@ struct LeonBookUnitTests {
             ("InfiniteCanvasTests.testCanvasResourcesStayInsideWorkspace", { try await InfiniteCanvasTests().testCanvasResourcesStayInsideWorkspace() }),
             ("InfiniteCanvasTests.testCanvasRuntimeEditingConnectionsAndCulling", { try await InfiniteCanvasTests().testCanvasRuntimeEditingConnectionsAndCulling() }),
             ("InfiniteCanvasTests.testCanvasNativeBridgeLoadsAndRefreshesArticleReferences", { try await InfiniteCanvasTests().testCanvasNativeBridgeLoadsAndRefreshesArticleReferences() }),
+            ("ArticleLibraryPerformanceTests.testCalendarCivilDatesAndTimeZones", { try ArticleLibraryPerformanceTests().testCalendarCivilDatesAndTimeZones() }),
+            ("ArticleLibraryPerformanceTests.testCalendarBucketsPreserveOrderAcrossMonths", { try ArticleLibraryPerformanceTests().testCalendarBucketsPreserveOrderAcrossMonths() }),
+            ("ArticleLibraryPerformanceTests.testMetadataBatchMergesSummariesAndRefreshesAliases", { try await ArticleLibraryPerformanceTests().testMetadataBatchMergesSummariesAndRefreshesAliases() }),
+            ("ArticleLibraryPerformanceTests.testConcurrentMetadataUpdatesKeepBothSummaries", { try await ArticleLibraryPerformanceTests().testConcurrentMetadataUpdatesKeepBothSummaries() }),
+            ("ArticleLibraryPerformanceTests.testBoardMoveReevaluatesDuplicateTitleLinks", { try await ArticleLibraryPerformanceTests().testBoardMoveReevaluatesDuplicateTitleLinks() }),
+            ("ArticleLibraryPerformanceTests.testMetadataRefreshDoesNotWriteIntoAnotherWorkspace", { try await ArticleLibraryPerformanceTests().testMetadataRefreshDoesNotWriteIntoAnotherWorkspace() }),
+            ("ArticleLibraryPerformanceTests.testMetadataMergePreservesConcurrentReloadAndPageViews", { try await ArticleLibraryPerformanceTests().testMetadataMergePreservesConcurrentReloadAndPageViews() }),
+            ("RichArticleBodyBridgeTests.testBodyPatchesValidateSessionRevisionAndUnicode", { try RichArticleBodyBridgeTests().testBodyPatchesValidateSessionRevisionAndUnicode() }),
+            ("RichArticleBodyBridgeTests.testIncrementalBridgeKeepsNativeBodyCurrentThroughUndoAndReload", { try await RichArticleBodyBridgeTests().testIncrementalBridgeKeepsNativeBodyCurrentThroughUndoAndReload() }),
+            ("RichArticleTests.testReaderImagesFollowNativeViewportAndPreserveSources", { try await RichArticleTests().testReaderImagesFollowNativeViewportAndPreserveSources() }),
+            ("RichArticleTests.testRichArticleSelectionWorkStaysWithinSelectedBlocks", { try await RichArticleTests().testRichArticleSelectionWorkStaysWithinSelectedBlocks() }),
+            ("RichArticleTests.testRichArticleTableAxisWorkTracksVisibleRows", { try await RichArticleTests().testRichArticleTableAxisWorkTracksVisibleRows() }),
+            ("RichArticleTests.testRichArticleClearFormattingKeepsSelectionAndUndo", { try await RichArticleTests().testRichArticleClearFormattingKeepsSelectionAndUndo() }),
+            ("RichArticleMediaResponseTests.testMediaRangeResponsesAndHeadRequests", { try await RichArticleMediaResponseTests().testMediaRangeResponsesAndHeadRequests() }),
+            ("RichArticleMediaResponseTests.testMediaStreamsBeforeReadingTailAndBoundsChunks", { try await RichArticleMediaResponseTests().testMediaStreamsBeforeReadingTailAndBoundsChunks() }),
+            ("RichArticleMediaResponseTests.testMediaCancellationStopsAfterFirstChunk", { try await RichArticleMediaResponseTests().testMediaCancellationStopsAfterFirstChunk() }),
+            ("RichArticleMediaResponseTests.testMediaThumbnailsRespectDimensionsAndPreserveSpecialFormats", { try await RichArticleMediaResponseTests().testMediaThumbnailsRespectDimensionsAndPreserveSpecialFormats() }),
+            ("RichArticleMediaSnapshotTests.testWhiteboardCompletionIgnoresImagePresentationChanges", { try await RichArticleMediaSnapshotTests().testWhiteboardCompletionIgnoresImagePresentationChanges() }),
+            ("RichArticleMediaSnapshotTests.testAudioCompletionIgnoresImagePresentationChanges", { try await RichArticleMediaSnapshotTests().testAudioCompletionIgnoresImagePresentationChanges() }),
             ("ArticleAudioTests.testAudioInsertionUndoCancellationAndSanitization", { try await ArticleAudioTests().testAudioInsertionUndoCancellationAndSanitization() }),
             ("ArticleAudioTests.testAudioDropImportsAtDropLocationThroughNativeBridge", { try await ArticleAudioTests().testAudioDropImportsAtDropLocationThroughNativeBridge() }),
             ("ArticleAudioTests.testMixedMediaDropImportsAtDropLocationThroughNativeBridge", { try await ArticleAudioTests().testAudioDropImportsAtDropLocationThroughNativeBridge(mixedMedia: true) }),
@@ -7122,6 +7161,8 @@ struct LeonBookUnitTests {
             ("RichArticleTests.testRichArticleIncrementalSerializationMatchesFullSanitizer", { try await RichArticleTests().testRichArticleIncrementalSerializationMatchesFullSanitizer() }),
             ("RichArticleTests.testRichArticleContentPresenceShortCircuitsLongDocuments", { RichArticleTests().testRichArticleContentPresenceShortCircuitsLongDocuments() }),
             ("RichArticleTests.testRichArticleTableTypingAndParagraphSplitWork", { try await RichArticleTests().testRichArticleTableTypingAndParagraphSplitWork() }),
+            ("RichArticleTests.testRichArticleIMECommitPreservesTableCaret", { try await RichArticleTests().testRichArticleIMECommitPreservesTableCaret() }),
+            ("RichArticleTests.testRichArticleCellNormalizationPreservesBackwardSelection", { try await RichArticleTests().testRichArticleCellNormalizationPreservesBackwardSelection() }),
             ("RichArticleTests.testRichArticleLongDocumentTypingWork", { try await RichArticleTests().testRichArticleLongDocumentTypingWork() }),
             ("RichArticleTests.testRichArticleConversionPreservesContentAndFormatting", { try RichArticleTests().testRichArticleConversionPreservesContentAndFormatting() }),
             ("RichArticleTests.testRichArticleHTMLSaveAndReopen", { try await RichArticleTests().testRichArticleHTMLSaveAndReopen() }),
@@ -7258,6 +7299,15 @@ struct LeonBookUnitTests {
             ("LocalBlogStoreTests.testMomentCommentsFollowTrashRestoreAndPermanentDeletion", { try await LocalBlogStoreTests().testMomentCommentsFollowTrashRestoreAndPermanentDeletion() }),
             ("LocalBlogStoreTests.testMomentCommentsSurviveBackupSnapshots", { try await LocalBlogStoreTests().testMomentCommentsSurviveBackupSnapshots() }),
             ("LocalBlogStoreTests.testQuestionAnswersAndTagSearchPersistInSQLite", { try await LocalBlogStoreTests().testQuestionAnswersAndTagSearchPersistInSQLite() }),
+            ("QAndAHotQuestionsTests.testGlobalHotRankingAndPersistentViews", { try await QAndAHotQuestionsTests().testGlobalHotRankingAndPersistentViews() }),
+            ("QAndAHotQuestionsTests.testLegacyQuestionDatabaseAndJSONRemainReadable", { try await QAndAHotQuestionsTests().testLegacyQuestionDatabaseAndJSONRemainReadable() }),
+            ("QAndAHotQuestionsTests.testHotQuestionsIgnoreFiltersAndReopeningPreservesDraft", { try await QAndAHotQuestionsTests().testHotQuestionsIgnoreFiltersAndReopeningPreservesDraft() }),
+            ("QAndAHotQuestionsTests.testQuestionViewResultDoesNotEnterAnotherWorkspace", { try await QAndAHotQuestionsTests().testQuestionViewResultDoesNotEnterAnotherWorkspace() }),
+            ("AIReadingTests.testRequestsCarrySourceAndHistoryForBothProviders", { try AIReadingTests().testRequestsCarrySourceAndHistoryForBothProviders() }),
+            ("AIReadingTests.testStreamingAndHTTPFailuresUseMockTransport", { try await AIReadingTests().testStreamingAndHTTPFailuresUseMockTransport() }),
+            ("AIReadingTests.testChatPersistenceSeparatesContentKindsAndWorkspaces", { try await AIReadingTests().testChatPersistenceSeparatesContentKindsAndWorkspaces() }),
+            ("AIReadingTests.testChatRetryCancellationAndUpdatedContext", { try await AIReadingTests().testChatRetryCancellationAndUpdatedContext() }),
+            ("AIReadingTests.testConversionsTargetOriginalContentAndKeepDrafts", { try await AIReadingTests().testConversionsTargetOriginalContentAndKeepDrafts() }),
             ("LocalBlogStoreTests.testArticleLifecycleSupportsDraftPublishingAndConflictProtection", { try await LocalBlogStoreTests().testArticleLifecycleSupportsDraftPublishingAndConflictProtection() }),
             ("LocalBlogStoreTests.testAtomicArticleBodyUpdatesCommitAndUndoBothNotes", { try await LocalBlogStoreTests().testAtomicArticleBodyUpdatesCommitAndUndoBothNotes() }),
             ("LocalBlogStoreTests.testArticleDeleteHidesRecord", { try await LocalBlogStoreTests().testArticleDeleteHidesRecord() }),

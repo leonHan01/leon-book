@@ -124,10 +124,9 @@ private struct BoardLaneColumn: View {
     }
 
     private func handleDrop(_ slugs: [String]) -> Bool {
-        let droppedArticles = allArticles.filter { slugs.contains($0.slug) }
-        for article in droppedArticles {
-            model.moveArticle(article, toGroup: lane.label, field: groupBy)
-        }
+        let droppedSlugs = Set(slugs)
+        let droppedArticles = allArticles.filter { droppedSlugs.contains($0.slug) }
+        model.moveArticles(droppedArticles, toGroup: lane.label, field: groupBy)
         return !droppedArticles.isEmpty
     }
 }
@@ -170,6 +169,8 @@ private struct BoardArticleCard: View {
 
 struct ArticleLibraryCalendarView: View {
     @Environment(\.locale) private var locale
+    @Environment(\.calendar) private var environmentCalendar
+    @Environment(\.timeZone) private var timeZone
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
@@ -178,10 +179,12 @@ struct ArticleLibraryCalendarView: View {
     @State private var displayedMonth = Calendar.current.date(
         from: Calendar.current.dateComponents([.year, .month], from: Date())
     ) ?? Date()
+    @State private var projection = NativeArticleCalendarProjection()
 
     private var calendar: Calendar {
-        var value = Calendar.current
+        var value = environmentCalendar
         value.locale = locale
+        value.timeZone = timeZone
         return value
     }
 
@@ -191,22 +194,11 @@ struct ArticleLibraryCalendarView: View {
     }
 
     private var availableDatePropertyKeys: [String] {
-        var keys: [String] = []
-        func append(_ key: String) {
-            guard !key.isEmpty,
-                  !keys.contains(where: { $0.caseInsensitiveCompare(key) == .orderedSame }) else { return }
-            keys.append(key)
-        }
-        for article in articles {
-            for (key, value) in article.properties where value.kind == .date { append(key) }
-        }
-        if let datePropertyKey { append(datePropertyKey) }
-        return keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        projection.availableDatePropertyKeys
     }
 
     private var unscheduledArticles: [NativeArticleSummary] {
-        guard datePropertyKey != nil else { return [] }
-        return articles.filter { articleDate(for: $0) == nil }
+        projection.unscheduledArticles
     }
 
     private var weekdaySymbols: [String] {
@@ -219,26 +211,16 @@ struct ArticleLibraryCalendarView: View {
         displayedMonth.formatted(.dateTime.year().month(.wide).locale(locale))
     }
 
-    private var days: [CalendarDay] {
-        guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth),
-              let gridStart = calendar.dateInterval(of: .weekOfMonth, for: monthInterval.start)?.start else {
-            return []
-        }
-        return (0..<42).compactMap { offset -> CalendarDay? in
-            guard let date = calendar.date(byAdding: .day, value: offset, to: gridStart) else { return nil }
-            let dayArticles = articles.filter {
-                guard let articleDate = articleDate(for: $0) else { return false }
-                return calendar.isDate(articleDate, inSameDayAs: date)
-            }
-            return CalendarDay(
-                date: date,
-                isInDisplayedMonth: calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month),
-                articles: dayArticles
-            )
-        }
+    private var days: [NativeArticleCalendarDay] {
+        projection.days(in: displayedMonth, calendar: calendar)
     }
 
     var body: some View {
+        let snapshot = NativeArticleCalendarSnapshot(
+            articles: articles,
+            datePropertyKey: datePropertyKey,
+            calendar: calendar
+        )
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -285,7 +267,7 @@ struct ArticleLibraryCalendarView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                         ScrollView(.horizontal) {
-                            HStack(spacing: 6) {
+                            LazyHStack(spacing: 6) {
                                 if unscheduledArticles.isEmpty {
                                     Text("拖到这里可清除日期")
                                         .font(.caption)
@@ -304,15 +286,9 @@ struct ArticleLibraryCalendarView: View {
                     .background(Color.secondary.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
                     .dropDestination(for: String.self) { slugs, _ in
                         guard let datePropertyKey else { return false }
-                        let dropped = articles.filter { slugs.contains($0.slug) }
-                        for article in dropped {
-                            model.updateArticleProperty(
-                                article: article,
-                                key: datePropertyKey,
-                                kind: .date,
-                                text: ""
-                            )
-                        }
+                        let droppedSlugs = Set(slugs)
+                        let dropped = articles.filter { droppedSlugs.contains($0.slug) }
+                        model.updateArticleProperties(articles: dropped, key: datePropertyKey, kind: .date, text: "")
                         return !dropped.isEmpty
                     }
                     .help("把日历卡片拖到这里可清除日期")
@@ -373,32 +349,28 @@ struct ArticleLibraryCalendarView: View {
                         .dropDestination(for: String.self) { slugs, _ in
                             guard let datePropertyKey else { return false }
                             let value = dateString(for: day.date)
-                            for slug in slugs {
-                                guard let article = articles.first(where: { $0.slug == slug }) else { continue }
-                                model.updateArticleProperty(
-                                    article: article,
-                                    key: datePropertyKey,
-                                    kind: .date,
-                                    text: value
-                                )
-                            }
-                            return !slugs.isEmpty
+                            let droppedSlugs = Set(slugs)
+                            let dropped = articles.filter { droppedSlugs.contains($0.slug) }
+                            model.updateArticleProperties(articles: dropped, key: datePropertyKey, kind: .date, text: value)
+                            return !dropped.isEmpty
                         }
                     }
                 }
             }
             .padding(20)
         }
-    }
-
-    private func articleDate(for article: NativeArticleSummary) -> Date? {
-        if let datePropertyKey {
-            guard let value = article.properties.first(where: {
-                $0.key.caseInsensitiveCompare(datePropertyKey) == .orderedSame
-            })?.value.value else { return nil }
-            return NativeTimestamp.date(from: value)
+        .task(id: snapshot) {
+            let build = Task.detached(priority: .userInitiated) {
+                NativeArticleCalendarProjection(snapshot: snapshot)
+            }
+            let updated = await withTaskCancellationHandler {
+                await build.value
+            } onCancel: {
+                build.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            projection = updated
         }
-        return NativeTimestamp.date(from: article.updatedAt)
     }
 
     private func setDateProperty(_ key: String?) {
@@ -410,19 +382,6 @@ struct ArticleLibraryCalendarView: View {
     }
 
     private func dateString(for date: Date) -> String {
-        let components = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(
-            format: "%04d-%02d-%02d",
-            components.year ?? 0,
-            components.month ?? 0,
-            components.day ?? 0
-        )
+        NativeArticleCalendarProjection.propertyDateString(for: date, timeZone: calendar.timeZone)
     }
-}
-
-private struct CalendarDay: Identifiable {
-    let date: Date
-    let isInDisplayedMonth: Bool
-    let articles: [NativeArticleSummary]
-    var id: Date { date }
 }

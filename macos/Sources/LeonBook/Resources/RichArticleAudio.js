@@ -1,4 +1,4 @@
-function createArticleAudio({ root, canEdit, documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu }) {
+function createArticleAudio({ root, canEdit, documentID, send, uuid, checkpoint, notify, focusBlock, closeMenu, cleanHTML = html => html }) {
   const t = (...args) => window.LeonL10n.text(...args);
   const pending = new Map();
   window.addEventListener('leonlanguagechange', () => updateButton());
@@ -14,7 +14,7 @@ function createArticleAudio({ root, canEdit, documentID, send, uuid, checkpoint,
   function remember(block, replace = false, before = false) {
     if (!canEdit() || !block || !root.contains(block) || pending.size) return null;
     const requestID = uuid();
-    pending.set(requestID, { block, replace, before, documentID: documentID(), original: block.outerHTML });
+    pending.set(requestID, { block, replace, before, documentID: documentID(), original: cleanHTML(block.outerHTML) });
     closeMenu(); updateButton();
     return requestID;
   }
@@ -43,7 +43,7 @@ function createArticleAudio({ root, canEdit, documentID, send, uuid, checkpoint,
   function completeMedia(requestID, items) {
     const request = pending.get(requestID);
     if (!request || !canEdit() || request.documentID !== documentID() || !root.contains(request.block)
-        || request.block.outerHTML !== request.original || !Array.isArray(items) || !items.length
+        || cleanHTML(request.block.outerHTML) !== request.original || !Array.isArray(items) || !items.length
         || !items.every(item => /^\/media\/[^/]+\/[^/]+$/.test(item.source) && extensions[item.kind]?.test(item.source))) return false;
     pending.delete(requestID); updateButton(); checkpoint();
     const fragment = document.createDocumentFragment();

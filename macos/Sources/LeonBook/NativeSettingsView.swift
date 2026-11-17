@@ -80,8 +80,18 @@ public struct NativeSettingsView: View {
                 LabeledContent(NativeLocalization.text("数据目录")) { Text(model.dataDirectoryPath).textSelection(.enabled) }
             }
 
+            Section(NativeLocalization.text("邮件设置")) {
+                EmailSettingsPanel(account: EmailAccountStore(scope: EmailAccountStore.scope(for: model.store.rootURL)))
+                    .id(model.workspaceGeneration)
+            }
+
+            Section(NativeLocalization.text("AI 阅读设置")) {
+                AIReadingSettingsPanel(account: AIReadingAccountStore(root: model.store.rootURL))
+                    .id(model.workspaceGeneration)
+            }
+
             Section(NativeLocalization.text("数据")) {
-                Text("文章 Markdown/YAML 和媒体文件是权威数据源；SQLite 保存文章索引及评论、版本、收藏等结构化数据。所有内容均保存在本机，不会启动 Node.js、监听端口或上传到云端。")
+                Text("HTML 文章和媒体保存在本地文件中，SQLite 保存索引、评论、聊天记录等结构化数据。主动发送邮件或 AI 消息时，会将相关内容发送到所选服务。")
                     .foregroundStyle(.secondary)
                 Button("在 Finder 中打开项目目录") {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: model.dataDirectoryPath)

@@ -6,6 +6,7 @@ struct TodoListView: View {
 
     @ObservedObject var model: NativeAppModel
     @State private var composer: TodoComposerContext?
+    @State private var emailContent: EmailContent?
     @FocusState private var quickEntryFocused: Bool
 
     var body: some View {
@@ -43,13 +44,14 @@ struct TodoListView: View {
         .sheet(item: $composer) { context in
             TodoEditorSheet(model: model, context: context)
         }
+        .modifier(EmailComposerPresenter(content: $emailContent, store: model.store))
         .task(id: model.workspaceGeneration) {
             do { try await model.reloadTodos() }
             catch { model.errorMessage = error.localizedDescription }
             if composer == nil { quickEntryFocused = true }
         }
         .onChange(of: model.todoSession.focusRequest) { _ in quickEntryFocused = true }
-        .onChange(of: model.workspaceGeneration) { _ in composer = nil }
+        .onChange(of: model.workspaceGeneration) { _ in composer = nil; emailContent = nil }
     }
 
     private func header(_ projection: TodoListProjection) -> some View {
@@ -61,6 +63,11 @@ struct TodoListView: View {
             }
             Spacer()
             if model.todoSession.isLoading || model.isSavingTodo { ProgressView().controlSize(.small) }
+            Button { emailContent = .todos(projection.items) } label: {
+                Label("发送清单…", nativeIcon: "envelope")
+            }
+            .help("发送当前筛选的待办清单")
+            .disabled(projection.items.isEmpty || model.todoSession.isLoading || !model.todoSession.hasLoaded)
             VStack(alignment: .trailing, spacing: 7) {
                 Text(NativeLocalization.text("已完成 \(projection.completedCount) / \(projection.openCount + projection.completedCount)"))
                     .font(.caption).foregroundStyle(.secondary)
@@ -169,6 +176,7 @@ struct TodoListView: View {
                     TodoItemRow(item: item, today: today, isEnabled: model.canWriteTodos,
                         onToggle: { Task { _ = await model.toggleTodo(item) } },
                         onEdit: { composer = TodoComposerContext(item: item, draft: item.draft, workspace: model.workspaceGeneration) },
+                        onEmail: { emailContent = .todos([item]) },
                         onDelete: { Task { _ = await model.deleteTodo(item) } })
                     if item.id != projection.items.last?.id { Divider().padding(.leading, 54) }
                 }
@@ -187,6 +195,7 @@ private struct TodoItemRow: View {
     let isEnabled: Bool
     let onToggle: () -> Void
     let onEdit: () -> Void
+    let onEmail: () -> Void
     let onDelete: () -> Void
     @State private var isHovered = false
 
@@ -218,6 +227,7 @@ private struct TodoItemRow: View {
                 .foregroundStyle(item.priority == .high ? Color.red.opacity(0.8) : item.priority == .normal ? appPalette.blue : appPalette.textSecondary.opacity(0.45))
                 .help(LocalizedStringKey(item.priority.label)).accessibilityLabel(LocalizedStringKey(item.priority.label))
             Menu {
+                Button("发送邮件…", action: onEmail)
                 Button("编辑待办", action: onEdit)
                 Button(LocalizedStringKey(item.isCompleted ? "标记未完成" : "标记完成"), action: onToggle)
                 Divider()
@@ -229,6 +239,7 @@ private struct TodoItemRow: View {
         .background(isHovered ? appPalette.lightBlue.opacity(0.55) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
         .onHover { isHovered = $0 }
         .contextMenu {
+            Button("发送邮件…", action: onEmail)
             Button("编辑待办", action: onEdit).disabled(!isEnabled)
             Button("删除待办", role: .destructive, action: onDelete).disabled(!isEnabled)
         }
