@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">LeonBook</string>
+    <string name="title_activity_main">LeonBook</string>
+    <string name="package_name">com.leonbook.mobile</string>
+    <string name="custom_url_scheme">com.leonbook.mobile</string>
+</resources>

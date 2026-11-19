@@ -253,6 +253,20 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("在新标签页打开"), "recent articles should offer an explicit new-tab action")
     expect(articleViews.contains("private struct ArticleCommentsSidebar"), "article reader should expose comments in the right sidebar")
     expect(articleViews.contains("private struct ArticleTextSelectionObserver"), "article body should monitor drag and double-click selections")
+    for marker in ["onSelectText: { selectedText in", "ArticleTextSelectionObserver { selectedText in"] {
+        if let start = articleViews.range(of: marker),
+           let end = articleViews.range(of: "\n                    }", range: start.upperBound..<articleViews.endIndex) {
+            let callback = articleViews[start.upperBound..<end.lowerBound]
+            expect(!callback.contains("isPresentingCompactInspector = true"), "selecting article text must not present a modal inspector")
+            expect(!callback.contains("isReaderInspectorVisible = true"), "selecting article text must not force open the reader sidebar")
+            expect(callback.contains("prepareArticleComment"), "selecting article text should still prepare its comment quote")
+        } else {
+            expect(false, "article selection callback should be readable")
+        }
+    }
+    expect(articleViews.contains("Button(action: onClose)"), "reader inspector should expose a close button")
+    expect(articleViews.contains("onClose: { isPresentingCompactInspector = false }"), "compact reader inspector should be explicitly dismissible")
+    expect(articleViews.contains("onClose: { workspaceLayout.isReaderInspectorVisible = false }"), "docked reader inspector should be explicitly dismissible")
     expect(articleViews.contains("NativeReadableTextSelection.read"), "selected article text should be captured for anchored comments")
     expect(articleViews.contains("评论所选原文"), "comment composer should display the selected source quote")
     expect(articleViews.contains("回到评论对应的原文"), "anchored comments should navigate back to their source section")

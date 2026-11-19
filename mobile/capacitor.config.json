@@ -1,0 +1,9 @@
+{
+  "appId": "com.leonbook.mobile",
+  "appName": "LeonBook",
+  "webDir": "dist",
+  "backgroundColor": "#f6f5f1",
+  "ios": { "contentInset": "never" },
+  "android": { "backgroundColor": "#f6f5f1", "minWebViewVersion": 107 },
+  "server": { "androidScheme": "https", "iosScheme": "capacitor", "hostname": "localhost" }
+}

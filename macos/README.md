@@ -66,7 +66,7 @@ Pinning protects a tab from being replaced: opening another article automaticall
 
 ## Text-selection comments
 
-The right side of the reader opens on the Comments pane. Drag across body text, or double-click a word, to quote the selection and focus the comment composer automatically. Clear the quote to leave a general article comment. Comments support replies and deletion; deleting a parent also deletes its replies.
+The right side of the reader opens on the Comments pane. Drag across body text, or double-click a word, to prepare a quote without opening a closed panel or presenting a modal window. Open **Article Panel** from the article toolbar and select **Comments** to write a comment. Use the panel's close button or Esc to dismiss it. Clear the quote to leave a general article comment. Comments support replies and deletion; deleting a parent also deletes its replies.
 
 An anchored comment stores both its source quote and nearest Markdown heading. Clicking the quote returns to that section, and the anchor is recalculated from the quote after article edits. Comments live in the current user's SQLite workspace and are included in local backups; the optional `.leonbook/` sidecar also makes them portable with the Markdown directory.
 

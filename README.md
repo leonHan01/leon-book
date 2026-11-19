@@ -2,6 +2,8 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+The Android and iOS companion can edit articles, local posts, and tasks offline, then sync with a selected Mac workspace. See the [mobile setup guide](mobile/README.md).
+
 A native macOS workspace for writing, collecting ideas, and organizing personal content. Keep articles, local posts, Q&A, tasks, photos, audio, and video together, with a homepage you can arrange around your work.
 
 Built with **SwiftUI, AppKit, WebKit, and SQLite**. Core writing and library features work offline; the app runs without a Node.js service, an external browser, or a local HTTP server. Articles and media stay in your chosen data directory.

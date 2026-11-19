@@ -70,6 +70,7 @@ struct ArticleReaderView: View {
                                         outline: outline,
                                         relations: model.selectedArticleRelations,
                                         globalGraph: model.articleGraph,
+                                        onClose: { workspaceLayout.isReaderInspectorVisible = false },
                                         onSelectOutline: { item in
                                             withAnimation(.easeInOut(duration: 0.2)) {
                                                 scrollProxy.scrollTo(item.id, anchor: .top)
@@ -104,6 +105,7 @@ struct ArticleReaderView: View {
                                     outline: outline,
                                     relations: model.selectedArticleRelations,
                                     globalGraph: model.articleGraph,
+                                    onClose: { isPresentingCompactInspector = false },
                                     onSelectOutline: { item in
                                         isPresentingCompactInspector = false
                                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -207,10 +209,8 @@ struct ArticleReaderView: View {
                             else { NSWorkspace.shared.open(url) }
                         },
                         onSelectText: { selectedText in
+                            guard model.selectedArticle?.slug == article.slug else { return }
                             model.prepareArticleComment(from: selectedText, in: article.body)
-                            if usesCompactInspector { isPresentingCompactInspector = true }
-                            else { workspaceLayout.isReaderInspectorVisible = true }
-                            workspaceLayout.readerInspectorPane = .comments
                         }
                     )
                 } else {
@@ -233,12 +233,6 @@ struct ArticleReaderView: View {
                     ArticleTextSelectionObserver { selectedText in
                         guard model.selectedArticle?.slug == article.slug else { return }
                         model.prepareArticleComment(from: selectedText, in: article.body)
-                        if usesCompactInspector {
-                            isPresentingCompactInspector = true
-                        } else {
-                            workspaceLayout.isReaderInspectorVisible = true
-                        }
-                        workspaceLayout.readerInspectorPane = .comments
                     }
                 }
                 }
@@ -338,7 +332,7 @@ struct ArticleReaderView: View {
                 .help("AI 阅读助手").accessibilityLabel("AI 阅读助手")
 
                 Button {
-                    if usesCompactInspector { isPresentingCompactInspector = true }
+                    if usesCompactInspector { isPresentingCompactInspector.toggle() }
                     else { workspaceLayout.isReaderInspectorVisible.toggle() }
                 } label: {
                     ArticleActionIcon(kind: .inspector)
@@ -548,6 +542,7 @@ private struct ArticleInspectorView: View {
     let outline: [MarkdownOutlineItem]
     let relations: NativeArticleRelations
     let globalGraph: NativeArticleGraph
+    let onClose: () -> Void
     let onSelectOutline: (MarkdownOutlineItem) -> Void
     let onSelectCommentAnchor: (String) -> Void
     let onOpenArticle: (String) -> Void
@@ -575,6 +570,15 @@ private struct ArticleInspectorView: View {
                     Text(LocalizedStringKey(selectedPane == .comments ? "划词评论" : selectedPane == .ai ? "AI 阅读助手" : "上下文导航"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Button(action: onClose) {
+                        NativeIcon.image("xmark", size: 12)
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityLabel("关闭")
+                    .help("关闭")
                 }
                 Picker("阅读面板", selection: $selectedPane) {
                     Text(NativeLocalization.text("评论 \(model.articleComments.count)")).tag(ArticleInspectorPane.comments)

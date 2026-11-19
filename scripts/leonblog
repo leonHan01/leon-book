@@ -29,6 +29,7 @@ leonblog - leon-book 原生 macOS 应用管理
   leonblog coverage           运行单元测试并生成覆盖率报告
   leonblog api METHOD [...]   外部 AI JSON CLI（api capabilities 列出所有能力）
   leonblog api --stdio        JSON Lines 接口，每行一个请求和响应
+  leonblog mobile-sync [...]  开启手机同步服务（使用 --help 查看参数）
   leonblog help               显示帮助
 
 构建模式：
@@ -179,6 +180,7 @@ case "$command_name" in
   test) "$PROJECT_DIR/macos/scripts/test-app.sh" ;;
   coverage) "$PROJECT_DIR/macos/scripts/coverage.sh" ;;
   api) shift; exec /bin/zsh "$PROJECT_DIR/macos/scripts/run-cli.sh" "$@" ;;
+  mobile-sync) shift; exec node "$PROJECT_DIR/mobile/server/main.js" "$@" ;;
   help|-h|--help) print_help ;;
   *) printf '[ERROR] 未知命令：%s\n\n' "$command_name" >&2; print_help >&2; exit 2 ;;
 esac

@@ -182,6 +182,16 @@ public actor AutomationService {
             let kind: String = try p.required("kind")
             guard ["image", "video", "audio", "file"].contains(kind) else { throw AutomationFailure("invalid_params", "kind must be image, video, audio or file") }
             return try .encoded(await store.uploadMedia(fileURL: absoluteURL(p.required("path")), kind: kind, slug: p.optional("slug")))
+        case "mobile.saveWithAttachments":
+            let method: String = try p.required("method")
+            guard ["articles.create", "articles.update", "moments.create", "moments.update"].contains(method),
+                  let operation = AutomationCatalog.operations.first(where: { $0.method == method }) else {
+                throw AutomationFailure("invalid_params", "Unsupported attachment destination")
+            }
+            let nested = AutomationParameters(values: try p.required("params"))
+            try operation.validate(nested.values)
+            try authorize(method, nested)
+            return try await store.saveMobileAttachments(method: method, parameters: nested, files: p.required("files"))
         case "bookmarks.list": return try .encoded(await store.listBookmarks())
         case "bookmarks.save": return try .encoded(await store.saveBookmark(p.required("bookmark")))
         case "bookmarks.delete": try await store.deleteBookmark(id: p.required("id"))
