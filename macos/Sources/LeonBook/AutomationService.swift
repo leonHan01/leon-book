@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import LeonBookBackupModule
 import LeonBookModuleKit
@@ -48,6 +49,15 @@ public actor AutomationService {
             }
             try validateDataRoot()
             try authorize(request.method, p)
+            var mobileWrite: WorkspaceStorageLifecycle.AsyncWriteLease?
+            defer { withExtendedLifetime(mobileWrite) {} }
+            if request.method == "mobile.mutate" {
+                do { mobileWrite = try WorkspaceStorageLifecycle.beginAsyncWrite(in: rootURL) }
+                catch { throw AutomationFailure("busy", "The library is being restored. Try again shortly.") }
+                guard try p.required("generation", as: String.self) == LocalBackupManager.restoreGeneration(at: rootURL) else {
+                    throw AutomationFailure("workspace_restored", "Review the mobile edit against the restored library.")
+                }
+            }
             if request.method.hasPrefix("app.") {
                 let result = try await NativeWorkspaceWindows.automationCommand(request, root: rootURL)
                 return .init(id: request.id, result: result)
@@ -120,15 +130,25 @@ public actor AutomationService {
         }
     }
 
+    private func authorizeArticleUpdate(_ method: String, _ p: AutomationParameters, _ store: LocalBlogStore) async throws {
+        if method == "articles.update", try p.optional("status", as: String.self) != "draft",
+           try await store.getArticle(slug: p.required("slug")).status == .published {
+            try authorize("articles.publish", p)
+        }
+    }
+
     private func execute(_ method: String, _ p: AutomationParameters, _ store: LocalBlogStore, _ user: NativeUser) async throws -> AutomationValue {
         switch method {
-        case "articles.list": return try page(await store.listArticles(includeDrafts: p.flag("includeDrafts", default: true)), p)
-        case "articles.get": return try .encoded(await store.getArticle(slug: p.required("slug")))
-        case "articles.create", "articles.update", "articles.publish", "articles.unpublish":
-            if method == "articles.update", try p.optional("status", as: String.self) != "draft",
-               try await store.getArticle(slug: p.required("slug")).status == .published {
-                try authorize("articles.publish", p)
+        case "articles.list":
+            return try page(await store.listArticles(includeDrafts: p.flag("includeDrafts", default: true)), p) { [$0.slug, $0.updatedAt] }
+        case "articles.get":
+            let article = try await store.getArticle(slug: p.required("slug"))
+            if let offset: Int = try p.optional("bodyOffset") {
+                return try articleBodyPage(article, offset: offset, expectedUpdatedAt: p.optional("expectedUpdatedAt"))
             }
+            return try .encoded(article)
+        case "articles.create", "articles.update", "articles.publish", "articles.unpublish":
+            try await authorizeArticleUpdate(method, p, store)
             return try .encoded(await store.automationSaveArticle(method: method, parameters: p))
         case "articles.delete": try await store.deleteArticle(slug: p.required("slug"), expectedUpdatedAt: p.required("expectedUpdatedAt"))
         case "articles.move": return try .encoded(await store.moveArticleSource(slug: p.required("slug"), to: p.required("path"), expectedUpdatedAt: p.required("expectedUpdatedAt")))
@@ -148,7 +168,8 @@ public actor AutomationService {
         case "articleComments.list": return try .encoded(await store.listArticleComments(articleSlug: p.required("slug")))
         case "articleComments.create": return try .encoded(await store.createArticleComment(articleSlug: p.required("slug"), authorName: user.name, text: p.required("text"), selection: p.optional("selection"), parentID: p.optional("parentID")))
         case "articleComments.delete": try await store.deleteArticleComment(id: p.required("id"), articleSlug: p.required("slug"))
-        case "moments.list": return try page(await store.listMoments(), p)
+        case "moments.list":
+            return try page(await store.listMoments(), p) { [$0.id, $0.updatedAt, String($0.isFavorite), String($0.commentCount)] }
         case "moments.get": return try .encoded(await store.getMoment(id: p.required("id")))
         case "moments.create": return try .encoded(await store.saveMoment(text: p.string("text"), textRuns: p.optional("textRuns") ?? [], images: p.optional("images") ?? []))
         case "moments.update", "moments.delete": return try await store.automationMutateMoment(method: method, parameters: p)
@@ -162,7 +183,10 @@ public actor AutomationService {
         case "answers.list": return try .encoded(await store.listQuestionAnswers(questionID: p.required("questionID")))
         case "answers.create": return try .encoded(await store.saveQuestionAnswer(questionID: p.required("questionID"), body: p.string("body"), images: p.optional("images") ?? []))
         case "answers.update": return try .encoded(await store.updateQuestionAnswer(id: p.required("id"), body: p.required("body"), images: p.required("images"), expectedUpdatedAt: p.required("expectedUpdatedAt")))
-        case "todos.list": return try .encoded(await store.listTodos())
+        case "todos.list":
+            let todos = try await store.listTodos()
+            if p.values.isEmpty { return try .encoded(todos) }
+            return try page(todos, p) { [$0.id, String($0.revision)] }
         case "todos.get": return try .encoded(await store.getTodo(id: p.required("id")))
         case "todos.create", "todos.update": return try .encoded(await store.automationSaveTodo(p))
         case "todos.complete": return try .encoded(await store.setTodoCompleted(id: p.required("id"), completed: p.required("completed"), expectedRevision: p.required("expectedRevision")))
@@ -182,16 +206,34 @@ public actor AutomationService {
             let kind: String = try p.required("kind")
             guard ["image", "video", "audio", "file"].contains(kind) else { throw AutomationFailure("invalid_params", "kind must be image, video, audio or file") }
             return try .encoded(await store.uploadMedia(fileURL: absoluteURL(p.required("path")), kind: kind, slug: p.optional("slug")))
-        case "mobile.saveWithAttachments":
+        case "mobile.saveWithAttachments", "mobile.mutate":
             let method: String = try p.required("method")
-            guard ["articles.create", "articles.update", "moments.create", "moments.update"].contains(method),
+            let attachmentMethods = ["articles.create", "articles.update", "moments.create", "moments.update"]
+            let taskMethods = ["todos.create", "todos.update", "todos.complete"]
+            let files: [MobileStagedAttachment]? = try p.optional("files")
+            guard attachmentMethods.contains(method) || (files == nil && taskMethods.contains(method)),
                   let operation = AutomationCatalog.operations.first(where: { $0.method == method }) else {
-                throw AutomationFailure("invalid_params", "Unsupported attachment destination")
+                throw AutomationFailure("invalid_params", "Unsupported mobile edit")
             }
             let nested = AutomationParameters(values: try p.required("params"))
             try operation.validate(nested.values)
             try authorize(method, nested)
-            return try await store.saveMobileAttachments(method: method, parameters: nested, files: p.required("files"))
+            let compact = try p.flag("compact")
+            let result: AutomationValue
+            if let files {
+                try await authorizeArticleUpdate(method, nested, store)
+                result = try await store.saveMobileAttachments(method: method, parameters: nested, files: files)
+            } else {
+                result = try await execute(method, nested, store, user)
+            }
+            if compact, method.hasPrefix("articles."), case .object(let article) = result {
+                var receipt = article.filter { ["slug", "updatedAt", "status"].contains($0.key) }
+                if let files, case .array(let media)? = article["media"] {
+                    receipt["uploadedAttachments"] = .array(Array(media.suffix(files.count)))
+                }
+                return .object(receipt)
+            }
+            return result
         case "bookmarks.list": return try .encoded(await store.listBookmarks())
         case "bookmarks.save": return try .encoded(await store.saveBookmark(p.required("bookmark")))
         case "bookmarks.delete": try await store.deleteBookmark(id: p.required("id"))
@@ -234,11 +276,45 @@ public actor AutomationService {
         .object(["id": .string(node.id), "kind": .string(node.kind.rawValue), "name": .string(node.name), "relativePath": .string(node.relativePath), "absolutePath": .string(node.absolutePath), "articleSlug": node.articleSlug.map(AutomationValue.string) ?? .null, "children": .array(node.children.map(resource))])
     }
 
-    private func page<T: Encodable>(_ items: [T], _ p: AutomationParameters) throws -> AutomationValue {
+    private func page<T: Encodable>(_ items: [T], _ p: AutomationParameters, identity: (T) -> [String]) throws -> AutomationValue {
         let offset = try p.integer("offset", default: 0), limit = try p.integer("limit", default: 100)
         guard offset >= 0, (1...1000).contains(limit) else { throw AutomationFailure("invalid_params", "offset must be >= 0 and limit must be 1...1000") }
+        var result: [String: AutomationValue] = [:]
+        if let expected: String = try p.optional("snapshot") {
+            let data = try JSONEncoder().encode(items.map(identity))
+            let snapshot = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            guard expected.isEmpty || expected == snapshot else {
+                throw AutomationFailure("snapshot_changed", "The collection changed while reading pages.")
+            }
+            result["snapshot"] = .string(snapshot)
+        }
         let slice = Array(items.dropFirst(offset).prefix(limit))
-        return .object(["items": try .encoded(slice), "total": .number(Double(items.count)), "offset": .number(Double(offset)), "hasMore": .bool(offset < items.count && slice.count < items.count - offset)])
+        result["items"] = try .encoded(slice)
+        result["total"] = .number(Double(items.count))
+        result["offset"] = .number(Double(offset))
+        result["hasMore"] = .bool(offset < items.count && slice.count < items.count - offset)
+        return .object(result)
+    }
+
+    private func articleBodyPage(_ article: NativeArticle, offset: Int, expectedUpdatedAt: String?) throws -> AutomationValue {
+        guard expectedUpdatedAt == nil || expectedUpdatedAt == article.updatedAt else { throw NativeStoreError.conflict }
+        let body = article.body.utf8
+        guard offset >= 0, let start = body.index(body.startIndex, offsetBy: offset, limitedBy: body.endIndex),
+              start == body.endIndex || body[start] & 0xC0 != 0x80 else {
+            throw AutomationFailure("invalid_params", "Invalid UTF-8 body offset.")
+        }
+        var end = body.index(start, offsetBy: 1024 * 1024, limitedBy: body.endIndex) ?? body.endIndex
+        while end < body.endIndex, body[end] & 0xC0 == 0x80 { body.formIndex(before: &end) }
+        var page: [String: AutomationValue] = [
+            "body": .string(String(decoding: body[start..<end], as: UTF8.self)),
+            "updatedAt": .string(article.updatedAt),
+            "nextOffset": end == body.endIndex ? .null : .number(Double(body.distance(from: body.startIndex, to: end))),
+        ]
+        if offset == 0, case .object(var metadata) = try AutomationValue.encoded(article) {
+            metadata.removeValue(forKey: "body")
+            page["article"] = .object(metadata)
+        }
+        return .object(page)
     }
 
     private func absoluteURL(_ path: String) throws -> URL {

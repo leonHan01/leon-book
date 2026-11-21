@@ -111,8 +111,20 @@ public enum LocalBackupManager {
     private static let temporaryPrefix = ".in-progress-"
     private static let restorePrefix = ".leon-book-restore-"
     private static let previousPrefix = ".leon-book-before-restore-"
+    private static let restoreGenerationFile = ".leonbook-restore-generation"
     private static let checksumChunkSize = 4 * 1_024 * 1_024
 
+    public static func restoreGeneration(at root: URL) throws -> String {
+        do {
+            let value = try String(contentsOf: root.appendingPathComponent(restoreGenerationFile), encoding: .utf8)
+            guard UUID(uuidString: value) != nil else {
+                throw NativeBackupError.fileSystem("Invalid restore generation.")
+            }
+            return value
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return "initial"
+        }
+    }
     public static func validateDestination(source: URL, destination: URL) throws {
         do {
             try FirstPartyBackupLocationPolicy.validate(source: source, destination: destination)
@@ -471,6 +483,10 @@ public enum LocalBackupManager {
                 }
             }
 
+            // The generation must travel with the new library at the swap.
+            try identifier.write(
+                to: stagingURL.appendingPathComponent(restoreGenerationFile), atomically: true, encoding: .utf8
+            )
             if fileManager.fileExists(atPath: destinationURL.path) {
                 try fileManager.moveItem(at: destinationURL, to: previousURL)
                 movedLiveData = true

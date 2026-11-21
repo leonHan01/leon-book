@@ -5,7 +5,7 @@ import './style.css';
 import { mediaPath, recordAttachments, uploadName } from '../shared/attachments.js';
 import { clearAttachmentCache, loadState, saveState } from './storage.js';
 import { attachmentCard, cacheUploadedAttachments, pendingAttachmentCard } from './attachments.js';
-import { emptyState, keyOf, lookup, pairDevice, parsePairing, request, resolveEdit, SyncEngine } from './sync.js';
+import { emptyState, keyOf, pairDevice, parsePairing, readRecord, request, resolveEdit, SyncEngine, upgradeSyncState } from './sync.js';
 import { completeTodo, editableFields, mergeEditorFields, saveEditor, uuid, validateUploadSelection } from './editor.js';
 
 const root = document.querySelector('#app');
@@ -233,14 +233,12 @@ function edit(kind, original, conflict) {
 async function fetchRemote(op) {
   if (!state.pairing) throw new Error('请先连接 Mac。');
   if (op.method.endsWith('.create') && op.kind !== 'articles') return null;
-  const reply = await request(state.pairing, 'read', { method: `${op.kind}.get`, params: lookup(op.kind, op.key) });
-  if (reply.error?.code === 'not_found') return null;
-  if (reply.error) throw new Error(reply.error.message);
-  return reply.result;
+  return readRecord((action, args) => request(state.pairing, action, args), op.kind, op.key);
 }
 
 function conflictDialog(op, local) {
-  const isConflict = ['conflict', 'not_found', 'already_exists'].includes(op.error.code);
+  const isRestored = op.error.code === 'workspace_restored';
+  const isConflict = isRestored || ['conflict', 'not_found', 'already_exists'].includes(op.error.code);
   modalOpen(isConflict ? '处理同步冲突' : '处理同步失败', (content, dialog) => {
     const message = el('p', {}, op.error.message);
     const remoteCard = el('section', { class: 'version-card' }, el('h3', {}, 'Mac'), el('p', { class: 'muted' }, '正在读取…'));
@@ -280,7 +278,7 @@ function conflictDialog(op, local) {
         const copyable = op.kind !== 'moments' || Boolean(local.text?.trim() || op.files?.length);
         if (isConflict || uncertain) {
           actions.append(button('保留手机副本', act(async () => {
-            if (uncertain && !confirm('请先在 Mac 核对上次保存结果。继续会新建一条内容，可能产生副本。')) return;
+            if ((uncertain || isRestored) && !confirm('请先在 Mac 核对上次保存结果。继续会新建一条内容，可能产生副本。')) return;
             const latest = await fetchRemote(op);
             const base = resolveEdit(state, op, latest);
             const fields = editableFields(op.kind, local);
@@ -528,7 +526,7 @@ function recordList(container) {
   }
   container.replaceChildren(...items.map(item => {
     const op = operation(active, item);
-    const badge = op?.error ? (['conflict', 'not_found', 'already_exists'].includes(op.error.code) ? '有冲突' : '待处理')
+    const badge = op?.error ? (['conflict', 'not_found', 'already_exists', 'workspace_restored'].includes(op.error.code) ? '有冲突' : '待处理')
       : op?.transferError ? '同步失败' : op ? '待同步' : active === 'articles' && item.status === 'draft' ? '草稿'
       : active === 'todos' && item.completedAt ? '已完成' : '';
     const heading = item.title || item.text || '无文字微博';
@@ -581,6 +579,8 @@ async function start() {
   try {
     state = await loadState() ?? emptyState();
     if (state.version !== 1) throw new Error('这份本机资料需要更新版本的 LeonBook。');
+    const upgraded = upgradeSyncState(state);
+    if (upgraded !== state) await commit(upgraded);
     render();
     if (Capacitor.getPlatform() === 'android') {
       await App.addListener('backButton', () => {

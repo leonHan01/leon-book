@@ -113,7 +113,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "LeonBookAutomationTests",
-            dependencies: ["LeonBook", "LeonBookTodoModule"],
+            dependencies: ["LeonBook", "LeonBookBackupModule", "LeonBookModuleKit", "LeonBookTodoModule"],
             path: "Tests/LeonBookAutomationTests"
         ),
         .executableTarget(

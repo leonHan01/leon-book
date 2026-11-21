@@ -31,17 +31,21 @@ const allowedOrigins = new Set([
 ]);
 const MAX_REQUEST = 4 * 1024 * 1024;
 const unknown = { error: { code: 'write_unknown', message: 'Mac 无法确认上次写入是否完成。请先核对 Mac 的资料，再处理手机保留的修改。' } };
+const restored = { error: { code: 'workspace_restored', message: 'Mac 资料库已恢复，或旧回执无法确认。请对照 Mac 版本处理手机保留的修改。' } };
 const messages = {
   conflict: 'Mac 上的内容已经变化。', not_found: '这条内容已从 Mac 的资料库移除。',
   already_exists: 'Mac 已存在同名内容。',
   module_disabled: '请在 Mac 设置中启用对应模块后重试。',
   read_only: '这个 Mac 工作区当前只读。',
   message_too_large: '内容超过同步接口的大小限制。',
+  response_too_large: 'Mac 返回的资料超过大小限制。',
+  snapshot_changed: 'Mac 上的资料在同步过程中已变化，请重试。',
+  workspace_restored: restored.error.message,
   validation_error: 'Mac 未接受这次保存，请检查内容。',
   invalid_params: 'Mac 未接受这次编辑参数。',
   invalid_request: 'Mac 未接受这次同步请求。',
   attachment_limit: '一条微博最多可保存 9 个附件。请移除部分待上传附件后重试。',
-  upgrade_required: '请升级 Mac 版 LeonBook，再重新同步这条带附件的内容。',
+  upgrade_required: '请升级 Mac 版 LeonBook，再重新同步这条内容。',
   storage_error: 'Mac 暂时无法保存上传文件，请检查可用空间后重试。',
 };
 
@@ -79,7 +83,8 @@ function cleanResponse(response) {
   } };
 }
 
-export function makeBridge({ databasePath, workspaceID, workspacePath, automation, tls, allowLegacyToken = true, now = Date.now }) {
+export function makeBridge({ databasePath, workspaceID, workspacePath, automation, getGeneration = async () => null,
+  tls, allowLegacyToken = true, now = Date.now }) {
   const token = allowLegacyToken ? randomBytes(32).toString('base64url') : null;
   const journal = new DatabaseSync(databasePath);
   journal.exec(`
@@ -87,18 +92,23 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
     PRAGMA synchronous = FULL;
     CREATE TABLE IF NOT EXISTS mobile_operations (
       workspace TEXT NOT NULL, id TEXT NOT NULL, fingerprint TEXT NOT NULL,
-      response TEXT, PRIMARY KEY (workspace, id)
+      response TEXT, generation TEXT, PRIMARY KEY (workspace, id)
     );
+    BEGIN IMMEDIATE;
   `);
+  if (!journal.prepare('PRAGMA table_info(mobile_operations)').all().some(column => column.name === 'generation')) {
+    journal.exec('ALTER TABLE mobile_operations ADD COLUMN generation TEXT');
+  }
+  journal.exec('COMMIT');
   const devices = deviceRegistry(journal, workspaceID, now);
-  const insert = journal.prepare('INSERT OR IGNORE INTO mobile_operations (workspace, id, fingerprint) VALUES (?, ?, ?)');
-  const select = journal.prepare('SELECT fingerprint, response FROM mobile_operations WHERE workspace = ? AND id = ?');
+  const insert = journal.prepare('INSERT OR IGNORE INTO mobile_operations (workspace, id, fingerprint, generation) VALUES (?, ?, ?, ?)');
+  const select = journal.prepare('SELECT fingerprint, response, generation FROM mobile_operations WHERE workspace = ? AND id = ?');
   const finish = journal.prepare('UPDATE mobile_operations SET response = ? WHERE workspace = ? AND id = ?');
   const remove = journal.prepare('DELETE FROM mobile_operations WHERE workspace = ? AND id = ?');
   let busy = false;
   const inFlight = new Set();
 
-  async function push({ id, method, params }, files = []) {
+  async function push({ id, method, params, generation: expected, compact }, files = []) {
     if (typeof id !== 'string' || !operationID.test(id) ||
         !object(params) || !writes.has(method) || Object.keys(params).some(key => !writes.get(method).includes(key))) {
       return invalid();
@@ -109,33 +119,45 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
     const payload = [method, Object.entries(params).sort(([a], [b]) => a.localeCompare(b))];
     if (files.length) payload.push(files.map(({ name, kind, digest }) => [name, kind, digest]));
     const fingerprint = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
-    const claimed = insert.run(workspaceID, id, fingerprint).changes === 1;
+    const generation = await getGeneration();
+    if ((expected !== undefined && expected !== generation) ||
+        (expected === undefined && generation !== null && generation !== 'initial')) return restored;
+    const claimed = insert.run(workspaceID, id, fingerprint, generation).changes === 1;
     if (!claimed) {
       const record = select.get(workspaceID, id);
       if (record.fingerprint !== fingerprint) return invalid('这次操作的编号已被另一项编辑使用。');
+      if (record.generation !== generation) return restored;
       // After a bridge crash, the content write may have committed. An unfinished
       // claim survives the restart and prevents a blind replay of that write.
       return record.response ? JSON.parse(record.response) : unknown;
     }
     let result;
     try {
-      const response = files.length
-        ? await automation('mobile.saveWithAttachments', { method, params, files: files.map(({ path, name, kind }) => ({ path, name, kind })) })
-        : await automation(method, params);
+      const staged = files.map(({ path, name, kind }) => ({ path, name, kind }));
+      const wantsReceipt = generation !== null && compact === true && method.startsWith('articles.');
+      const response = generation !== null
+        ? await automation('mobile.mutate', { method, params, generation, compact: wantsReceipt, ...(staged.length ? { files: staged } : {}) })
+        : staged.length ? await automation('mobile.saveWithAttachments', { method, params, files: staged })
+          : await automation(method, params);
       if (response.error?.code === 'busy') {
         remove.run(workspaceID, id);
         return null;
       }
-      if (files.length && response.error?.code === 'method_not_found') {
+      if (response.error?.code === 'workspace_restored') {
+        remove.run(workspaceID, id);
+        return restored;
+      }
+      if ((generation !== null || files.length) && response.error?.code === 'method_not_found') {
         result = { error: { code: 'upgrade_required', message: messages.upgrade_required } };
       } else {
         result = response.error && !rejected.has(response.error.code) ? unknown : cleanResponse(response);
+        if (wantsReceipt && !response.error) result.receipt = true;
       }
     } catch {
       result = unknown;
     }
     finish.run(JSON.stringify(result), workspaceID, id);
-    return result;
+    return generation !== await getGeneration() ? restored : result;
   }
 
   async function handle(req, res) {
@@ -198,8 +220,8 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
     if (req.headers['content-type']?.split(';')[0] !== 'application/json') { res.writeHead(415).end(); return; }
     const input = await readBody(req);
     if (!object(input) || input.workspaceID !== workspaceID) { send(400, invalid('请检查配对工作区。')); return; }
-    const { action, method, params } = input;
-    if (action === 'hello') { send(200, { workspaceID }); return; }
+    const { action, method, params, generation } = input;
+    if (action === 'hello') { send(200, { workspaceID, generation: (await getGeneration()) ?? undefined }); return; }
     if (busy) { send(503, { error: { code: 'busy' } }); return; }
     busy = true;
     let attachment;
@@ -210,7 +232,9 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
         const response = await push(input);
         send(response ? 200 : 503, response ?? { error: { code: 'busy' } });
       } else if (action === 'read' && reads.has(method) && object(params)) {
+        if (generation !== undefined && generation !== await getGeneration()) { send(200, restored); return; }
         const response = await automation(method, params);
+        if (generation !== undefined && generation !== await getGeneration()) { send(200, restored); return; }
         send(response.error?.code === 'busy' ? 503 : 200, cleanResponse(response));
       } else {
         send(400, invalid());

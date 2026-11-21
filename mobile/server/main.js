@@ -12,11 +12,27 @@ import { managedTLS } from './managed-tls.js';
 
 const cliDefault = fileURLToPath(new URL('../../macos/dist/leon-book.app/Contents/MacOS/LeonBookCLI', import.meta.url));
 
+export async function libraryGeneration(root) {
+  // This file is written into the staging directory by LocalBackupManager.
+  const directory = await stat(root);
+  let value;
+  try { value = await readFile(join(root, '.leonbook-restore-generation'), 'utf8'); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const current = await stat(root);
+    if (current.ino !== directory.ino || current.dev !== directory.dev) throw new Error('Library changed during sync');
+    return 'initial';
+  }
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value)) throw new Error('Invalid restore generation');
+  return value;
+}
+
 export function automate(executable, root, userID, method, params = {}) {
   return new Promise((resolve, reject) => {
     const args = [method, '--root', root, '--json', '-'];
     if (userID) args.push('--user', userID);
     const child = execFile(executable, args, { timeout: 45_000, maxBuffer: 10 * 1024 * 1024 }, (error, stdout) => {
+      if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') { resolve({ error: { code: 'response_too_large' } }); return; }
       if (error?.killed || (error && typeof error.code !== 'number')) { reject(new Error('Mac API 无法响应。')); return; }
       try {
         const response = JSON.parse(stdout);
@@ -75,6 +91,7 @@ async function main() {
     workspaceID, tls, workspacePath: join(root, 'workspaces', userID),
     allowLegacyToken: !values['control-stdio'],
     databasePath: join(journalDir, 'operations.sqlite'),
+    getGeneration: () => libraryGeneration(root),
     automation: (method, params) => automate(executable, root, userID, method, params),
   });
   await new Promise((resolve, reject) => {

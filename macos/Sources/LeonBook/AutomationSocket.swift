@@ -83,7 +83,7 @@ public enum AutomationSocket {
     }
 
     static func write(_ data: Data, to fd: Int32) throws {
-        guard data.count <= maximumMessageBytes else { throw AutomationFailure("message_too_large", "Response exceeds 8 MiB; request a smaller page") }
+        guard data.count <= maximumMessageBytes else { throw AutomationFailure("response_too_large", "Response exceeds 8 MiB; request a smaller page") }
         var count = UInt32(data.count).bigEndian
         var frame = withUnsafeBytes(of: &count) { Data($0) }
         frame.append(data)

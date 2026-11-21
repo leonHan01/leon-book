@@ -107,7 +107,7 @@ function previewTag(mime) {
 }
 
 export async function cacheUploadedAttachments(pairing, method, record, files) {
-  const items = method.startsWith('articles.') ? record.media : record.images;
+  const items = method.startsWith('articles.') ? record.uploadedAttachments ?? record.media : record.images;
   if (!Array.isArray(items) || items.length < files.length) return;
   const added = items.slice(-files.length);
   for (const [index, file] of files.entries()) {

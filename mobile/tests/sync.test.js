@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { completeTodo, editableFields, mergeEditorFields, saveEditor } from '../src/editor.js';
-import { emptyState, parsePairing, request, resolveEdit, SyncEngine } from '../src/sync.js';
+import { emptyState, parsePairing, request, resolveEdit, SyncEngine, upgradeSyncState } from '../src/sync.js';
 
 const pairing = { url: 'https://mac.local:8765', token: 'a'.repeat(43), workspaceID: 'b'.repeat(64) };
 const todo = { id: 'todo-1', title: '原始标题', notes: '原始备注', priority: 1, dueDay: null, revision: 1 };
@@ -117,6 +117,114 @@ test('merging an attachment-only edit retains the Mac body and its format', () =
   assert.equal(merged.articles[0].format, 'html');
   assert.deepEqual(merged.outbox[0].params, { slug: 'article', expectedUpdatedAt: 'v2' });
   assert.equal(merged.outbox[0].files[0].id, 'local-image');
+});
+
+test('a reverted offline field is removed from the patch, including after reopening the saved queue', () => {
+  const original = { slug: 'article', title: '原始标题', body: '原始正文', updatedAt: 'v1' };
+  const baseline = editableFields('articles', original);
+  const state = { ...makeState(), articles: [original] };
+  const edited = saveEditor(state, 'articles', original, { ...baseline, title: '临时标题', body: '已修改正文' });
+  const reopened = structuredClone(edited);
+  const kept = saveEditor(reopened, 'articles', reopened.articles[0], { ...baseline, body: '最终正文' });
+  const [op] = kept.outbox;
+  assert.deepEqual(op.params, { slug: 'article', expectedUpdatedAt: 'v1', body: '最终正文', format: 'text' });
+  assert.equal(mergeEditorFields('articles', { ...original, title: 'Mac 新标题' }, op).title, 'Mac 新标题');
+  const reverted = saveEditor(kept, 'articles', kept.articles[0], baseline);
+  assert.deepEqual(reverted.outbox, []);
+  assert.equal(reverted.articles[0].body, original.body);
+
+  delete reopened.outbox[0].baseFields;
+  const legacy = saveEditor(reopened, 'articles', reopened.articles[0], baseline);
+  assert.equal(legacy.outbox[0].params.title, original.title);
+  assert.equal(legacy.outbox[0].params.body, original.body);
+});
+
+test('a new library generation preserves pending revisions and files for manual review', async () => {
+  const files = [{ id: 'local-image', name: 'image.png', blob: new Blob(['bytes']) }];
+  let state = saveEditor({ ...makeState(), syncGeneration: 'initial' }, 'todos', todo, drafts);
+  state = saveEditor(state, 'articles', null, { title: 'Offline draft', body: 'Draft body', format: 'text' }, files);
+  state.outbox[1].attempted = true;
+  let saved;
+  const engine = new SyncEngine(state, async next => { saved = structuredClone(next); }, async (action, args) => {
+    if (action === 'hello') return { workspaceID: pairing.workspaceID, generation: 'restored' };
+    assert.equal(action, 'read');
+    assert.equal(args.generation, 'restored');
+    return { result: { items: [], total: 0, hasMore: false, snapshot: 'empty' } };
+  });
+  await engine.run();
+  assert.equal(saved.syncGeneration, 'restored');
+  assert.deepEqual(saved.outbox.map(op => op.error.code), ['workspace_restored', 'workspace_restored']);
+  assert.equal(saved.outbox[1].id, state.outbox[1].id);
+  assert.equal(await saved.outbox[1].files[0].blob.text(), 'bytes');
+  assert.equal(saved.articles[0].body, 'Draft body');
+  assert.equal(saved.todos[0].title, drafts.title);
+});
+
+test('legacy size errors cannot authorize a second copy of a possibly applied write', () => {
+  const state = saveEditor(makeState(), 'todos', todo, drafts);
+  state.outbox[0].attempted = true;
+  state.outbox[0].error = { code: 'message_too_large' };
+  const verified = { ...state, syncGeneration: 'initial' };
+  assert.equal(upgradeSyncState(verified), verified);
+  const upgraded = upgradeSyncState(state);
+  assert.equal(upgraded.outbox[0].error.code, 'write_unknown');
+  assert.equal(upgraded.outbox[0].id, state.outbox[0].id);
+  assert.equal(upgraded.todos[0].title, drafts.title);
+});
+
+test('a changed page restarts the scan and a failed todo pull leaves complete collections committed', async () => {
+  const state = { ...makeState(), syncGeneration: 'initial', lastSync: 'prior sync' };
+  const article = { slug: 'article', title: 'Mac article', body: 'Mac body', updatedAt: 'v1' };
+  const deleted = { id: 'deleted', text: 'Deleted mid-scan' };
+  const remaining = { id: 'remaining', text: 'Still present' };
+  const timelineRequests = [];
+  const engine = new SyncEngine(state, async () => {}, async (action, { method, params } = {}) => {
+    if (action === 'hello') return { workspaceID: pairing.workspaceID, generation: 'initial' };
+    if (method === 'articles.list') return { result: { items: [article], total: 1, hasMore: false, snapshot: 'articles' } };
+    if (method === 'articles.get') return { result: article };
+    if (method === 'todos.list') return { error: { code: 'response_too_large', message: 'Exceeded size limit' } };
+    assert.equal(method, 'moments.list');
+    timelineRequests.push(params);
+    switch (timelineRequests.length) {
+      case 1: return { result: { items: [deleted], total: 2, hasMore: true, snapshot: 'before' } };
+      case 2: return { error: { code: 'snapshot_changed' } };
+      default: return { result: { items: [remaining], total: 1, hasMore: false, snapshot: 'after' } };
+    }
+  });
+  await assert.rejects(engine.run(), /待办/);
+  assert.deepEqual(timelineRequests.map(({ offset, snapshot }) => [offset, snapshot]), [[0, ''], [1, 'before'], [0, '']]);
+  assert.deepEqual(engine.state.articles, [article]);
+  assert.deepEqual(engine.state.moments, [remaining]);
+  assert.deepEqual(engine.state.todos, [todo]);
+  assert.equal(engine.state.lastSync, 'prior sync');
+});
+
+test('a compact receipt confirms a write and the large article is fetched in version-checked parts', async () => {
+  let state = { ...makeState(), syncGeneration: 'initial' };
+  state = saveEditor(state, 'articles', null, { title: 'Local title', body: 'Local draft', format: 'text' });
+  const [{ key: slug }] = state.outbox;
+  const summary = { slug, title: 'Mac title', updatedAt: 'v1' };
+  const requests = [];
+  const engine = new SyncEngine(state, async () => {}, async (action, args) => {
+    if (action === 'hello') return { workspaceID: pairing.workspaceID, generation: 'initial' };
+    if (action === 'push') {
+      assert.equal(args.compact, true);
+      return { result: { slug, updatedAt: 'v1', status: 'draft' }, receipt: true };
+    }
+    if (args.method === 'articles.get') {
+      requests.push(args.params);
+      if (args.params.bodyOffset === undefined) return { error: { code: 'response_too_large' } };
+      if (args.params.bodyOffset === 0) return { result: { article: summary, updatedAt: 'v1', body: '一🙂', nextOffset: 7 } };
+      assert.deepEqual(args.params, { slug, bodyOffset: 7, expectedUpdatedAt: 'v1' });
+      return { result: { updatedAt: 'v1', body: '二', nextOffset: null } };
+    }
+    const items = args.method === 'articles.list' ? [summary] : [];
+    return { result: { items, total: items.length, hasMore: false, snapshot: 'checked' } };
+  });
+  const synced = await engine.run();
+  assert.equal(requests.length, 3);
+  assert.deepEqual(synced.outbox, []);
+  assert.deepEqual(synced.articles, [{ ...summary, body: '一🙂二' }]);
 });
 
 test('a shifted page cannot remove a cached article that still exists', async () => {

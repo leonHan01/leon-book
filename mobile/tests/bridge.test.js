@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, truncate, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeBridge } from '../server/bridge.js';
-import { automate } from '../server/main.js';
+import { automate, libraryGeneration } from '../server/main.js';
 import { attachmentLimit } from '../shared/attachments.js';
 import { request } from '../src/sync.js';
 
@@ -62,6 +62,31 @@ test('bridge restricts callers and never replays acknowledged or uncertain write
   assert.deepEqual(await (await call(newURL, restarted.token, request)).json(), first);
   assert.equal((await (await call(newURL, restarted.token, uncertain)).json()).error.code, 'write_unknown');
   assert.equal(calls, 2);
+});
+
+test('the bridge will not replay a success receipt from before a library restore', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'leonbook-restore-generation-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let mutations = 0;
+  const bridge = makeBridge({
+    databasePath: join(directory, 'journal.sqlite'), workspaceID, getGeneration: () => libraryGeneration(directory),
+    automation: async (method, params) => {
+      assert.equal(method, 'mobile.mutate');
+      assert.equal(params.generation, 'initial');
+      mutations++;
+      return { result: { id: 'previously-saved', text: params.params.text } };
+    },
+  });
+  const url = await listen(bridge, t);
+  const talk = async input => (await call(url, bridge.token, input)).json();
+  const edit = { action: 'push', id: '15d52088-027f-43a2-a055-0518b3520dc9', method: 'moments.create', params: { text: 'Draft' } };
+  assert.equal((await talk({ ...edit, generation: 'initial' })).result.id, 'previously-saved');
+  const restoredGeneration = 'd8cdfd24-ae9b-4fef-a252-802724dc5e54';
+  await writeFile(join(directory, '.leonbook-restore-generation'), restoredGeneration);
+  assert.equal((await talk({ action: 'hello' })).generation, restoredGeneration);
+  assert.equal((await talk({ ...edit, generation: 'initial' })).error.code, 'workspace_restored');
+  assert.equal((await talk({ ...edit, generation: restoredGeneration })).error.code, 'workspace_restored');
+  assert.equal(mutations, 1);
 });
 
 test('bridge syncs with the real Mac CLI and preserves concurrent Mac changes', { skip: !process.env.LEONBOOK_TEST_CLI }, async t => {
@@ -148,7 +173,8 @@ test('Mac saves uploads along with the record and preserves existing files acros
   const info = (await cli('workspace.info', {})).result;
   assert.ok(info?.user.id);
   const workspacePath = join(await realpath(root), 'workspaces', info.user.id);
-  const bridge = makeBridge({ workspacePath, workspaceID, databasePath: join(directory, 'journal.sqlite'), automation: cli });
+  const bridge = makeBridge({ workspacePath, workspaceID, databasePath: join(directory, 'journal.sqlite'),
+    getGeneration: () => libraryGeneration(root), automation: cli });
   const endpoint = await listen(bridge, t);
   const pairing = { url: new URL(endpoint).origin, token: bridge.token, workspaceID };
   const photo = { id: 'fb34dd41-d4c5-48cc-81ce-a24026011ccb', name: '手机照片.png', blob: new Blob([picture]) };
@@ -163,10 +189,12 @@ test('Mac saves uploads along with the record and preserves existing files acros
 
   const createID = '110ee745-6827-42f7-98ba-28b16d090eea';
   const slug = `mobile-${createID}`;
-  const create = { id: createID, method: 'articles.create', params: { slug, body: '正文', format: 'text', title: '手机文章' }, files: [photo] };
+  const create = { id: createID, method: 'articles.create', params: { slug, body: '正文', format: 'text', title: '手机文章' },
+    files: [photo], generation: 'initial', compact: true };
   const article = await request(pairing, 'push', create);
-  assert.equal(article.result?.media[0]?.name, '手机照片.png', JSON.stringify(article));
-  assert.ok(article.result.media[0].url.startsWith(`/media/${slug}/`));
+  assert.equal(article.receipt, true, JSON.stringify(article));
+  assert.equal(article.result?.uploadedAttachments[0]?.name, '手机照片.png');
+  assert.ok(article.result.uploadedAttachments[0].url.startsWith(`/media/${slug}/`));
   assert.deepEqual(await request(pairing, 'push', create), article);
   const changed = (await cli('articles.update', { slug, expectedUpdatedAt: article.result.updatedAt, title: 'Mac 改过' })).result;
   assert.equal(changed?.title, 'Mac 改过');

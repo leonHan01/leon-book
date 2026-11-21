@@ -49,25 +49,45 @@ export function saveEditor(state, kind, original, fields, files) {
   for (const [field, value] of Object.entries(fields)) {
     if (field !== 'format' && (creating || previous[field] !== value)) patch[field] = value;
   }
-  if (Object.hasOwn(patch, 'body') || (kind === 'articles' && previous.format !== fields.format)) {
+  if (kind === 'articles' && (Object.hasOwn(patch, 'body') || previous.format !== fields.format)) {
     patch.body = fields.body;
     patch.format = fields.format;
   }
   const filesChanged = selected.length !== previousFiles.length || selected.some((file, index) => file.id !== previousFiles[index]?.id);
   if (!Object.keys(patch).length && !filesChanged) return state;
-  if (filesChanged && !selected.length && !isCreate && !Object.keys(patch).length &&
-      pending && Object.keys(pending.params).every(field => Object.hasOwn(base, field))) {
-    return resolveEdit(state, pending, original);
-  }
-  if (new TextEncoder().encode(JSON.stringify(patch)).length > 3 * 1024 * 1024) {
-    throw new Error('内容太长，无法通过手机同步。请缩短内容或在 Mac 上编辑。');
+  if (pending?.attempted || pending?.error) throw new Error('这条内容有待确认的同步，请先同步或处理冲突。');
+  const params = { ...pending?.params, ...base, ...patch };
+  const baseFields = { ...pending?.baseFields };
+  if (!isCreate) {
+    for (const field of Object.keys(patch)) {
+      // A queue saved by older versions may have no baseline for a field that
+      // was already edited. Keep that field until it can be reviewed.
+      if (!Object.hasOwn(pending?.params ?? {}, field)) baseFields[field] = previous[field];
+    }
+    for (const field of Object.keys(baseFields)) {
+      if (field === 'body' || field === 'format') continue;
+      if (params[field] === baseFields[field]) delete params[field];
+    }
+    if (Object.hasOwn(baseFields, 'body') && Object.hasOwn(baseFields, 'format') &&
+        params.body === baseFields.body && params.format === baseFields.format) {
+      delete params.body;
+      delete params.format;
+    }
   }
   const preview = {
     ...(kind === 'articles' ? { status: 'draft' } : {}),
     ...(kind === 'moments' ? { createdAt: now() } : {}),
     updatedAt: now(), ...original, ...identity, ...fields,
   };
-  return queueEdit(state, kind, key, `${kind}.${isCreate ? 'create' : 'update'}`, { ...base, ...patch }, preview, () => operationID, files);
+  if (!isCreate && !selected.length && pending?.method === `${kind}.update` &&
+      Object.keys(params).every(field => Object.hasOwn(base, field))) {
+    return resolveEdit(state, pending, preview);
+  }
+  if (new TextEncoder().encode(JSON.stringify(params)).length > 3 * 1024 * 1024) {
+    throw new Error('内容太长，无法通过手机同步。请缩短内容或在 Mac 上编辑。');
+  }
+  return queueEdit(state, kind, key, `${kind}.${isCreate ? 'create' : 'update'}`,
+    params, preview, () => operationID, { files, baseFields });
 }
 
 export function completeTodo(state, todo, completedAt) {

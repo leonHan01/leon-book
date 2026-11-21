@@ -1,5 +1,7 @@
 import Darwin
 import Foundation
+import LeonBookBackupModule
+import LeonBookModuleKit
 import LeonBookTodoModule
 @testable import LeonBook
 
@@ -32,6 +34,7 @@ struct AutomationTests {
             try await articles(service, root)
             try await timelineAndTasks(service)
             try await workspaceAndBackup(service, root)
+            try await mobilePermissions(service, root, defaults)
             try await wrongRoot(root, defaults)
             try await transport(service, root)
             try await cli(root)
@@ -133,6 +136,49 @@ struct AutomationTests {
         try expect(FileManager.default.fileExists(atPath: snapshotPath + "/workspaces/" + user.id), "backup must include other users")
         _ = try await call(service, "todos.create", ["title": .string("after backup")])
         try await expectError(service, "trash.empty", ["confirm": .bool(false)], "confirmation_required")
+        await service.close()
+        let snapshot = URL(fileURLWithPath: snapshotPath)
+        try LocalBackupManager.restoreSnapshot(at: snapshot, to: root, minimumFreeSpaceBytes: 0)
+        let firstGeneration = try LocalBackupManager.restoreGeneration(at: root)
+        try expect(firstGeneration != "initial", "restoring a pre-mobile backup must change the generation")
+        try LocalBackupManager.restoreSnapshot(at: snapshot, to: root, minimumFreeSpaceBytes: 0)
+        let generation = try LocalBackupManager.restoreGeneration(at: root)
+        try expect(generation != firstGeneration, "restoring the same backup must produce a new generation")
+        let params: [String: AutomationValue] = ["id": .string(original[0].id), "expectedRevision": .number(Double(original[0].revision)), "title": .string("old queued edit")]
+        let write: [String: AutomationValue] = ["method": .string("todos.update"), "generation": .string(firstGeneration), "params": .object(params)]
+        try await expectError(service, "mobile.mutate", write, "workspace_restored")
+        let restored: [TodoItem] = try await call(service, "todos.list").decoded()
+        try expect(restored == original, "restoring backups must preserve their content and reject edits from an old generation")
+
+        let firstPage = try object(await call(service, "todos.list", ["snapshot": .string(""), "limit": .number(1)]))
+        _ = try await call(service, "todos.delete", ["id": .string(original[0].id), "expectedRevision": .number(Double(original[0].revision))])
+        _ = try await call(service, "todos.create", ["title": .string("Different task, same total")])
+        try await expectError(service, "todos.list", ["offset": .number(1), "snapshot": firstPage["snapshot"]!], "snapshot_changed")
+    }
+
+    static func mobilePermissions(_ service: AutomationService, _ root: URL, _ defaults: UserDefaults) async throws {
+        let article: NativeArticle = try await call(service, "articles.create", [
+            "title": .string("Published"), "body": .string("正文"), "status": .string("published"),
+        ]).decoded()
+        let params: [String: AutomationValue] = [
+            "slug": .string(article.slug), "expectedUpdatedAt": .string(article.updatedAt), "title": .string("Blocked"),
+        ]
+        let file = root.appendingPathComponent("staged.txt")
+        try Data("staged attachment".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let files: AutomationValue = .array([.object(["path": .string(file.path), "name": .string("staged.txt"), "kind": .string("file")])])
+        let previous = NativeFirstPartyModules.loadRuntime(defaults: defaults)
+        var disabled = previous
+        _ = disabled.setEnabled(false, for: FirstPartyModuleID(rawValue: "publishing"))
+        NativeFirstPartyModules.save(disabled.state, defaults: defaults)
+        defer { NativeFirstPartyModules.save(previous.state, defaults: defaults) }
+        try await expectError(service, "articles.update", params, "module_disabled")
+        let withFiles: [String: AutomationValue] = ["method": .string("articles.update"), "params": .object(params), "files": files]
+        try await expectError(service, "mobile.saveWithAttachments", withFiles, "module_disabled")
+        let generation = try LocalBackupManager.restoreGeneration(at: root)
+        try await expectError(service, "mobile.mutate", withFiles.merging(["generation": .string(generation)]) { _, new in new }, "module_disabled")
+        let current: NativeArticle = try await call(service, "articles.get", ["slug": .string(article.slug)]).decoded()
+        try expect(current.updatedAt == article.updatedAt && current.media.isEmpty, "denied mobile writes must leave the article untouched")
     }
 
     static func transport(_ service: AutomationService, _ root: URL) async throws {
@@ -145,6 +191,7 @@ struct AutomationTests {
         let post: NativeMoment = try response!.result!.decoded()
         let fetched: NativeMoment = try await call(service, "moments.get", ["id": .string(post.id)]).decoded()
         try expect(fetched.text == "socket round trip", "socket mutation must persist through shared store")
+        try await largeMobileArticle(root)
         let attrs = try FileManager.default.attributesOfItem(atPath: AutomationSocket.path(for: root))
         try expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600, "socket permissions must be private")
         let missing = try await Task.detached { try AutomationSocket.call(.init(method: "capabilities"), root: root.appendingPathComponent("absent")) }.value
@@ -169,6 +216,37 @@ struct AutomationTests {
         let fromCLI: NativeMoment = try rpc.result!.decoded()
         let found: NativeMoment = try await call(service, "moments.get", ["id": .string(fromCLI.id)]).decoded()
         try expect(found.text == "external process", "external CLI write must be visible")
+    }
+
+    static func largeMobileArticle(_ root: URL) async throws {
+        let slug = "large-mobile-article"
+        let body = String(repeating: "&", count: 1_700_000) + "🙂"
+        let generation = try LocalBackupManager.restoreGeneration(at: root)
+        let request = AutomationRequest(method: "mobile.mutate", params: [
+            "method": .string("articles.create"), "compact": .bool(true), "generation": .string(generation),
+            "params": .object(["slug": .string(slug), "title": .string("Large mobile article"), "body": .string(body), "format": .string("text")]),
+        ])
+        let saved = try await Task.detached { try AutomationSocket.call(request, root: root) }.value
+        guard let result = saved?.result else { throw Failure(description: "expected compact write receipt, got \(String(describing: saved?.error))") }
+        let receipt = try object(result)
+        try expect(receipt["slug"] == .string(slug) && receipt["body"] == nil, "large writes must return a short acknowledgment")
+        let get = AutomationRequest(method: "articles.get", params: ["slug": .string(slug)])
+        let full = try await Task.detached { try AutomationSocket.call(get, root: root) }.value
+        try expect(full?.error?.code == "response_too_large", "read response size must differ from rejected request size")
+        var next: AutomationValue = .number(0)
+        var joined = ""
+        while next != .null {
+            let getPart = AutomationRequest(method: "articles.get", params: [
+                "slug": .string(slug), "bodyOffset": next, "expectedUpdatedAt": receipt["updatedAt"]!,
+            ])
+            let response = try await Task.detached { try AutomationSocket.call(getPart, root: root) }.value
+            guard let part = response?.result else { throw Failure(description: "expected a bounded body chunk") }
+            let page = try object(part)
+            joined += try page["body"]!.decoded(String.self)
+            next = page["nextOffset"]!
+        }
+        let expected = "<article data-leon-format=\"html-v1\"><p>" + String(repeating: "&amp;", count: 1_700_000) + "🙂</p></article>"
+        try expect(joined == expected, "all body chunks must reconstruct the original HTML")
     }
 
     static func wrongRoot(_ root: URL, _ defaults: UserDefaults) async throws {
