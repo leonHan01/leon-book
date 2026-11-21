@@ -6,12 +6,13 @@ import { mediaPath, recordAttachments, uploadName } from '../shared/attachments.
 import { clearAttachmentCache, loadState, saveState } from './storage.js';
 import { attachmentCard, cacheUploadedAttachments, pendingAttachmentCard } from './attachments.js';
 import { emptyState, keyOf, lookup, pairDevice, parsePairing, request, resolveEdit, SyncEngine } from './sync.js';
-import { completeTodo, editableFields, saveEditor, uuid, validateUploadSelection } from './editor.js';
+import { completeTodo, editableFields, mergeEditorFields, saveEditor, uuid, validateUploadSelection } from './editor.js';
 
 const root = document.querySelector('#app');
 const labels = { articles: '文章', moments: '微博', todos: '待办' };
 let state, active = 'articles', query = '', busy = false, notice = '';
 let modal, modalDismiss;
+let updateSyncView;
 let foreground = !document.hidden, autoRequested = false, autoTimer, nextAutoAt = 0;
 
 function el(tag, props = {}, ...children) {
@@ -159,7 +160,7 @@ function attachmentPicker(kind, original, startingFiles, dialog) {
 
 function edit(kind, original, conflict) {
   const draft = conflict?.local ?? original;
-  const initial = editableFields(kind, draft);
+  const initial = conflict ? mergeEditorFields(kind, conflict.remote, conflict.op) : editableFields(kind, original);
   const article = kind === 'articles';
   const formTitle = conflict ? '手动合并' : `${original ? '编辑' : '新建'}${labels[kind]}`;
   modalOpen(formTitle, (content, dialog) => {
@@ -198,6 +199,7 @@ function edit(kind, original, conflict) {
     form.append(el('p', { class: 'error', role: 'alert' }),
       el('button', { type: 'submit', class: 'primary' }, conflict ? '保存合并结果' : '保存'));
     content.append(form);
+    const initialValues = conflict ? new FormData(form) : null;
     bindForm(form, dialog, async values => {
       const base = conflict ? resolveEdit(state, conflict.op, conflict.remote) : state;
       let next;
@@ -209,6 +211,13 @@ function edit(kind, original, conflict) {
         if (article) fields = { title: values.get('title').trim(), body: values.get('body'), format: initial.format };
         else if (kind === 'moments') fields = { text: values.get('text') };
         else fields = { title: values.get('title').trim(), notes: values.get('notes'), priority: Number(values.get('priority')), dueDay: values.get('dueDay') || null };
+        // Form controls may normalize line endings and the editor trims titles.
+        // Keep the original field value when the merge form was left unchanged.
+        if (initialValues) {
+          for (const key of Object.keys(fields)) {
+            if (key !== 'format' && values.get(key) === initialValues.get(key)) fields[key] = initial[key];
+          }
+        }
         const files = picker?.files();
         if (fields.title === '' || fields.body?.trim() === '' || (fields.text?.trim() === '' && !original?.images?.length && !files?.length)) {
           throw new Error('请填写完整的内容。');
@@ -328,10 +337,12 @@ function conflictDialog(op, local) {
 
 function detail(kind, item) {
   const op = operation(kind, item);
-  if (op?.error) { conflictDialog(op, item); return; }
+  const readOnly = busy;
+  if (op?.error && !readOnly) { conflictDialog(op, item); return; }
   modalOpen(item.title || labels[kind], (content, dialog) => {
     const date = dateLabel(item.createdAt || item.updatedAt);
     if (date) content.append(el('p', { class: 'muted' }, date));
+    if (readOnly) content.append(el('p', { class: 'muted' }, '当前查看的是本机版本。同步结束后，从列表重新打开可编辑或查看更新。'));
     const refs = new Map(recordAttachments(kind, item).map(ref => [ref.path, ref]));
     const pairing = state.pairing;
     const key = keyOf(kind, item);
@@ -339,7 +350,7 @@ function detail(kind, item) {
       const ref = refs.get(path);
       if (!ref) return null;
       refs.delete(path);
-      return attachmentCard({ ref, kind, key, pairing, dialog });
+      return attachmentCard({ ref, kind, key, pairing, dialog, offlineOnly: readOnly });
     };
     content.append(kind === 'articles' ? articleBody(item, renderAttachment) : itemContent(kind, item));
     const remaining = [...refs.keys()].map(renderAttachment);
@@ -347,6 +358,7 @@ function detail(kind, item) {
     if (remaining.length) {
       content.append(el('section', { class: 'attachments', 'aria-label': '附件' }, el('h3', {}, '附件'), remaining));
     }
+    if (readOnly) return;
     if (op?.attempted) content.append(el('p', { class: 'muted' }, '这条编辑等待 Mac 确认。'));
     const actions = el('div', { class: 'sheet-actions' },
       button('编辑', () => edit(kind, item), { class: 'primary', disabled: op?.attempted || op?.method === 'todos.complete' }));
@@ -456,7 +468,7 @@ async function sync({ onlyOperationID } = {}) {
   nextAutoAt = Date.now() + 8_000;
   busy = true;
   notice = '正在与 Mac 同步…';
-  render();
+  updateSyncView();
   const engine = new SyncEngine(state, commit, async (action, args) => {
     const result = await request(state.pairing, action, args);
     if (result.result && action === 'push' && args.files?.length) {
@@ -475,7 +487,7 @@ async function sync({ onlyOperationID } = {}) {
     catch { /* Keep the visible error if local storage is unavailable too. */ }
   } finally {
     busy = false;
-    render();
+    updateSyncView(true);
     flushAutoSync();
   }
 }
@@ -522,7 +534,7 @@ function recordList(container) {
     const heading = item.title || item.text || '无文字微博';
     const summary = active === 'articles' ? item.excerpt : active === 'todos' ? item.notes : null;
     const metadata = [active === 'todos' ? item.dueDay : dateLabel(item.createdAt || item.updatedAt), badge].filter(Boolean);
-    const record = button('', () => detail(active, item), { class: 'record', disabled: busy });
+    const record = button('', () => detail(active, item), { class: 'record' });
     record.append(
       el('strong', { class: 'record-title' }, heading),
       summary ? el('span', { class: 'record-summary' }, summary) : '',
@@ -531,27 +543,38 @@ function recordList(container) {
   }));
 }
 
-function render() {
-  const list = el('div', { class: 'records' });
-  const search = el('input', { class: 'search', type: 'search', 'aria-label': `搜索${labels[active]}`, placeholder: `搜索${labels[active]}`, value: query,
-    oninput: event => { query = event.target.value; recordList(list); } });
-  const heading = el('header', { class: 'top' },
-    el('div', { class: 'brand' }, el('span', { class: 'brand-icon', 'aria-hidden': 'true' }, 'L'), 'LeonBook'),
-    button(state.pairing ? '配对设置' : '连接 Mac', pairing, { class: 'quiet', disabled: busy }));
+function renderSyncStatus(status) {
   const failed = state.outbox.filter(op => op.error || op.transferError).length;
   const pending = state.outbox.length - failed;
-  const status = el('div', { class: 'status' },
+  status.replaceChildren(
     el('div', {}, el('span', { 'aria-live': 'polite' }, notice || state.lastSyncError || (state.lastSync ? `上次同步 ${dateLabel(state.lastSync)}`
       : state.pairing ? '等待首次同步' : '当前仅在本机保存')),
     el('div', { class: failed ? 'error' : 'muted' }, `待同步 ${pending} · 失败 ${failed}`)),
     el('div', { class: 'sync-actions' }, button('同步状态', syncStatus, { disabled: busy }),
       state.pairing ? button('同步', () => sync(), { disabled: busy }) : ''));
+}
+
+function render() {
+  const list = el('div', { class: 'records' });
+  const search = el('input', { class: 'search', type: 'search', 'aria-label': `搜索${labels[active]}`, placeholder: `搜索${labels[active]}`, value: query,
+    oninput: event => { query = event.target.value; recordList(list); } });
+  const connectButton = button(state.pairing ? '配对设置' : '连接 Mac', pairing, { class: 'quiet' });
+  const heading = el('header', { class: 'top' },
+    el('div', { class: 'brand' }, el('span', { class: 'brand-icon', 'aria-hidden': 'true' }, 'L'), 'LeonBook'), connectButton);
+  const status = el('div', { class: 'status' });
+  const newButton = button('＋ 新建', () => edit(active), { class: 'primary' });
   const tabs = el('nav', { class: 'tabs', 'aria-label': '资料分类' }, Object.entries(labels).map(([kind, label]) =>
     button(label, () => { active = kind; query = ''; render(); }, { 'aria-current': kind === active ? 'page' : null })));
   root.replaceChildren(heading, el('main', {}, status,
-    el('div', { class: 'list-head' }, el('h1', {}, labels[active]), button('＋ 新建', () => edit(active), { class: 'primary', disabled: busy })),
+    el('div', { class: 'list-head' }, el('h1', {}, labels[active]), newButton),
     search, list), tabs);
-  recordList(list);
+  updateSyncView = (refreshRecords = false) => {
+    connectButton.disabled = busy;
+    newButton.disabled = busy;
+    renderSyncStatus(status);
+    if (refreshRecords) recordList(list);
+  };
+  updateSyncView(true);
 }
 
 async function start() {

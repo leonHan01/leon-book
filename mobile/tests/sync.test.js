@@ -1,13 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { completeTodo, saveEditor } from '../src/editor.js';
-import { emptyState, parsePairing, resolveEdit, SyncEngine } from '../src/sync.js';
+import { completeTodo, editableFields, mergeEditorFields, saveEditor } from '../src/editor.js';
+import { emptyState, parsePairing, request, resolveEdit, SyncEngine } from '../src/sync.js';
 
 const pairing = { url: 'https://mac.local:8765', token: 'a'.repeat(43), workspaceID: 'b'.repeat(64) };
 const todo = { id: 'todo-1', title: '原始标题', notes: '原始备注', priority: 1, dueDay: null, revision: 1 };
 const drafts = { title: '手机标题', notes: '原始备注', priority: 1, dueDay: null };
 const makeState = () => ({ ...emptyState(), pairing, todos: [todo] });
 const emptyPage = { result: { items: [], hasMore: false } };
+
+test('sync aborts when the response headers arrived but the JSON body stalls', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let reachedBody;
+  const reading = new Promise(resolve => { reachedBody = resolve; });
+  t.mock.method(globalThis, 'fetch', async (_url, { signal }) => ({
+    ok: true,
+    status: 200,
+    json: () => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      reachedBody(signal);
+    }),
+  }));
+  const result = request(pairing, 'hello').catch(error => error);
+  const signal = await reading;
+  t.mock.timers.tick(50_000);
+  assert.equal(signal.aborted, true);
+  assert.match((await result).message, /超时/);
+});
 
 test('loss of response keeps the same payload durable and retry acknowledges it once', async () => {
   const next = saveEditor(makeState(), 'todos', todo, drafts);
@@ -68,6 +87,36 @@ test('conflicting and deleted records preserve mobile edits and allow unrelated 
   });
   assert.equal(copied.articles[0].slug, `mobile-${copied.outbox.find(op => op.kind === 'articles').id}`);
   assert.equal(copied.articles.some(item => item.slug === article.slug), false);
+});
+
+test('merging an article carries the mobile body forward without overwriting the Mac title', () => {
+  const original = { slug: 'article', title: '旧标题', body: '旧正文', updatedAt: 'v1' };
+  const local = saveEditor({ ...makeState(), articles: [original] }, 'articles', original, {
+    ...editableFields('articles', original), body: '<手机纯文本>',
+  });
+  const [op] = local.outbox;
+  const remote = { ...original, title: 'Mac 新标题', updatedAt: 'v2' };
+  const fields = mergeEditorFields('articles', remote, op);
+  assert.equal(fields.title, 'Mac 新标题');
+  const merged = saveEditor(resolveEdit(local, op, remote), 'articles', remote, fields);
+  assert.deepEqual(merged.outbox[0].params, {
+    slug: 'article', expectedUpdatedAt: 'v2', body: '<手机纯文本>', format: 'text',
+  });
+});
+
+test('merging an attachment-only edit retains the Mac body and its format', () => {
+  const original = { slug: 'article', title: '旧标题', body: '旧正文', updatedAt: 'v1' };
+  const files = [{ id: 'local-image', name: 'image.png', blob: new Blob(['bytes']) }];
+  const local = saveEditor({ ...makeState(), articles: [original] }, 'articles', original,
+    editableFields('articles', original), files);
+  const [op] = local.outbox;
+  const remote = { ...original, body: '<p><strong>Mac 富文本</strong></p>', updatedAt: 'v2' };
+  const fields = mergeEditorFields('articles', remote, op);
+  const merged = saveEditor(resolveEdit(local, op, remote), 'articles', remote, fields, op.files);
+  assert.equal(merged.articles[0].body, remote.body);
+  assert.equal(merged.articles[0].format, 'html');
+  assert.deepEqual(merged.outbox[0].params, { slug: 'article', expectedUpdatedAt: 'v2' });
+  assert.equal(merged.outbox[0].files[0].id, 'local-image');
 });
 
 test('a shifted page cannot remove a cached article that still exists', async () => {

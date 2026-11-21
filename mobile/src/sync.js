@@ -73,19 +73,24 @@ export async function request(pairing, action, args = {}) {
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), uploading ? 180_000 : 50_000);
-  let response;
   try {
-    response = await fetch(`${pairing.url}${uploading ? '/v1/push-with-files' : '/v1/sync'}`, {
-      method: 'POST', headers, body,
-      redirect: 'error', signal: controller.signal, cache: 'no-store',
-    });
-  } catch { throw new Error('连接 Mac 失败。请检查网络、配对地址和 Mac 同步服务。'); }
-  finally { clearTimeout(timeout); }
-  if (response.status === 401) throw new Error('此设备的配对已失效，请在 Mac 重新生成配对码。');
-  if (response.status === 503) throw new Error('Mac 正在处理其他请求，请稍后继续同步。');
-  if (uploading && response.status === 404) throw new Error('请更新并重启 Mac 的同步服务后再上传附件。');
-  if (!response.ok) throw new Error('Mac 未接受同步请求，请检查配对信息。');
-  return response.json();
+    let response;
+    try {
+      response = await fetch(`${pairing.url}${uploading ? '/v1/push-with-files' : '/v1/sync'}`, {
+        method: 'POST', headers, body,
+        redirect: 'error', signal: controller.signal, cache: 'no-store',
+      });
+    } catch { throw new Error('连接 Mac 失败。请检查网络、配对地址和 Mac 同步服务。'); }
+    if (response.status === 401) throw new Error('此设备的配对已失效，请在 Mac 重新生成配对码。');
+    if (response.status === 503) throw new Error('Mac 正在处理其他请求，请稍后继续同步。');
+    if (uploading && response.status === 404) throw new Error('请更新并重启 Mac 的同步服务后再上传附件。');
+    if (!response.ok) throw new Error('Mac 未接受同步请求，请检查配对信息。');
+    // Fetch resolves at the headers. Keep the deadline in force while reading the body.
+    return await response.json();
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('与 Mac 同步超时，请检查网络后重试。');
+    throw error;
+  } finally { clearTimeout(timeout); }
 }
 
 // A sent payload is immutable. Even after a timeout its UUID must replay the

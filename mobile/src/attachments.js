@@ -129,7 +129,7 @@ export function pendingAttachmentCard(file, dialog) {
   });
 }
 
-export function attachmentCard({ ref, kind, key, pairing, dialog, localBlob }) {
+export function attachmentCard({ ref, kind, key, pairing, dialog, localBlob, offlineOnly = false }) {
   const card = document.createElement('span');
   card.className = 'attachment';
   const name = document.createElement('strong');
@@ -199,8 +199,8 @@ export function attachmentCard({ ref, kind, key, pairing, dialog, localBlob }) {
       if (controller.signal.aborted) return;
       if (blob) display(blob, true);
       else {
-        status.textContent = tooLarge ? attachmentErrors[413] : '未下载';
-        action.disabled = tooLarge;
+        status.textContent = tooLarge ? attachmentErrors[413] : offlineOnly ? '尚未下载，请同步结束后从列表重新打开。' : '未下载';
+        action.disabled = tooLarge || offlineOnly;
       }
     });
   }

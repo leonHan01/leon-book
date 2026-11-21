@@ -76,6 +76,21 @@ export function completeTodo(state, todo, completedAt) {
   }, { ...todo, completedAt }, uuid);
 }
 
+export function mergeEditorFields(kind, remote, operation) {
+  const fields = editableFields(kind, remote);
+  const { params } = operation;
+  // The outbox already records exactly which fields the phone intended to write.
+  for (const key of Object.keys(fields)) {
+    if (key !== 'format' && Object.hasOwn(params, key)) fields[key] = params[key];
+  }
+  if (kind === 'articles' && Object.hasOwn(params, 'body')) {
+    const body = editableFields(kind, { body: params.body, format: params.format });
+    fields.body = body.body;
+    fields.format = body.format;
+  }
+  return fields;
+}
+
 export function editableFields(kind, item) {
   item ??= {};
   if (kind === 'articles') {
