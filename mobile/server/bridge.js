@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { openAttachment } from './attachments.js';
+import { deviceRegistry } from './devices.js';
 import { operationID, readUpload } from './uploads.js';
 
 const reads = new Set([
@@ -56,14 +57,14 @@ function invalid(message = '同步请求格式不正确。') {
 
 function object(value) { return value && typeof value === 'object' && !Array.isArray(value); }
 
-async function readBody(req) {
+async function readBody(req, maxBytes = MAX_REQUEST) {
   const length = req.headers['content-length'];
-  if (length !== undefined && Number(length) > MAX_REQUEST) return null;
+  if (length !== undefined && Number(length) > maxBytes) return null;
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_REQUEST) return null;
+    if (size > maxBytes) return null;
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
@@ -78,8 +79,8 @@ function cleanResponse(response) {
   } };
 }
 
-export function makeBridge({ databasePath, workspaceID, workspacePath, automation, tls }) {
-  const token = randomBytes(32).toString('base64url');
+export function makeBridge({ databasePath, workspaceID, workspacePath, automation, tls, allowLegacyToken = true, now = Date.now }) {
+  const token = allowLegacyToken ? randomBytes(32).toString('base64url') : null;
   const journal = new DatabaseSync(databasePath);
   journal.exec(`
     PRAGMA busy_timeout = 3000;
@@ -89,6 +90,7 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
       response TEXT, PRIMARY KEY (workspace, id)
     );
   `);
+  const devices = deviceRegistry(journal, workspaceID, now);
   const insert = journal.prepare('INSERT OR IGNORE INTO mobile_operations (workspace, id, fingerprint) VALUES (?, ?, ?)');
   const select = journal.prepare('SELECT fingerprint, response FROM mobile_operations WHERE workspace = ? AND id = ?');
   const finish = journal.prepare('UPDATE mobile_operations SET response = ? WHERE workspace = ? AND id = ?');
@@ -146,7 +148,8 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
     res.setHeader('Cache-Control', 'no-store, no-transform');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     const multipart = req.url === '/v1/push-with-files';
-    if (!multipart && req.url !== '/v1/sync') { res.writeHead(404).end(); return; }
+    const pairing = req.url === '/v1/pair';
+    if (!multipart && !pairing && req.url !== '/v1/sync') { res.writeHead(404).end(); return; }
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         'Access-Control-Allow-Methods': 'POST',
@@ -156,8 +159,19 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
       return;
     }
     if (req.method !== 'POST') { res.writeHead(405).end(); return; }
-    if (!authorized(req.headers.authorization, token)) { res.writeHead(401).end(); return; }
     const send = (status, response) => res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }).end(JSON.stringify(response));
+    if (pairing) {
+      if (req.headers['content-type']?.split(';')[0] !== 'application/json') { res.writeHead(415).end(); return; }
+      const input = await readBody(req, 4096);
+      const result = devices.pair(input);
+      if (!result) { send(403, { error: { code: 'pairing_unavailable' } }); return; }
+      send(200, { result });
+      return;
+    }
+    const authorization = req.headers.authorization;
+    const canSync = () => (token && authorized(authorization, token)) ||
+      (authorization?.startsWith('Bearer ') && devices.accepts(authorization.slice(7)));
+    if (!canSync()) { res.writeHead(401).end(); return; }
     if (multipart) {
       if (busy) { req.resume(); send(503, { error: { code: 'busy' } }); return; }
       busy = true;
@@ -166,6 +180,7 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
         directory = await mkdtemp(join(tmpdir(), 'leonbook-upload-'));
         const staged = await readUpload(req, directory);
         if (req.aborted) return;
+        if (!canSync()) { res.writeHead(401).end(); return; }
         if (staged.error) {
           send(200, { error: { code: staged.error, message: messages[staged.error] } });
         } else if (staged.metadata.workspaceID !== workspaceID) {
@@ -228,5 +243,5 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
   server.headersTimeout = 10_000;
   server.maxConnections = 24;
   server.once('close', () => Promise.allSettled([...inFlight]).then(() => journal.close()));
-  return { server, token };
+  return { server, token, devices };
 }

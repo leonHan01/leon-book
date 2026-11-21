@@ -3,18 +3,54 @@ export function emptyState() {
   return { version: 1, pairing: null, articles: [], moments: [], todos: [], outbox: [], lastSync: null };
 }
 export function keyOf(kind, item) { return kind === 'articles' ? item.slug : item.id; }
-export function parsePairing(text) {
+const invalidPairing = () => new Error('配对信息无效，请扫描或粘贴 LeonBook 显示的配对信息。');
+
+export function parsePairing(text, now = Date.now()) {
   let value, url;
-  try { value = JSON.parse(text); url = new URL(value.url); }
-  catch { throw new Error('配对信息无效，请复制 Mac 终端输出的完整 JSON。'); }
+  try {
+    if (typeof text !== 'string' || text.length > 4096) throw invalidPairing();
+    value = JSON.parse(text);
+    if (typeof value.url !== 'string') throw invalidPairing();
+    url = new URL(value.url);
+  } catch { throw invalidPairing(); }
   const loopback = ['127.0.0.1', '[::1]'].includes(url.hostname);
   if (!(url.protocol === 'https:' || (url.protocol === 'http:' && loopback)) || url.username || url.password ||
       url.pathname !== '/' || url.search || url.hash ||
-      typeof value.token !== 'string' || !/^[\w-]{32,128}$/.test(value.token) ||
       typeof value.workspaceID !== 'string' || !/^[\w-]{16,128}$/.test(value.workspaceID)) {
-    throw new Error('配对信息无效，请复制 Mac 终端输出的完整 JSON。');
+    throw invalidPairing();
   }
-  return { url: url.origin, token: value.token, workspaceID: value.workspaceID };
+  const origin = { url: url.origin, workspaceID: value.workspaceID };
+  if (value.type === 'leonbook-pair') {
+    if (value.version !== 1 || typeof value.code !== 'string' || !/^[\w-]{43}$/.test(value.code) ||
+        !Number.isFinite(value.expiresAt)) throw invalidPairing();
+    // Mac validates expiration against its own clock. Allow modest clock skew on mobile.
+    if (value.expiresAt < now - 60_000) throw new Error('配对码已过期，请在 Mac 上生成新的二维码。');
+    return { ...origin, code: value.code };
+  }
+  if (typeof value.token !== 'string' || !/^[\w-]{32,128}$/.test(value.token)) throw invalidPairing();
+  return { ...origin, token: value.token };
+}
+
+export async function pairDevice(invitation, name) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    let response;
+    try {
+      response = await fetch(`${invitation.url}/v1/pair`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', redirect: 'error',
+        body: JSON.stringify({ workspaceID: invitation.workspaceID, code: invitation.code, name }), signal: controller.signal,
+      });
+    } catch {
+      throw new Error('无法连接 Mac。请确认同一局域网、Mac 同步已开启，以及手机已信任同步证书。');
+    }
+    if (response.status === 403) throw new Error('配对码不可用，请在 Mac 上生成新的二维码后重试。');
+    if (!response.ok) throw new Error('Mac 未接受配对，请检查同步服务。');
+    const { result } = await response.json();
+    if (result?.workspaceID !== invitation.workspaceID || typeof result.token !== 'string' ||
+        !/^[\w-]{43}$/.test(result.token) || typeof result.deviceID !== 'string') throw invalidPairing();
+    return { url: invitation.url, workspaceID: result.workspaceID, token: result.token, deviceID: result.deviceID };
+  } finally { clearTimeout(timeout); }
 }
 
 export const versions = { articles: 'expectedUpdatedAt', moments: 'expectedUpdatedAt', todos: 'expectedRevision' };
@@ -45,7 +81,7 @@ export async function request(pairing, action, args = {}) {
     });
   } catch { throw new Error('连接 Mac 失败。请检查网络、配对地址和 Mac 同步服务。'); }
   finally { clearTimeout(timeout); }
-  if (response.status === 401) throw new Error('配对已失效，请从 Mac 重新复制配对信息。');
+  if (response.status === 401) throw new Error('此设备的配对已失效，请在 Mac 重新生成配对码。');
   if (response.status === 503) throw new Error('Mac 正在处理其他请求，请稍后继续同步。');
   if (uploading && response.status === 404) throw new Error('请更新并重启 Mac 的同步服务后再上传附件。');
   if (!response.ok) throw new Error('Mac 未接受同步请求，请检查配对信息。');
@@ -92,22 +128,32 @@ export class SyncEngine {
     this.todosDisabled = false;
   }
   async commit(next) { await this.persist(next); this.state = next; }
-  async run() {
+  async run({ onlyOperationID } = {}) {
     const identity = await this.rpc('hello');
     if (identity.workspaceID !== this.state.pairing.workspaceID) throw new Error('Mac 工作区已变化，请检查配对信息。');
     // Flush each operation and durably acknowledge it before sending the next.
     for (const original of [...this.state.outbox]) {
-      if (original.error) continue;
+      if (original.error || (onlyOperationID && original.id !== onlyOperationID)) continue;
       let next = structuredClone(this.state);
       next.outbox.find(op => op.id === original.id).attempted = true;
       await this.commit(next);
-      const response = await this.rpc('push', {
-        id: original.id, method: original.method, params: original.params,
-        ...(original.files?.length ? { files: original.files } : {}),
-      });
+      let response;
+      try {
+        response = await this.rpc('push', {
+          id: original.id, method: original.method, params: original.params,
+          ...(original.files?.length ? { files: original.files } : {}),
+        });
+      } catch (error) {
+        next = structuredClone(this.state);
+        next.outbox.find(op => op.id === original.id).transferError = error.message || '发送中断，请重试。';
+        await this.commit(next);
+        throw error;
+      }
       next = structuredClone(this.state);
       if (response.error) {
-        next.outbox.find(op => op.id === original.id).error = response.error;
+        const rejected = next.outbox.find(op => op.id === original.id);
+        rejected.error = response.error;
+        delete rejected.transferError;
       } else {
         if (!response.result || typeof keyOf(original.kind, response.result) !== 'string') throw new Error('Mac 返回了无效的保存结果。');
         next.outbox = next.outbox.filter(op => op.id !== original.id);
@@ -164,6 +210,7 @@ export class SyncEngine {
         ...remote[kind].filter(item => !pendingKeys.has(keyOf(kind, item)))];
     }
     next.lastSync = new Date().toISOString();
+    next.lastSyncError = null;
     await this.commit(next);
     return this.state;
   }

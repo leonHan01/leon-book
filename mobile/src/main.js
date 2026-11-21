@@ -5,13 +5,14 @@ import './style.css';
 import { mediaPath, recordAttachments, uploadName } from '../shared/attachments.js';
 import { clearAttachmentCache, loadState, saveState } from './storage.js';
 import { attachmentCard, cacheUploadedAttachments, pendingAttachmentCard } from './attachments.js';
-import { emptyState, keyOf, lookup, parsePairing, request, resolveEdit, SyncEngine } from './sync.js';
+import { emptyState, keyOf, lookup, pairDevice, parsePairing, request, resolveEdit, SyncEngine } from './sync.js';
 import { completeTodo, editableFields, saveEditor, uuid, validateUploadSelection } from './editor.js';
 
 const root = document.querySelector('#app');
 const labels = { articles: '文章', moments: '微博', todos: '待办' };
 let state, active = 'articles', query = '', busy = false, notice = '';
 let modal, modalDismiss;
+let foreground = !document.hidden, autoRequested = false, autoTimer, nextAutoAt = 0;
 
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
@@ -84,6 +85,7 @@ function modalOpen(title, build) {
   dialog.addEventListener('close', () => {
     dialog.remove();
     if (modal === dialog) { modal = null; modalDismiss = null; }
+    flushAutoSync();
   });
   modal = dialog;
   modalDismiss = dismiss;
@@ -296,6 +298,7 @@ function conflictDialog(op, local) {
             retry.params = originalParams;
             retry.attempted = false;
             delete retry.error;
+            delete retry.transferError;
             await commit(next);
             render();
             if (retry.method === 'todos.complete') {
@@ -365,23 +368,57 @@ function detail(kind, item) {
 
 function pairing() {
   modalOpen('连接 Mac', (content, dialog) => {
+    const platform = Capacitor.getPlatform();
+    const nameInput = el('input', { name: 'device', value: platform === 'ios' ? 'iPhone' : platform === 'android' ? 'Android 手机' : '浏览器', maxlength: 64 });
+    const paste = el('input', { name: 'payload', type: 'password', autocomplete: 'off', required: true });
+    const connectButton = el('button', { type: 'submit', class: 'primary' }, '连接');
     const form = el('form', { class: 'editor' },
-      el('p', { class: 'muted' }, '在 Mac 上开启同步，将终端输出的配对信息粘贴到这里。'),
-      field('配对信息', el('input', { name: 'payload', type: 'password', autocomplete: 'off', required: true })),
-      el('p', { class: 'error', role: 'alert' }), el('button', { type: 'submit', class: 'primary' }, '连接'));
-    content.append(form);
-    bindForm(form, dialog, async values => {
-      const connection = parsePairing(values.get('payload'));
-      if (Capacitor.isNativePlatform() && !connection.url.startsWith('https://')) throw new Error('手机连接需要使用 Mac 输出的 HTTPS 地址。');
-      const switching = state.pairing && state.pairing.workspaceID !== connection.workspaceID;
+      el('p', { class: 'muted' }, '打开 Mac 的「设置 → 手机同步」，生成一次性二维码。首次使用这台 Mac 时，请先安装并信任同步证书。'),
+      field('设备名称', nameInput),
+      field('粘贴配对信息', paste), el('p', { class: 'error', role: 'alert' }), connectButton);
+    async function connect(payload, name) {
+      const parsed = parsePairing(payload);
+      if (Capacitor.isNativePlatform() && !parsed.url.startsWith('https://')) throw new Error('手机连接需要使用 Mac 输出的 HTTPS 地址。');
+      const switching = Boolean(state.pairing && state.pairing.workspaceID !== parsed.workspaceID);
       if (switching && state.outbox.length) throw new Error('请先同步或处理原工作区的手机修改，再切换工作区。');
-      const identity = await request(connection, 'hello');
-      if (identity.workspaceID !== connection.workspaceID) throw new Error('Mac 返回了其他工作区。');
       if (switching && !confirm('切换工作区后将清除手机上的旧工作区缓存。继续？')) return false;
-      await commit({ ...(switching ? emptyState() : state), pairing: connection }, { clearAttachments: switching });
+      if (parsed.code && !name.trim()) throw new Error('请填写设备名称。');
+      const connection = parsed.code ? await pairDevice(parsed, name.trim()) : parsed;
+      if (!parsed.code) {
+        const identity = await request(connection, 'hello');
+        if (identity.workspaceID !== parsed.workspaceID) throw new Error('Mac 返回了其他工作区。');
+      }
+      await commit({ ...(switching ? emptyState() : state), pairing: connection, lastSyncError: null }, { clearAttachments: switching });
       notice = '已连接 Mac。';
-      dialog.addEventListener('close', sync, { once: true });
-    }, false);
+      dialog.addEventListener('close', () => sync(), { once: true });
+    }
+    if (Capacitor.isNativePlatform()) {
+      const scan = button('扫描配对码', async () => {
+        if (dialog.dataset.saving === 'true') return;
+        dialog.dataset.saving = 'true';
+        scan.disabled = connectButton.disabled = true;
+        formError(form, '');
+        try {
+          const { CapacitorBarcodeScanner, CapacitorBarcodeScannerTypeHint } = await import('@capacitor/barcode-scanner');
+          const result = await CapacitorBarcodeScanner.scanBarcode({
+            hint: CapacitorBarcodeScannerTypeHint.QR_CODE, scanInstructions: '对准 Mac 上的 LeonBook 配对二维码',
+            cancelButtonAccessibilityLabel: '取消扫码',
+          });
+          if (result.ScanResult && await connect(result.ScanResult, nameInput.value) !== false) {
+            dialog.close();
+            render();
+          }
+        } catch (error) {
+          if (!/cancel/i.test(error?.message ?? '')) formError(form, error?.message || '无法扫码，请检查相机权限或粘贴配对信息。');
+        } finally {
+          scan.disabled = connectButton.disabled = false;
+          dialog.dataset.saving = 'false';
+        }
+      }, { class: 'primary' });
+      nameInput.closest('label').after(scan);
+    }
+    content.append(form);
+    bindForm(form, dialog, values => connect(values.get('payload'), nameInput.value), false);
     if (state.pairing) {
       const result = el('p', { class: 'muted', role: 'status' });
       const clear = button('清除附件缓存', async () => {
@@ -397,8 +434,26 @@ function pairing() {
   });
 }
 
-async function sync() {
-  if (busy || !state.pairing) return;
+function requestAutoSync() {
+  if (!state?.pairing) return;
+  autoRequested = true;
+  flushAutoSync();
+}
+
+function flushAutoSync() {
+  if (!autoRequested || !foreground || busy || modal?.open || autoTimer) return;
+  autoTimer = setTimeout(() => {
+    autoTimer = undefined;
+    if (autoRequested && foreground && !busy && !modal?.open) sync();
+  }, Math.max(400, nextAutoAt - Date.now()));
+}
+
+async function sync({ onlyOperationID } = {}) {
+  if (busy || modal?.open || !state.pairing) return;
+  autoRequested = false;
+  clearTimeout(autoTimer);
+  autoTimer = undefined;
+  nextAutoAt = Date.now() + 8_000;
   busy = true;
   notice = '正在与 Mac 同步…';
   render();
@@ -410,12 +465,44 @@ async function sync() {
     return result;
   });
   try {
-    await engine.run();
+    await engine.run({ onlyOperationID });
     const failures = state.outbox.filter(op => op.error).length;
     notice = failures ? `同步完成，${failures} 条修改待处理。` : '已与 Mac 同步。';
     if (engine.todosDisabled) notice += 'Mac 已关闭待办模块，手机保留现有待办。';
-  } catch (error) { notice = error?.message || '同步暂时失败。'; }
-  finally { busy = false; render(); }
+  } catch (error) {
+    notice = error?.message || '同步暂时失败。';
+    try { await commit({ ...state, lastSyncError: notice }); }
+    catch { /* Keep the visible error if local storage is unavailable too. */ }
+  } finally {
+    busy = false;
+    render();
+    flushAutoSync();
+  }
+}
+
+function syncStatus() {
+  modalOpen('同步状态', (content, dialog) => {
+    if (state.lastSync) content.append(el('p', { class: 'muted' }, `上次同步 ${dateLabel(state.lastSync)}`));
+    if (state.lastSyncError) content.append(el('p', { class: 'error', role: 'status' }, state.lastSyncError));
+    if (!state.outbox.length) content.append(el('p', { class: 'muted' }, '没有待同步的修改。'));
+    const afterClose = task => {
+      dialog.addEventListener('close', task, { once: true });
+      dialog.close();
+    };
+    for (const op of state.outbox) {
+      const item = state[op.kind].find(record => keyOf(op.kind, record) === op.key);
+      const failure = op.error?.message ?? op.transferError;
+      const row = el('div', { class: 'sync-item' },
+        el('strong', {}, item?.title || item?.text || labels[op.kind]),
+        el('p', { class: failure ? 'error' : 'muted' }, failure || (op.attempted ? '等待 Mac 确认' : '待同步')));
+      if (op.error && item) row.append(button('处理', () => detail(op.kind, item)));
+      else if (state.pairing && op.transferError) {
+        row.append(button('重试此条', () => afterClose(() => sync({ onlyOperationID: op.id }))));
+      }
+      content.append(row);
+    }
+    if (state.pairing) content.append(button('立即同步', () => afterClose(() => sync()), { class: 'primary' }));
+  });
 }
 
 function recordList(container) {
@@ -430,7 +517,7 @@ function recordList(container) {
   container.replaceChildren(...items.map(item => {
     const op = operation(active, item);
     const badge = op?.error ? (['conflict', 'not_found', 'already_exists'].includes(op.error.code) ? '有冲突' : '待处理')
-      : op ? '待同步' : active === 'articles' && item.status === 'draft' ? '草稿'
+      : op?.transferError ? '同步失败' : op ? '待同步' : active === 'articles' && item.status === 'draft' ? '草稿'
       : active === 'todos' && item.completedAt ? '已完成' : '';
     const heading = item.title || item.text || '无文字微博';
     const summary = active === 'articles' ? item.excerpt : active === 'todos' ? item.notes : null;
@@ -439,7 +526,7 @@ function recordList(container) {
     record.append(
       el('strong', { class: 'record-title' }, heading),
       summary ? el('span', { class: 'record-summary' }, summary) : '',
-      metadata.length ? el('span', { class: op?.error ? 'record-meta error' : 'record-meta' }, metadata.join(' · ')) : '');
+      metadata.length ? el('span', { class: op?.error || op?.transferError ? 'record-meta error' : 'record-meta' }, metadata.join(' · ')) : '');
     return record;
   }));
 }
@@ -451,10 +538,14 @@ function render() {
   const heading = el('header', { class: 'top' },
     el('div', { class: 'brand' }, el('span', { class: 'brand-icon', 'aria-hidden': 'true' }, 'L'), 'LeonBook'),
     button(state.pairing ? '配对设置' : '连接 Mac', pairing, { class: 'quiet', disabled: busy }));
+  const failed = state.outbox.filter(op => op.error || op.transferError).length;
+  const pending = state.outbox.length - failed;
   const status = el('div', { class: 'status' },
-    el('span', { 'aria-live': 'polite' }, notice || (state.lastSync ? `上次同步 ${dateLabel(state.lastSync)}`
+    el('div', {}, el('span', { 'aria-live': 'polite' }, notice || state.lastSyncError || (state.lastSync ? `上次同步 ${dateLabel(state.lastSync)}`
       : state.pairing ? '等待首次同步' : '当前仅在本机保存')),
-    state.pairing ? button('同步', sync, { disabled: busy }) : '');
+    el('div', { class: failed ? 'error' : 'muted' }, `待同步 ${pending} · 失败 ${failed}`)),
+    el('div', { class: 'sync-actions' }, button('同步状态', syncStatus, { disabled: busy }),
+      state.pairing ? button('同步', () => sync(), { disabled: busy }) : ''));
   const tabs = el('nav', { class: 'tabs', 'aria-label': '资料分类' }, Object.entries(labels).map(([kind, label]) =>
     button(label, () => { active = kind; query = ''; render(); }, { 'aria-current': kind === active ? 'page' : null })));
   root.replaceChildren(heading, el('main', {}, status,
@@ -474,6 +565,19 @@ async function start() {
         else App.minimizeApp();
       });
     }
+    if (Capacitor.isNativePlatform()) {
+      await App.addListener('appStateChange', ({ isActive }) => {
+        foreground = isActive;
+        if (isActive) requestAutoSync();
+      });
+    } else {
+      document.addEventListener('visibilitychange', () => {
+        foreground = !document.hidden;
+        if (foreground) requestAutoSync();
+      });
+    }
+    window.addEventListener('online', requestAutoSync);
+    if (foreground) requestAutoSync();
   } catch (error) {
     root.replaceChildren(el('p', { class: 'boot error', role: 'alert' }, error?.message || '无法打开本机资料。'));
   }

@@ -135,6 +135,16 @@ COPYFILE_DISABLE=1 cp "${BIN_PATH}/${EXECUTABLE_NAME}" "${CONTENTS_DIR}/MacOS/${
 COPYFILE_DISABLE=1 cp "${BIN_PATH}/LeonBookCLI" "${CONTENTS_DIR}/MacOS/LeonBookCLI"
 COPYFILE_DISABLE=1 cp "${MACOS_DIR}/Resources/Info.plist" "${CONTENTS_DIR}/Info.plist"
 COPYFILE_DISABLE=1 cp "${MACOS_DIR}/Resources/Notes.icns" "${CONTENTS_DIR}/Resources/Notes.icns"
+MOBILE_SOURCE_DIR="${MACOS_DIR:h}/mobile"
+MOBILE_RESOURCES="${CONTENTS_DIR}/Resources/MobileSync"
+mkdir -p "${MOBILE_RESOURCES}/node_modules"
+COPYFILE_DISABLE=1 cp "${MOBILE_SOURCE_DIR}/package.json" "${MOBILE_RESOURCES}/package.json"
+COPYFILE_DISABLE=1 cp -R "${MOBILE_SOURCE_DIR}/server" "${MOBILE_SOURCE_DIR}/shared" "${MOBILE_RESOURCES}/"
+for dependency in busboy streamsearch; do
+    if [[ -d "${MOBILE_SOURCE_DIR}/node_modules/${dependency}" ]]; then
+        COPYFILE_DISABLE=1 cp -R "${MOBILE_SOURCE_DIR}/node_modules/${dependency}" "${MOBILE_RESOURCES}/node_modules/"
+    fi
+done
 print -r -- "${BUILD_SYSTEM}" > "${CONTENTS_DIR}/Resources/leonbook-build-system"
 for LOCALIZATION_DIR in "${MACOS_DIR}/Sources/LeonBook/Resources/"*.lproj; do
     [[ -d "${LOCALIZATION_DIR}" ]] || continue

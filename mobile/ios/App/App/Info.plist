@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LeonBook 需要访问局域网，以便与您的 Mac 同步文章、微博和待办。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>LeonBook 使用相机扫描 Mac 的一次性配对二维码。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

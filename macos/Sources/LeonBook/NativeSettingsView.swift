@@ -80,6 +80,8 @@ public struct NativeSettingsView: View {
                 LabeledContent(NativeLocalization.text("数据目录")) { Text(model.dataDirectoryPath).textSelection(.enabled) }
             }
 
+            NativeMobileSyncSettings(model: model)
+
             Section(NativeLocalization.text("邮件设置")) {
                 EmailSettingsPanel(account: EmailAccountStore(scope: EmailAccountStore.scope(for: model.store.rootURL)))
                     .id(model.workspaceGeneration)

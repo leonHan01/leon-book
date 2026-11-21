@@ -4,7 +4,7 @@ Android 和 iOS 共用同一套移动界面。文章、微博和待办保存在�
 
 ## 构建应用
 
-需要 Node.js 22.13 或更高版本。iOS 项目要求 Xcode 26 或更高版本，目标系统为 iOS 16 或更高版本。Android 项目需要 Android Studio 和 Android SDK 36。手机最低 Android 7.0，并需要版本 107 或更新的 Android System WebView。参见 [Capacitor 环境要求](https://capacitorjs.com/docs/getting-started/environment-setup)。
+需要 Node.js 22.13 或更高版本。iOS 项目要求 Xcode 26 或更高版本，目标系统为 iOS 16 或更高版本。Android 项目需要 Android Studio 和 Android SDK 36。扫码组件要求 Android 8.0 或更高版本，设备需要版本 107 或更新的 Android System WebView。参见 [Capacitor 环境要求](https://capacitorjs.com/docs/getting-started/environment-setup)和[扫码组件说明](https://capacitorjs.com/docs/apis/barcode-scanner)。
 
 ```bash
 cd mobile
@@ -18,27 +18,15 @@ npm run android   # 在 Android Studio 中构建并安装 Debug 版本
 
 ## 在同一 Wi-Fi 上配对
 
-1. 完成上面的 `npm ci`，再在项目根目录运行 `./scripts/leonblog build`。如果 Mac 应用已经打开，先保存并退出旧版本，再打开新版本。同步服务可在 Mac 应用打开或者关闭时运行，上传附件需要新版本的 Mac 应用或 CLI。
-2. 查到 Mac 的局域网 IP。下例以 `192.168.1.23` 为例，替换为实际地址，生成供这台 Mac 使用的 HTTPS 证书。
+1. 完成上面的 `npm ci`，再在项目根目录运行 `./scripts/leonblog build`。Mac 上运行同步服务也需要 Node.js 22.13 或更高版本。
+2. 在 Mac 打开 LeonBook 的「设置 → 手机同步」，选择与手机位于同一局域网的地址，点「启动同步」。
+3. 首次连接这台 Mac 时，点「导出同步证书」，只将这台 Mac 导出的 `leonbook-ca.cer` 安装到自己的手机并信任。iOS 安装证书描述文件后，在「设置 → 通用 → 关于本机 → 证书信任设置」启用完全信任。Android 从系统设置安装为 CA 证书。参见 [Apple 证书信任说明](https://support.apple.com/102390)。
+4. 在 Mac 点「生成配对二维码」。手机打开 LeonBook 的「连接 Mac → 扫描配对码」，输入设备名称后扫码。也可复制并粘贴配对信息。二维码五分钟内有效，只能使用一次。如果系统请求相机或局域网权限，请允许。
+5. 第一次配对会同步。之后打开手机 App、回到前台或网络恢复时会尝试同步。「同步状态」会显示待同步和失败条目；也可点「同步」立即执行。
 
-   ```bash
-   node mobile/scripts/create-lan-cert.js 192.168.1.23 ~/leonbook-sync-cert
-   ```
+关闭 Mac 的设置窗口后，服务会继续运行。退出 Mac 应用会停止服务。以相同地址和端口重新启动时，已配对的设备会保留授权；如果局域网 IP 或端口变化，手机需要使用新的连接地址。Mac 设置里可查看已配对设备，并移除某个设备的同步权限。
 
-3. 将自己生成的 `leonbook-ca.cer` 传到手机并安装为受信任的 CA。iOS 安装证书描述文件后，到「设置 → 通用 → 关于本机 → 证书信任设置」启用完全信任。Android Debug 构建可使用系统中手动安装的 CA。Android Release 构建使用系统信任的 HTTPS 证书。保留 `mac-key.pem` 在 Mac 上。参见 [Apple 证书信任说明](https://support.apple.com/102390)。
-4. 在 Mac 开启同步。将数据根目录替换为你的实际目录。可以加 `--user 用户ID` 固定对应工作区，省略时取服务启动时的当前用户。
-
-   ```bash
-   ./scripts/leonblog mobile-sync \
-     --root /Volumes/T7Shield/myblog \
-     --host 192.168.1.23 \
-     --cert ~/leonbook-sync-cert/mac-cert.pem \
-     --key ~/leonbook-sync-cert/mac-key.pem
-   ```
-
-5. 打开手机上的 LeonBook，选择「连接 Mac」，粘贴终端显示的整行配对 JSON。第一次连接会拉取资料。之后在手机上点「同步」，先发送本机已保存的编辑，再拉取 Mac 的更新。iOS 若请求局域网权限，请允许。
-
-Mac 需要开机并保持同步服务运行。终端按 Ctrl+C 可关闭，重新启动会生成新的配对凭证。在手机的「配对设置」更新同一工作区的凭证时，本机缓存和待同步修改会保留。若 Mac IP 变化，以新地址重新生成证书并配对。已有可信 HTTPS 反向代理也可以将请求代理至默认服务地址 `127.0.0.1:8765`，启动时用 `--url https://你的同步地址` 指定手机连接的地址。
+开发时也可以用 `./scripts/leonblog mobile-sync --help` 启动终端服务。终端打印的直接连接凭证只在本次运行期间有效。已有可信 HTTPS 反向代理可代理至默认的本机地址 `127.0.0.1:8765`，并通过 `--url https://你的同步地址` 指定访问地址。
 
 ## 附件与离线查看
 

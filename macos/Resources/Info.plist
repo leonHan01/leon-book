@@ -69,6 +69,8 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>LeonBook 使用局域网与已配对的手机同步资料。</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>

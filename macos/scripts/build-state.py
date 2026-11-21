@@ -37,6 +37,14 @@ def capture(macos):
             name = str(path.relative_to(macos))
             group = "editor" if editor_asset(name) and not path.is_symlink() else "native"
             state[group][name] = digest(path)
+    mobile = macos.parent / "mobile"
+    for path in [mobile / "package.json", mobile / "package-lock.json",
+                 *sorted((mobile / "server").glob("*.js")), *sorted((mobile / "shared").glob("*.js"))]:
+        if path.is_file():
+            state["native"]["@mobile/" + path.relative_to(mobile).as_posix()] = digest(path)
+    for dependency in ("busboy", "streamsearch"):
+        manifest = mobile / "node_modules" / dependency / "package.json"
+        state["native"]["@mobile-dependency/" + dependency] = digest(manifest) if manifest.is_file() else ""
     # Changing SDK selection must not reuse a binary built for another SDK.
     state["native"]["@sdk"] = os.environ.get("LEON_BOOK_SDK_PATH", "")
     state["native"]["@developer"] = os.environ.get("DEVELOPER_DIR", "")

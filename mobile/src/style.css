@@ -69,6 +69,10 @@ main {
 }
 .status, .list-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .status { min-height: 44px; color: var(--muted); font-size: .875rem; margin-bottom: 1rem; }
+.status > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.sync-actions { display: flex; flex-wrap: wrap; gap: .45rem; justify-content: flex-end; flex-shrink: 0; }
+.sync-item { border: 1px solid var(--line); border-radius: 12px; padding: .7rem; overflow-wrap: anywhere; }
+.sync-item button { margin-top: .4rem; }
 .list-head { margin-bottom: 1rem; }
 input, textarea, select { width: 100%; min-width: 0; min-height: 46px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .65rem .8rem; }
 textarea { resize: vertical; display: block; }
