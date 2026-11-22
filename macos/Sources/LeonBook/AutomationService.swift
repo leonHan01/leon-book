@@ -204,6 +204,13 @@ public actor AutomationService {
         case "folders.create": try await store.createWorkspaceFolder(relativePath: p.required("path"))
         case "resources.move": _ = try await store.moveWorkspaceSourceItems([.init(sourceRelativePath: p.required("from"), destinationRelativePath: p.required("to"))])
         case "resources.trash": _ = try await store.trashWorkspaceSourceItems(relativePaths: p.required("paths"))
+        case "media.discardChatArchive":
+            let value: String = try p.required("archiveId")
+            guard let id = UUID(uuidString: value) else {
+                throw AutomationFailure("invalid_params", "archiveId must be a UUID")
+            }
+            try await store.discardUncommittedChatArchiveMedia(id)
+            return .object(["ok": .bool(true)])
         case "media.upload":
             let kind: String = try p.required("kind")
             guard ["image", "video", "audio", "file"].contains(kind) else { throw AutomationFailure("invalid_params", "kind must be image, video, audio or file") }

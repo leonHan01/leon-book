@@ -30,6 +30,11 @@ print -r -- 'SDK_ARGUMENTS=()' > "${FIXTURE_MACOS_DIR}/scripts/swift-sdk.sh"
 touch "${FIXTURE_MACOS_DIR}/Resources/Info.plist" "${FIXTURE_MACOS_DIR}/Resources/Notes.icns" "${FIXTURE_MACOS_DIR}/Package.swift"
 print -- 'chat runtime fixture' > "${FIXTURE_PRODUCTS}/LeonBookMac_LeonChat.bundle/MarkdownRuntime/markdown.html"
 print -- 'math font fixture' > "${FIXTURE_PRODUCTS}/SwiftMath_SwiftMath.bundle/mathFonts.bundle/fixture.txt"
+FIXTURE_CHAT_SOURCE="${FIXTURE_MACOS_DIR}/Sources/LeonChat/Resources/MarkdownRuntime"
+mkdir -p "${FIXTURE_CHAT_SOURCE}"
+print -- '// renderer fixture' > "${FIXTURE_CHAT_SOURCE}/renderer.js"
+cp "${FIXTURE_CHAT_SOURCE}/renderer.js" "${FIXTURE_PRODUCTS}/LeonBookMac_LeonChat.bundle/MarkdownRuntime/renderer.js"
+
 print -- 'license fixture' > "${FIXTURE_MACOS_DIR}/Vendor/SwiftMath/LICENSE"
 mkdir -p "${FIXTURE_MACOS_DIR:h}/mobile/server" "${FIXTURE_MACOS_DIR:h}/mobile/shared"
 print -- '{}' > "${FIXTURE_MACOS_DIR:h}/mobile/package.json"
@@ -124,6 +129,12 @@ PACKAGED_RESOURCES="${FIXTURE_MACOS_DIR}/dist/leon-book.app/Contents/Resources"
 [[ -f "${PACKAGED_RESOURCES}/SwiftMath_SwiftMath.bundle/mathFonts.bundle/fixture.txt" ]]
 [[ -f "${PACKAGED_RESOURCES}/SwiftMath-LICENSE.txt" ]]
 print -- 'PASS: chat Markdown, math fonts and license are included in the application.'
+packaged_renderer="${PACKAGED_RESOURCES}/LeonBookMac_LeonChat.bundle/MarkdownRuntime/renderer.js"
+rm "${packaged_renderer}"
+[[ "$(python3 "${SCRIPT_DIR}/build-state.py" status "${FIXTURE_MACOS_DIR}" "${FIXTURE_MACOS_DIR}/dist/leon-book.app" release default)" == build ]]
+cp "${FIXTURE_CHAT_SOURCE}/renderer.js" "${packaged_renderer}"
+print -- 'PASS: a missing Markdown renderer forces a rebuild.'
+
 
 PACKAGED_BUILD_INFO="${FIXTURE_MACOS_DIR}/dist/leon-book.app/Contents/Resources/leonbook-build-configuration"
 [[ "$(cat "${PACKAGED_BUILD_INFO}")" == release ]]

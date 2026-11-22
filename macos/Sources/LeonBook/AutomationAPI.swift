@@ -193,6 +193,7 @@ enum AutomationCatalog {
         .init("resources.move", "Move source files or folders.", true, ["from": "string!", "to": "string!"]),
         .init("resources.trash", "Move source files/folders to trash.", true, ["paths": "string[]!"]),
         .init("media.upload", "Copy a local media file into this user's workspace.", true, ["path": "absolute path!", "kind": "image|video|audio|file!", "slug": "string"]),
+        .init("media.discardChatArchive", "Remove unreferenced media staged for an unfinished chat archive.", true, ["archiveId": "UUID!"]),
         .init("mobile.saveWithAttachments", "Append staged local files while saving a version-checked article or local post.", true, ["method": "string!", "params": "object!", "files": "staged file descriptors []!", "inlineImages": "boolean"]),
         .init("mobile.mutate", "Apply a mobile edit against a specific library generation.", true, ["method": "string!", "params": "object!", "files": "staged file descriptors []", "generation": "string!", "compact": "boolean", "inlineImages": "boolean"]),
         .init("bookmarks.list", "List bookmarks."),

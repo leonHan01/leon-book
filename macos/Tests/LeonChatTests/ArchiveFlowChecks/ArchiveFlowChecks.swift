@@ -131,6 +131,12 @@ private final class ArchiveProtocol: URLProtocol, @unchecked Sendable {
             store.selectConversation(message.conversationId!, refresh: false)
             return store
         }
+        func prepare(_ store: ChatStore) async throws -> ChatStore.PreparedArchive {
+            let root = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"]!
+            let library = try LeonBlogExporter.destination(root: root)
+            return try await store.prepareArchive(.init(scope: store.conversationScope, agentID: "archive-test-agent", library: library))
+        }
+
 
         // Only referenced quote attachments must also be copied, without duplicate uploads.
         let attachments = try library("attachments"); setenv("LEON_BOOK_WORKDIR", attachments.root, 1)
@@ -144,8 +150,8 @@ private final class ArchiveProtocol: URLProtocol, @unchecked Sendable {
         quote.documents = [document, quotedDocument]; original.quote = quote
         let files = [image.id: Data([1, 2, 3, 4]), quotedImage.id: Data([5, 6, 7, 8]), document.id: Data("document-original".utf8), quotedDocument.id: Data("quoted-document-original".utf8)]
         ArchiveProtocol.fixture.reset(message: original, files: files)
-        let attachmentStore = store(original); await attachmentStore.prepareBlogDestination()
-        await attachmentStore.exportCurrentRound(agentId: "archive-test-agent", startNew: false)
+        let attachmentStore = store(original); let attachmentStorePrepared = try await prepare(attachmentStore)
+        _ = await attachmentStore.exportCurrentRound(attachmentStorePrepared, startNew: false)
         check(attachmentStore.exportError == nil, "attachment export succeeds")
         let attachmentID = ArchiveProtocol.fixture.snapshot().archives.first!
         let article = try cli("articles.get", attachments, ["slug": "leon-chat-" + attachmentID])
@@ -167,8 +173,8 @@ private final class ArchiveProtocol: URLProtocol, @unchecked Sendable {
         let missing = try library("missing-file"); setenv("LEON_BOOK_WORKDIR", missing.root, 1)
         var missingMessage = message(); missingMessage.documents = [document]
         ArchiveProtocol.fixture.reset(message: missingMessage, failDownloads: true)
-        let missingStore = store(missingMessage); await missingStore.prepareBlogDestination()
-        await missingStore.exportCurrentRound(agentId: "archive-test-agent", startNew: true)
+        let missingStore = store(missingMessage); let missingStorePrepared = try await prepare(missingStore)
+        _ = await missingStore.exportCurrentRound(missingStorePrepared, startNew: true)
         check(missingStore.exportError != nil && ArchiveProtocol.fixture.snapshot().finishes.isEmpty, "missing document prevents successful archive and context reset")
         check(try cli("articles.list", missing)["total"] as? Int == 0, "missing document never leaves a falsely complete draft")
 
@@ -176,14 +182,14 @@ private final class ArchiveProtocol: URLProtocol, @unchecked Sendable {
         let retry = try library("retry"), other = try library("other"); setenv("LEON_BOOK_WORKDIR", retry.root, 1)
         var retryMessage = message(); retryMessage.documents = [document]
         ArchiveProtocol.fixture.reset(message: retryMessage, files: files, finishFailures: 1)
-        let firstStore = store(retryMessage); await firstStore.prepareBlogDestination()
-        await firstStore.exportCurrentRound(agentId: "archive-test-agent", startNew: true)
+        let firstStore = store(retryMessage); let firstStorePrepared = try await prepare(firstStore)
+        _ = await firstStore.exportCurrentRound(firstStorePrepared, startNew: true)
         let first = ArchiveProtocol.fixture.snapshot()
         check(firstStore.exportError != nil && firstStore.exportProgress.contains("已保存") && first.finishes.count == 1, "failed finish reports saved draft without claiming a new context")
         setenv("LEON_BOOK_WORKDIR", other.root, 1); ArchiveProtocol.fixture.stopDownloads()
-        let restartedStore = store(retryMessage); await restartedStore.prepareBlogDestination()
-        check(restartedStore.blogDestination?.root == retry.root, "reopened retry previews persisted library and user")
-        await restartedStore.exportCurrentRound(agentId: "archive-test-agent", startNew: true)
+        let restartedStore = store(retryMessage); let restartedStorePrepared = try await prepare(restartedStore)
+        check(restartedStorePrepared.destination.root == retry.root, "reopened retry previews persisted library and user")
+        _ = await restartedStore.exportCurrentRound(restartedStorePrepared, startNew: true)
         let resumed = ArchiveProtocol.fixture.snapshot()
         check(restartedStore.exportError == nil, "saved archive can resume finish without original attachments")
         check(resumed.archives.count == 1 && resumed.finishes.count == 2 && Set(resumed.finishes) == Set(first.archives), "retry reuses saved archive without another summary request")
@@ -193,12 +199,12 @@ private final class ArchiveProtocol: URLProtocol, @unchecked Sendable {
         // Changing LeonBook defaults after the preview must not redirect the write.
         let pinned = try library("pinned"); setenv("LEON_BOOK_WORKDIR", pinned.root, 1)
         let pinnedMessage = message(); ArchiveProtocol.fixture.reset(message: pinnedMessage)
-        let pinnedStore = store(pinnedMessage); await pinnedStore.prepareBlogDestination()
+        let pinnedStore = store(pinnedMessage); let pinnedStorePrepared = try await prepare(pinnedStore)
         let switchedUser = try cli("users.create", pinned, ["name": "临时另一个用户"])["user"] as! [String: Any]
         let switchedDestination = LeonBlogExporter.Destination(root: pinned.root, user: switchedUser["id"] as! String)
         setenv("LEON_BOOK_WORKDIR", other.root, 1)
-        await pinnedStore.exportCurrentRound(agentId: "archive-test-agent", startNew: false)
-        check(pinnedStore.exportError == nil && pinnedStore.blogDestination?.root == pinned.root, "export keeps the destination displayed before defaults changed")
+        _ = await pinnedStore.exportCurrentRound(pinnedStorePrepared, startNew: false)
+        check(pinnedStore.exportError == nil && pinnedStorePrepared.destination.root == pinned.root, "export keeps the destination displayed before defaults changed")
         check(try cli("articles.list", pinned)["total"] as? Int == 1 && cli("articles.list", other)["total"] as? Int == 0, "changed defaults receive no exported content")
         check(try cli("articles.list", switchedDestination)["total"] as? Int == 0, "switching LeonBook users after preview cannot redirect the export")
 
@@ -211,11 +217,12 @@ private final class ArchiveProtocol: URLProtocol, @unchecked Sendable {
             let changed = mode != "busy"
             ArchiveProtocol.fixture.reset(message: source, finishFailures: 1, finishFailureStatus: 409,
                                           topicStartedAfter: mode == "new-topic" ? 1 : 0, newerMessages: changed ? [newer] : [])
-            let conflictStore = store(source); await conflictStore.prepareBlogDestination()
-            await conflictStore.exportCurrentRound(agentId: "archive-test-agent", startNew: true)
+            let conflictStore = store(source); let conflictStorePrepared = try await prepare(conflictStore)
+            _ = await conflictStore.exportCurrentRound(conflictStorePrepared, startNew: true)
             let initial = ArchiveProtocol.fixture.snapshot()
             check(conflictStore.exportError != nil && conflictStore.exportProgress.contains("尚未开始新对话"), mode + ": server conflict never claims a reset")
-            await conflictStore.exportCurrentRound(agentId: "archive-test-agent", startNew: true)
+            let refreshed = try await prepare(conflictStore)
+            _ = await conflictStore.exportCurrentRound(refreshed, startNew: true)
             let final = ArchiveProtocol.fixture.snapshot()
             check(conflictStore.exportError == nil && final.archives.count == (changed ? 2 : 1), mode + ": retry uses the appropriate snapshot")
             check(changed ? final.finishes.first != final.finishes.last : final.finishes == [initial.archives[0], initial.archives[0]], mode + ": reset targets the correct archive ID")
@@ -224,18 +231,16 @@ private final class ArchiveProtocol: URLProtocol, @unchecked Sendable {
 
         let guardedMessage = message(); ArchiveProtocol.fixture.reset(message: guardedMessage)
         let guardedStore = store(guardedMessage)
-        await guardedStore.exportCurrentRound(agentId: "archive-test-agent", startNew: false)
-        check(guardedStore.exportError != nil && ArchiveProtocol.fixture.snapshot().archives.isEmpty, "export waits for its destination to be prepared")
-        await guardedStore.prepareBlogDestination()
+        let guardedStorePrepared = try await prepare(guardedStore)
         guardedStore.selectConversation("another-room", refresh: false)
-        await guardedStore.exportCurrentRound(agentId: "archive-test-agent", startNew: false)
+        _ = await guardedStore.exportCurrentRound(guardedStorePrepared, startNew: false)
         check(guardedStore.exportError != nil && ArchiveProtocol.fixture.snapshot().archives.isEmpty, "prepared destination cannot be reused for another conversation")
 
         // The single-Agent slash command must still support one-step export.
         setenv("LEON_BOOK_WORKDIR", pinned.root, 1)
         let commandMessage = message(); ArchiveProtocol.fixture.reset(message: commandMessage)
         let commandStore = store(commandMessage)
-        await commandStore.performCommand(.exportRound)
+        await commandStore.performCommand(.exportRound, library: pinned)
         check(commandStore.exportError == nil && commandStore.exportProgress.contains("已保存"), "single-Agent /export prepares and pins its destination automatically")
         if failures > 0 { throw ClientError.message("\(failures) archive flow checks failed") }
         print("PASS: temporary libraries only; no production models or chat services used")

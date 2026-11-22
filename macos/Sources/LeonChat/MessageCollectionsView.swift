@@ -184,7 +184,7 @@ struct BranchConversationView:View {
             if let failure {Text(failure).font(.system(size:13)).foregroundStyle(.red).fixedSize(horizontal:false,vertical:true)}
             HStack {
                 Spacer()
-                Button("取消",role:.cancel) {store.branchMessage=nil;dismiss()}.disabled(creating)
+                Button("取消",role:.cancel) {dismiss()}.disabled(creating)
                 Button(failure == nil ? "创建分支" : "重试创建") {
                     if submittedName == nil {submittedName=name.trimmingCharacters(in:.whitespacesAndNewlines)}
                     creating=true;failure=nil;attempt+=1
@@ -203,7 +203,7 @@ struct BranchConversationView:View {
                     name=title+" · 分支"
                 }
             }
-            .onChange(of:store.searchConnectionID) {_ in store.branchMessage=nil;dismiss()}
+            .onChange(of:store.searchConnectionID) {_ in dismiss()}
             .task(id:attempt) {
                 guard attempt>0,let title=submittedName else {return}
                 defer {creating=false}
@@ -211,7 +211,7 @@ struct BranchConversationView:View {
                     let room=try await store.createBranch(message,name:title,requestId:request)
                     try Task.checkCancellation()
                     let stillAtSource=store.documentRoom == message.conversationId
-                    store.branchMessage=nil;dismiss();if stillAtSource {openRoom(room)}
+                    dismiss();if stillAtSource {openRoom(room)}
                 } catch is CancellationError {} catch {failure=error.localizedDescription}
             }
     }

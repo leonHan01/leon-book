@@ -105,6 +105,7 @@ let package = Package(
             name: "LeonBookApp",
             dependencies: [
                 "LeonBook",
+                "LeonChat",
             ],
             path: "Sources/LeonBookApp"
         ),

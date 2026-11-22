@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UserNotifications
 
 /// One connection and outbox across LeonBook windows and navigation changes.
 @MainActor
@@ -14,21 +16,26 @@ final class LeonChatSession {
         let foreground: Bool
         let key: Bool
         let visible: Bool
-        let root: String?
-        let user: String?
         let open: () -> Void
     }
     private var hosts: [UUID: Host] = [:]
 
-    private init() { store.requiresHostArchiveDestination = true }
+    private init() {}
+
+    func startIfNeeded(forVisibleChat visible: Bool = false) {
+        let notifications = ChatNotifications.shared
+        guard !started, visible || notifications.enabled || notifications.route != nil else { return }
+        started = true
+        Task {
+            await store.start()
+            bind()
+        }
+    }
 
     func update(_ id: UUID, host: Host) {
         hosts[id] = host
         if host.key && host.foreground { lastKeyHostID = id }
-        if host.visible && !started {
-            started = true
-            Task { await store.start() }
-        }
+        startIfNeeded(forVisibleChat: host.visible)
         bind()
     }
 
@@ -52,9 +59,6 @@ final class LeonChatSession {
             store.setActive(foreground)
         }
         let front = frontHost
-        // A window captures the destination before archive creation. Existing
-        // unfinished archives retain their original root/user for safe retries.
-        store.setArchiveDestination(root: front?.root, user: front?.user)
         ChatNotifications.shared.bind(api: store.notificationAPI, device: store.notificationDevice,
             room: front?.visible == true ? store.selectedConversationId : nil, foreground: foreground)
         openPendingNotification()
@@ -62,6 +66,7 @@ final class LeonChatSession {
 
     func openPendingNotification() {
         let notifications = ChatNotifications.shared
+        if notifications.route != nil { startIfNeeded() }
         guard !routing, let route = notifications.route, frontHost != nil,
               let api = store.notificationAPI else { return }
         routing = true
@@ -84,7 +89,7 @@ final class LeonChatSession {
                 store.selectConversation(route.room)
                 host.open()
             } catch {
-                guard notifications.route == route else { return }
+                guard notifications.route == route, store.searchConnectionID == ObjectIdentifier(api) else { return }
                 notifications.route = nil
                 store.error = error.localizedDescription
             }
@@ -93,13 +98,43 @@ final class LeonChatSession {
 }
 
 @MainActor
+public final class LeonChatApplicationDelegate: NSObject, NSApplicationDelegate {
+    public func applicationWillFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = ChatNotifications.shared
+        LeonChatSession.shared.startIfNeeded()
+    }
+}
+
+public struct LeonChatActions {
+    public let openSettings: () -> Void
+    public let sync: () -> Void
+}
+
+private struct LeonChatActionsKey: FocusedValueKey {
+    typealias Value = LeonChatActions
+}
+
+public extension FocusedValues {
+    var leonChatActions: LeonChatActions? {
+        get { self[LeonChatActionsKey.self] }
+        set { self[LeonChatActionsKey.self] = newValue }
+    }
+}
+
+@MainActor
 public struct LeonChatView: View {
     @ObservedObject private var store = LeonChatSession.shared.store
 
-    public init() {}
+    private let library: LeonBlogExporter.Destination?
+
+    public init(archiveRoot: String?, archiveUser: String?) {
+        library = archiveRoot.flatMap { root in
+            archiveUser.map { LeonBlogExporter.Destination(root: root, user: $0) }
+        }
+    }
 
     public var body: some View {
-        ContentView(store: store)
+        ContentView(store: store, archiveLibrary: library)
             .frame(minWidth: 760, minHeight: 560)
             .accessibilityIdentifier("leon-chat-workspace")
     }
@@ -109,8 +144,6 @@ public struct LeonChatView: View {
 @MainActor
 private struct LeonChatHost: ViewModifier {
     let isVisible: Bool
-    let archiveRoot: String?
-    let archiveUser: String?
     let openChat: () -> Void
     @State private var id = UUID()
     @Environment(\.scenePhase) private var phase
@@ -124,8 +157,6 @@ private struct LeonChatHost: ViewModifier {
             .onChange(of: phase) { _ in update() }
             .onChange(of: controlActiveState) { _ in update() }
             .onChange(of: isVisible) { _ in update() }
-            .onChange(of: archiveRoot) { _ in update() }
-            .onChange(of: archiveUser) { _ in update() }
             .onChange(of: store.searchConnectionID) { _ in update() }
             .onChange(of: store.selectedConversationId) { _ in update() }
             .onChange(of: notifications.route) { _ in LeonChatSession.shared.openPendingNotification() }
@@ -134,16 +165,13 @@ private struct LeonChatHost: ViewModifier {
 
     private func update() {
         LeonChatSession.shared.update(id, host: .init(foreground: phase == .active,
-            key: controlActiveState == .key, visible: isVisible, root: archiveRoot,
-            user: archiveUser, open: openChat))
+            key: controlActiveState == .key, visible: isVisible, open: openChat))
     }
 }
 
 @MainActor
 public extension View {
-    func leonChatHost(isVisible: Bool, archiveRoot: String?, archiveUser: String?,
-                      openChat: @escaping () -> Void) -> some View {
-        modifier(LeonChatHost(isVisible: isVisible, archiveRoot: archiveRoot,
-            archiveUser: archiveUser, openChat: openChat))
+    func leonChatHost(isVisible: Bool, openChat: @escaping () -> Void) -> some View {
+        modifier(LeonChatHost(isVisible: isVisible, openChat: openChat))
     }
 }

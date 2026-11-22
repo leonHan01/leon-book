@@ -25,7 +25,7 @@ struct IntegrationChecks {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("leon-chat-integration-" + UUID().uuidString)
         let previousRoot = ProcessInfo.processInfo.environment["LEON_BOOK_WORKDIR"]
         let defaults = ChatPreferences.defaults
-        let pendingKey = ".archive.shared:"
+        let pendingKey = ".archive.shared:agent-a"
         let oldPending = defaults.object(forKey: pendingKey)
         let oldDestination = defaults.object(forKey: pendingKey + ".destination")
         defer {
@@ -37,38 +37,56 @@ struct IntegrationChecks {
         }
         let first = try LeonBlogExporter.destination(root: directory.appendingPathComponent("first").path)
         let second = try LeonBlogExporter.destination(root: directory.appendingPathComponent("second").path)
-        let other = try cli("users.create", root: second.root, params: ["name": "Other User"])
-        let otherID = (other["user"] as! [String: Any])["id"] as! String
+        let createdUser = try cli("users.create", root: second.root, params: ["name": "Other User"])
+        let otherID = (createdUser["user"] as! [String: Any])["id"] as! String
         precondition(otherID != second.user)
         setenv("LEON_BOOK_WORKDIR", first.root, 1)
 
         let store = ChatStore()
-        store.requiresHostArchiveDestination = true
         store.setActive(false)
-        await store.prepareBlogDestination()
-        precondition(store.blogDestination == nil && store.exportError != nil,
-            "A disconnected host must not export to the CLI's global default library")
+        func selection(_ library: LeonBlogExporter.Destination?, agent: String = "agent-a") -> ChatStore.ArchiveSelection {
+            .init(scope: store.conversationScope, agentID: agent, library: library)
+        }
+        do {
+            _ = try await store.prepareArchive(selection(nil))
+            preconditionFailure("A disconnected host must not export to the global default library")
+        } catch let error as ClientError {
+            precondition(error.localizedDescription.contains("先连接 LeonBook"))
+        }
         print("PASS: an unavailable host library cannot silently use a different data root")
 
-        store.setArchiveDestination(root: second.root, user: second.user)
-        await store.prepareBlogDestination()
-        precondition(store.exportError == nil && store.blogDestination == second,
-            "The window's root and user must override global and active-user defaults")
-        print("PASS: archive destination follows the current window's library and user")
+        let other = LeonBlogExporter.Destination(root: second.root, user: otherID)
+        let firstWindow = try await store.prepareArchive(selection(second))
+        let secondWindow = try await store.prepareArchive(selection(other, agent: "agent-b"))
+        precondition(firstWindow.destination == second && firstWindow.selection.agentID == "agent-a")
+        precondition(secondWindow.destination == other && secondWindow.selection.agentID == "agent-b")
+        precondition(firstWindow.selection != secondWindow.selection)
+        print("PASS: simultaneous windows resolve their own user and selected Agent")
 
-        store.setArchiveDestination(root: second.root, user: otherID)
-        precondition(store.blogDestination == nil, "A prepared destination must be invalidated after switching users")
-        await store.prepareBlogDestination()
-        precondition(store.blogDestination == .init(root: second.root, user: otherID))
-        print("PASS: switching workspace users invalidates and resolves the archive destination")
+        store.exportBusy = true
+        let switchedWindow = try await store.prepareArchive(selection(first, agent: "agent-b"))
+        store.exportBusy = false
+        precondition(switchedWindow.destination == first && switchedWindow.selection.agentID == "agent-b")
+        precondition(secondWindow.destination == other)
+        print("PASS: busy archive leaves its original selection intact while a new window gets a fresh destination")
 
         defaults.set(UUID().uuidString, forKey: pendingKey)
         defaults.set(try JSONEncoder().encode(second), forKey: pendingKey + ".destination")
-        store.setArchiveDestination(root: first.root, user: first.user)
-        await store.prepareBlogDestination()
-        precondition(store.blogDestination == second,
-            "An unfinished archive must retry against its pinned root and user")
+        let retry = try await store.prepareArchive(selection(first))
+        precondition(retry.destination == second && retry.pendingID != nil)
         print("PASS: unfinished archives remain pinned to the original library and user")
+
+        var generation = UUID()
+        let initialGeneration = generation
+        var delivered: [Int64] = []
+        let events = (1...2).map { ChatNotification(id: Int64($0), room: "shared", title: "Test", text: "Message") }
+        let complete = await ChatNotifications.deliverBatch(events, isCurrent: { generation == initialGeneration }) { event in
+            delivered.append(event.id)
+            await Task.yield()
+            generation = UUID()
+        }
+        precondition(!complete && delivered == [1], "A switched account must discard the rest of the old page and its cursor")
+        print("PASS: connection switch during notification delivery drops remaining events and rejects the old cursor")
 
         let secondStore = ChatStore()
         precondition(store.deviceId == secondStore.deviceId, "Windows must share one integrated device identity")

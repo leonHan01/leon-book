@@ -15,6 +15,7 @@ struct AgentHistoryRow: View {
     @ObservedObject var store: ChatStore
     let room: Conversation
     var compact = true
+    let onDelete: (Conversation) -> Void
     @StateObject private var hover = ConversationRowHover()
 
     var body: some View {
@@ -26,7 +27,7 @@ struct AgentHistoryRow: View {
                     Spacer(minLength: 0)
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
-            Button(role: .destructive) { store.conversationToDelete = room } label: {
+            Button(role: .destructive) { onDelete(room) } label: {
                 Image(systemName: "trash").frame(width: 24, height: 26).contentShape(Rectangle())
             }.buttonStyle(.borderless).opacity(hover.hovering ? 1 : 0)
                 .disabled(!store.hasConnection || store.deletingConversation || store.creatingAgentConversation)
@@ -36,7 +37,7 @@ struct AgentHistoryRow: View {
                 : compact ? Color.clear : Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: compact ? 8 : 12))
             .onHover { hover.hovering = $0 }
             .contextMenu {
-                Button("永久删除对话…", role: .destructive) { store.conversationToDelete = room }
+                Button("永久删除对话…", role: .destructive) { onDelete(room) }
                     .disabled(!store.hasConnection || store.deletingConversation || store.creatingAgentConversation)
             }
     }

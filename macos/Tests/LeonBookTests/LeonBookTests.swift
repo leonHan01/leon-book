@@ -7128,6 +7128,7 @@ struct LeonBookUnitTests {
             ("RichArticleBodyBridgeTests.testIncrementalBridgeKeepsNativeBodyCurrentThroughUndoAndReload", { try await RichArticleBodyBridgeTests().testIncrementalBridgeKeepsNativeBodyCurrentThroughUndoAndReload() }),
             ("RichArticleTests.testEmbeddedReaderSuppressesPageScrollbarsUntilNativeHeightCatchesUp", { try await RichArticleTests().testEmbeddedReaderSuppressesPageScrollbarsUntilNativeHeightCatchesUp() }),
             ("RichArticleTests.testReaderUsesOnlyNativeScrollViewWhileScrollingAndResizing", { try await RichArticleTests().testReaderUsesOnlyNativeScrollViewWhileScrollingAndResizing() }),
+            ("RichArticleTests.testReaderSelectionKeepsFocusWhilePreparingComment", { try await RichArticleTests().testReaderSelectionKeepsFocusWhilePreparingComment() }),
             ("RichArticleTests.testReaderReportedHeightContainsHeadingMarginsWithoutInnerScroll", { try await RichArticleTests().testReaderReportedHeightContainsHeadingMarginsWithoutInnerScroll() }),
             ("RichArticleTests.testReaderImagesFollowNativeViewportAndPreserveSources", { try await RichArticleTests().testReaderImagesFollowNativeViewportAndPreserveSources() }),
             ("RichArticleTests.testRichArticleSelectionWorkStaysWithinSelectedBlocks", { try await RichArticleTests().testRichArticleSelectionWorkStaysWithinSelectedBlocks() }),

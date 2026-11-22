@@ -43,6 +43,33 @@ print -r -- "${BUILD_CONFIGURATION}" > "${BUILD_INFO}"
 BUILD_STARTED_AT=$SECONDS
 python3 "${SCRIPT_DIR}/build-state.py" capture "${MACOS_DIR}" "${INPUT_STATE}"
 
+# Release packaging may use an Apple identity. An explicit team is required
+# and the designated requirement survives changes to the executable and leaf certificate.
+load_signing_configuration() {
+    local fields
+    fields="$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1]))["native"]; print(s["@codesign-identity"]); print(s["@codesign-team"])' "${INPUT_STATE}")"
+    signing_identity="${fields%%$'\n'*}"
+    signing_team="${fields#*$'\n'}"
+    if [[ "${signing_identity}" != - ]]; then
+        if [[ -z "${signing_identity}" || ! "${signing_team}" =~ '^[A-Z0-9]{10}$' ]]; then
+            print -u2 -- 'Apple signing requires LEON_BOOK_CODESIGN_IDENTITY and a 10-character LEON_BOOK_CODESIGN_TEAM_ID.'
+            return 1
+        fi
+        signing_requirement="anchor apple generic and certificate leaf[subject.OU] = \"${signing_team}\" and ((certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists) or (certificate 1[field.1.2.840.113635.100.6.2.1] exists and (certificate leaf[field.1.2.840.113635.100.6.1.12] exists or certificate leaf[field.1.2.840.113635.100.6.1.7] exists)))"
+    fi
+}
+
+verify_app() {
+    local target="$1"
+    codesign --verify --deep --strict "${target}" || return 1
+    if [[ "${signing_identity}" != - ]]; then
+        codesign --verify --strict -R "=${signing_requirement}" "${target}" || return 1
+        codesign --verify --strict -R "=${signing_requirement}" "${target}/Contents/MacOS/LeonBookCLI" || return 1
+    fi
+}
+
+load_signing_configuration
+
 acquire_publish_lock() {
     mkdir -p "${MACOS_DIR}/dist"
     # The destination owns the lock, regardless of TMPDIR or cache overrides.
@@ -56,15 +83,24 @@ sign_and_publish() {
     python3 "${SCRIPT_DIR}/build-state.py" sync-editor "${MACOS_DIR}" "${STAGING_APP}" "${INPUT_STATE}"
     COPYFILE_DISABLE=1 cp "${INPUT_STATE}" "${CONTENTS_DIR}/Resources/leonbook-build-inputs.json"
     COPYFILE_DISABLE=1 cp -p "${BUILD_INFO}" "${CONTENTS_DIR}/Resources/leonbook-build-configuration"
-    codesign --force --sign - --timestamp=none "${STAGING_APP}"
-    codesign --verify --deep --strict "${STAGING_APP}"
+    if [[ "${signing_identity}" == - ]]; then
+        codesign --force --sign - --timestamp=none "${STAGING_APP}"
+    else
+        codesign --force --sign "${signing_identity}" --timestamp=none \
+            --identifier com.leon-book.macos.cli \
+            --requirements "=designated => identifier \"com.leon-book.macos.cli\" and (${signing_requirement})" \
+            "${CONTENTS_DIR}/MacOS/LeonBookCLI"
+        codesign --force --sign "${signing_identity}" --timestamp=none \
+            --requirements "=designated => identifier \"com.leon-book.macos\" and (${signing_requirement})" "${STAGING_APP}"
+    fi
+    verify_app "${STAGING_APP}"
 
     [[ -n "${PUBLISH_LOCK_FD:-}" ]] || acquire_publish_lock
     # Copy and verify on the destination volume before replacing the old app.
     local install_root
     install_root="$(mktemp -d "${MACOS_DIR}/dist/.leonbook-install.XXXXXX")"
     if ! COPYFILE_DISABLE=1 ditto --norsrc --noextattr --noqtn --noacl "${STAGING_APP}" "${install_root}/${APP_NAME}.app" || \
-        ! codesign --verify --deep --strict "${install_root}/${APP_NAME}.app"; then
+        ! verify_app "${install_root}/${APP_NAME}.app"; then
         rm -rf "${install_root}"
         return 1
     fi
@@ -84,6 +120,7 @@ if [[ "${LEON_BOOK_FORCE_SWIFT_BUILD:-0}" != 1 ]] && \
     # Keep the source app stable while copying it; another engine may be publishing.
     acquire_publish_lock
     python3 "${SCRIPT_DIR}/build-state.py" capture "${MACOS_DIR}" "${INPUT_STATE}"
+    load_signing_configuration
     LOCKED_STATUS="$(python3 "${SCRIPT_DIR}/build-state.py" status "${MACOS_DIR}" "${APP_BUNDLE}" "${BUILD_CONFIGURATION}" "${BUILD_SYSTEM}" "${INPUT_STATE}")"
     if [[ "${LOCKED_STATUS}" == unchanged ]]; then
         zsystem flock -u "${PUBLISH_LOCK_FD}"

@@ -9,6 +9,7 @@ final class AgentDetailDraft: ObservableObject {
 struct AgentConversationSidebar: View {
     @ObservedObject var store: ChatStore
     let agent: AgentInfo
+    let onDelete: (Conversation) -> Void
     @StateObject private var draft = AgentDetailDraft()
 
     var body: some View {
@@ -32,7 +33,7 @@ struct AgentConversationSidebar: View {
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
                     }
                     ForEach(store.agentConversations(agent.id)) { room in
-                        AgentHistoryRow(store: store, room: room)
+                        AgentHistoryRow(store: store, room: room, onDelete: onDelete)
                     }
                 }
             }
@@ -55,6 +56,7 @@ struct AgentConversationSidebar: View {
 struct AgentDetailView: View {
     @ObservedObject var store: ChatStore
     let agentId: String
+    let onDelete: (Conversation) -> Void
     @StateObject private var draft = AgentDetailDraft()
 
     var body: some View {
@@ -102,7 +104,7 @@ struct AgentDetailView: View {
                     }
                     LazyVStack(spacing: 10) {
                         ForEach(store.agentConversations(agentId)) { room in
-                            AgentHistoryRow(store: store, room: room, compact: false)
+                            AgentHistoryRow(store: store, room: room, compact: false, onDelete: onDelete)
                         }
                     }
                 }.padding(20).frame(maxWidth: 820, alignment: .leading).frame(maxWidth: .infinity)

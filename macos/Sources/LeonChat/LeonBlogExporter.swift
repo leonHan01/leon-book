@@ -125,6 +125,13 @@ enum LeonBlogExporter {
     static func export(_ archive: ChatArchive, destination: Destination, imageFiles: [String: URL], documentFiles: [String: URL] = [:]) throws -> Saved {
         if let existing = try savedArchive(id: archive.id, destination: destination) { return existing }
         let slug = "leon-chat-" + archive.id.lowercased()
+        // Recover staged files left by an interrupted attempt. Cleanup on errors
+        // keeps repeated saves from collecting copies of the original conversation.
+        try discardUncommittedMedia(archiveID: archive.id, destination: destination)
+        var committed = false
+        defer {
+            if !committed { try? discardUncommittedMedia(archiveID: archive.id, destination: destination) }
+        }
         var media: [[String: Any]] = [], imageURLs: [String: String] = [:], documentURLs: [String: String] = [:]
         for id in images(in: archive).map(\.id).sorted() {
             guard let file = imageFiles[id] else { throw ClientError.message("原对话图片未准备完整，当前上下文已保留。") }
@@ -187,6 +194,11 @@ enum LeonBlogExporter {
         }
         _ = try call("articles.create", params: params, destination: destination)
         guard let saved = try savedArchive(id: archive.id, destination: destination) else { throw ClientError.message("LeonBook 未确认归档已保存，当前上下文已保留。") }
+        committed = true
         return saved
+    }
+
+    private static func discardUncommittedMedia(archiveID: String, destination: Destination) throws {
+        _ = try call("media.discardChatArchive", params: ["archiveId": archiveID], destination: destination)
     }
 }

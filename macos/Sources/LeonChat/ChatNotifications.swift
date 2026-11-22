@@ -19,6 +19,7 @@ final class ChatNotifications:NSObject,ObservableObject,UNUserNotificationCenter
     private var device="",account=""
     private var foreground=true,visibleRoom:String?
     private var task:Task<Void,Never>?
+    private var deviceRemoval: Task<Void, Never>?
     private var generation=UUID()
     private var token=ChatPreferences.defaults.string(forKey:"chat.notifications.apns-token") ?? ""
     private var after:Int64?
@@ -29,7 +30,7 @@ final class ChatNotifications:NSObject,ObservableObject,UNUserNotificationCenter
         let changed=self.api.map(ObjectIdentifier.init) != api.map(ObjectIdentifier.init)
         self.foreground=foreground;visibleRoom=room
         if changed {
-            if let previous=self.api {Task {try? await previous.removeNotifications(device:self.device)}}
+            if let previous = self.api { scheduleRemoval(api: previous, device: self.device) }
             task?.cancel();generation=UUID();after=nil;displayed=[];account=""
             UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         }
@@ -45,9 +46,25 @@ final class ChatNotifications:NSObject,ObservableObject,UNUserNotificationCenter
             catch {status="无法申请系统通知权限。";return}
         }
         enabled=value;ChatPreferences.defaults.set(value,forKey:"chat.notifications.enabled")
-        if value {registerRemoteIfAvailable()}else {UNUserNotificationCenter.current().removeAllPendingNotificationRequests();UNUserNotificationCenter.current().removeAllDeliveredNotifications();if let api {try? await api.removeNotifications(device:device)}}
         restart()
+        if !value {
+            UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+            UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+            if let api {
+                scheduleRemoval(api: api, device: device)
+                await deviceRemoval?.value
+            }
+        }
     }
+
+    private func scheduleRemoval(api: any NotificationAPI, device: String) {
+        let earlier = deviceRemoval
+        deviceRemoval = Task {
+            await earlier?.value
+            try? await api.removeNotifications(device: device)
+        }
+    }
+
     func receivedToken(_ data:Data){token=data.map {String(format:"%02x",$0)}.joined();ChatPreferences.defaults.set(token,forKey:"chat.notifications.apns-token");restart()}
     func remoteFailed(){if enabled {status="系统通知已开启；APNs 尚未配置。"}}
     private var remoteEnabled:Bool {Bundle.main.object(forInfoDictionaryKey:"LeonRemotePushEnabled") as? Bool == true}
@@ -82,18 +99,38 @@ final class ChatNotifications:NSObject,ObservableObject,UNUserNotificationCenter
                 do {
                     let settings=await UNUserNotificationCenter.current().notificationSettings()
                     guard stamp==generation,!Task.isCancelled else {return}
-                    guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {status="系统通知未授权，请在系统设置中允许。";try? await api.removeNotifications(device:device);task=nil;return}
+                    guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+                        status = "系统通知未授权，请在系统设置中允许。"
+                        scheduleRemoval(api: api, device: device)
+                        await deviceRemoval?.value
+                        if stamp == generation { task = nil }
+                        return
+                    }
                     if Date().timeIntervalSince(checkedAt)>30 {
-                        let availability=try await api.notificationStatus();guard stamp==generation else {return}
-                        account=availability.userId;remoteAvailable=availability.apns&&remoteEnabled && !token.isEmpty
-                        try await api.registerNotifications(registration(active:foreground ? visibleRoom : nil));checkedAt=Date()
+                        // Reconnecting the same account uses the same device ID.
+                        // An old removal must finish before registering it again.
+                        await deviceRemoval?.value
+                        guard stamp == generation, !Task.isCancelled else { return }
+                        let availability = try await api.notificationStatus()
+                        guard stamp == generation, !Task.isCancelled else { return }
+                        account = availability.userId
+                        remoteAvailable = availability.apns && remoteEnabled && !token.isEmpty
+                        try await api.registerNotifications(registration(active: foreground ? visibleRoom : nil))
+                        guard stamp == generation, !Task.isCancelled else { return }
+                        checkedAt = Date()
                         status=remoteAvailable ? "系统通知已开启；后台通道已配置" : "应用运行时通知已开启；后台推送待配置"
                     }
                     let page=try await api.notifications(device:device,after:after,preview:previews)
                     guard stamp==generation,!Task.isCancelled else {return}
-                    for event in page.events {
-                        if !(foreground && event.room==visibleRoom),!remoteAvailable {await present(event)}
+                    let batchAccount = account
+                    let delivered = await Self.deliverBatch(page.events, isCurrent: {
+                        self.generation == stamp && !Task.isCancelled
+                    }) { event in
+                        if !(self.foreground && event.room == self.visibleRoom), !remoteAvailable {
+                            await self.present(event, account: batchAccount, stamp: stamp)
+                        }
                     }
+                    guard delivered, generation == stamp, !Task.isCancelled else { return }
                     after=page.nextAfter
                     if page.hasMore {continue}
                 } catch {if stamp==generation {status=error.localizedDescription}}
@@ -101,12 +138,21 @@ final class ChatNotifications:NSObject,ObservableObject,UNUserNotificationCenter
             }
         }
     }
-    private func present(_ event:ChatNotification) async {
-        guard enabled,displayed.insert(event.id).inserted else {return}
+    static func deliverBatch(_ events: [ChatNotification], isCurrent: () -> Bool,
+                             deliver: (ChatNotification) async -> Void) async -> Bool {
+        for event in events {
+            guard isCurrent() else { return false }
+            await deliver(event)
+        }
+        return isCurrent()
+    }
+
+    private func present(_ event: ChatNotification, account: String, stamp: UUID) async {
+        guard stamp == generation, enabled, displayed.insert(event.id).inserted else { return }
         if displayed.count>1000 {displayed=[event.id]}
         let content=UNMutableNotificationContent();content.title=event.title;content.body=event.text;content.sound = .default;content.threadIdentifier=event.room
         content.userInfo=["accountId":account,"roomId":event.room,"messageId":event.id]
-        let stamp=generation,identifier="leon.\(account).\(event.id)"
+        let identifier = "leon.\(account).\(stamp.uuidString).\(event.id)"
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier:identifier,content:content,trigger:nil))
         if stamp != generation {UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers:[identifier]);UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers:[identifier])}
     }
@@ -159,34 +205,6 @@ struct NotificationSettingsView:View {
                     .padding(.top, 6)
             }
             .font(.callout)
-        }
-    }
-}
-
-@MainActor
-struct NotificationHost:ViewModifier {
-    @ObservedObject var store:ChatStore
-    let visibleRoom:String?
-    let openRoom:(String)->Void
-    @ObservedObject private var notifications=ChatNotifications.shared
-    @Environment(\.scenePhase) private var phase
-    func body(content:Content)->some View {
-        content.task {bind();openPending()}
-            .onChange(of:store.searchConnectionID){_ in bind()}
-            .onChange(of:visibleRoom){_ in bind()}
-            .onChange(of:phase){_ in bind()}
-            .onChange(of:notifications.route){_ in openPending()}
-    }
-    private func bind(){notifications.bind(api:store.notificationAPI,device:store.notificationDevice,room:visibleRoom,foreground:phase == .active)}
-    private func openPending(){
-        guard let route=notifications.route,store.notificationAPI != nil else {return}
-        Task {
-            do {
-                guard let api=store.notificationAPI else {return};let status=try await api.notificationStatus()
-                guard route.account==status.userId,store.searchConnectionID==ObjectIdentifier(api) else {notifications.route=nil;return}
-                _ = try await store.searchHistory(room:route.room,message:route.message,direction:"around")
-                guard store.searchConnectionID==ObjectIdentifier(api) else {return};notifications.route=nil;openRoom(route.room)
-            }catch {notifications.route=nil;store.error=error.localizedDescription}
         }
     }
 }

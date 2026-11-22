@@ -99,8 +99,6 @@ public struct ContentView: View {
         .onOpenURL(perform: model.handleAutomationURL)
         .leonChatHost(
             isVisible: chatNavigation.section == .chat,
-            archiveRoot: model.storageReady ? model.dataRootDirectoryPath : nil,
-            archiveUser: model.storageReady ? model.currentUser.id : nil,
             openChat: { model.section = .chat }
         )
         .nativeAppTheme()
@@ -383,7 +381,9 @@ private struct NativeNavigationDetail: View {
     var body: some View {
         switch section {
         case .dashboard: DashboardView(model: model).id(model.workspaceGeneration)
-        case .chat: LeonChatView()
+        case .chat:
+            LeonChatView(archiveRoot: model.storageReady ? model.dataRootDirectoryPath : nil,
+                         archiveUser: model.storageReady ? model.currentUser.id : nil)
         case .articles: ArticleListView(model: model)
         case .graph: ArticleGraphView(model: model, pageState: pageStateCache.graph)
         case .canvas: InfiniteCanvasView(model: model)

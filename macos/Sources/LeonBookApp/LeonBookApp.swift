@@ -1,8 +1,10 @@
 import LeonBook
+import LeonChat
 import SwiftUI
 
 @main
 struct LeonBookApp: App {
+    @NSApplicationDelegateAdaptor(LeonChatApplicationDelegate.self) private var chatDelegate
     @StateObject private var languagePreferences = NativeLanguagePreferences.shared
 
     var body: some Scene {
@@ -55,17 +57,28 @@ private struct LeonBookSettingsRoot: View {
 
 private struct LeonBookCommands: Commands {
     @FocusedObject private var model: NativeAppModel?
+    @FocusedValue(\.leonChatActions) private var chatActions
     @ObservedObject private var preferences = NativeCommandPreferences.shared
     @ObservedObject private var languagePreferences = NativeLanguagePreferences.shared
 
     var body: some Commands {
+        if let chatActions {
+            CommandGroup(replacing: .appSettings) {
+                Button(NativeLocalization.string("聊天设置…", language: languagePreferences.language), action: chatActions.openSettings)
+                    .keyboardShortcut(",")
+            }
+            CommandMenu(NativeLocalization.string("聊天", language: languagePreferences.language)) {
+                Button(NativeLocalization.string("立即同步", language: languagePreferences.language), action: chatActions.sync)
+                    .keyboardShortcut("r")
+            }
+        }
         CommandMenu(NativeLocalization.string("笔记", language: languagePreferences.language)) {
             ForEach(menuCommands) { definition in
                 Button(NativeLocalization.string(definition.title, language: languagePreferences.language)) {
                     model?.executeCommand(definition.id)
                 }
                 .modifier(NativeOptionalKeyboardShortcut(
-                    shortcut: preferences.shortcut(for: definition)
+                    shortcut: definition.id == .reload && chatActions != nil ? nil : preferences.shortcut(for: definition)
                 ))
                 .disabled(model?.canExecuteCommand(definition.id) != true)
             }

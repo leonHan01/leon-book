@@ -10,7 +10,7 @@ Android 与 iOS 移动版支持离线编辑文章、微博和待办，并与 Mac
 
 主导航新增「聊天」，已集成 LeonApp Mac 的 Agent / 群聊、消息与附件、搜索收藏、分支、上下文、通知、用量和对话归档。首次进入后配置聊天服务地址和令牌；归档直接保存到当前 LeonBook 资料库用户的草稿。详见[聊天集成说明与功能对应](docs/LEON_CHAT_INTEGRATION.md)。
 
-[快速开始](#快速开始) · [主要功能](#主要功能) · [数据与备份](#数据与备份) · [自动化接入](#自动化接入) · [开发说明](#开发说明)
+[快速开始](#快速开始) · [主要功能](#主要功能) · [手机同步](#手机同步) · [聊天](#聊天) · [数据与备份](#数据与备份) · [自动化接入](#自动化接入) · [开发说明](#开发说明)
 
 ## 快速开始
 
@@ -46,6 +46,8 @@ LEON_BOOK_WORKDIR="$HOME/Documents/LeonBookData" ./scripts/leonblog open
 | 影音库 | 独立分组管理视频和音频，添加介绍、搜索内容，使用原生控件播放并记忆播放进度。 |
 | 待办 | 设置优先级、截止日期和备注，按未完成、今天、逾期或已完成筛选，也可将待办清单放到首页。 |
 | 工作空间 | 切换本地用户，在不同窗口中独立导航，并保存命名的阅读或写作布局。 |
+| 移动端 | 在 Android 或 iOS 上离线编辑文章、微博和待办，与配对的 Mac 工作区同步。 |
+| 聊天 | 连接 LeonApp 服务，与 Agent 或群聊交流，并将对话归档为文章草稿。 |
 
 文章“发布”和微博发布都作用于本地资料库，不会向互联网平台发送内容。内嵌远程网页需要网络连接。
 
@@ -87,6 +89,20 @@ LEON_BOOK_WORKDIR="$HOME/Documents/LeonBookData" ./scripts/leonblog open
 
 批量 PDF 和 HTML 同样输出 ZIP，每篇文章为独立文件；批量 HTML 和文章包中的已导出文章链接会改写为相对链接。可选择是否包含分类、标签、更新时间和摘要。远程图片及媒体需要在导出时联网下载，网页嵌入转换为来源链接。导出读取已保存内容；找不到附件时提示错误，取消或失败不会覆盖已有导出。完成后可在访达中查看或使用系统分享菜单。
 
+## 手机同步
+
+Android 和 iOS 移动版在设备上保存文章、微博、待办、草稿及已下载的附件，可与一个配对的 Mac 工作区双向同步，并提供编辑冲突处理选项。移动端支持文章目录、续读、正文插图和附件上传；画板编辑在 Mac 上进行。
+
+安装移动 App 后，在 Mac 的“设置 → 手机同步”中选择同一局域网内的地址并启动服务，再用手机扫描生成的配对码。Mac 同步服务需要 Node.js 22.13 或更高版本，并在 `mobile/` 目录运行 `npm ci` 安装依赖。局域网连接使用未加密的 HTTP，请在可信 Wi-Fi 上使用；退出 Mac 应用会停止服务。
+
+平台要求、构建命令、附件限制、重连和冲突处理见[移动端指南](mobile/README.md)。
+
+## 聊天
+
+打开主导航中的“聊天”，在“设置 → 连接”中填写 LeonApp 服务地址和访问令牌。首次进入聊天页面时客户端才会尝试连接。同一账号的服务器会话、消息、收藏和 Agent 可以同步；LeonBook 使用独立设备身份，不会自动导入独立 LeonApp 中未发送的草稿。
+
+聊天支持 Agent 与群聊、附件、Markdown 与图表、搜索、分支、上下文、通知和用量。通过“新对话”或 `/export` 可将对话归档为当前 LeonBook 资料库用户的文章草稿。完整功能与数据边界见[聊天集成说明](docs/LEON_CHAT_INTEGRATION.md)。
+
 ## 软件截图
 
 以下为仓库内的产品演示截图，使用独立工作区中的示例数据，展示写作、内容关联和时间线等界面；布局可能与当前版本不同。
@@ -118,6 +134,7 @@ LEON_BOOK_WORKDIR="$HOME/Documents/LeonBookData" ./scripts/leonblog open
 | `./scripts/leonblog build` | 构建并打包 Release，不启动应用 |
 | `./scripts/leonblog test` | 运行原生测试与检查 |
 | `./scripts/leonblog coverage` | 运行单元测试并生成覆盖率报告 |
+| `./scripts/leonblog mobile-sync --help` | 查看从终端运行手机同步服务的选项 |
 | `./scripts/leonblog help` | 查看命令帮助 |
 
 `open`、`start`、`restart`、`build` 均支持 `--debug` 和 `--release`。Debug 在可用时采用 native 构建引擎，缓存与常规 Release 构建分开；自动选择时若该引擎不可用，会回退到工具链默认引擎。可设置 `LEON_BOOK_BUILD_SYSTEM=default` 显式使用工具链默认引擎。每种构建配置首次使用时需要建立缓存。
@@ -188,6 +205,7 @@ macos/Package.swift                # SwiftPM 产品与 target 定义
 macos/Sources/LeonBookApp/          # 应用入口与 App Intents
 macos/Sources/LeonBook/             # 界面、编辑器、存储及宿主适配
 macos/Sources/LeonBookCLI/          # JSON CLI 与 JSON Lines 通信
+macos/Sources/LeonChat/             # 集成聊天客户端与内置渲染资源
 macos/Sources/LeonBookModuleKit/    # 第一方模块契约
 macos/Sources/LeonBook*Module/      # 搜索、图谱、发布、备份、采集和待办
 macos/Sources/LeonBookExtensionKit/ # 声明式扩展契约
@@ -195,10 +213,11 @@ macos/Whiteboard/                   # Excalidraw 资源构建源码
 macos/Tests/                       # 原生、模块与自动化测试
 macos/Checks/                      # 应用及存储专项检查
 macos/scripts/                     # 构建、测试、覆盖率与性能脚本
+mobile/                            # Android/iOS 移动端与局域网同步服务
 ```
 
 第一方模块可在设置中独立启停。声明式扩展通过版本化的 `extension.json` 提供命令、模板变量、文本/JSON 导入器和围栏渲染器，格式见 [扩展示例](macos/Examples/DeclarativeExtension/extension.json)。
 
-常规 Swift 构建直接使用仓库内的画板资源，无需 Node.js；仅在重新构建这些资源时需要 Node.js/npm，操作见 [画板开发说明](macos/Whiteboard/README.md)。
+常规 Swift 构建直接使用仓库内的资源，无需 Node.js。移动端及同步服务、重新构建画板资源时需要 Node.js/npm，操作见[移动端指南](mobile/README.md)和[画板开发说明](macos/Whiteboard/README.md)。
 
 进一步阅读：[macOS 开发与使用说明](macos/README.zh-CN.md) · [性能说明](macos/PERFORMANCE.md) · [AI 自动化接入](docs/AI_AUTOMATION.md)。

@@ -8,6 +8,7 @@ struct DocumentCard:View {
     let document:DocumentAttachment
     var favorite:Int64?=nil
     var message:Message?=nil
+    var onBranch: ((Message) -> Void)? = nil
     var remove:(()->Void)?=nil
     @State private var preview:URL?
     @State private var busy=false
@@ -19,7 +20,7 @@ struct DocumentCard:View {
             if busy {ProgressView()}
             if let remove {Button(action:remove){Image(systemName:"xmark").font(.system(size:12)).frame(width:32,height:32)}.buttonStyle(.plain).accessibilityLabel("移除附件")}
         }.foregroundStyle(.primary).padding(12).background(Color.primary.opacity(0.045),in:RoundedRectangle(cornerRadius:7))
-            .contextMenu {if let message {Button("引用"){store.quoteMessage(message)};Button("收藏"){Task {await store.favoriteMessage(message)}};Button("从这里创建分支"){store.beginBranch(message)}}}
+            .contextMenu {if let message {Button("引用"){store.quoteMessage(message)};Button("收藏"){Task {await store.favoriteMessage(message)}};if let onBranch { Button("从这里创建分支") { onBranch(message) } }}}
             .quickLookPreview($preview).alert("附件",isPresented:Binding(get:{error != nil},set:{if !$0 {error=nil}})){Button("确定",role:.cancel){}} message:{Text(error ?? "")}
             .onChange(of:store.searchConnectionID){_ in preview=nil;error=nil}
     }

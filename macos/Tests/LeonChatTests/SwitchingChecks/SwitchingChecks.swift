@@ -203,8 +203,9 @@ struct SwitchingChecks {
             "/api/conversations/context/clear-preview": try JSONEncoder().encode(clearPreview),
             "/api/conversations/context/clear": try JSONEncoder().encode(ClearHistoryResult(clearedMessages: 1, historyRevision: 1))
         ])
-        await store.performCommand(.clear)
-        check(store.showClearHistory && store.messages.count == 1, "/clear opens confirmation without deleting history")
+        var presentingClear = false
+        await store.performCommand(.clear) { if case .clearHistory = $0 { presentingClear = true } }
+        check(presentingClear && store.messages.count == 1, "/clear opens confirmation without deleting history")
         check(!FixtureProtocol.fixture.paths().contains("/api/conversations/context/clear"), "no deletion request before confirmation")
         await store.prepareClearHistory()
         check(store.clearPreview?.messageCount == 1, "confirmation reads current server history count")
@@ -226,7 +227,6 @@ struct SwitchingChecks {
         let branch=Conversation(id:"branch:copy",name:"分支",kind:"direct",agentId:"a",agentIds:["a"])
         let branchPath="/api/conversations/\(a.id)/branches"
         FixtureProtocol.fixture.setup(holding:directoryPaths,responses:[branchPath:try JSONEncoder().encode(branch)])
-        store.beginBranch(message(901,room:a))
         let created=try await store.createBranch(message(901,room:a),name:"分支",requestId:"request")
         check(created.id==branch.id && store.conversations.contains(where:{$0.id==branch.id}),"branch appears in the conversation directory")
         check(store.selectedConversationId==a.id && store.draft=="source draft","branch creation preserves source navigation and draft")

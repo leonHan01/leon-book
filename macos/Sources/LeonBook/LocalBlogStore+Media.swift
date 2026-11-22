@@ -80,6 +80,33 @@ extension LocalBlogStore {
         return resolved
     }
 
+    func discardUncommittedChatArchiveMedia(_ archiveID: UUID) throws {
+        try prepare()
+        let slug = "leon-chat-" + archiveID.uuidString.lowercased()
+        let folder = mediaURL.appendingPathComponent(slug, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: folder.path) else { return }
+        guard try folder.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == false else {
+            throw NativeStoreError.fileSystem("Invalid chat archive media directory")
+        }
+        // An article may have been committed even if the CLI timed out. Its
+        // directory is retained, including files needed to finish a retry.
+        do {
+            _ = try getArticle(slug: slug)
+            return
+        } catch NativeStoreError.notFound {
+            // Uncommitted media are removed only if nothing else references them.
+        }
+        let files = try FileManager.default.contentsOfDirectory(at: folder,
+            includingPropertiesForKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+        let media = try files.compactMap { file -> NativeMedia? in
+            let properties = try file.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+            guard properties.isSymbolicLink == false, properties.isRegularFile == true else { return nil }
+            return NativeMedia(kind: "file", name: file.lastPathComponent, size: 0,
+                               url: "/media/\(slug)/\(file.lastPathComponent)")
+        }
+        try discardUnreferencedMedia(media)
+    }
+
     func discardUnreferencedMedia(_ media: [NativeMedia]) throws {
         try prepare()
         guard !media.isEmpty else { return }

@@ -10,7 +10,7 @@ Built with **SwiftUI, AppKit, WebKit, and SQLite**. Core writing and library fea
 
 The new **Chat** destination integrates LeonApp for Mac: agents and groups, messages and attachments, search and favorites, branches, context, notifications, usage, and conversation archives. Configure the chat server and token on first use. Archives become drafts in the current LeonBook library and user. See the [integration and feature mapping](docs/LEON_CHAT_INTEGRATION.md).
 
-[Quick start](#quick-start) · [Features](#features) · [Data and backups](#data-and-backups) · [Automation](#automation) · [Development](#development)
+[Quick start](#quick-start) · [Features](#features) · [Mobile sync](#mobile-sync) · [Chat](#chat) · [Data and backups](#data-and-backups) · [Automation](#automation) · [Development](#development)
 
 ## Quick start
 
@@ -46,6 +46,8 @@ Without this override, the app uses your remembered directory, then the reposito
 | Media Library | Organize video and audio into independent groups, add introductions, search, and play files with native controls and saved progress. |
 | Tasks | Track priorities, due dates, and notes. Filter open, today, overdue, and completed tasks, and include a task list on the homepage. |
 | Workspaces | Switch between local users, keep navigation independent across windows, and save named reading or writing layouts. |
+| Mobile companion | Edit articles, posts, and tasks offline on Android or iOS, then sync with a paired Mac workspace. |
+| Chat | Connect to a LeonApp server to work with agents and groups, and archive conversations as article drafts. |
 
 Article **Publish** and posting to the timeline update your local library. They do not publish content to an internet service. Embedded remote webpages require a network connection.
 
@@ -87,6 +89,20 @@ Use the moment card menu, a to-do item's menu, **Email List** for the currently 
 
 Sending uses your configured SMTP service directly and requires a network connection. Success means the server accepted the message; the provider handles final delivery. If delivery is unconfirmed, check the recipient inbox before retrying to avoid duplicates.
 
+## Mobile sync
+
+The Android and iOS companion keeps articles, local posts, tasks, drafts, and downloaded attachments available on the device. It syncs changes in both directions with one paired Mac workspace and provides options to resolve conflicting edits. Article directories, reading position, inline images, and attachment uploads are supported; whiteboard editing remains on the Mac.
+
+To pair, install the mobile app, then open **Settings → Mobile Sync** on the Mac, start the service using an address on the same local network, and scan the generated pairing code in the mobile app. The Mac sync service requires Node.js 22.13 or later and the mobile dependencies installed with `npm ci` in `mobile/`. The local connection uses unencrypted HTTP, so use a trusted Wi-Fi network. The service stops when the Mac app exits.
+
+See the [mobile guide](mobile/README.md) for platform requirements, build commands, attachment limits, reconnection, and conflict handling.
+
+## Chat
+
+Open **Chat** in the main navigation and enter your LeonApp server address and access token under **Settings → Connection**. The client connects when the Chat page is first opened. Server conversations, messages, favorites, and agents sync through the same account; LeonBook uses its own device identity and does not automatically import unsent drafts from the standalone LeonApp.
+
+Chat supports agent and group conversations, attachments, Markdown and diagrams, search, branches, context, notifications, and usage details. Use **New Conversation** or `/export` to archive a conversation as an article draft in the current LeonBook library and user. See the [chat integration guide](docs/LEON_CHAT_INTEGRATION.md) for the full feature mapping and data boundaries.
+
 ## Screenshots
 
 These repository screenshots use a separate demo workspace with sample content. They illustrate the writing, linking, and timeline views; layouts may differ from the current version.
@@ -118,6 +134,7 @@ Run these commands from the repository root:
 | `./scripts/leonblog build` | Build and package Release without launching |
 | `./scripts/leonblog test` | Run the native test and check suites |
 | `./scripts/leonblog coverage` | Run unit tests and generate a coverage report |
+| `./scripts/leonblog mobile-sync --help` | Show options for running the mobile sync service from a terminal |
 | `./scripts/leonblog help` | Show command help |
 
 `open`, `start`, `restart`, and `build` accept `--debug` or `--release`. Debug uses the native build engine when available, with a separate cache from normal Release builds; automatic selection falls back to the toolchain default when needed. Set `LEON_BOOK_BUILD_SYSTEM=default` to select the toolchain default explicitly. The first build for a configuration populates its cache.
@@ -188,6 +205,7 @@ macos/Package.swift                # SwiftPM products and targets
 macos/Sources/LeonBookApp/          # App entry point and App Intents
 macos/Sources/LeonBook/             # UI, editor, storage, and host adapters
 macos/Sources/LeonBookCLI/          # JSON CLI and JSON Lines transport
+macos/Sources/LeonChat/             # Integrated chat client and bundled rendering resources
 macos/Sources/LeonBookModuleKit/    # First-party module contracts
 macos/Sources/LeonBook*Module/      # Search, graph, publishing, backup, capture, tasks
 macos/Sources/LeonBookExtensionKit/ # Declarative extension contracts
@@ -195,10 +213,11 @@ macos/Whiteboard/                   # Excalidraw resource build sources
 macos/Tests/                       # Native, module, and automation tests
 macos/Checks/                      # Additional application and storage checks
 macos/scripts/                     # Build, test, coverage, and performance scripts
+mobile/                            # Android/iOS companion and local sync service
 ```
 
 First-party modules can be enabled independently in Settings. Declarative extensions use a versioned `extension.json` to contribute commands, template variables, text/JSON importers, and fence renderers. See the [example extension](macos/Examples/DeclarativeExtension/extension.json).
 
-Normal Swift builds use the bundled whiteboard assets and do not require Node.js. Node.js/npm are needed only when rebuilding those assets; follow the [whiteboard guide](macos/Whiteboard/README.md).
+Normal Swift builds use bundled assets and do not require Node.js. Node.js/npm are needed for the mobile app and sync service, or when rebuilding whiteboard assets; follow the [mobile guide](mobile/README.md) or [whiteboard guide](macos/Whiteboard/README.md).
 
 Further documentation: [macOS guide](macos/README.md) · [Performance notes](macos/PERFORMANCE.md) · [AI automation](docs/AI_AUTOMATION.md).

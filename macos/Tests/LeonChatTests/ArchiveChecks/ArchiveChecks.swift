@@ -18,6 +18,20 @@ struct ArchiveChecks {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let destination = try LeonBlogExporter.destination(root: directory.appendingPathComponent("library").path)
+        let failedID = UUID().uuidString.lowercased()
+        let failed = ChatArchive(id: failedID, title: " ", summary: "Test", conversationId: "room", throughId: 1,
+            operation: .init(id: failedID, agentId: "agent", agentName: "Test", status: "SUCCEEDED", error: "", result: "", createdAt: 1, kind: "ARCHIVE"), messages: [])
+        let staged = URL(fileURLWithPath: destination.root).appendingPathComponent("workspaces/\(destination.user)/media/leon-chat-\(failedID)")
+        for _ in 0..<2 {
+            do {
+                _ = try LeonBlogExporter.export(failed, destination: destination, imageFiles: [:])
+                preconditionFailure("Invalid article should be rejected after media is staged")
+            } catch {
+                let remaining = try FileManager.default.contentsOfDirectory(atPath: staged.path)
+                precondition(remaining.isEmpty, "Failed archives should not leave orphaned attachments")
+            }
+        }
+        print("PASS: repeated article save failure leaves no staged Markdown or duplicate attachments")
         let id = UUID().uuidString.lowercased(), imageId = UUID().uuidString.lowercased()
         let image = directory.appendingPathComponent("image.png")
         try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4ZkAAAAASUVORK5CYII=")!.write(to: image)

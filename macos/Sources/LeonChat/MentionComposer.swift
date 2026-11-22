@@ -187,6 +187,8 @@ private struct NativeMentionEditor: NSViewRepresentable {
 
 struct MentionComposer: View {
     @ObservedObject var store: ChatStore
+    let onSend: () -> Void
+    let onCommand: (ChatCommand) -> Void
     @StateObject private var state = MentionEditorState()
     var body: some View {
         VStack(spacing: 8) {
@@ -260,8 +262,8 @@ struct MentionComposer: View {
             }
             NativeMentionEditor(text: $store.draft, state: state, agents: store.availableAgents,
                 group: store.selectedConversation?.kind == "group", conversationId: store.selectedConversationId,
-                onSend: { Task { await store.sendDraft() } }, onImages: { images in Task { await store.addImages(images) } },
-                onCommand: { command in Task { await store.performCommand(command) } })
+                onSend: onSend, onImages: { images in Task { await store.addImages(images) } },
+                onCommand: onCommand)
                 .frame(height: 82).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.15)))
         }

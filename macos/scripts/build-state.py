@@ -10,6 +10,10 @@ import sys
 
 STATE_NAME = "leonbook-build-inputs.json"
 EDITOR_DIR = "Sources/LeonBook/Resources"
+CHAT_ASSETS = {
+    "Sources/LeonChat/Resources/MarkdownRuntime/": "LeonBookMac_LeonChat.bundle/MarkdownRuntime/",
+    "Vendor/SwiftMath/Sources/SwiftMath/mathFonts.bundle/": "SwiftMath_SwiftMath.bundle/mathFonts.bundle/",
+}
 
 
 def editor_asset(name):
@@ -48,6 +52,19 @@ def capture(macos):
     # Changing SDK selection must not reuse a binary built for another SDK.
     state["native"]["@sdk"] = os.environ.get("LEON_BOOK_SDK_PATH", "")
     state["native"]["@developer"] = os.environ.get("DEVELOPER_DIR", "")
+    # Reopen/rebuild a configured checkout without silently downgrading its signer.
+    identity = os.environ.get("LEON_BOOK_CODESIGN_IDENTITY")
+    team = os.environ.get("LEON_BOOK_CODESIGN_TEAM_ID")
+    if identity is None:
+        try:
+            installed = read_state(macos / "dist/leon-book.app/Contents/Resources" / STATE_NAME)["native"]
+            identity = installed.get("@codesign-identity", "-")
+            if team is None:
+                team = installed.get("@codesign-team", "")
+        except (OSError, ValueError, TypeError, AttributeError):
+            identity = "-"
+    state["native"]["@codesign-identity"] = identity
+    state["native"]["@codesign-team"] = (team or "") if identity != "-" else ""
     return state
 
 
@@ -81,6 +98,10 @@ def status(app, configuration, system, current):
         previous = read_state(resources / STATE_NAME)
         if previous["native"] != current["native"]:
             return "build"
+        for name, expected in current["native"].items():
+            for source, destination in CHAT_ASSETS.items():
+                if name.startswith(source) and digest(resources / destination / name[len(source):]) != expected:
+                    return "build"
         if previous["editor"] != current["editor"]:
             return "resources"
         for name, expected in current["editor"].items():

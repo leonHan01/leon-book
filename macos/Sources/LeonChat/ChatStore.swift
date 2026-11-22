@@ -5,11 +5,6 @@ import CryptoKit
 final class ChatStore: ObservableObject {
     var scrollPositions:[String:ConversationScrollPosition]=[:]
     func openQuotedRoom(_ id:String) {selectConversation(id)}
-    @Published var branchMessage:Message?
-    func beginBranch(_ message:Message) {
-        guard message.id>0,message.conversationId == selectedConversationId,api != nil else {return}
-        branchMessage=message
-    }
     func createBranch(_ message:Message,name:String,requestId:String) async throws -> Conversation {
         guard message.id>0,let room=message.conversationId,let api else {throw ClientError.message("请先连接服务器并选择已发送成功的消息。")}
         let connection=connectionId
@@ -145,7 +140,6 @@ final class ChatStore: ObservableObject {
             if navigation == navigationRequest, agentDetailId == agent.id || (fromHistory && agentDetailId == nil) { selectConversation(room.id) }
         } catch { if connection == connectionId { self.error = friendly(error) } }
     }
-    @Published var showUsage = false
     @Published var modelUsage: [ModelUsage] = []
     @Published var usageBusy = false
     @Published var usageLoadedAt: Date?
@@ -185,7 +179,6 @@ final class ChatStore: ObservableObject {
     }
 
     @Published var selectedConversationId = "shared"
-    @Published var conversationToDelete: Conversation?
     @Published private(set) var deletingConversation = false
     private var deletedConversationIDs = Set<String>()
     private var directoryRevision = UUID()
@@ -213,7 +206,6 @@ final class ChatStore: ObservableObject {
         guard result.conversationId == room else { throw ClientError.message("服务端返回的会话不匹配，请刷新列表。") }
         directoryRevision = UUID()
         removeConversationLocally(room)
-        conversationToDelete = nil
     }
 
     private func removeConversationLocally(_ room: String) {
@@ -239,11 +231,9 @@ final class ChatStore: ObservableObject {
         compressionRequests = compressionRequests.filter { !$0.key.hasPrefix(room + ":") }
         let prefix = pendingKey + ".archive." + room + ":"
         for key in ChatPreferences.defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) { ChatPreferences.defaults.removeObject(forKey: key) }
-        if branchMessage?.conversationId == room { branchMessage = nil }
         api?.clearImageCache()
     }
 
-    @Published var showClearHistory = false
     @Published var clearBusy = false
     @Published var clearPreview: ClearHistoryPreview?
     @Published var clearError: String?
@@ -286,7 +276,7 @@ final class ChatStore: ObservableObject {
                 generation = UUID(); draft = ""; draftImages = []; messages = []; jobs = []; contextOperations = []; contextInfo = nil
                 historyRevision = result.historyRevision; initialLoaded = false; hasOlder = false; loadingOlder = false
                 exportProgress = ""; exportError = nil; contextError = nil
-                showClearHistory = false; clearPreview = nil; clearRequestId = nil
+                clearPreview = nil; clearRequestId = nil
                 beginPolling()
             }
         } catch { if connection == connectionId { clearError = friendly(error) } }
@@ -301,28 +291,31 @@ final class ChatStore: ObservableObject {
         }
         historyRevision = revision
     }
-    @Published var showEndRound = false
-    @Published var endRoundExportOnly = false
+    struct ConversationScope: Equatable {
+        let room: String
+        let connection: UUID
+    }
+
+    struct ArchiveSelection: Equatable {
+        let scope: ConversationScope
+        let agentID: String
+        let library: LeonBlogExporter.Destination?
+    }
+
+    struct PreparedArchive {
+        let selection: ArchiveSelection
+        let destination: LeonBlogExporter.Destination
+        let pendingID: String?
+    }
+
+    var conversationScope: ConversationScope {
+        .init(room: selectedConversationId, connection: connectionId)
+    }
+
     @Published var exportBusy = false
     @Published var exportProgress = ""
     @Published var exportRoomId = ""
     @Published var exportError: String?
-    var requiresHostArchiveDestination = false
-    private(set) var hostArchiveDestination: LeonBlogExporter.Destination?
-    func setArchiveDestination(root: String?, user: String?) {
-        let next = root.flatMap { root in user.map { LeonBlogExporter.Destination(root: root, user: $0) } }
-        guard next != hostArchiveDestination else { return }
-        hostArchiveDestination = next
-        guard !exportBusy else { return }
-        blogDestinationRequest = UUID(); blogDestinationLoading = false
-        blogDestination = nil; blogDestinationScope = nil
-        if showEndRound { Task { await prepareBlogDestination() } }
-    }
-    @Published var blogDestination: LeonBlogExporter.Destination?
-    @Published private(set) var blogDestinationLoading = false
-    private var blogDestinationScope: String?
-    private var blogDestinationRequest = UUID()
-    @Published var showContext = false
     private func archiveKey(room: String, agentId: String) -> String { pendingKey + ".archive." + room + ":" + agentId }
     private func clearPendingArchive(_ key: String) {
         ChatPreferences.defaults.removeObject(forKey: key)
@@ -341,35 +334,34 @@ final class ChatStore: ObservableObject {
             if ChatPreferences.defaults.string(forKey: key) == id { clearPendingArchive(key) }
         }
     }
-    func prepareBlogDestination(agentId: String? = nil) async {
-        let targetAgent = agentId ?? (availableAgents.count == 1 ? availableAgents[0].id : "")
-        let room = selectedConversationId, connection = connectionId, request = UUID()
-        let key = archiveKey(room: room, agentId: targetAgent)
-        blogDestinationRequest = request; blogDestinationLoading = true
-        blogDestination = nil; blogDestinationScope = nil; exportError = nil
-        defer { if blogDestinationRequest == request { blogDestinationLoading = false } }
-        do {
-            let destination: LeonBlogExporter.Destination
-            if ChatPreferences.defaults.string(forKey: key) != nil, let data = ChatPreferences.defaults.data(forKey: key + ".destination") {
-                guard let saved = try? JSONDecoder().decode(LeonBlogExporter.Destination.self, from: data) else {
-                    throw ClientError.message("未完成归档的资料库配置无效，当前上下文已保留。")
-                }
-                destination = saved
-            } else {
-                let host = hostArchiveDestination
-                guard !requiresHostArchiveDestination || host != nil else {
-                    throw ClientError.message("请先连接 LeonBook 资料库，再归档当前对话。")
-                }
-                destination = try await Task.detached { try LeonBlogExporter.destination(root: host?.root, user: host?.user) }.value
-            }
-            guard blogDestinationRequest == request, room == selectedConversationId, connection == connectionId, !Task.isCancelled else { return }
-            blogDestination = destination; blogDestinationScope = key
-        } catch {
-            if blogDestinationRequest == request, room == selectedConversationId, connection == connectionId, !Task.isCancelled { exportError = friendly(error) }
+    func prepareArchive(_ selection: ArchiveSelection) async throws -> PreparedArchive {
+        guard selection.scope == conversationScope, !selection.agentID.isEmpty else {
+            throw ClientError.message("会话已切换，请重新打开归档。")
         }
+        let key = archiveKey(room: selection.scope.room, agentId: selection.agentID)
+        let pendingID = ChatPreferences.defaults.string(forKey: key)
+        let destination: LeonBlogExporter.Destination
+        if pendingID != nil {
+            guard let data = ChatPreferences.defaults.data(forKey: key + ".destination"),
+                  let saved = try? JSONDecoder().decode(LeonBlogExporter.Destination.self, from: data) else {
+                throw ClientError.message("未完成归档的资料库配置无效，当前上下文已保留。")
+            }
+            destination = saved
+        } else {
+            guard let library = selection.library else {
+                throw ClientError.message("请先连接 LeonBook 资料库，再归档当前对话。")
+            }
+            destination = try await Task.detached {
+                try LeonBlogExporter.destination(root: library.root, user: library.user)
+            }.value
+        }
+        try Task.checkCancellation()
+        guard selection.scope == conversationScope else { throw CancellationError() }
+        return PreparedArchive(selection: selection, destination: destination, pendingID: pendingID)
     }
-    func startFreshRound() async {
-        guard let api, !exportBusy, !contextActionActive, currentPending.isEmpty, draftImages.isEmpty, draftDocuments.isEmpty, !preparingImages, !importingDocuments else { exportError = "请等待当前回复并处理待发送消息后再开始新对话。"; return }
+
+    func startFreshRound(in scope: ConversationScope) async -> Bool {
+        guard scope == conversationScope, let api, !exportBusy, !contextActionActive, currentPending.isEmpty, draftImages.isEmpty, draftDocuments.isEmpty, !preparingImages, !importingDocuments else { exportError = "请等待当前回复并处理待发送消息后再开始新对话。"; return false }
         let connection = connectionId, room = selectedConversationId
         exportBusy = true; exportError = nil
         defer { exportBusy = false }
@@ -377,19 +369,30 @@ final class ChatStore: ObservableObject {
             let info = try await api.context(conversation: room)
             let updated = try await api.configureContext(conversation: room, rounds: info.recentRounds, reset: true)
             if connection == connectionId { clearPendingArchives(room: room) }
-            guard connection == connectionId, room == selectedConversationId else { return }
-            contextInfo = updated; exportRoomId = room; exportProgress = "已开始全新上下文，历史对话保留。"; showEndRound = false
-        } catch { exportError = friendly(error) }
+            guard connection == connectionId, room == selectedConversationId else { return true }
+            contextInfo = updated; exportRoomId = room; exportProgress = "已开始全新上下文，历史对话保留。"
+            return true
+        } catch { exportError = friendly(error); return false }
     }
-    func exportCurrentRound(agentId: String, startNew: Bool) async {
-        guard let api, !exportBusy, !contextActionActive, currentPending.isEmpty, draftImages.isEmpty, draftDocuments.isEmpty, !preparingImages, !importingDocuments else { exportError = "请等待当前回复并处理待发送消息后再归档。"; if !showEndRound { error = exportError }; return }
-        let room = selectedConversationId, connection = connectionId
-        let key = archiveKey(room: room, agentId: agentId)
-        guard let destination = blogDestination, !blogDestinationLoading, blogDestinationScope == key else {
-            exportError = "请等待资料库读取完成并选择总结使用的 Agent 后再导出。"
-            if !showEndRound { error = exportError }; return
+    func exportCurrentRound(_ prepared: PreparedArchive, startNew: Bool) async -> Bool {
+        guard prepared.selection.scope == conversationScope else {
+            exportError = "会话已切换，请重新打开归档。"
+            return false
         }
+        guard let api, !exportBusy, !contextActionActive, currentPending.isEmpty, draftImages.isEmpty,
+              draftDocuments.isEmpty, !preparingImages, !importingDocuments else {
+            exportError = "请等待当前回复并处理待发送消息后再归档。"
+            return false
+        }
+        let room = selectedConversationId, connection = connectionId
+        let agentId = prepared.selection.agentID
+        let destination = prepared.destination
+        let key = archiveKey(room: room, agentId: agentId)
         let pendingID = ChatPreferences.defaults.string(forKey: key)
+        guard pendingID == prepared.pendingID else {
+            exportError = "归档状态已变化，请重新确认资料库后导出。"
+            return false
+        }
         let id = pendingID ?? UUID().uuidString.lowercased()
         exportBusy = true; exportRoomId = room; exportProgress = "正在生成本轮对话总结…"; exportError = nil
         defer { exportBusy = false }
@@ -452,12 +455,13 @@ final class ChatStore: ObservableObject {
                 exportProgress += "，已开始全新上下文。"
             }
             clearPendingArchive(key)
-            if connection == connectionId, room == selectedConversationId { showEndRound = false; beginPolling() }
+            if connection == connectionId, room == selectedConversationId { beginPolling() }
+            return true
         } catch {
             if case ClientError.archiveConflict = error { await discardChangedArchive(id: id, key: key, room: room, api: api) }
             exportError = friendly(error)
             exportProgress = exportProgress.hasPrefix("已保存") ? exportProgress + "；尚未开始新对话。" : "归档未完成，当前上下文保留。"
-            if !showEndRound { self.error = exportError }
+            return false
         }
     }
     @Published var contextInfo: ConversationContext?
@@ -466,34 +470,49 @@ final class ChatStore: ObservableObject {
     @Published var compressionRequestBusy = false
     private var compressionRequests: [String: String] = [:]
     var contextActionActive: Bool { compressionRequestBusy || jobs.contains { $0.status == "PENDING" || $0.status == "RUNNING" } || contextOperations.contains { $0.active } }
-    func performCommand(_ command: ChatCommand) async {
+    enum CommandSheet {
+        case archive(exportOnly: Bool), context, clearHistory
+    }
+
+    func performCommand(_ command: ChatCommand, library: LeonBlogExporter.Destination? = nil,
+                        present: (CommandSheet) -> Void = { _ in }) async {
         guard hasConnection else { error = "请先连接服务器"; return }
-        if command == .context { draft = ""; showContext = true; return }
+        if command == .context { draft = ""; present(.context); return }
         if command == .clear {
             guard !exportBusy, !preparingImages, !currentPending.contains(where: { sending.contains($0.id) }) else { error = "请等待归档、图片处理和发送完成后再清空。"; return }
-            draft = ""; showClearHistory = true; return
+            draft = ""; present(.clearHistory); return
         }
         if command == .newRound || command == .exportRound {
             guard draftImages.isEmpty, !preparingImages, currentPending.isEmpty else { error = "请先处理待发送消息和图片，再结束或导出本轮。"; return }
             draft = ""
-            endRoundExportOnly = command == .exportRound
             if command == .exportRound, availableAgents.count == 1 {
-                let agentId = availableAgents[0].id, room = selectedConversationId, connection = connectionId
-                await prepareBlogDestination(agentId: agentId)
-                guard room == selectedConversationId, connection == connectionId else { return }
-                await exportCurrentRound(agentId: agentId, startNew: false)
+                let selection = ArchiveSelection(scope: conversationScope, agentID: availableAgents[0].id, library: library)
+                do {
+                    let prepared = try await prepareArchive(selection)
+                    if prepared.pendingID != nil {
+                        present(.archive(exportOnly: true))
+                        return
+                    }
+                    if !(await exportCurrentRound(prepared, startNew: false)) { error = exportError }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    exportError = friendly(error)
+                    self.error = exportError
+                }
+            } else {
+                present(.archive(exportOnly: command == .exportRound))
             }
-            else { showEndRound = true }
             return
         }
         guard draftImages.isEmpty, !preparingImages else { error = "请先发送或移除待发送图片，再执行压缩命令。"; return }
         draft = ""
         if availableAgents.count == 1 { await compactContext(agentId: availableAgents[0].id) }
-        else { showContext = true }
+        else { present(.context) }
     }
-    func compactContext(agentId: String) async {
+    func compactContext(agentId: String, presentsErrorsInSheet: Bool = false) async {
         guard let api, !compressionRequestBusy else { return }
-        guard !contextActionActive else { contextError = "请等待当前会话回复或压缩完成后再压缩上下文"; if !showContext { error = contextError }; return }
+        guard !contextActionActive else { contextError = "请等待当前会话回复或压缩完成后再压缩上下文"; if !presentsErrorsInSheet { error = contextError }; return }
         let connection = connectionId, room = selectedConversationId
         let scope = room + ":" + agentId
         let requestId = compressionRequests[scope] ?? UUID().uuidString.lowercased()
@@ -512,7 +531,7 @@ final class ChatStore: ObservableObject {
         } catch {
             if connection == connectionId, room == selectedConversationId {
                 contextError = friendly(error)
-                if !showContext { self.error = contextError }
+                if !presentsErrorsInSheet { self.error = contextError }
             }
         }
     }
@@ -541,7 +560,6 @@ final class ChatStore: ObservableObject {
             beginPolling()
         } catch { if connection == connectionId, room == selectedConversationId { contextError = friendly(error) } }
     }
-    @Published var showNewGroup = false
     @Published private(set) var avatarSessionKey = UUID().uuidString
     func avatarId(for agentId: String?) -> String { agents.first { $0.id == agentId }?.avatarId ?? "alfred" }
     func avatarData(_ id: String) async -> Data? { guard let api else { return nil }; return try? await api.avatarData(id) }
@@ -669,15 +687,16 @@ final class ChatStore: ObservableObject {
             self.error = friendly(error)
         }
     }
-    func createGroup(name: String, agentIds: [String]) async {
-        guard let api else { return }
+    func createGroup(name: String, agentIds: [String]) async -> Bool {
+        guard let api else { return false }
         let connection = connectionId
         do {
             let room = try await api.group(name: name, agentIds: agentIds); let rooms = try await api.conversations()
-            guard connection == connectionId else { return }
-            conversations = rooms; showNewGroup = false; selectConversation(room.id)
+            guard connection == connectionId else { return false }
+            conversations = rooms; selectConversation(room.id)
+            return true
         }
-        catch { self.error = friendly(error) }
+        catch { self.error = friendly(error); return false }
     }
     func retryJob(_ job: AgentJob) async {
         guard let api else { return }
@@ -691,7 +710,7 @@ final class ChatStore: ObservableObject {
     @Published var loadingMessages = false
     @Published var sending = Set<String>()
     @Published var configuring = false
-    @Published var showSettings = false
+    @Published private(set) var needsConnectionSetup = false
     @Published var address = ChatPreferences.defaults.string(forKey: "server") ?? "https://121.40.254.112"
     @Published var sender = ChatPreferences.defaults.string(forKey: "sender") ?? Host.current().localizedName ?? "我的 Mac"
     let deviceId: String
@@ -716,18 +735,18 @@ final class ChatStore: ObservableObject {
         status = "正在读取安全存储…"
         let token = await Keychain.read()
         guard api == nil, !configuring else { return }
-        guard !token.isEmpty else { showSettings = true; return }
+        guard !token.isEmpty else { needsConnectionSetup = true; return }
         do {
             let base = try Endpoint.normalize(address)
             api = MessageAPI(base: base, token: token)
             restorePending(base: base, token: token)
             status = "正在连接…"
             beginPolling()
-        } catch { self.error = friendly(error); showSettings = true }
+        } catch { self.error = friendly(error); needsConnectionSetup = true }
     }
 
-    func configure(address: String, token: String, sender: String) async {
-        guard !configuring else { return }
+    func configure(address: String, token: String, sender: String) async -> Bool {
+        guard !configuring else { return false }
         configuring = true
         defer { configuring = false }
         do {
@@ -746,7 +765,7 @@ final class ChatStore: ObservableObject {
             let rooms = try await candidate.conversations()
             try await Keychain.save(secret)
             generation = UUID(); connectionId = UUID(); avatarSessionKey = UUID().uuidString
-            conversationToDelete = nil; deletingConversation = false; deletedConversationIDs = []; directoryRevision = UUID()
+            deletingConversation = false; deletedConversationIDs = []; directoryRevision = UUID()
             agentDetailId = nil; creatingAgentConversation = false
             modelUsage = []; usageError = nil; usageLoadedAt = nil; usageBusy = false
             scrollPositions=[:];navigationRequest = UUID(); roomCache = [:]; roomCacheOrder = []
@@ -773,9 +792,10 @@ final class ChatStore: ObservableObject {
             connected = true
             status = "已连接 · 自动同步"
             error = nil
-            showSettings = false
+            needsConnectionSetup = false
             beginPolling()
-        } catch { self.error = friendly(error) }
+            return true
+        } catch { self.error = friendly(error); return false }
     }
 
     func setActive(_ value: Bool) {
@@ -876,10 +896,10 @@ final class ChatStore: ObservableObject {
         } catch { if current == generation { self.error = friendly(error) } }
     }
 
-    func sendDraft() async {
+    func sendDraft(library: LeonBlogExporter.Destination? = nil, present: (CommandSheet) -> Void = { _ in }) async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
-        if quotedMessage == nil,draftDocuments.isEmpty, let command = ChatCommand.exact(text) { await performCommand(command); return }
+        if quotedMessage == nil,draftDocuments.isEmpty, let command = ChatCommand.exact(text) { await performCommand(command, library: library, present: present); return }
         if quotedMessage == nil,draftDocuments.isEmpty, ChatCommand.isAttempt(text) { error = "请选择 / 菜单中的有效命令，命令无需附加文字。"; return }
         do {for doc in draftDocuments {try DocumentFiles.save(doc,scope:pendingKey)}; for image in draftImages { try ChatImageFiles.save(image, scope: pendingKey) } }
         catch { self.error = "无法保存图片，请检查磁盘空间后重试。"; return }

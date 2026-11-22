@@ -7,6 +7,64 @@ private struct ReaderScrollFailure: Error, CustomStringConvertible { let descrip
 
 extension RichArticleTests {
     @MainActor
+    func testReaderSelectionKeepsFocusWhilePreparingComment() async throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("reader-selection-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let defaults = UserDefaults(suiteName: "ReaderSelection.\(UUID())")!
+        let layout = NativeWorkspaceLayoutState(defaults: defaults)
+        layout.isReaderInspectorVisible = true
+        let preferences = NativeReadingPreferences(defaults: defaults)
+        let model = NativeAppModel(navigationScopeID: nil, startsAutomatically: false, store: LocalBlogStore(rootURL: directory))
+        model.storageReady = true; model.isLoading = false
+        let body = RichArticleDocument.opening + "<p>选择这段文字用于评论。</p></article>"
+        model.selectedArticle = NativeArticle(banner: nil, body: body, category: "测试", excerpt: "", media: [],
+            slug: "selection-fixture", status: .draft, tags: [], title: "选区测试",
+            updatedAt: "2026-11-21T14:00:00Z", publishedAt: nil, wordCount: nil)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: ArticleReaderView(model: model, workspaceLayout: layout, readingPreferences: preferences))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        var loaded: WKWebView?
+        for _ in 0..<200 {
+            host.layoutSubtreeIfNeeded()
+            if let web = descendants(host).compactMap({ $0 as? WKWebView }).first,
+               (try? await web.evaluateJavaScript("document.querySelector('#document p')?.textContent.includes('选择这段')")) as? Bool == true {
+                loaded = web; break
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        guard let web = loaded else { throw ReaderScrollFailure(description: "Reader did not load") }
+        for pane in [ArticleInspectorPane.comments, .context] {
+            layout.readerInspectorPane = pane
+            model.clearPendingArticleCommentSelection()
+            try await Task.sleep(nanoseconds: 150_000_000)
+            guard window.makeFirstResponder(web) else { throw ReaderScrollFailure(description: "Could not focus reader") }
+            let readerResponder = window.firstResponder
+            _ = try await web.callAsyncJavaScript(#"""
+            const root = document.getElementById('document'), text = root.querySelector('p').firstChild;
+            root.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+            getSelection().setBaseAndExtent(text, 0, text, 6);
+            document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0 }));
+            """#, arguments: [:], in: nil, contentWorld: .page)
+            try await Task.sleep(nanoseconds: 300_000_000)
+            guard model.pendingArticleCommentSelection != nil, layout.readerInspectorPane == .comments else {
+                throw ReaderScrollFailure(description: "Selection did not prepare a comment from \(pane)")
+            }
+            guard window.firstResponder === readerResponder else {
+                throw ReaderScrollFailure(description: "Comment composer stole focus after selecting text from \(pane)")
+            }
+            guard (try await web.evaluateJavaScript("getSelection().toString()")) as? String == "选择这段文字" else {
+                throw ReaderScrollFailure(description: "Reader text selection did not survive comment preparation from \(pane)")
+            }
+        }
+    }
+
+    @MainActor
     func testEmbeddedReaderSuppressesPageScrollbarsUntilNativeHeightCatchesUp() async throws {
         try await withWebEditor { view in
             _ = try await view.callAsyncJavaScript(#"""
