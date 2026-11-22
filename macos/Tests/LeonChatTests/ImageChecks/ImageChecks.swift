@@ -4,12 +4,25 @@ import SwiftUI
 import ImageIO
 import UniformTypeIdentifiers
 
+private actor ImageSourceFixture {
+    let bytes: Data
+    private(set) var reads = 0
+
+    init(_ bytes: Data) { self.bytes = bytes }
+
+    func read() async throws -> Data {
+        reads += 1
+        try await Task.sleep(nanoseconds: 20_000_000)
+        return bytes
+    }
+}
+
 @main
 struct ImageChecks {
     static func check(_ condition: @autoclosure () -> Bool, _ message: String) throws {
         if !condition() { throw ClientError.message(message) }
     }
-    @MainActor static func main() throws {
+    @MainActor static func main() async throws {
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
         let context = CGContext(data: nil, width: 3200, height: 1600, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
@@ -63,8 +76,29 @@ struct ImageChecks {
         let payload = Data("{\"id\":1,\"clientMessageId\":\"m\",\"deviceId\":\"d\",\"sender\":\"Mac\",\"platform\":\"macos\",\"text\":\"\",\"createdAt\":1,\"images\":[{\"id\":\"\(prepared.id)\",\"mimeType\":\"image/jpeg\",\"width\":1600,\"height\":800,\"byteCount\":1234}]}".utf8)
         let message = try JSONDecoder().decode(Message.self, from: payload)
         try check(message.images?.first?.id == prepared.id && message.text.isEmpty, "History attachment decoding failed")
+
+        let loader = ChatImageLoader(), fixture = ImageSourceFixture(oriented as Data)
+        let load: ChatImageLoader.Source = { try await fixture.read() }
+        let first = Task { @MainActor in ObjectIdentifier(try await loader.thumbnail("same-image", pixels: 384, source: load)) }
+        let second = Task { @MainActor in ObjectIdentifier(try await loader.thumbnail("same-image", pixels: 384, source: load)) }
+        let (firstID, secondID) = try await (first.value, second.value)
+        let preview = try await loader.thumbnail("same-image", pixels: 384, source: load)
+        let thumbnailReads = await fixture.reads
+        try check(firstID == secondID && firstID == ObjectIdentifier(preview) && thumbnailReads == 1,
+                  "Concurrent requests and later reads must reuse the same decoded thumbnail")
+        try check(preview.size == NSSize(width: 192, height: 384), "Thumbnail ignored the pixel limit or orientation")
+        let original = try await loader.fullSize("same-image", source: load)
+        let saved = try await loader.data("same-image", source: load)
+        try check(original.size == NSSize(width: 1600, height: 3200) && saved == oriented as Data,
+                  "Full-size preview and saving must preserve the original resolution and bytes")
+        loader.cancel()
+        do {
+            _ = try await loader.thumbnail("same-image", pixels: 384, source: load)
+            throw ClientError.message("A cleared session returned a cached thumbnail")
+        } catch is CancellationError {}
         print("PASS: image normalization, JPEG size cap, EXIF orientation, invalid-data rejection")
         print("PASS: native image paste and Finder-file paste preserve text; plain text stays unchanged")
         print("PASS: image-only outbox encoding and history image metadata decoding")
+        print("PASS: concurrent thumbnails share one decode, source previews and saves retain original quality, session reset rejects stale images")
     }
 }

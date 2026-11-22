@@ -117,7 +117,7 @@ extension LocalBlogStore {
         try prepare()
         let sql = """
         \(articleSummarySelect)
-        WHERE deleted_at IS NULL
+        WHERE deleted_at IS NULL AND \(contentVisibility())
         \(includeDrafts ? "" : "AND status = 'published'")
         ORDER BY updated_at DESC
         """
@@ -138,7 +138,7 @@ extension LocalBlogStore {
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
             try db().query("""
             \(articleSummarySelect)
-            WHERE deleted_at IS NULL AND slug IN (\(placeholders))
+            WHERE deleted_at IS NULL AND \(contentVisibility()) AND slug IN (\(placeholders))
             """, values: chunk.map(SQLiteValue.text)) { row in
                 articles.append(try decodeArticleSummary(row))
             }
@@ -287,7 +287,7 @@ extension LocalBlogStore {
                     continue
                 }
                 let wasMoved = matched.sourceRelativePath != record.relativePath
-                let updated = article(from: record, preserving: matched)
+                let updated = try article(from: record, preserving: matched)
                 changes.append((matched, updated))
                 byPath[record.relativePath] = updated
                 if wasMoved {
@@ -507,7 +507,8 @@ extension LocalBlogStore {
                 properties: article.properties,
                 sourceRelativePath: article.sourceRelativePath,
                 sourceContentHash: article.sourceContentHash,
-                sourceImportedAt: article.sourceImportedAt
+                sourceImportedAt: article.sourceImportedAt,
+                isPrivate: article.isPrivate
             )
             let record = try MarkdownArticleSource.write(
                 changed,
@@ -552,7 +553,10 @@ extension LocalBlogStore {
     private func article(
         from record: MarkdownArticleSourceRecord,
         preserving previous: NativeArticle
-    ) -> NativeArticle {
+    ) throws -> NativeArticle {
+        let override = try db().integer(
+            "SELECT privacy_override FROM articles WHERE slug = ?", values: [.text(previous.slug)]
+        ).map { $0 == 1 }
         let updatedAt: String
         if let declared = record.declaredUpdatedAt,
            let declaredDate = NativeTimestamp.date(from: declared),
@@ -579,7 +583,8 @@ extension LocalBlogStore {
             properties: record.properties,
             sourceRelativePath: record.relativePath,
             sourceContentHash: record.contentHash,
-            sourceImportedAt: timestamp(from: Date())
+            sourceImportedAt: timestamp(from: Date()),
+            isPrivate: override ?? record.isPrivate ?? previous.isPrivate
         )
     }
 
@@ -603,7 +608,8 @@ extension LocalBlogStore {
             properties: record.properties,
             sourceRelativePath: record.relativePath,
             sourceContentHash: record.contentHash,
-            sourceImportedAt: timestamp(from: Date())
+            sourceImportedAt: timestamp(from: Date()),
+            isPrivate: record.isPrivate ?? false
         )
     }
 
@@ -628,7 +634,8 @@ extension LocalBlogStore {
             properties: article.properties,
             sourceRelativePath: record.relativePath,
             sourceContentHash: record.contentHash,
-            sourceImportedAt: timestamp(from: Date())
+            sourceImportedAt: timestamp(from: Date()),
+            isPrivate: article.isPrivate
         )
     }
 }

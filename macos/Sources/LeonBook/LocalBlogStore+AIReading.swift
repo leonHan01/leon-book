@@ -3,6 +3,10 @@ import Foundation
 extension LocalBlogStore {
     func listAIReadingMessages(context: AIReadingContext) throws -> [AIReadingMessage] {
         try prepare()
+        switch context.kind {
+        case .article: try requireVisibleArticleContext(slug: context.id)
+        case .question: _ = try getQuestion(id: context.id)
+        }
         var result: [AIReadingMessage] = []
         try db().query("""
         SELECT id, role, content, provider, model, created_at, is_complete FROM ai_reading_messages

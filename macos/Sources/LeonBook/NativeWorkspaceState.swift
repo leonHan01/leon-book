@@ -38,6 +38,7 @@ struct NativeMomentDraft: Equatable {
     var text = ""
     var textRuns: [NativeMomentTextRun] = []
     var images: [NativeMedia] = []
+    var isPrivate = false
 
     var isEmpty: Bool {
         NativeMomentTag.content(from: text, textRuns: textRuns).text
@@ -59,6 +60,7 @@ struct NativeEditorDraft: Equatable {
     var properties: [String: NativeArticlePropertyValue] = [:]
     var status: NativeArticleStatus = .draft
     var updatedAt: String?
+    var isPrivate = false
 
     var isNew: Bool { slug.isEmpty }
 }

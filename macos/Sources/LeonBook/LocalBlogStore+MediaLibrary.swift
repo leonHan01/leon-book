@@ -14,14 +14,17 @@ extension LocalBlogStore {
 
     func mediaLibraryItems(reusing files: [NativeLibraryMedia]? = nil) throws -> [NativeLibraryMedia] {
         try prepare()
+        let hiddenPaths = try hiddenMediaPaths()
         var names: [String: String] = [:]
         var introductions: [String: String] = [:]
         var memberships: [String: String] = [:]
         if files == nil {
             try db().query("""
-            SELECT media_json FROM articles WHERE media_json <> '[]'
-            UNION ALL SELECT images_json FROM moments WHERE images_json <> '[]'
-            UNION ALL SELECT images_json FROM question_answers WHERE images_json <> '[]'
+            SELECT media_json FROM articles WHERE media_json <> '[]' AND \(contentVisibility())
+            UNION ALL SELECT images_json FROM moments WHERE images_json <> '[]' AND \(contentVisibility())
+            UNION ALL SELECT answer.images_json FROM question_answers AS answer
+            JOIN questions AS q ON q.id = answer.question_id
+            WHERE answer.images_json <> '[]' AND \(contentVisibility("q.is_private"))
             """, checkingCancellation: true) { row in
                 guard let json = row.text(at: 0), let data = json.data(using: .utf8),
                       let media = try? JSONDecoder().decode([NativeMedia].self, from: data) else { return }
@@ -38,7 +41,7 @@ extension LocalBlogStore {
             }
         }
         if let files {
-            return files.map { item in
+            return files.filter { !hiddenPaths.contains($0.id) }.map { item in
                 let name = names[item.id] ?? item.media.name
                 let introduction = introductions[item.id] ?? ""
                 let groupID = memberships[item.id]
@@ -67,6 +70,7 @@ extension LocalBlogStore {
                       let values = try? file.resourceValues(forKeys: keys),
                       values.isRegularFile == true, values.isSymbolicLink != true else { continue }
                 let url = "/media/\(directory.lastPathComponent)/\(file.lastPathComponent)"
+                guard !hiddenPaths.contains(url) else { continue }
                 items.append(NativeLibraryMedia(
                     media: NativeMedia(kind: kind.rawValue, name: names[url] ?? file.lastPathComponent,
                                        size: values.fileSize ?? 0, url: url),

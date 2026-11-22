@@ -39,6 +39,7 @@ public struct ContentView: View {
                 pageStateCache: pageStateCache,
                 isPresentingNewUser: $isPresentingNewUser
             )
+            .id(model.privacyPresentationRevision)
         }
         .nativeLoadingFeedback(model.loadingFeedbackTitle)
         .frame(minWidth: 1_080, minHeight: 680)

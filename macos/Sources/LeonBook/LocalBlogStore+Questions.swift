@@ -11,7 +11,7 @@ extension LocalBlogStore {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let rawSelectedTag = tag?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let selectedTag = rawSelectedTag.isEmpty ? nil : NativeQuestionTag.identifier(rawSelectedTag)
-        var predicates: [String] = []
+        var predicates = [contentVisibility("q.is_private")]
         var values: [SQLiteValue] = []
 
         if query.count >= 3 {
@@ -62,6 +62,7 @@ extension LocalBlogStore {
         var questions: [NativeQuestion] = []
         try db().query("""
         \(questionSelect)
+        WHERE \(contentVisibility("q.is_private"))
         ORDER BY (
             (SELECT COUNT(*) FROM question_answers AS ranked_answer WHERE ranked_answer.question_id = q.id) * \(NativeQuestion.answerHeatWeight)
             + q.view_count
@@ -76,10 +77,7 @@ extension LocalBlogStore {
     public func recordQuestionView(id: String) throws -> NativeQuestion {
         try prepare()
         let safeID = try requireSafeSegment(id, label: "问题 ID")
-        guard try db().integer(
-            "SELECT COUNT(*) FROM questions WHERE id = ?",
-            values: [.text(safeID)]
-        ) == 1 else { throw NativeStoreError.notFound }
+        _ = try getQuestion(id: safeID)
         try db().execute(
             "UPDATE questions SET view_count = view_count + 1 WHERE id = ?",
             values: [.text(safeID)]
@@ -89,7 +87,7 @@ extension LocalBlogStore {
 
     public func countQuestions() throws -> Int {
         try prepare()
-        return try db().integer("SELECT COUNT(*) FROM questions") ?? 0
+        return try db().integer("SELECT COUNT(*) FROM questions WHERE \(contentVisibility())") ?? 0
     }
 
     public func listQuestionTagFacets() throws -> [NativeQuestionTagFacet] {
@@ -97,7 +95,9 @@ extension LocalBlogStore {
         var facets: [NativeQuestionTagFacet] = []
         try db().query("""
         SELECT MIN(tag), COUNT(*)
-        FROM question_tags
+        FROM question_tags AS tag
+        JOIN questions AS q ON q.id = tag.question_id
+        WHERE \(contentVisibility("q.is_private"))
         GROUP BY normalized_tag
         ORDER BY COUNT(*) DESC, normalized_tag ASC
         """) { row in
@@ -114,7 +114,7 @@ extension LocalBlogStore {
         let safeID = try requireSafeSegment(id, label: "问题 ID")
         var result: NativeQuestion?
         try db().query(
-            questionSelect + " WHERE q.id = ?",
+            questionSelect + " WHERE q.id = ? AND \(contentVisibility("q.is_private"))",
             values: [.text(safeID)]
         ) { row in
             result = try decodeQuestion(row)
@@ -126,7 +126,8 @@ extension LocalBlogStore {
     public func saveQuestion(
         title: String,
         body: String,
-        tags: [String]
+        tags: [String],
+        isPrivate: Bool = false
     ) throws -> NativeQuestion {
         try prepare()
         let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -141,8 +142,8 @@ extension LocalBlogStore {
         let id = "question-\(Int(Date().timeIntervalSince1970 * 1_000))-\(UUID().uuidString.lowercased().prefix(8))"
         try db().transaction {
             try db().execute("""
-            INSERT INTO questions(id, title, body, tags_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO questions(id, title, body, tags_json, created_at, updated_at, is_private)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """, values: [
                 .text(id),
                 .text(normalizedTitle),
@@ -150,6 +151,7 @@ extension LocalBlogStore {
                 .text(try jsonString(normalizedTags)),
                 .text(createdAt),
                 .text(createdAt),
+                .integer(isPrivate ? 1 : 0),
             ])
             try replaceQuestionTags(questionID: id, tags: normalizedTags)
             try replaceShortSearchDocument(
@@ -166,13 +168,28 @@ extension LocalBlogStore {
             body: normalizedBody,
             tags: normalizedTags,
             createdAt: createdAt,
-            updatedAt: createdAt
+            updatedAt: createdAt,
+            isPrivate: isPrivate
         )
+    }
+
+    func setQuestionPrivacy(id: String, isPrivate: Bool, expectedUpdatedAt: String) throws {
+        let question = try getQuestion(id: id)
+        try db().execute(
+            "UPDATE questions SET is_private = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
+            values: [.integer(isPrivate ? 1 : 0), .text(nextQuestionTimestamp(after: question.updatedAt)),
+                     .text(question.id), .text(expectedUpdatedAt)]
+        )
+        guard try db().integer("SELECT changes()") == 1 else { throw NativeStoreError.conflict }
     }
 
     public func listQuestionAnswers(questionID: String) throws -> [NativeQuestionAnswer] {
         try prepare()
         let safeQuestionID = try requireSafeSegment(questionID, label: "问题 ID")
+        if !showsPrivateContent,
+           try db().integer("SELECT is_private FROM questions WHERE id = ?", values: [.text(safeQuestionID)]) == 1 {
+            throw NativeStoreError.notFound
+        }
         var answers: [NativeQuestionAnswer] = []
         try db().query(
             questionAnswerSelect + " WHERE question_id = ? ORDER BY created_at ASC, id ASC",
@@ -241,6 +258,7 @@ extension LocalBlogStore {
         guard let previous = try questionAnswer(withID: safeID) else {
             throw NativeStoreError.notFound
         }
+        _ = try getQuestion(id: previous.questionID)
         guard previous.updatedAt == expectedUpdatedAt else {
             throw NativeStoreError.questionAnswerConflict
         }
@@ -357,7 +375,8 @@ extension LocalBlogStore {
             createdAt: createdAt,
             updatedAt: updatedAt,
             answerCount: row.integer(at: 6) ?? 0,
-            viewCount: row.integer(at: 7) ?? 0
+            viewCount: row.integer(at: 7) ?? 0,
+            isPrivate: row.integer(at: 8) == 1
         )
     }
 

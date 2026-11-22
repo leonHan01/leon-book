@@ -15,13 +15,19 @@ extension LocalBlogStore {
     func listWorkspaceResources() throws -> [NativeWorkspaceResourceNode] {
         try prepare()
         let articles = try allArticleSummaries()
+        var hiddenPaths = Set<String>()
+        if !showsPrivateContent {
+            try db().query("SELECT source_relative_path FROM articles WHERE is_private = 1") { row in
+                if let path = row.text(at: 0) { hiddenPaths.insert(path) }
+            }
+        }
         let sourceRecords = try workspaceResourceRecords(
             at: articlesURL,
             storage: .markdownSource,
             placementFolder: { relativePath in
                 relativePath.split(separator: "/").dropLast().joined(separator: "/")
             }
-        )
+        ).filter { !hiddenPaths.contains($0.relativePath) }
         let articleBySlug = Dictionary(uniqueKeysWithValues: articles.map { ($0.slug, $0) })
         let mediaDisplayNames = try workspaceMediaDisplayNames(articles: articles)
         let mediaRecords = try workspaceResourceRecords(
@@ -221,7 +227,7 @@ extension LocalBlogStore {
                 names[path] = banner.name
             }
         }
-        try db().query("SELECT media_json FROM articles WHERE deleted_at IS NULL") { row in
+        try db().query("SELECT media_json FROM articles WHERE deleted_at IS NULL AND \(contentVisibility())") { row in
             guard let raw = row.text(at: 0) else { return }
             let media: [NativeMedia] = try decode(raw)
             for item in media {

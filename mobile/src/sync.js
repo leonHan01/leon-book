@@ -14,6 +14,8 @@ export function upgradeSyncState(state) {
   return { ...state, outbox };
 }
 
+export function isPrivateRecord(item) { return item?.isPrivate === true || item?.remoteIsPrivate === true; }
+
 export function keyOf(kind, item) { return kind === 'articles' ? item.slug : item.id; }
 const invalidPairing = () => new Error('配对信息无效，请扫描或粘贴 LeonBook 显示的配对信息。');
 
@@ -229,16 +231,23 @@ export class SyncEngine {
       next.syncGeneration = generation;
       await this.commit(next);
     }
-    const context = generation ? { generation } : {};
+    const supportsContentPrivacy = identity.supportsContentPrivacy === true;
+    const context = {
+      ...(generation ? { generation } : {}),
+      ...(supportsContentPrivacy ? { includePrivate: true } : {}),
+    };
     // Flush each operation and durably acknowledge it before sending the next.
     for (const original of [...this.state.outbox]) {
       if (original.error || (onlyOperationID && original.id !== onlyOperationID)) continue;
       let next = structuredClone(this.state);
       let upgrade;
+      const local = this.state[original.kind].find(item => keyOf(original.kind, item) === original.key);
       if (original.kind === 'articles' && identity.supportsInlineArticleImages !== true && inlineArticleIDs(original.params.body).size) {
         upgrade = '请升级 Mac 版 LeonBook，再同步含正文插图的文章。';
       } else if (original.method === 'articles.create' && original.params.destinationFolder && identity.supportsArticleDestination !== true) {
         upgrade = destinationUpgrade;
+      } else if (!supportsContentPrivacy && (isPrivateRecord(local) || original.baseFields?.isPrivate || Object.hasOwn(original.params, 'isPrivate'))) {
+        upgrade = '请升级 Mac 版 LeonBook，再同步私密内容。';
       }
       if (upgrade) {
         if (original.transferError !== upgrade) {
@@ -274,6 +283,7 @@ export class SyncEngine {
           const { uploadedAttachments, ...receipt } = record;
           const local = next.articles.find(item => item.slug === original.key);
           record = { ...local, ...receipt, needsRefresh: true };
+          delete record.remoteIsPrivate;
           if (uploadedAttachments?.length) {
             const media = new Map([...(local?.media ?? []), ...uploadedAttachments].map(item => [item.url, item]));
             record.media = [...media.values()];
@@ -307,8 +317,13 @@ export class SyncEngine {
       }
       const next = structuredClone(this.state);
       const pending = new Set(this.state.outbox.filter(op => op.kind === kind).map(op => op.key));
-      next[kind] = [...next[kind].filter(item => pending.has(keyOf(kind, item))),
-        ...records.filter(item => !pending.has(keyOf(kind, item)))];
+      const remotePrivacy = new Map(records.map(item => [keyOf(kind, item), item.isPrivate === true]));
+      const previews = next[kind].filter(item => pending.has(keyOf(kind, item))).map(item => {
+        const isPrivate = remotePrivacy.get(keyOf(kind, item));
+        return isPrivate !== undefined && isPrivate !== (item.remoteIsPrivate === true)
+          ? { ...item, remoteIsPrivate: isPrivate } : item;
+      });
+      next[kind] = [...previews, ...records.filter(item => !pending.has(keyOf(kind, item)))];
       if (kind === 'articles' && identity.supportsArticleFolders) {
         try {
           const response = await this.rpc('read', { ...context, method: 'articles.folders', params: {} });
@@ -379,8 +394,11 @@ export class SyncEngine {
     const pending = new Set(this.state.outbox.filter(op => op.kind === kind).map(op => op.key));
     // Recheck missing cached keys before treating them as remote deletions.
     for (const key of new Set([...summaries.keys(), ...cached.keys()])) {
-      if (pending.has(key)) continue;
       const summary = summaries.get(key);
+      if (pending.has(key)) {
+        if (summary) records.push(summary);
+        continue;
+      }
       const old = cached.get(key);
       if (summary && kind === 'moments') records.push(summary);
       else if (summary && old && !old.needsRefresh && old.updatedAt === summary.updatedAt && typeof old.body === 'string') {

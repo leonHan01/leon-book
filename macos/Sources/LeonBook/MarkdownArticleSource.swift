@@ -20,6 +20,7 @@ struct MarkdownArticleSourceRecord: Hashable {
     let tags: [String]
     let publishedAt: String?
     let properties: [String: NativeArticlePropertyValue]
+    let isPrivate: Bool?
 }
 
 enum MarkdownArticleSource {
@@ -53,7 +54,7 @@ enum MarkdownArticleSource {
     private static let reservedKeys = Set([
         "title", "category", "tags", "tag", "slug", "status", "updatedat", "updated_at",
         "publishedat", "published_at", "banner", "banneralt", "banner_alt", "excerpt", "description",
-        "leonmedia", "leon_media",
+        "leonmedia", "leon_media", "leonprivate",
     ])
 
     static func defaultRelativePath(for slug: String, body: String = "") -> String {
@@ -210,7 +211,8 @@ enum MarkdownArticleSource {
             status: status,
             tags: tags,
             publishedAt: frontmatter.scalar(for: ["publishedAt", "published_at"]).flatMap(nonEmpty),
-            properties: try NativeArticleProperties.validated(properties)
+            properties: try NativeArticleProperties.validated(properties),
+            isPrivate: frontmatter.scalar(for: ["leonPrivate"]).flatMap { Bool($0.lowercased()) }
         )
     }
 
@@ -472,6 +474,7 @@ enum MarkdownArticleSource {
             "updatedAt: \(article.updatedAt)",
             "excerpt: \(quoted(article.excerpt))",
         ]
+        if article.isPrivate { lines.append("leonPrivate: true") }
         if let publishedAt = article.publishedAt { lines.append("publishedAt: \(publishedAt)") }
         if let banner = article.banner {
             lines.append("banner: \(quoted(banner.url))")
@@ -585,6 +588,12 @@ enum MarkdownArticleSource {
             isSemanticallyUnchanged: (NativeArticleStatus(
                 rawValue: parsed.scalar(for: ["status"])?.lowercased() ?? ""
             ) ?? .draft) == article.status
+        )
+        update(
+            aliases: ["leonPrivate"],
+            canonicalKey: "leonPrivate",
+            desiredRawValue: article.isPrivate ? "true" : "false",
+            isSemanticallyUnchanged: (parsed.scalar(for: ["leonPrivate"]).flatMap { Bool($0.lowercased()) } ?? false) == article.isPrivate
         )
         update(
             aliases: ["updatedAt", "updated_at"],

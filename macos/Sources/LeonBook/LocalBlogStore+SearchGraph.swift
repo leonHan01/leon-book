@@ -22,6 +22,18 @@ extension LocalBlogStore {
 
         var predicates: [String] = []
         var values: [SQLiteValue] = []
+        if !showsPrivateContent {
+            predicates.append("""
+            NOT (
+                (document_type = 'article' AND EXISTS (
+                    SELECT 1 FROM articles WHERE slug = content_search.document_id AND is_private = 1
+                ))
+                OR (document_type = 'moment' AND EXISTS (
+                    SELECT 1 FROM moments WHERE id = content_search.document_id AND is_private = 1
+                ))
+            )
+            """)
+        }
         let indexedTerms = query.textTerms.filter { $0.count >= 3 }
         let shortTerms = query.textTerms.filter { $0.count < 3 }
 
@@ -250,10 +262,8 @@ extension LocalBlogStore {
         try prepare()
         let safeSourceSlug = try requireSafeSegment(sourceSlug, label: "来源文章 slug")
         let safeTargetSlug = try requireSafeSegment(targetSlug, label: "目标文章 slug")
-        guard let source = try storedArticle(withSlug: safeSourceSlug),
-              let target = try storedArticle(withSlug: safeTargetSlug) else {
-            throw NativeStoreError.notFound
-        }
+        let source = try getArticle(slug: safeSourceSlug)
+        let target = try getArticle(slug: safeTargetSlug)
         guard source.updatedAt == expectedUpdatedAt else { throw NativeStoreError.conflict }
         let replacement = NativeArticleLink.linkingUnlinkedMentions(
             of: target.title,

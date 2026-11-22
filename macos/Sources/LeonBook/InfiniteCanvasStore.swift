@@ -197,6 +197,7 @@ extension LocalBlogStore {
             guard InfiniteCanvasDocument.safeRelativePath(relative) else { return nil }
             let root = mediaURL.standardizedFileURL.resolvingSymlinksInPath()
             guard root.path.hasPrefix(rootURL.standardizedFileURL.resolvingSymlinksInPath().path + "/") else { return nil }
+            guard showsPrivateContent || (try? hiddenMediaPaths(matching: "/" + relative).isEmpty) == true else { return nil }
             let file = rootURL.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
             return file.path.hasPrefix(root.path + "/") && FileManager.default.fileExists(atPath: file.path) ? file : nil
         }
@@ -205,7 +206,15 @@ extension LocalBlogStore {
         let relative = path.hasPrefix("articles/") ? String(path.dropFirst(9)) : path
         let base = source.flatMap { $0.isEmpty ? nil : root.appendingPathComponent($0).deletingLastPathComponent() } ?? root
         let file = base.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
-        return file.path.hasPrefix(root.path + "/") && FileManager.default.fileExists(atPath: file.path) ? file : nil
+        guard file.path.hasPrefix(root.path + "/"), FileManager.default.fileExists(atPath: file.path) else { return nil }
+        if !showsPrivateContent {
+            let sourcePath = String(file.path.dropFirst(root.path.count + 1)).precomposedStringWithCanonicalMapping
+            guard (try? db().integer(
+                "SELECT COUNT(*) FROM articles WHERE source_relative_path = ? AND is_private = 1",
+                values: [.text(sourcePath)]
+            )) == 0 else { return nil }
+        }
+        return file
     }
 
     private func canvasDirectory() throws -> URL {

@@ -162,6 +162,9 @@ struct ArticleReaderView: View {
                     .font(readingPreferences.profile.bodyFont.swiftUIFont(size: 32, weight: .semibold))
                     .id(NativeArticleCommentAnchor.articleTopID)
                 HStack(spacing: 12) {
+                    if article.isPrivate {
+                        Label("私密", nativeIcon: "lock.fill", iconSize: 12)
+                    }
                     Text(article.category)
                     Text("·")
                     Text(NativeLocalization.text("更新于 \(article.updatedAt.nativeDateLabel)"))
@@ -360,6 +363,14 @@ struct ArticleReaderView: View {
                             }
                         }
                     }
+                    Button(
+                        LocalizedStringKey(article.isPrivate ? "取消私密" : "设为私密"),
+                        nativeIcon: article.isPrivate ? "lock.open" : "lock"
+                    ) {
+                        Task { await model.changeArticlePrivacy(article) }
+                    }
+                    .disabled(model.isSaving || model.isBackingUp)
+
                     Button("版本历史", nativeIcon: "clock.arrow.circlepath") {
                         model.refreshArticleHistory()
                         isPresentingHistory = true
@@ -767,14 +778,9 @@ private struct ArticleCommentsSidebar: View {
                 }
             }
         }
-        .onAppear {
-            guard model.pendingArticleCommentSelection != nil else { return }
-            DispatchQueue.main.async { isComposerFocused = true }
-        }
         .onChange(of: model.articleCommentSelectionRevision) { _ in
             guard model.pendingArticleCommentSelection != nil else { return }
             replyingTo = nil
-            isComposerFocused = true
         }
         .onChange(of: article.slug) { _ in
             commentText = ""

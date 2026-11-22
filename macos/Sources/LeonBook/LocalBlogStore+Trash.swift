@@ -10,7 +10,7 @@ extension LocalBlogStore {
         try db().query("""
         SELECT slug, title, excerpt, deleted_at, delete_expires_at
         FROM articles
-        WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL
+        WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL AND \(contentVisibility())
         """) { row in
             guard let slug = row.text(at: 0),
                   let title = row.text(at: 1),
@@ -32,7 +32,7 @@ extension LocalBlogStore {
         try db().query("""
         SELECT id, text, images_json, deleted_at, delete_expires_at
         FROM moments
-        WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL
+        WHERE deleted_at IS NOT NULL AND delete_expires_at IS NOT NULL AND \(contentVisibility())
         """) { row in
             guard let id = row.text(at: 0),
                   let text = row.text(at: 1),
@@ -64,7 +64,8 @@ extension LocalBlogStore {
         switch item.kind {
         case .article:
             try requireWritableArticleSource()
-            guard let restoring = try storedArticle(withSlug: safeKey, includingDeleted: true) else {
+            guard let restoring = try storedArticle(withSlug: safeKey, includingDeleted: true),
+                  permitsContent(isPrivate: restoring.isPrivate) else {
                 throw NativeStoreError.notFound
             }
             try db().transaction {
@@ -97,7 +98,8 @@ extension LocalBlogStore {
             try writeTrashBackup()
             markJSONBackupNeedsRebuild()
         case .moment:
-            guard let restoring = try moment(withID: safeKey, includingDeleted: true) else {
+            guard let restoring = try moment(withID: safeKey, includingDeleted: true),
+                  permitsContent(isPrivate: restoring.isPrivate) else {
                 throw NativeStoreError.notFound
             }
             try db().transaction {
@@ -127,7 +129,7 @@ extension LocalBlogStore {
         case .article:
             try requireWritableArticleSource()
             guard let article = try storedArticle(withSlug: safeKey, includingDeleted: true),
-                  try db().text("SELECT deleted_at FROM articles WHERE slug = ?", values: [.text(safeKey)]) != nil else {
+                  try db().text("SELECT deleted_at FROM articles WHERE slug = ? AND \(contentVisibility())", values: [.text(safeKey)]) != nil else {
                 throw NativeStoreError.notFound
             }
             try MarkdownArticleSource.remove(relativePath: article.sourceRelativePath, in: articlesURL)
@@ -143,7 +145,7 @@ extension LocalBlogStore {
             try writeTrashBackup()
         case .moment:
             guard let moment = try moment(withID: safeKey, includingDeleted: true),
-                  try db().text("SELECT deleted_at FROM moments WHERE id = ?", values: [.text(safeKey)]) != nil else {
+                  try db().text("SELECT deleted_at FROM moments WHERE id = ? AND \(contentVisibility())", values: [.text(safeKey)]) != nil else {
                 throw NativeStoreError.notFound
             }
             try db().execute("DELETE FROM moments WHERE id = ? AND deleted_at IS NOT NULL", values: [.text(safeKey)])
@@ -157,20 +159,21 @@ extension LocalBlogStore {
         try prepare()
         var articlesToDelete: [(slug: String, sourcePath: String)] = []
         var momentsToDelete: [(id: String, images: [NativeMedia])] = []
+        let visibility = contentVisibility()
 
-        try db().query("SELECT slug, source_relative_path FROM articles WHERE deleted_at IS NOT NULL") { row in
+        try db().query("SELECT slug, source_relative_path FROM articles WHERE deleted_at IS NOT NULL AND \(visibility)") { row in
             if let slug = row.text(at: 0) {
                 articlesToDelete.append((slug, row.text(at: 1) ?? "\(slug).md"))
             }
         }
-        try db().query("SELECT id, images_json FROM moments WHERE deleted_at IS NOT NULL") { row in
+        try db().query("SELECT id, images_json FROM moments WHERE deleted_at IS NOT NULL AND \(visibility)") { row in
             guard let id = row.text(at: 0), let imagesJSON = row.text(at: 1) else { return }
             momentsToDelete.append((id: id, images: try decode(imagesJSON)))
         }
 
         try db().transaction {
-            try db().execute("DELETE FROM articles WHERE deleted_at IS NOT NULL")
-            try db().execute("DELETE FROM moments WHERE deleted_at IS NOT NULL")
+            try db().execute("DELETE FROM articles WHERE deleted_at IS NOT NULL AND \(visibility)")
+            try db().execute("DELETE FROM moments WHERE deleted_at IS NOT NULL AND \(visibility)")
             for article in articlesToDelete {
                 try db().execute(
                     "DELETE FROM article_revisions WHERE article_slug = ? OR draft_key = ?",

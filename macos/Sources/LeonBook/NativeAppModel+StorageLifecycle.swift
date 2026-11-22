@@ -6,6 +6,31 @@ enum NativeWorkspaceWindows {
 
     static func register(_ model: NativeAppModel) { models.add(model) }
 
+    static func setPrivacyMode(_ enabled: Bool, using privacy: NativeContentPrivacy) {
+        privacy.setEnabled(enabled)
+        for model in models.allObjects where model.contentPrivacy === privacy {
+            model.applyPrivacyMode(enabled)
+        }
+    }
+
+    static func reloadAfterContentPrivacyChange(
+        in root: URL,
+        excluding initiator: NativeAppModel,
+        articleSlugs: Set<String> = [],
+        momentIDs: Set<String> = [],
+        questionIDs: Set<String> = []
+    ) {
+        for model in models.allObjects where model !== initiator && model.store.rootURL == root
+            && model.storageReady && !model.isRestoringBackup {
+            if model.privacyModeEnabled {
+                model.invalidateContentPreviews()
+            } else {
+                model.concealPrivateContent(articleSlugs: articleSlugs, momentIDs: momentIDs, questionIDs: questionIDs)
+            }
+            model.schedulePrivacyReload()
+        }
+    }
+
     static func matching(_ root: URL) -> [NativeAppModel] {
         let path = root.standardizedFileURL.resolvingSymlinksInPath().path
         return models.allObjects.filter {

@@ -88,6 +88,7 @@ extension NativeAppModel {
 
     @discardableResult
     func selectQuestion(_ question: NativeQuestion) -> Bool {
+        guard privacyModeEnabled || !question.isPrivate else { return false }
         if question.id == selectedQuestion?.id {
             recordQuestionView(questionID: question.id)
             return true
@@ -97,6 +98,11 @@ extension NativeAppModel {
         }
         let discardedMedia = questionSession.beginSelecting(question)
         discardUnreferencedMedia(discardedMedia)
+        if let concealed = concealedQuestionAnswerDrafts.removeValue(forKey: question.id) {
+            questionAnswerDraft = concealed.draft
+            editingQuestionAnswerID = concealed.id
+            editingQuestionAnswerUpdatedAt = concealed.updatedAt
+        }
         let generation = workspaceGeneration
         let activeStore = store
         recordQuestionView(questionID: question.id)
@@ -154,7 +160,7 @@ extension NativeAppModel {
         refreshQuestionList()
     }
 
-    func publishQuestion(title: String, body: String, tagsText: String) async -> Bool {
+    func publishQuestion(title: String, body: String, tagsText: String, isPrivate: Bool = false) async -> Bool {
         guard authorizeFirstPartyModule(
             PublishingFirstPartyModule.id,
             permission: .contentPublish,
@@ -177,7 +183,8 @@ extension NativeAppModel {
             let saved = try await store.saveQuestion(
                 title: title,
                 body: body,
-                tags: NativeQuestionTag.parse(tagsText)
+                tags: NativeQuestionTag.parse(tagsText),
+                isPrivate: isPrivate
             )
             questionSearchText = ""
             selectedQuestionTag = nil
@@ -193,6 +200,28 @@ extension NativeAppModel {
         } catch {
             errorMessage = error.localizedDescription
             return false
+        }
+    }
+
+    func changeQuestionPrivacy(_ question: NativeQuestion) async {
+        let activeStore = store
+        do {
+            try await activeStore.setQuestionPrivacy(id: question.id, isPrivate: !question.isPrivate, expectedUpdatedAt: question.updatedAt)
+            guard activeStore === store else { return }
+            NativeWorkspaceWindows.reloadAfterContentPrivacyChange(in: activeStore.rootURL, excluding: self, questionIDs: [question.id])
+            if !privacyModeEnabled {
+                questionListGeneration += 1
+                questions.removeAll { $0.id == question.id }
+                questionSession.hotQuestions.removeAll { $0.id == question.id }
+                questionTagFacets = []
+                selectedQuestionTag = nil
+                concealQuestionDetail(id: question.id)
+                invalidateContentPreviews()
+            }
+            try await reloadQuestionList()
+            scheduleBackup()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

@@ -173,7 +173,7 @@ public actor AutomationService {
         case "moments.list":
             return try page(await store.listMoments(), p) { [$0.id, $0.updatedAt, String($0.isFavorite), String($0.commentCount)] }
         case "moments.get": return try .encoded(await store.getMoment(id: p.required("id")))
-        case "moments.create": return try .encoded(await store.saveMoment(text: p.string("text"), textRuns: p.optional("textRuns") ?? [], images: p.optional("images") ?? []))
+        case "moments.create": return try .encoded(await store.saveMoment(text: p.string("text"), textRuns: p.optional("textRuns") ?? [], images: p.optional("images") ?? [], isPrivate: p.flag("isPrivate")))
         case "moments.update", "moments.delete": return try await store.automationMutateMoment(method: method, parameters: p)
         case "moments.favorite": return try .encoded(await store.setMomentFavorite(id: p.required("id"), isFavorite: p.required("isFavorite")))
         case "momentComments.list": return try .encoded(await store.listMomentComments(momentID: p.required("momentID")))
@@ -181,7 +181,7 @@ public actor AutomationService {
         case "momentComments.delete": try await store.deleteMomentComment(id: p.required("id"), momentID: p.required("momentID"))
         case "questions.list": return try .encoded(await store.listQuestions(searchText: p.string("search"), tag: p.optional("tag")))
         case "questions.get": return try .encoded(await store.getQuestion(id: p.required("id")))
-        case "questions.create": return try .encoded(await store.saveQuestion(title: p.required("title"), body: p.string("body"), tags: p.optional("tags") ?? []))
+        case "questions.create": return try .encoded(await store.saveQuestion(title: p.required("title"), body: p.string("body"), tags: p.optional("tags") ?? [], isPrivate: p.flag("isPrivate")))
         case "answers.list": return try .encoded(await store.listQuestionAnswers(questionID: p.required("questionID")))
         case "answers.create": return try .encoded(await store.saveQuestionAnswer(questionID: p.required("questionID"), body: p.string("body"), images: p.optional("images") ?? []))
         case "answers.update": return try .encoded(await store.updateQuestionAnswer(id: p.required("id"), body: p.required("body"), images: p.required("images"), expectedUpdatedAt: p.required("expectedUpdatedAt")))
@@ -215,6 +215,17 @@ public actor AutomationService {
             let kind: String = try p.required("kind")
             guard ["image", "video", "audio", "file"].contains(kind) else { throw AutomationFailure("invalid_params", "kind must be image, video, audio or file") }
             return try .encoded(await store.uploadMedia(fileURL: absoluteURL(p.required("path")), kind: kind, slug: p.optional("slug")))
+        case "mobile.read":
+            let method: String = try p.required("method")
+            guard ["articles.list", "articles.get", "moments.list", "moments.get"].contains(method),
+                  let operation = AutomationCatalog.operations.first(where: { $0.method == method }) else {
+                throw AutomationFailure("invalid_params", "Unsupported mobile read")
+            }
+            let nested = AutomationParameters(values: try p.required("params"))
+            try operation.validate(nested.values)
+            return try await NativeContentPrivacy.$includesPrivateForSync.withValue(true) {
+                try await execute(method, nested, store, user)
+            }
         case "mobile.saveWithAttachments", "mobile.mutate":
             let method: String = try p.required("method")
             let attachmentMethods = ["articles.create", "articles.update", "moments.create", "moments.update"]
@@ -228,17 +239,17 @@ public actor AutomationService {
             try operation.validate(nested.values)
             try authorize(method, nested)
             let compact = try p.flag("compact")
-            let result: AutomationValue
-            if let files {
-                try await authorizeArticleUpdate(method, nested, store)
-                result = try await store.saveMobileAttachments(
-                    method: method, parameters: nested, files: files, inlineImages: p.flag("inlineImages")
-                )
-            } else {
-                result = try await execute(method, nested, store, user)
+            let result = try await NativeContentPrivacy.$includesPrivateForSync.withValue(p.flag("includePrivate")) {
+                if let files {
+                    try await authorizeArticleUpdate(method, nested, store)
+                    return try await store.saveMobileAttachments(
+                        method: method, parameters: nested, files: files, inlineImages: p.flag("inlineImages")
+                    )
+                }
+                return try await execute(method, nested, store, user)
             }
             if compact, method.hasPrefix("articles."), case .object(let article) = result {
-                var receipt = article.filter { ["slug", "updatedAt", "status"].contains($0.key) }
+                var receipt = article.filter { ["slug", "updatedAt", "status", "isPrivate"].contains($0.key) }
                 if let files, case .array(let media)? = article["media"] {
                     receipt["uploadedAttachments"] = .array(Array(media.suffix(files.count)))
                 }
@@ -380,7 +391,8 @@ extension LocalBlogStore {
             tags: p.optional("tags") ?? previous?.tags ?? [], title: title,
             expectedUpdatedAt: previous == nil ? nil : p.required("expectedUpdatedAt"),
             properties: p.optional("properties") ?? previous?.properties ?? [:],
-            sourceRelativePath: previous == nil ? p.optional("sourceRelativePath") : nil
+            sourceRelativePath: previous == nil ? p.optional("sourceRelativePath") : nil,
+            isPrivate: p.optional("isPrivate")
         ))
     }
 
@@ -398,7 +410,7 @@ extension LocalBlogStore {
             try deleteMoment(id: current.id, expectedUpdatedAt: expected)
             return .object(["ok": .bool(true)])
         }
-        return try .encoded(updateMoment(id: current.id, text: p.optional("text") ?? current.text, textRuns: p.optional("textRuns") ?? (p.values["text"] == nil ? current.textRuns : []), images: p.optional("images") ?? current.images, expectedUpdatedAt: expected))
+        return try .encoded(updateMoment(id: current.id, text: p.optional("text") ?? current.text, textRuns: p.optional("textRuns") ?? (p.values["text"] == nil ? current.textRuns : []), images: p.optional("images") ?? current.images, expectedUpdatedAt: expected, isPrivate: p.optional("isPrivate")))
     }
 
     func automationSaveTodo(_ p: AutomationParameters) throws -> TodoItem {

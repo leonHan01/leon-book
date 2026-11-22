@@ -11,6 +11,7 @@ public struct NativeQuestion: Codable, Hashable, Identifiable {
     public let updatedAt: String
     public let answerCount: Int
     public let viewCount: Int
+    public let isPrivate: Bool
 
     public var heatScore: Int { answerCount * Self.answerHeatWeight + viewCount }
 
@@ -18,7 +19,7 @@ public struct NativeQuestion: Codable, Hashable, Identifiable {
         NativeQuestion(
             id: id, title: title, body: body, tags: tags,
             createdAt: createdAt, updatedAt: updatedAt,
-            answerCount: answerCount, viewCount: max(viewCount, count)
+            answerCount: answerCount, viewCount: max(viewCount, count), isPrivate: isPrivate
         )
     }
 
@@ -30,7 +31,8 @@ public struct NativeQuestion: Codable, Hashable, Identifiable {
         createdAt: String,
         updatedAt: String,
         answerCount: Int = 0,
-        viewCount: Int = 0
+        viewCount: Int = 0,
+        isPrivate: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -40,6 +42,7 @@ public struct NativeQuestion: Codable, Hashable, Identifiable {
         self.updatedAt = updatedAt
         self.answerCount = answerCount
         self.viewCount = viewCount
+        self.isPrivate = isPrivate
     }
 
     public init(from decoder: Decoder) throws {
@@ -52,6 +55,7 @@ public struct NativeQuestion: Codable, Hashable, Identifiable {
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
         answerCount = try container.decodeIfPresent(Int.self, forKey: .answerCount) ?? 0
         viewCount = try container.decodeIfPresent(Int.self, forKey: .viewCount) ?? 0
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
     }
 }
 

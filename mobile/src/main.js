@@ -11,7 +11,7 @@ import { attachmentCard, cacheUploadedAttachments, pendingAttachmentCard, previe
 import { articleFolderPath, buildArticleDirectory, parentFolderPath } from './article-directories.js';
 import { searchArticles, searchText } from './article-search.js';
 import { browsingViewKey, loadBrowsingState, saveBrowsingState, setBrowsingPosition } from './browsing-state.js';
-import { emptyState, keyOf, pairDevice, parsePairing, readRecord, request, resolveEdit, SyncEngine, upgradeSyncState } from './sync.js';
+import { emptyState, isPrivateRecord, keyOf, pairDevice, parsePairing, readRecord, request, resolveEdit, SyncEngine, upgradeSyncState } from './sync.js';
 import { completeTodo, editableFields, mergeEditorFields, saveEditor, uuid, validateUploadSelection } from './editor.js';
 import { imagePreviews, loadPhoto } from './attachment-images.js';
 import { rememberReadingPosition } from './reading-position.js';
@@ -26,6 +26,7 @@ let modal, modalDismiss, momentFeed, gallery, readerImages;
 let updateSyncView;
 let updateSyncDetails;
 let articleDrafts = new Map(), draftButton, activeArticleDraft;
+let privacyModeEnabled = false;
 let foreground = !document.hidden, autoRequested = false, autoTimer, nextAutoAt = 0;
 
 function el(tag, props = {}, ...children) {
@@ -44,6 +45,17 @@ const dateLabel = value => value && Number.isFinite(new Date(value).getTime())
   ? new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
   : '';
 const operation = (kind, item) => state.outbox.find(op => op.kind === kind && op.key === keyOf(kind, item));
+
+const canShowContent = item => privacyModeEnabled || !isPrivateRecord(item);
+const visibleRecords = kind => state[kind].filter(canShowContent);
+const attachmentPairing = () => privacyModeEnabled && state.pairing
+  ? { ...state.pairing, includePrivate: true } : state.pairing;
+const visibleOutbox = () => {
+  if (privacyModeEnabled) return state.outbox;
+  const hiddenKeys = new Set([...state.articles.filter(isPrivateRecord).map(item => 'articles:' + item.slug),
+    ...state.moments.filter(isPrivateRecord).map(item => 'moments:' + item.id)]);
+  return state.outbox.filter(op => !hiddenKeys.has(`${op.kind}:${op.key}`));
+};
 
 async function commit(next, options) { await saveState(next, options); state = next; }
 
@@ -240,15 +252,20 @@ async function refreshArticleDrafts() {
   articleDrafts = new Map((await loadArticleDrafts(draftWorkspace())).map(draft => [draft.id, draft]));
 }
 
+function canShowDraft(draft) {
+  const original = state.articles.find(article => article.slug === draft.base?.slug);
+  return canShowContent(draft.fields) && canShowContent(draft.base) && canShowContent(original);
+}
+
 function updateDraftButton() {
   if (!draftButton) return;
-  draftButton.hidden = !articleDrafts.size;
+  draftButton.hidden = ![...articleDrafts.values()].some(canShowDraft);
   draftButton.disabled = busy;
 }
 
 function openArticleDrafts() {
   modalOpen('本地草稿', content => {
-    const drafts = [...articleDrafts.values()].sort((a, b) => b.savedAt - a.savedAt);
+    const drafts = [...articleDrafts.values()].filter(canShowDraft).sort((a, b) => b.savedAt - a.savedAt);
     for (const draft of drafts) {
       const label = draft.fields.title.trim() || '未命名文章';
       content.append(button(label, () => {
@@ -265,8 +282,14 @@ function openArticleDrafts() {
 }
 
 function editArticle(original, conflict, selectedDraft) {
-  const id = selectedDraft?.id ?? draftID(original, conflict);
-  const restored = selectedDraft ?? articleDrafts.get(id);
+  if (!canShowContent(original) || (selectedDraft && !canShowDraft(selectedDraft))) return;
+  let id = selectedDraft?.id ?? draftID(original, conflict);
+  let restored = selectedDraft ?? articleDrafts.get(id);
+  if (restored && !canShowDraft(restored)) {
+    if (id !== 'new') return;
+    id = 'new:' + uuid();
+    restored = null;
+  }
   const baseArticle = original ? restored?.base ?? original : null;
   const fields = restored?.fields ?? (conflict
     ? mergeEditorFields('articles', conflict.remote, conflict.op) : editableFields('articles', original));
@@ -277,6 +300,7 @@ function editArticle(original, conflict, selectedDraft) {
   modalOpen(conflict ? '手动合并' : original ? '编辑文章' : '新建文章', (content, dialog) => {
     const form = el('form', { class: 'editor article-editor-form' });
     const title = el('input', { name: 'title', value: fields.title, required: true });
+    const privacy = el('input', { name: 'isPrivate', type: 'checkbox', checked: fields.isPrivate === true });
     const status = el('p', { class: 'muted', 'aria-live': 'polite' });
     const discard = button('丢弃本地草稿', async () => {
       if (dialog.dataset.saving === 'true' || !confirm('丢弃这份本地草稿？')) return;
@@ -297,7 +321,7 @@ function editArticle(original, conflict, selectedDraft) {
     let folder;
     const layout = el('div', { class: 'article-editor-fields' }, field('标题', title));
     if (chooseFolder) {
-      const directory = buildArticleDirectory(state.articles, state.articleFolders ?? []);
+      const directory = buildArticleDirectory(visibleRecords('articles'), state.articleFolders ?? []);
       const selected = restored?.folder ?? (original ? articleFolderPath(original) : browsing.folder);
       const paths = [...new Set([...directory.keys(), selected])]
         .filter(path => path !== defaultArticleFolder && validArticleDestination(path)).sort((a, b) => a.localeCompare(b));
@@ -313,6 +337,7 @@ function editArticle(original, conflict, selectedDraft) {
     } else if (!original && restored?.base) {
       form.append(el('p', { class: 'muted' }, '原文章暂时无法编辑，保存这份草稿会新建文章。'));
     }
+    layout.append(el('label', { class: 'privacy-field' }, privacy, '私密'));
     form.append(layout);
 
     let inline = new Set();
@@ -329,7 +354,7 @@ function editArticle(original, conflict, selectedDraft) {
       onChange: changed,
     });
     const refs = new Map(recordAttachments('articles', original ?? restored?.base).map(ref => [ref.path, ref]));
-    const pairing = state.pairing;
+    const pairing = attachmentPairing();
     const imageInput = el('input', { type: 'file', name: 'inlineImages', multiple: true, hidden: true,
       accept: '.jpg,.jpeg,.png,.gif,.webp,.avif,.heic,.heif' });
     rich = createArticleRichEditor(fields, {
@@ -362,7 +387,7 @@ function editArticle(original, conflict, selectedDraft) {
 
     session = autosaveArticleDraft(() => ({
       id, base: baseArticle ?? restored?.base ?? null, savedAt: Date.now(), folder: folder?.value,
-      fields: { title: title.value, ...rich.body() }, files: picker.files(),
+      fields: { title: title.value, ...rich.body(), isPrivate: privacy.checked }, files: picker.files(),
     }), async snapshot => {
       await saveArticleDraft(key, snapshot);
       articleDrafts.set(id, snapshot);
@@ -374,6 +399,7 @@ function editArticle(original, conflict, selectedDraft) {
     activeArticleDraft = session;
 
     title.addEventListener('input', changed);
+    privacy.addEventListener('change', changed);
     folder?.addEventListener('change', changed);
     form.append(rich.element, imageInput, pendingImageError, picker.element, status, el('p', { class: 'error', role: 'alert' }),
       el('button', { type: 'submit', class: 'primary' }, conflict ? '保存合并结果' : '保存文章'), discard);
@@ -383,7 +409,7 @@ function editArticle(original, conflict, selectedDraft) {
       const body = rich.body();
       if (!title || !rich.hasContent()) throw new Error('请填写标题，并在正文输入文字或插图。');
       const base = conflict ? resolveEdit(state, conflict.op, baseArticle) : state;
-      const next = saveEditor(base, 'articles', baseArticle, { title, ...body }, picker.files(), {
+      const next = saveEditor(base, 'articles', baseArticle, { title, ...body, isPrivate: privacy.checked }, picker.files(), {
         articleDestination: folder ? values.get('articleFolder') : undefined,
       });
       await session.settle();
@@ -407,6 +433,7 @@ function editArticle(original, conflict, selectedDraft) {
 }
 
 function edit(kind, original, conflict) {
+  if (!canShowContent(original)) return;
   if (kind === 'articles') { editArticle(original, conflict); return; }
   const draft = conflict?.local ?? original;
   const initial = conflict ? mergeEditorFields(kind, conflict.remote, conflict.op) : editableFields(kind, original);
@@ -419,7 +446,8 @@ function edit(kind, original, conflict) {
       form.append(field('标题', el('input', { name: 'title', value: initial.title, required: true, maxlength: kind === 'todos' ? 200 : undefined })));
     }
     if (kind === 'moments') {
-      form.append(field('正文', textarea('text', initial.text, { maxlength: Math.max(5000, initial.text.length), rows: 9 })));
+      form.append(field('正文', textarea('text', initial.text, { maxlength: Math.max(5000, initial.text.length), rows: 9 })),
+        el('label', { class: 'privacy-field' }, el('input', { name: 'isPrivate', type: 'checkbox', checked: initial.isPrivate }), '私密'));
     } else {
       const priority = el('select', { name: 'priority' }, ['低', '普通', '高'].map((label, index) =>
         el('option', { value: index, selected: index === initial.priority }, label)));
@@ -449,7 +477,7 @@ function edit(kind, original, conflict) {
         next = completed === Boolean(original.completedAt) ? base : completeTodo(base, original, completed ? new Date().toISOString() : null);
       } else {
         let fields;
-        if (kind === 'moments') fields = { text: values.get('text') };
+        if (kind === 'moments') fields = { text: values.get('text'), isPrivate: values.has('isPrivate') };
         else fields = { title: values.get('title').trim(), notes: values.get('notes'), priority: Number(values.get('priority')), dueDay: values.get('dueDay') || null };
         // Form controls may normalize line endings and the editor trims titles.
         // Keep the original field value when the merge form was left unchanged.
@@ -473,7 +501,9 @@ function edit(kind, original, conflict) {
 async function fetchRemote(op) {
   if (!state.pairing) throw new Error('请先连接 Mac。');
   if (op.method.endsWith('.create') && op.kind !== 'articles') return null;
-  return readRecord((action, args) => request(state.pairing, action, args), op.kind, op.key);
+  const remote = await readRecord((action, args) => request(state.pairing, action, args), op.kind, op.key, { includePrivate: true });
+  if (!canShowContent(remote)) throw new Error('开启隐私模式后可处理这条修改。');
+  return remote;
 }
 
 function conflictDialog(op, local) {
@@ -576,6 +606,7 @@ function conflictDialog(op, local) {
 }
 
 function detail(kind, item) {
+  if (!canShowContent(item)) return;
   const op = operation(kind, item);
   const readOnly = busy;
   if (op?.error && !readOnly) { conflictDialog(op, item); return; }
@@ -585,7 +616,7 @@ function detail(kind, item) {
     if (date) content.append(el('p', { class: 'muted' }, date));
     if (readOnly) content.append(el('p', { class: 'muted' }, '当前查看的是本机版本。同步结束后，从列表重新打开可编辑或查看更新。'));
     const refs = new Map(recordAttachments(kind, item).map(ref => [ref.path, ref]));
-    const pairing = state.pairing;
+    const pairing = attachmentPairing();
     const key = keyOf(kind, item);
     const photos = kind === 'moments' ? momentPhotoSources(item, op) : [];
     let photoDownloads = Promise.resolve();
@@ -679,7 +710,7 @@ function addReaderTools(dialog, toolbar, body, position, editArticle) {
 
 function readArticle(item, op, readOnly) {
   const title = item.title || labels.articles;
-  const pairing = state.pairing;
+  const pairing = attachmentPairing();
   const refs = recordAttachments('articles', item);
   const available = new Map(refs.map(ref => [ref.path, ref]));
   const remaining = new Set(available.keys());
@@ -866,7 +897,20 @@ async function sync({ onlyOperationID } = {}) {
   busy = true;
   notice = '';
   updateSyncView();
-  const engine = new SyncEngine(state, commit, async (action, args) => {
+  const persist = async next => {
+    const becamePrivate = !privacyModeEnabled && ['articles', 'moments'].some(kind => {
+      if (next[kind] === state[kind]) return false;
+      const previouslyVisible = new Set(visibleRecords(kind).map(item => keyOf(kind, item)));
+      return next[kind].some(item => isPrivateRecord(item) && previouslyVisible.has(keyOf(kind, item)));
+    });
+    await commit(next);
+    if (becamePrivate) {
+      gallery?.close();
+      modal?.close();
+      updateSyncView(true);
+    }
+  };
+  const engine = new SyncEngine(state, persist, async (action, args) => {
     const result = await request(state.pairing, action, args);
     if (result.result && action === 'push' && args.files?.length) {
       await cacheUploadedAttachments(state.pairing, args.method, result.result, args.files);
@@ -890,9 +934,10 @@ async function sync({ onlyOperationID } = {}) {
 const hasConflict = op => ['conflict', 'not_found', 'already_exists', 'workspace_restored'].includes(op?.error?.code);
 
 function syncOverview() {
-  const conflicts = state.outbox.filter(hasConflict).length;
-  const failed = state.outbox.filter(op => !hasConflict(op) && (op.error || op.transferError)).length;
-  const pending = state.outbox.length - conflicts - failed;
+  const outbox = visibleOutbox();
+  const conflicts = outbox.filter(hasConflict).length;
+  const failed = outbox.filter(op => !hasConflict(op) && (op.error || op.transferError)).length;
+  const pending = outbox.length - conflicts - failed;
   const queued = [
     pending ? `${pending} 条待同步` : '',
     conflicts ? `${conflicts} 条冲突` : '',
@@ -932,8 +977,9 @@ function syncStatus() {
       if (last) details.append(el('p', { class: 'muted' }, last));
       if (state.lastSyncError && !busy) details.append(el('p', { class: 'error' }, state.lastSyncError));
       if (notice) details.append(el('p', { class: 'muted' }, notice));
-      if (!state.outbox.length && !busy) details.append(el('p', { class: 'muted' }, '没有待同步的修改。'));
-      for (const op of state.outbox) {
+      const outbox = visibleOutbox();
+      if (!outbox.length && !busy) details.append(el('p', { class: 'muted' }, '没有待同步的修改。'));
+      for (const op of outbox) {
         const item = state[op.kind].find(record => keyOf(op.kind, record) === op.key);
         const failure = op.error?.message ?? op.transferError;
         const row = el('div', { class: 'sync-item' },
@@ -949,7 +995,7 @@ function syncStatus() {
       if (!state.pairing || state.lastSyncErrorCode === 'pairing_expired') {
         details.append(button(state.pairing ? '重新配对' : '连接 Mac', () => afterClose(pairing), { class: 'primary' }));
       } else {
-        const action = state.lastSyncError || state.outbox.some(op => op.transferError) ? '重试同步' : '立即同步';
+        const action = state.lastSyncError || outbox.some(op => op.transferError) ? '重试同步' : '立即同步';
         details.append(button(action, () => afterClose(() => sync()), { class: 'primary', disabled: busy }));
       }
     };
@@ -962,6 +1008,7 @@ function recordBadge(kind, item, op) {
   if (op?.error) return hasConflict(op) ? '有冲突' : '待处理';
   if (op?.transferError) return '同步失败';
   if (op) return '待同步';
+  if (isPrivateRecord(item)) return '私密';
   if (kind === 'articles' && item.status === 'draft') return '草稿';
   if (kind === 'todos' && item.completedAt) return '已完成';
   return '';
@@ -990,7 +1037,7 @@ function momentPhotoSources(item, op) {
 
 function openPhotoViewer(kind, key, photos, index, blob, anchor) {
   if (gallery?.open) return;
-  const pairing = state.pairing;
+  const pairing = attachmentPairing();
   const selected = photos[index];
   const sheet = modal?.open ? modal : null;
   if (!sheet) storeBrowsingPosition();
@@ -1015,7 +1062,7 @@ function openPhotoViewer(kind, key, photos, index, blob, anchor) {
 }
 
 function renderMomentFeed(container, items) {
-  const images = imagePreviews({ pairing: state.pairing, kind: 'moments', networkEnabled: canLoadMomentImages() });
+  const images = imagePreviews({ pairing: attachmentPairing(), kind: 'moments', networkEnabled: canLoadMomentImages() });
   const cards = items.map(item => {
     const op = operation('moments', item);
     const photos = momentPhotoSources(item, op);
@@ -1096,10 +1143,10 @@ function recordList(container, articleDirectory) {
   const folder = articleDirectory?.get(browsing.folder);
   const folders = folder && !filter ? folder.folders : [];
   const withinFolder = folder?.path && browsing.scope === 'folder';
-  const matches = folder && filter ? searchArticles(state.articles, filter, withinFolder ? folder.path : '') : null;
+  const matches = folder && filter ? searchArticles(visibleRecords('articles'), filter, withinFolder ? folder.path : '') : null;
   const items = matches ? [...matches.keys()] : filter
-    ? state[kind].filter(item => searchText([item.title, item.text, item.notes, ...(item.tags ?? [])].filter(Boolean).join(' ')).includes(filter))
-    : folder?.articles ?? state[kind];
+    ? visibleRecords(kind).filter(item => searchText([item.title, item.text, item.notes, ...(item.tags ?? [])].filter(Boolean).join(' ')).includes(filter))
+    : folder?.articles ?? visibleRecords(kind);
   if (!items.length && !folders.length) {
     const title = filter ? '没有匹配内容' : folder?.path ? '这个目录是空的' : `还没有${labels[kind]}`;
     const hint = filter ? (withinFolder ? '试试其他关键词，或搜索全部文章。' : '试试其他关键词。')
@@ -1169,8 +1216,18 @@ function render({ restore = false } = {}) {
     saveBrowsingState(state.pairing?.workspaceID, browsing);
   }
   const connectButton = button(state.pairing ? '配对设置' : '连接 Mac', pairing, { class: 'quiet' });
+  const privacyButton = button(privacyModeEnabled ? '隐私模式已开启' : '隐私模式', () => {
+    privacyModeEnabled = !privacyModeEnabled;
+    if (!privacyModeEnabled) {
+      browsing.queries.articles = '';
+      browsing.queries.moments = '';
+      notice = '';
+    }
+    render({ restore: true });
+  }, { class: 'quiet', 'aria-pressed': String(privacyModeEnabled) });
   const heading = el('header', { class: 'top' },
-    el('div', { class: 'brand' }, el('img', { class: 'brand-icon', src: appIcon, alt: '' }), 'LeonBook'), connectButton);
+    el('div', { class: 'brand' }, el('img', { class: 'brand-icon', src: appIcon, alt: '' }), 'LeonBook'),
+    el('div', { class: 'header-actions' }, privacyButton, connectButton));
   const statusTitle = el('strong', { class: 'sync-summary-title', 'aria-live': 'polite' });
   const statusDetail = el('span', { class: 'sync-summary-detail muted' });
   const status = button('', syncStatus, { class: 'sync-summary', 'aria-haspopup': 'dialog' });
@@ -1201,7 +1258,7 @@ function render({ restore = false } = {}) {
     if (refreshRecords) {
       if (list.hasChildNodes()) storeBrowsingPosition();
       if (breadcrumbs) {
-        articleDirectory = buildArticleDirectory(state.articles, state.articleFolders ?? []);
+        articleDirectory = buildArticleDirectory(visibleRecords('articles'), state.articleFolders ?? []);
         while (!articleDirectory.has(browsing.folder)) browsing.folder = parentFolderPath(browsing.folder);
         renderArticleBreadcrumbs(breadcrumbs);
       }

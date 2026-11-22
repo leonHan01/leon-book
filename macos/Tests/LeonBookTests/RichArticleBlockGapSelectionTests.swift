@@ -4,6 +4,44 @@ import WebKit
 
 extension RichArticleTests {
     @MainActor
+    func testReaderPointerSelectionDoesNotExtendIntoFollowingGap() async throws {
+        try await withWebEditor { view in
+            _ = try await view.callAsyncJavaScript(#"""
+            const root = document.getElementById('document'), selection = getSelection();
+            const expect = (value, message) => { if (!value) throw new Error(message); };
+            LeonArticle.load('<article data-leon-format="html-v1"><p>第一段正文。</p><p>下一段正文。</p></article>', 'reader-gap', false, 18);
+            const first = root.firstElementChild.firstChild, second = root.lastElementChild.firstChild;
+            const select = (anchor, anchorOffset, focus, focusOffset) => {
+              root.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+              selection.setBaseAndExtent(anchor, anchorOffset, focus, focusOffset);
+              document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0 }));
+            };
+            select(first, 0, second, 0);
+            expect(selection.toString().trim() === '第一段正文。', 'the selected text must remain intact');
+            expect(selection.getRangeAt(0).endContainer === first && selection.getRangeAt(0).endOffset === first.length,
+              'selecting a paragraph must not include the following block gap');
+            select(second, 0, first, 0);
+            expect(selection.anchorNode === first && selection.anchorOffset === first.length && selection.focusNode === first && selection.focusOffset === 0,
+              'backward selection must preserve direction without including the gap');
+            select(first, 0, root, 1);
+            expect(selection.getRangeAt(0).endContainer === first && selection.getRangeAt(0).endOffset === first.length,
+              'container-boundary endpoints must not include the gap');
+            select(first, 0, second, 2);
+            expect(selection.toString().includes('下一'), 'selecting actual text in the next paragraph must remain possible');
+            LeonArticle.load('<article data-leon-format="html-v1"><p>第一<strong>段正文。</strong></p><p><em>下一段。</em></p></article>', 'reader-inline-gap', false, 18);
+            const paragraph = root.firstElementChild, inlineStart = paragraph.firstChild, inlineNext = root.lastElementChild.firstChild.firstChild;
+            select(inlineStart, 0, inlineNext, 0);
+            expect(selection.toString() === '第一段正文。' && selection.getRangeAt(0).endContainer === paragraph,
+              'inline formatting must remain selected without a trailing paragraph gap');
+            selection.setBaseAndExtent(inlineStart, 0, inlineNext, 0);
+            document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0 }));
+            expect(selection.getRangeAt(0).endContainer === inlineNext, 'non-pointer selections must retain paragraph breaks');
+            return true;
+            """#, arguments: [:], in: nil, contentWorld: .page)
+        }
+    }
+
+    @MainActor
     func testRichArticleBlockGapSelectionPreservesContent() async throws {
         try await withWebEditor { view in
             _ = try await view.callAsyncJavaScript(#"""

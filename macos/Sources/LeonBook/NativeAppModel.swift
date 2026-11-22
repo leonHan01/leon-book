@@ -25,6 +25,12 @@ public final class NativeAppModel: ObservableObject {
     private static weak var backgroundMaintenanceOwner: NativeAppModel?
 
     let navigationScopeID: String?
+    let contentPrivacy: NativeContentPrivacy
+    @Published public internal(set) var privacyModeEnabled: Bool
+    @Published var privacyPresentationRevision = UUID()
+    var privacyReloadTask: Task<Void, Never>?
+    var concealedMomentDrafts: [String: NativeMomentDraft] = [:]
+    var concealedQuestionAnswerDrafts: [String: (draft: NativeQuestionAnswerDraft, id: String?, updatedAt: String?)] = [:]
     public var commandRegistry: NativeCommandRegistry {
         NativeCommandRegistry(
             definitions: NativeCommandRegistry.builtIn.definitions.filter {
@@ -304,7 +310,10 @@ public final class NativeAppModel: ObservableObject {
     ) {
         self.navigationScopeID = navigationScopeID
         acceptsAutomationRequests = startsAutomatically
-        let store = injectedStore ?? LocalBlogStore()
+        let contentPrivacy = injectedStore?.contentPrivacy ?? (startsAutomatically ? .shared : NativeContentPrivacy())
+        self.contentPrivacy = contentPrivacy
+        privacyModeEnabled = contentPrivacy.isEnabled
+        let store = injectedStore ?? LocalBlogStore(rootURL: LocalBlogStore.defaultRootURL, contentPrivacy: contentPrivacy)
         self.store = store
         mediaLibrary = NativeMediaLibraryModel(store: store)
         userWorkspaces = injectedUserWorkspaces ?? UserWorkspaceStore(rootURL: store.rootURL)
@@ -354,6 +363,7 @@ public final class NativeAppModel: ObservableObject {
         backupOverviewTask?.cancel()
         compatibilityExportTask?.cancel()
         workspaceAncillaryLoadTask?.cancel()
+        privacyReloadTask?.cancel()
         momentSearchTask?.cancel()
         questionSearchTask?.cancel()
         globalSearchTask?.cancel()
@@ -389,7 +399,7 @@ public final class NativeAppModel: ObservableObject {
         return projection
     }
 
-    private func clearArticleSummaries() {
+    func clearArticleSummaries() {
         projectionRebuilds.invalidate(.articleLibrary)
         articleLibraryProjection = NativeArticleLibraryProjection()
         articlePageViewOverrides.removeAll(keepingCapacity: false)
@@ -422,6 +432,7 @@ public final class NativeAppModel: ObservableObject {
     }
 
     func replaceArticleSummaries(_ summaries: [NativeArticleSummary]) async {
+        let summaries = privacyModeEnabled ? summaries : summaries.filter { !$0.isPrivate }
         guard !summaries.isEmpty else {
             clearArticleSummaries()
             return
@@ -728,7 +739,7 @@ public final class NativeAppModel: ObservableObject {
         try WorkspaceStorageLifecycle.requireAvailable(rootURL)
         storageReady = false
         userWorkspaces = UserWorkspaceStore(rootURL: rootURL)
-        store = LocalBlogStore(rootURL: rootURL)
+        store = LocalBlogStore(rootURL: rootURL, contentPrivacy: contentPrivacy)
         dataRootDirectoryPath = rootURL.standardizedFileURL.path
         var workspace = try await userWorkspaces.prepare()
         if let preferredUserID, let user = workspace.users.first(where: { $0.id == preferredUserID }) {
@@ -979,7 +990,8 @@ public final class NativeAppModel: ObservableObject {
             media: article.media,
             properties: article.properties,
             status: article.status,
-            updatedAt: article.updatedAt
+            updatedAt: article.updatedAt,
+            isPrivate: article.isPrivate
         )
         pendingNewArticleFolderPath = nil
         editorBodySelection = NSRange(location: 0, length: 0)
@@ -1136,16 +1148,30 @@ public final class NativeAppModel: ObservableObject {
             properties: editor.properties,
             sourceRelativePath: editor.isNew
                 ? "\(pendingNewArticleFolderPath ?? NativeArticleDirectoryPolicy.defaultFolderPath)/\(slug).html"
-                : nil
+                : nil,
+            isPrivate: editor.isPrivate
         )
 
+        let activeStore = store
         do {
-            let saved = try await store.saveArticle(payload)
-            try await store.attachArticleRevisions(draftKey: recoveryID, toArticleSlug: saved.slug)
+            let saved = try await activeStore.saveArticle(payload)
+            try await activeStore.attachArticleRevisions(draftKey: recoveryID, toArticleSlug: saved.slug)
+            guard store === activeStore, editor.recoveryID == recoveryID else { return }
             let previous = editorOriginalArticle
+            if previous?.isPrivate != saved.isPrivate, (previous != nil || saved.isPrivate) {
+                NativeWorkspaceWindows.reloadAfterContentPrivacyChange(in: activeStore.rootURL, excluding: self, articleSlugs: [saved.slug])
+            }
+            if saved.isPrivate, !privacyModeEnabled {
+                editorOriginalArticle = saved
+                concealPrivateContent(articleSlugs: [saved.slug], preservesEditor: false)
+                schedulePrivacyReload()
+                scheduleBackup()
+                return
+            }
             let resourcesChanged = previous == nil
                 || previous?.sourceRelativePath != saved.sourceRelativePath
                 || previous?.title != saved.title
+                || previous?.isPrivate != saved.isPrivate
                 || previous?.banner != saved.banner
                 || previous?.media != saved.media
                 || (previous?.body != saved.body
@@ -1220,7 +1246,8 @@ public final class NativeAppModel: ObservableObject {
             media: article.media,
             properties: article.properties,
             status: article.status,
-            updatedAt: article.updatedAt
+            updatedAt: article.updatedAt,
+            isPrivate: article.isPrivate
         )
         editorOriginalArticle = article
         selectedArticle = article
@@ -1460,27 +1487,41 @@ public final class NativeAppModel: ObservableObject {
         Task {
             defer { isPublishingMoment = false }
             do {
+                let generation = workspaceGeneration
+                let previous = moments.first { $0.id == editingMomentID }
                 let saved: NativeMoment
                 if let editingMomentID {
                     saved = try await store.updateMoment(
                         id: editingMomentID,
                         text: momentDraft.text,
                         textRuns: momentDraft.textRuns,
-                        images: momentDraft.images
+                        images: momentDraft.images,
+                        isPrivate: momentDraft.isPrivate
                     )
+                    guard generation == workspaceGeneration else { return }
                     if let index = moments.firstIndex(where: { $0.id == saved.id }) {
-                        moments[index] = saved
+                        if saved.isPrivate, !privacyModeEnabled {
+                            moments.remove(at: index)
+                        } else {
+                            moments[index] = saved
+                        }
                     }
                     self.editingMomentID = nil
                 } else {
                     saved = try await store.saveMoment(
                         text: momentDraft.text,
                         textRuns: momentDraft.textRuns,
-                        images: momentDraft.images
+                        images: momentDraft.images,
+                        isPrivate: momentDraft.isPrivate
                     )
-                    moments.insert(saved, at: 0)
+                    guard generation == workspaceGeneration else { return }
+                    if privacyModeEnabled || !saved.isPrivate { moments.insert(saved, at: 0) }
                 }
                 momentDraft = NativeMomentDraft()
+                if (previous?.isPrivate ?? false) != saved.isPrivate {
+                    NativeWorkspaceWindows.reloadAfterContentPrivacyChange(in: store.rootURL, excluding: self, momentIDs: [saved.id])
+                }
+                if saved.isPrivate, !privacyModeEnabled { invalidateContentPreviews() }
                 try await reloadMomentFeed(refreshesFacets: true)
                 try await refreshActivity()
                 scheduleBackup()
@@ -1587,11 +1628,12 @@ public final class NativeAppModel: ObservableObject {
             || editor.category != "Notes"
             || !editor.properties.isEmpty
             || editor.status != .draft
+            || editor.isPrivate
             || editor.banner != nil
             || !editor.media.isEmpty
     }
 
-    private var editorRevisionSnapshot: NativeArticleRevisionSnapshot {
+    var editorRevisionSnapshot: NativeArticleRevisionSnapshot {
         NativeArticleRevisionSnapshot(
             banner: editor.banner,
             body: editor.body,
@@ -1602,7 +1644,8 @@ public final class NativeAppModel: ObservableObject {
             tags: NativeArticleTag.parse(editor.tags),
             title: editor.title,
             articleUpdatedAt: editor.updatedAt,
-            properties: editor.properties
+            properties: editor.properties,
+            isPrivate: editor.isPrivate
         )
     }
 
@@ -1675,7 +1718,7 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
-    func restoreLatestUnsavedArticleDraftIfNeeded() async throws {
+    func restoreLatestUnsavedArticleDraftIfNeeded(onlyPrivate: Bool = false) async throws {
         guard !Task.isCancelled, !isSaving, !isEditorDirty else { return }
         let generation = workspaceGeneration
         let navigationGeneration = articleNavigationGeneration
@@ -1685,7 +1728,7 @@ public final class NativeAppModel: ObservableObject {
             !Task.isCancelled && !isSaving && generation == workspaceGeneration
                 && navigationGeneration == articleNavigationGeneration && editor == initialDraft
         }
-        guard let revision = try await activeStore.latestUnsavedArticleAutosave(), canRestore() else { return }
+        guard let revision = try await activeStore.latestUnsavedArticleAutosave(onlyPrivate: onlyPrivate), canRestore() else { return }
         let revisions = try await activeStore.listArticleRevisions(articleSlug: nil, draftKey: revision.draftKey)
         guard canRestore() else { return }
         editorOriginalArticle = nil
@@ -1724,7 +1767,8 @@ public final class NativeAppModel: ObservableObject {
             media: snapshot.media,
             properties: snapshot.properties,
             status: snapshot.status,
-            updatedAt: expectedUpdatedAt
+            updatedAt: expectedUpdatedAt,
+            isPrivate: snapshot.isPrivate || editorOriginalArticle?.isPrivate == true
         )
     }
 
@@ -1740,7 +1784,8 @@ public final class NativeAppModel: ObservableObject {
             return hasRecoverableEditorContent
         }
         guard let original = editorOriginalArticle else { return false }
-        return editor.title != original.title
+        return editor.isPrivate != original.isPrivate
+            || editor.title != original.title
             || editor.body != original.body
             || editor.excerpt != original.excerpt
             || editor.category != original.category

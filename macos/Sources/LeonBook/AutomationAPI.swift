@@ -139,7 +139,7 @@ enum AutomationCatalog {
         ])
     }
 
-    static let articleFields = ["title": "string", "body": "string (HTML, Markdown or plain text)", "format": "html|markdown|text", "category": "string", "excerpt": "string", "tags": "string[]", "properties": "NativeArticlePropertyValue map", "banner": "NativeBanner|null", "media": "NativeMedia[]", "status": "draft|published"]
+    static let articleFields = ["title": "string", "body": "string (HTML, Markdown or plain text)", "format": "html|markdown|text", "category": "string", "excerpt": "string", "tags": "string[]", "properties": "NativeArticlePropertyValue map", "banner": "NativeBanner|null", "media": "NativeMedia[]", "status": "draft|published", "isPrivate": "boolean"]
     static let operations: [AutomationOperation] = [
         .init("capabilities", "Discover every supported operation and its parameter contract."),
         .init("app.commands", "List commands in an open app window, including availability.", false, ["windowID": "string"]),
@@ -167,8 +167,8 @@ enum AutomationCatalog {
         .init("articleComments.delete", "Delete a comment and its replies.", true, ["slug": "string!", "id": "string!"]),
         .init("moments.list", "List local microblog posts, newest first.", false, ["offset": "integer", "limit": "integer", "snapshot": "string"]),
         .init("moments.get", "Read a local microblog post.", false, ["id": "string!"]),
-        .init("moments.create", "Publish to the app's local microblog timeline (not sina.com).", true, ["text": "string", "textRuns": "NativeMomentTextRun[]", "images": "NativeMedia[]"]),
-        .init("moments.update", "Patch a microblog post with version protection.", true, ["id": "string!", "expectedUpdatedAt": "string!", "text": "string", "textRuns": "NativeMomentTextRun[]", "images": "NativeMedia[]"]),
+        .init("moments.create", "Publish to the app's local microblog timeline (not sina.com).", true, ["text": "string", "textRuns": "NativeMomentTextRun[]", "images": "NativeMedia[]", "isPrivate": "boolean"]),
+        .init("moments.update", "Patch a microblog post with version protection.", true, ["id": "string!", "expectedUpdatedAt": "string!", "text": "string", "textRuns": "NativeMomentTextRun[]", "images": "NativeMedia[]", "isPrivate": "boolean"]),
         .init("moments.favorite", "Set a microblog favorite.", true, ["id": "string!", "isFavorite": "boolean!"]),
         .init("moments.delete", "Move a microblog post to trash with version protection.", true, ["id": "string!", "expectedUpdatedAt": "string!"]),
         .init("momentComments.list", "List microblog comments.", false, ["momentID": "string!"]),
@@ -176,7 +176,7 @@ enum AutomationCatalog {
         .init("momentComments.delete", "Delete a comment and its replies.", true, ["momentID": "string!", "id": "string!"]),
         .init("questions.list", "Find questions.", false, ["search": "string", "tag": "string"]),
         .init("questions.get", "Read a question.", false, ["id": "string!"]),
-        .init("questions.create", "Publish a question.", true, ["title": "string!", "body": "string", "tags": "string[]"]),
+        .init("questions.create", "Publish a question.", true, ["title": "string!", "body": "string", "tags": "string[]", "isPrivate": "boolean"]),
         .init("answers.list", "Read answers to a question.", false, ["questionID": "string!"]),
         .init("answers.create", "Publish an answer.", true, ["questionID": "string!", "body": "string", "images": "NativeMedia[]"]),
         .init("answers.update", "Replace answer body and images with version protection.", true, ["id": "string!", "body": "string!", "images": "NativeMedia[]!", "expectedUpdatedAt": "string!"]),
@@ -195,7 +195,8 @@ enum AutomationCatalog {
         .init("media.upload", "Copy a local media file into this user's workspace.", true, ["path": "absolute path!", "kind": "image|video|audio|file!", "slug": "string"]),
         .init("media.discardChatArchive", "Remove unreferenced media staged for an unfinished chat archive.", true, ["archiveId": "UUID!"]),
         .init("mobile.saveWithAttachments", "Append staged local files while saving a version-checked article or local post.", true, ["method": "string!", "params": "object!", "files": "staged file descriptors []!", "inlineImages": "boolean"]),
-        .init("mobile.mutate", "Apply a mobile edit against a specific library generation.", true, ["method": "string!", "params": "object!", "files": "staged file descriptors []", "generation": "string!", "compact": "boolean", "inlineImages": "boolean"]),
+        .init("mobile.read", "Read a paired mobile client's content snapshot.", false, ["method": "string!", "params": "object!"]),
+        .init("mobile.mutate", "Apply a mobile edit against a specific library generation.", true, ["method": "string!", "params": "object!", "files": "staged file descriptors []", "generation": "string!", "compact": "boolean", "inlineImages": "boolean", "includePrivate": "boolean"]),
         .init("bookmarks.list", "List bookmarks."),
         .init("bookmarks.save", "Create or replace a bookmark.", true, ["bookmark": "NativeBookmark!"]),
         .init("bookmarks.delete", "Delete a bookmark.", true, ["id": "string!"]),

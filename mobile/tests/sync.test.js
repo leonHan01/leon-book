@@ -304,3 +304,46 @@ test('certificate-free pairing accepts private IPs while public cleartext and no
   assert.throws(() => parsePairing(JSON.stringify({ ...pairing, url: 'http://192.168.1.8:8765/redirect' })));
   assert.throws(() => parsePairing(JSON.stringify({ ...pairing, url: 'https://mac.local/path' })));
 });
+
+test('mobile keeps private content queued until the Mac supports it', async () => {
+  const edited = saveEditor(makeState(), 'moments', null, { text: 'private note', isPrivate: true });
+  const older = await new SyncEngine(edited, async () => {}, async (action, args) => {
+    if (action === 'hello') return { workspaceID: pairing.workspaceID };
+    assert.equal(action, 'read');
+    return args.method === 'todos.list' ? { result: [] } : emptyPage;
+  }).run();
+  assert.equal(older.moments[0].isPrivate, true);
+  assert.equal(older.outbox[0].attempted, false);
+
+  const record = { id: 'saved-private', text: 'private note', isPrivate: true };
+  const current = await new SyncEngine(older, async () => {}, async (action, args) => {
+    if (action === 'hello') return { workspaceID: pairing.workspaceID, supportsContentPrivacy: true };
+    if (action === 'push') {
+      assert.equal(args.includePrivate, true);
+      assert.equal(args.params.isPrivate, true);
+      return { result: record };
+    }
+    if (args.method === 'moments.list') {
+      assert.equal(args.includePrivate, true);
+      return { result: { items: [record], hasMore: false } };
+    }
+    return args.method === 'todos.list' ? { result: [] } : emptyPage;
+  }).run();
+  assert.equal(current.moments[0].isPrivate, true);
+  assert.equal(current.outbox.length, 0);
+});
+
+test('a Mac privacy change also hides a conflicting mobile preview', async () => {
+  const record = { id: 'existing-moment', text: 'Mac version', updatedAt: 'v1' };
+  const edited = saveEditor({ ...makeState(), moments: [record] }, 'moments', record, { text: 'Offline edit' });
+  const synced = await new SyncEngine(edited, async () => {}, async (action, args) => {
+    if (action === 'hello') return { workspaceID: pairing.workspaceID, supportsContentPrivacy: true };
+    if (action === 'push') return { error: { code: 'conflict' } };
+    if (args.method === 'moments.list') {
+      return { result: { items: [{ ...record, updatedAt: 'v2', isPrivate: true }], hasMore: false } };
+    }
+    return args.method === 'todos.list' ? { result: [] } : emptyPage;
+  }).run();
+  assert.equal(synced.moments[0].text, 'Offline edit');
+  assert.equal(synced.moments[0].remoteIsPrivate, true);
+});

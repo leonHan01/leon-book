@@ -66,15 +66,16 @@ extension LocalBlogStore {
 
         if let articleSlug {
             let safeArticleSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
+            try requireVisibleArticleContext(slug: safeArticleSlug)
             try db().query(
-                revisionSelect + " WHERE article_slug = ? OR draft_key = ? ORDER BY updated_at DESC, id DESC",
+                revisionSelect + " WHERE (article_slug = ? OR draft_key = ?) AND \(revisionVisibility) ORDER BY updated_at DESC, id DESC",
                 values: [.text(safeArticleSlug), .text(safeDraftKey)]
             ) { row in
                 revisions.append(try decodeArticleRevision(row))
             }
         } else {
             try db().query(
-                revisionSelect + " WHERE draft_key = ? ORDER BY updated_at DESC, id DESC",
+                revisionSelect + " WHERE draft_key = ? AND \(revisionVisibility) ORDER BY updated_at DESC, id DESC",
                 values: [.text(safeDraftKey)]
             ) { row in
                 revisions.append(try decodeArticleRevision(row))
@@ -86,16 +87,18 @@ extension LocalBlogStore {
     public func latestArticleAutosave(articleSlug: String) throws -> NativeArticleRevision? {
         try prepare()
         let safeSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
+        try requireVisibleArticleContext(slug: safeSlug)
         return try latestArticleRevision(
-            whereClause: "article_slug = ? AND reason = ?",
+            whereClause: "article_slug = ? AND reason = ? AND \(revisionVisibility)",
             values: [.text(safeSlug), .text(NativeArticleRevisionReason.autosave.rawValue)]
         )
     }
 
-    public func latestUnsavedArticleAutosave() throws -> NativeArticleRevision? {
+    public func latestUnsavedArticleAutosave(onlyPrivate: Bool = false) throws -> NativeArticleRevision? {
         try prepare()
+        let privateDraft = onlyPrivate ? " AND json_extract(snapshot_json, '$.isPrivate') = 1" : ""
         return try latestArticleRevision(
-            whereClause: "article_slug IS NULL AND reason = ?",
+            whereClause: "article_slug IS NULL AND reason = ? AND \(revisionVisibility)\(privateDraft)",
             values: [.text(NativeArticleRevisionReason.autosave.rawValue)]
         )
     }
@@ -133,6 +136,7 @@ extension LocalBlogStore {
     public func listArticleComments(articleSlug: String) throws -> [NativeArticleComment] {
         try prepare()
         let safeSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
+        try requireVisibleArticleContext(slug: safeSlug)
         var comments: [NativeArticleComment] = []
         try db().query(
             commentSelect + " WHERE article_slug = ? ORDER BY created_at, id",
@@ -153,7 +157,7 @@ extension LocalBlogStore {
     ) throws -> NativeArticleComment {
         try prepare()
         let safeSlug = try requireSafeSegment(articleSlug, label: "文章 slug")
-        guard try storedArticle(withSlug: safeSlug) != nil else { throw NativeStoreError.notFound }
+        _ = try getArticle(slug: safeSlug)
 
         let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedText.isEmpty, normalizedText.count <= 2_000 else {
@@ -320,6 +324,17 @@ extension LocalBlogStore {
             createdAt: createdAt,
             updatedAt: updatedAt
         )
+    }
+
+    private var revisionVisibility: String {
+        showsPrivateContent ? "1" : """
+        COALESCE(json_extract(snapshot_json, '$.isPrivate'), 0) = 0
+        AND NOT EXISTS (
+            SELECT 1 FROM articles
+            WHERE articles.slug = COALESCE(article_revisions.article_slug, article_revisions.draft_key)
+              AND is_private = 1
+        )
+        """
     }
 
     private func latestArticleRevision(

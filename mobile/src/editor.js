@@ -50,6 +50,7 @@ export function saveEditor(state, kind, original, fields, files, { articleDestin
   const patch = {};
   const previous = editableFields(kind, original);
   for (const [field, value] of Object.entries(fields)) {
+    if (field === 'isPrivate' && creating && value !== true) continue;
     if (field !== 'format' && (creating || previous[field] !== value)) patch[field] = value;
   }
   if (kind === 'articles' && (Object.hasOwn(patch, 'body') || previous.format !== fields.format)) {
@@ -61,6 +62,7 @@ export function saveEditor(state, kind, original, fields, files, { articleDestin
   if (!Object.keys(patch).length && !filesChanged && !folderChanged) return state;
   if (pending?.attempted || pending?.error) throw new Error('这条内容有待确认的同步，请先同步或处理冲突。');
   const params = { ...pending?.params, ...base, ...patch };
+  if (isCreate && params.isPrivate === false) delete params.isPrivate;
   if (choosesFolder) {
     if (articleDestination === defaultArticleFolder) delete params.destinationFolder;
     else params.destinationFolder = articleDestination;
@@ -87,6 +89,7 @@ export function saveEditor(state, kind, original, fields, files, { articleDestin
     ...(kind === 'moments' ? { createdAt: now() } : {}),
     updatedAt: now(), ...original, ...identity, ...fields,
   };
+  if (!isCreate && original.isPrivate && (!pending || pending.baseFields?.isPrivate)) preview.remoteIsPrivate = true;
   if (choosesFolder) preview.sourceRelativePath = articleSourcePath(articleDestination, key);
   if (!isCreate && !selected.length && pending?.method === `${kind}.update` &&
       Object.keys(params).every(field => Object.hasOwn(base, field))) {
@@ -130,11 +133,11 @@ export function editableFields(kind, item) {
       const paragraphs = Array.from(wrapped[1].matchAll(/<p>([^<>]*)<\/p>/g), match => match[1]);
       if (paragraphs.every(text => !/&(?!(?:amp|lt|gt|quot);)/.test(text))) {
         const plain = paragraphs.map(text => text.replace(/&(?:amp|lt|gt|quot);/g, entity => entities[entity])).join('\n');
-        return { title: item.title ?? '', body: plain, format: 'text' };
+        return { title: item.title ?? '', body: plain, format: 'text', isPrivate: item.isPrivate === true };
       }
     }
-    return { title: item.title ?? '', body, format: item.format ?? (/^\s*</.test(body) ? 'html' : 'text') };
+    return { title: item.title ?? '', body, format: item.format ?? (/^\s*</.test(body) ? 'html' : 'text'), isPrivate: item.isPrivate === true };
   }
-  if (kind === 'moments') return { text: item.text ?? '' };
+  if (kind === 'moments') return { text: item.text ?? '', isPrivate: item.isPrivate === true };
   return { title: item.title ?? '', notes: item.notes ?? '', priority: item.priority ?? 1, dueDay: item.dueDay ?? null };
 }

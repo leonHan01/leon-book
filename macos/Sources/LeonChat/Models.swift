@@ -346,6 +346,7 @@ final class MessageAPI: NotificationAPI, @unchecked Sendable {
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
               http.mimeType == "image/jpeg", data.count <= 1024 * 1024 else { throw ClientError.message("图片加载失败，点击重试") }
+        try Task.checkCancellation()
         imageCache.setObject(data as NSData, forKey: id as NSString, cost: data.count)
         return data
     }

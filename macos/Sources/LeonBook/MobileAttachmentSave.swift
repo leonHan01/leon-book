@@ -111,7 +111,7 @@ extension LocalBlogStore {
             if method == "moments.update" {
                 return try automationMutateMoment(method: method, parameters: save)
             }
-            return try .encoded(saveMoment(text: save.string("text"), textRuns: save.optional("textRuns") ?? [], images: existing + added))
+            return try .encoded(saveMoment(text: save.string("text"), textRuns: save.optional("textRuns") ?? [], images: existing + added, isPrivate: save.flag("isPrivate")))
         } catch {
             // A failed version check may race a desktop edit after staging.
             // The store only removes imported files that have no references.

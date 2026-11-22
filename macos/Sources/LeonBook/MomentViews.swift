@@ -778,6 +778,10 @@ private struct MomentComposerView: View {
 
                 Spacer()
 
+                Toggle("私密", isOn: $model.momentDraft.isPrivate)
+                    .toggleStyle(.checkbox)
+                    .disabled(model.isPublishingMoment)
+
                 Text("\((model.momentDraft.text as NSString).length) / \(NativeMoment.maximumTextLength)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(
@@ -932,6 +936,12 @@ private struct MomentCard: View {
                 .accessibilityLabel(LocalizedStringKey(isCollapsed ? "展开微博" : "折叠微博"))
                 .accessibilityValue(Text(LocalizedStringKey(isCollapsed ? "已折叠" : "已展开")))
 
+                if moment.isPrivate {
+                    NativeIcon.image("lock.fill", size: 12)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("私密")
+                }
+
                 Button(action: onToggleFavorite) {
                     NativeIcon.image(moment.isFavorite ? "heart.fill" : "heart", size: 14)
                         .foregroundStyle(moment.isFavorite ? appPalette.accent : appPalette.textSecondary)
@@ -950,7 +960,13 @@ private struct MomentCard: View {
                     Button { emailContent = .moment(moment) } label: {
                         Label("发送邮件…", nativeIcon: "envelope")
                     }
-                    Button(action: onToggleFavorite) {
+                    if moment.isPrivate {
+                    NativeIcon.image("lock.fill", size: 12)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("私密")
+                }
+
+                Button(action: onToggleFavorite) {
                         Label(
                             LocalizedStringKey(moment.isFavorite ? "取消收藏" : "收藏微博"),
                             nativeIcon: moment.isFavorite ? "heart.slash" : "heart"

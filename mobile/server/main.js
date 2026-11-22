@@ -84,6 +84,8 @@ async function main() {
   }
   const executable = resolve(values.cli ?? cliDefault);
   const workspace = await automate(executable, root, values.user, 'workspace.info');
+  const capabilities = await automate(executable, root, values.user, 'capabilities');
+  const supportsContentPrivacy = capabilities.result?.operations?.some(operation => operation.method === 'mobile.read') === true;
   const userID = workspace.result?.user?.id;
   if (!userID) throw new Error(workspace.error?.message ?? '无法读取 LeonBook 用户工作区。');
   const workspaceID = createHash('sha256').update(JSON.stringify([root, userID])).digest('hex');
@@ -95,7 +97,7 @@ async function main() {
   const managed = values.managed ? await managedTLS(join(journalDir, 'certificates'), values.host) : null;
   const tls = managed?.tls ?? (values.cert ? { cert: await readFile(values.cert), key: await readFile(values.key), minVersion: 'TLSv1.2' } : null);
   const { server, token, devices } = makeBridge({
-    workspaceID, tls, workspacePath: join(root, 'workspaces', userID),
+    workspaceID, tls, supportsContentPrivacy, workspacePath: join(root, 'workspaces', userID),
     allowLegacyToken: !values['control-stdio'],
     databasePath: join(journalDir, 'operations.sqlite'),
     getGeneration: () => libraryGeneration(root),

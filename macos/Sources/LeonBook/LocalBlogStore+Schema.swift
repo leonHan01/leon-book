@@ -270,6 +270,10 @@ extension LocalBlogStore {
         try ensureColumn("delete_expires_at", in: "moments", database: database)
         try ensureColumn("tags_json", in: "moments", database: database)
         try ensureColumn("is_favorite", in: "moments", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
+        try ensureColumn("privacy_override", in: "articles", database: database, definition: "INTEGER")
+        for table in ["articles", "moments", "questions"] {
+            try ensureColumn("is_private", in: table, database: database, definition: "INTEGER NOT NULL DEFAULT 0")
+        }
         try ensureColumn("view_count", in: "questions", database: database, definition: "INTEGER NOT NULL DEFAULT 0")
         try ensureColumn(
             "images_json",

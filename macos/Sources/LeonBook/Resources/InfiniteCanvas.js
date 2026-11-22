@@ -225,7 +225,8 @@
     const kind = document.createElement('span'); kind.className = 'card-type';
     kind.textContent = node.leonbook?.kind === 'article' ? t('文章') : node.leonbook?.kind === 'moment' ? t('微博') : ({ text: t('便签'), link: t('网页'), file: t('文件'), group: t('分组') })[node.type];
     const title = document.createElement('span'); title.className = 'card-title';
-    title.textContent = contentCache.get(node.id)?.title || node.leonbook?.title || node.label || (node.type === 'link' ? new URL(node.url).hostname : node.file?.split('/').pop() || t('便签'));
+    const needsContent = node.type === 'file' || node.leonbook;
+    title.textContent = contentCache.get(node.id)?.title || (needsContent ? kind.textContent : node.label || (node.type === 'link' ? new URL(node.url).hostname : t('便签')));
     header.append(kind, title);
     if (node.leonbook?.kind === 'article') header.append(button('external', () => post('openArticle', { slug: node.leonbook.id }), t('打开原文')));
     else if (node.type === 'link') header.append(button('external', () => post('external', { url: node.url }), t('在浏览器中打开')));

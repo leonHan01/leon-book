@@ -14,7 +14,7 @@ struct SidebarFooter: View {
                     .disabled(!hasConnection)
                 SidebarFooterButton(title: "用量", symbol: "chart.bar", help: "查看 Token 用量", action: openUsage)
                     .disabled(!hasConnection)
-                SidebarFooterButton(title: "设置", symbol: "gearshape", help: "连接与通知设置", action: openSettings)
+                SidebarFooterButton(title: "设置", symbol: "gearshape", help: "聊天设置", action: openSettings)
             }
         }
         .padding(.bottom, 12)

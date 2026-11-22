@@ -24,7 +24,10 @@ async function fetchAttachment(pairing, kind, key, ref, signal) {
     try {
       response = await fetchWithBusyRetry(() => fetch(`${pairing.url}/v1/sync`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pairing.token}` },
-        body: JSON.stringify({ action: 'attachment', workspaceID: pairing.workspaceID, kind, key, path: ref.path }),
+        body: JSON.stringify({
+          action: 'attachment', workspaceID: pairing.workspaceID, kind, key, path: ref.path,
+          ...(pairing.includePrivate ? { includePrivate: true } : {}),
+        }),
         cache: 'no-store', redirect: 'error', signal: controller.signal,
       }), controller.signal);
     } catch {

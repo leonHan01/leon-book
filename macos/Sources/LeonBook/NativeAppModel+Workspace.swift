@@ -5,6 +5,7 @@ extension NativeAppModel {
         let loadingID = loadingOperations.begin(.refresh)
         defer { loadingOperations.end(loadingID) }
         let syncResult = try await store.refreshMarkdownSources()
+        try await reconcileContentPrivacy()
         try await reloadIndexedState()
         if !syncResult.warnings.isEmpty {
             errorMessage = syncResult.warnings.joined(separator: "\n")
@@ -25,10 +26,17 @@ extension NativeAppModel {
         }
     }
 
-    private func reloadArticleLibraryState() async throws {
-        await replaceArticleSummaries(try await store.listArticles())
-        workspaceResources = try await store.listWorkspaceResources()
-        bookmarks = try await store.listBookmarks()
+    func reloadArticleLibraryState() async throws {
+        let generation = workspaceGeneration
+        let activeStore = store
+        let summaries = try await activeStore.listArticles()
+        guard !Task.isCancelled, generation == workspaceGeneration else { return }
+        await replaceArticleSummaries(summaries)
+        let resources = try await activeStore.listWorkspaceResources()
+        let loadedBookmarks = try await activeStore.listBookmarks()
+        guard !Task.isCancelled, generation == workspaceGeneration else { return }
+        workspaceResources = resources
+        bookmarks = loadedBookmarks
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             updateArticleListSearch(searchText, debounce: false)
         }
@@ -74,6 +82,10 @@ extension NativeAppModel {
             selectedArticleSlug: selectedSlug
         )
         guard plan.reloadsArticleList else { return }
+        if try await reconcileContentPrivacy() {
+            schedulePrivacyReload()
+            return
+        }
 
         let affectedSlugs = result.affectedArticleSlugs
         let refreshed = try await store.listArticleSummaries(slugs: affectedSlugs)
@@ -167,7 +179,7 @@ extension NativeAppModel {
         pendingMarkdownSourceChanges = NativeMarkdownSourceChangeSet()
     }
 
-    private func enqueueMarkdownSourceChanges(
+    func enqueueMarkdownSourceChanges(
         _ changes: NativeMarkdownSourceChangeSet,
         generation: Int
     ) {
@@ -234,7 +246,7 @@ extension NativeAppModel {
     }
 
     func loadWorkspace(_ workspace: NativeWorkspaceState) async throws {
-        let nextStore = LocalBlogStore(rootURL: workspace.workspaceURL)
+        let nextStore = LocalBlogStore(rootURL: workspace.workspaceURL, contentPrivacy: contentPrivacy)
         try await nextStore.prepareForInteractiveUse()
         let sourceState = try await nextStore.markdownWorkspaceSourceState()
         let sourceURL = try await nextStore.markdownSourceDirectoryURL()
@@ -246,6 +258,7 @@ extension NativeAppModel {
         backupOverviewTask?.cancel()
         compatibilityExportTask?.cancel()
         workspaceAncillaryLoadTask?.cancel()
+        privacyReloadTask?.cancel()
         articleListSearchTask?.cancel()
         globalSearchTask?.cancel()
         questionSearchTask?.cancel()
@@ -305,6 +318,8 @@ extension NativeAppModel {
         editorOriginalArticle = nil
         momentDraft = NativeMomentDraft()
         editingMomentID = nil
+        concealedMomentDrafts = [:]
+        concealedQuestionAnswerDrafts = [:]
         searchText = ""
         momentSearchText = ""
         globalSearchText = ""

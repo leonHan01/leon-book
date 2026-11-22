@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 
@@ -134,6 +135,8 @@ struct NativeReadingTypography: Equatable {
 }
 
 struct NativeReadingProfile: Codable, Equatable {
+    static let fontSizeRange: ClosedRange<Double> = 13...30
+
     var readingWidth: Double = 800
     var bodyFont: NativeReadingFontFamily = .serif
     var codeFont: NativeCodeFontFamily = .system
@@ -145,7 +148,7 @@ struct NativeReadingProfile: Codable, Equatable {
     var normalized: Self {
         var result = self
         result.readingWidth = min(max(result.readingWidth, 520), 1_400)
-        result.fontSize = min(max(result.fontSize, 13), 30)
+        result.fontSize = min(max(result.fontSize, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
         result.lineSpacing = min(max(result.lineSpacing, 0), 18)
         result.paragraphSpacing = min(max(result.paragraphSpacing, 4), 36)
         return result
@@ -165,6 +168,8 @@ struct NativeReadingProfile: Codable, Equatable {
 
 @MainActor
 final class NativeReadingPreferences: ObservableObject {
+    private static let didChange = Notification.Name("leon-book.reading-preferences.did-change")
+
     private struct Archive: Codable {
         var profilesByUser: [String: NativeReadingProfile] = [:]
     }
@@ -175,25 +180,25 @@ final class NativeReadingPreferences: ObservableObject {
 
     private let defaults: UserDefaults
     private let defaultsKey = "leon-book.reading-preferences.v1"
-    private var archive: Archive
     private var currentUserID: String?
     private var isApplying = false
+    private var updates: AnyCancellable?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        archive = defaults.data(forKey: defaultsKey)
-            .flatMap { try? JSONDecoder().decode(Archive.self, from: $0) } ?? Archive()
         profile = NativeReadingProfile()
+        updates = NotificationCenter.default.publisher(for: Self.didChange, object: defaults)
+            .sink { [weak self] _ in
+                guard let self, let userID = self.currentUserID else { return }
+                self.prepare(for: userID)
+            }
     }
 
     var typography: NativeReadingTypography { profile.typography }
 
     func prepare(for userID: String) {
-        reloadArchive()
         currentUserID = userID
-        isApplying = true
-        profile = (archive.profilesByUser[userID] ?? NativeReadingProfile()).normalized
-        isApplying = false
+        apply((loadArchive().profilesByUser[userID] ?? NativeReadingProfile()).normalized)
     }
 
     func reset() {
@@ -202,35 +207,37 @@ final class NativeReadingPreferences: ObservableObject {
 
     func applyPortableProfile(_ imported: NativeReadingProfile, for userID: String) {
         currentUserID = userID
-        isApplying = true
-        profile = imported.normalized
-        isApplying = false
-        archive.profilesByUser[userID] = profile
-        persistArchive()
+        apply(imported.normalized)
+        persist(profile, for: userID)
     }
 
     private func profileDidChange() {
         guard !isApplying else { return }
         let normalized = profile.normalized
-        if normalized != profile {
-            isApplying = true
-            profile = normalized
-            isApplying = false
-        }
+        apply(normalized)
         guard let currentUserID else { return }
-        archive.profilesByUser[currentUserID] = normalized
-        persistArchive()
+        persist(normalized, for: currentUserID)
     }
 
-    private func reloadArchive() {
-        guard let data = defaults.data(forKey: defaultsKey),
-              let stored = try? JSONDecoder().decode(Archive.self, from: data) else { return }
-        archive = stored
+    private func apply(_ next: NativeReadingProfile) {
+        guard profile != next else { return }
+        isApplying = true
+        profile = next
+        isApplying = false
     }
 
-    private func persistArchive() {
+    private func loadArchive() -> Archive {
+        defaults.data(forKey: defaultsKey)
+            .flatMap { try? JSONDecoder().decode(Archive.self, from: $0) } ?? Archive()
+    }
+
+    private func persist(_ profile: NativeReadingProfile, for userID: String) {
+        var archive = loadArchive()
+        guard archive.profilesByUser[userID] != profile else { return }
+        archive.profilesByUser[userID] = profile
         guard let data = try? JSONEncoder().encode(archive) else { return }
         defaults.set(data, forKey: defaultsKey)
+        NotificationCenter.default.post(name: Self.didChange, object: defaults)
     }
 }
 

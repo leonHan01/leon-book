@@ -1,8 +1,30 @@
 import SwiftUI
 import AppKit
 
+enum ChatTypography {
+    static let bodySizeKey = "chat.messageBodyFontSize"
+    static let defaultBodySize = 14
+    static let bodySizeRange = 12...28
+
+    static func fontSize(_ storedSize: Int) -> CGFloat {
+        CGFloat(min(max(storedSize, bodySizeRange.lowerBound), bodySizeRange.upperBound))
+    }
+}
+
+private struct ChatBodyFontSizeKey: EnvironmentKey {
+    static let defaultValue = CGFloat(ChatTypography.defaultBodySize)
+}
+
+extension EnvironmentValues {
+    var chatBodyFontSize: CGFloat {
+        get { self[ChatBodyFontSizeKey.self] }
+        set { self[ChatBodyFontSizeKey.self] = newValue }
+    }
+}
+
 struct MarkdownMessageView: View, Equatable {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.chatBodyFontSize) private var bodyFontSize
     let source: String
     let mine: Bool
     var onQuote: (() -> Void)?
@@ -19,7 +41,8 @@ struct MarkdownMessageView: View, Equatable {
 
     var body: some View {
         if RichMarkdown.isRequired(source) {
-            RichMarkdownMessageView(source: source, mine: mine, onQuote:onQuote,onFavorite:onFavorite,onBranch:onBranch)
+            RichMarkdownMessageView(source: source, mine: mine, fontSize: bodyFontSize,
+                                    onQuote: onQuote, onFavorite: onFavorite, onBranch: onBranch)
         } else {
             nativeBody
         }
@@ -34,7 +57,7 @@ struct MarkdownMessageView: View, Equatable {
                         RoundedRectangle(cornerRadius: 2).fill(foreground.opacity(0.35)).frame(width: 3)
                     }
                     if let marker = block.marker {
-                        Text(marker).font(.system(size: 14)).frame(minWidth: 16, alignment: .trailing)
+                        Text(marker).font(.system(size: bodyFontSize)).frame(minWidth: 16, alignment: .trailing)
                     }
                     content(block)
                 }
@@ -63,12 +86,12 @@ struct MarkdownMessageView: View, Equatable {
     private func content(_ block: MessageMarkdown.Block) -> some View {
         switch block.kind {
         case .math(let expression):
-            if let rendered = MathRenderer.render(expression, white: mine || colorScheme == .dark) {
+            if let rendered = MathRenderer.render(expression, size: bodyFontSize + 2, white: mine || colorScheme == .dark) {
                 Image(nsImage: rendered.image).resizable().scaledToFit()
                     .frame(maxWidth: rendered.image.size.width)
                     .accessibilityLabel(expression.latex)
             } else {
-                Text(expression.source).font(.system(size: 14, design: .monospaced))
+                Text(expression.source).font(.system(size: bodyFontSize, design: .monospaced))
                     .fixedSize(horizontal: false, vertical: true)
             }
         case .rule:
@@ -83,18 +106,20 @@ struct MarkdownMessageView: View, Equatable {
                     }.buttonStyle(.borderless).help("复制代码").accessibilityLabel("复制代码")
                 }.foregroundStyle(foreground.opacity(0.75))
                 ScrollView(.horizontal) {
-                    Text(String(block.text.characters)).font(.system(size: 13, design: .monospaced))
+                    Text(String(block.text.characters)).font(.system(size: bodyFontSize - 1, design: .monospaced))
                         .lineSpacing(4).fixedSize(horizontal: true, vertical: true)
                         .padding(.bottom, 4)
                 }
             }.padding(10).background(insetBackground, in: RoundedRectangle(cornerRadius: 8))
         case .table:
+            let cellFontSize = bodyFontSize - 1
             let widths = block.columns.indices.map { tableColumnWidth(block, column: $0) }
             ScrollView(.horizontal) {
                 MarkdownTableLayout(widths: widths) {
                     ForEach(block.rows.indices, id: \.self) { row in
                         ForEach(block.columns.indices, id: \.self) { column in
-                            mathText(styled(block.rows[row][column], size: 13, bold: row == 0), size: 13, maxWidth: widths[column] - 20)
+                            mathText(styled(block.rows[row][column], size: cellFontSize, bold: row == 0),
+                                     size: cellFontSize, maxWidth: widths[column] - 20)
                                 .lineSpacing(3)
                                 .frame(width: widths[column] - 20, alignment: alignment(block.columns[column].alignment))
                                 .fixedSize(horizontal: false, vertical: true)
@@ -107,25 +132,26 @@ struct MarkdownMessageView: View, Equatable {
                 }.padding(1)
             }
         case .heading(let level):
-            let size: CGFloat = [16, 15, 14, 14, 14, 14][min(max(level, 1), 6) - 1]
+            let size = bodyFontSize + CGFloat(max(0, 3 - level))
             mathText(styled(block.text, size: size, bold: true), size: size)
                 .lineSpacing(4).fixedSize(horizontal: false, vertical: true)
         case .text:
-            mathText(styled(block.text)).lineSpacing(5).fixedSize(horizontal: false, vertical: true)
+            mathText(styled(block.text, size: bodyFontSize), size: bodyFontSize)
+                .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func tableColumnWidth(_ block: MessageMarkdown.Block, column: Int) -> CGFloat {
         // Horizontal scrolling proposes an unbounded width. Give every cell a
         // concrete wrapping width before measuring the height of its row.
-        let font = NSFont.systemFont(ofSize: 13, weight: .bold)
+        let font = NSFont.systemFont(ofSize: bodyFontSize - 1, weight: .bold)
         let contentWidth = block.rows.map { row in
             (String(row[column].characters) as NSString).size(withAttributes: [.font: font]).width
         }.max() ?? 0
         return min(240, max(70, ceil(contentWidth) + 20))
     }
 
-    private func mathText(_ source: AttributedString, size: CGFloat = 14, maxWidth: CGFloat = 400) -> Text {
+    private func mathText(_ source: AttributedString, size: CGFloat, maxWidth: CGFloat = 400) -> Text {
         var result = Text("")
         for run in source.runs {
             if let expression = run[MathMarkup.Attribute.self],
@@ -138,7 +164,7 @@ struct MarkdownMessageView: View, Equatable {
         return result
     }
 
-    private func styled(_ source: AttributedString, size: CGFloat = 14, bold: Bool = false) -> AttributedString {
+    private func styled(_ source: AttributedString, size: CGFloat, bold: Bool = false) -> AttributedString {
         var value = source
         for run in source.runs {
             let intent = run.inlinePresentationIntent ?? []

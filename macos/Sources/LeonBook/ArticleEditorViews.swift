@@ -581,6 +581,12 @@ struct ArticleEditorView: View {
                     in: Capsule()
                 )
 
+            if model.editor.isPrivate {
+                Label("私密", nativeIcon: "lock.fill", iconSize: 12)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             HStack(spacing: 6) {
                 if model.isEditorAutosaving {
                     ProgressView()
@@ -629,6 +635,9 @@ struct ArticleEditorView: View {
                 .help(Text(LocalizedStringKey(editorMode == .focus ? "专注写作模式会隐藏右侧面板" : "显示或隐藏编辑右侧面板")))
 
                 Menu {
+                    Toggle("私密", isOn: $model.editor.isPrivate)
+                        .disabled(model.isMarkdownSourceReadOnly)
+
                     Section(NativeLocalization.text("编辑视图")) {
                         modeMenuButton(.blocks, shortcut: "1")
                         modeMenuButton(.focus, shortcut: "2")

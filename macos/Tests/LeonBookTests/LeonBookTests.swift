@@ -48,6 +48,37 @@ private func XCTFail(_ message: String) {
 
 final class NativeModelsTests {
     @MainActor
+    func testBodyFontSizeUpdatesOpenWindowsAndPersistsPerUser() {
+        let suiteName = "NativeReadingPreferencesTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let reader = NativeReadingPreferences(defaults: defaults)
+        let settings = NativeReadingPreferences(defaults: defaults)
+        let otherWorkspace = NativeReadingPreferences(defaults: defaults)
+        reader.prepare(for: "reader")
+        settings.prepare(for: "reader")
+        otherWorkspace.prepare(for: "other")
+
+        settings.profile.fontSize = 24
+        XCTAssertEqual(reader.typography.fontSize, 24)
+        XCTAssertEqual(otherWorkspace.typography.fontSize, 18)
+        otherWorkspace.profile.fontSize = 20
+        reader.profile.fontSize = 40
+        XCTAssertEqual(settings.typography.fontSize, 30)
+
+        let reopened = NativeReadingPreferences(defaults: defaults)
+        reopened.prepare(for: "other")
+        XCTAssertEqual(reopened.typography.fontSize, 20)
+        reopened.prepare(for: "reader")
+        XCTAssertEqual(reopened.typography.fontSize, 30)
+
+        settings.reset()
+        XCTAssertEqual(reader.typography.fontSize, 18)
+        XCTAssertEqual(reopened.typography.fontSize, 18)
+    }
+
+    @MainActor
     func testNavigationSidebarFollowsTheCurrentSection() {
         let navigation = NativeNavigationState()
         let independentSections: [NativeSection] = [.dashboard, .chat, .canvas, .photos, .moments, .qAndA, .todos, .graph, .trash, .settings]
@@ -7038,6 +7069,9 @@ private func makeTemporaryDirectory() throws -> URL {
 struct LeonBookUnitTests {
     static func main() async {
         var tests: [(String, () async throws -> Void)] = [
+            ("ContentPrivacyTests.testPrivateContentVisibilityAndPersistence", { try await ContentPrivacyTests.testPrivateContentVisibilityAndPersistence() }),
+            ("ContentPrivacyTests.testReadOnlyArticlePrivacySurvivesSourceChanges", { try await ContentPrivacyTests.testReadOnlyArticlePrivacySurvivesSourceChanges() }),
+            ("ContentPrivacyTests.testClosingPrivacyModeClearsOpenContentInEveryWindow", { try await ContentPrivacyTests.testClosingPrivacyModeClearsOpenContentInEveryWindow() }),
             ("MomentFavoritePerformanceTests.testFavoriteReconcilesConcurrentFeedReload", { try await MomentFavoritePerformanceTests().testFavoriteReconcilesConcurrentFeedReload() }),
             ("MomentViewportPerformanceTests.testHistoricalColumnsShareScrollingAndSkipOffscreenCallbacks", { try await MomentViewportPerformanceTests().testHistoricalColumnsShareScrollingAndSkipOffscreenCallbacks() }),
             ("MomentViewportPerformanceTests.testActualMultiDateFeedUsesOneObserverAndRetainsHistoryHeight", { try await MomentViewportPerformanceTests().testActualMultiDateFeedUsesOneObserverAndRetainsHistoryHeight() }),
@@ -7186,6 +7220,7 @@ struct LeonBookUnitTests {
             ("RichArticleTests.testRichArticleOutlineNavigationAndUpdates", { try await RichArticleTests().testRichArticleOutlineNavigationAndUpdates() }),
             ("RichArticleTests.testRichArticleOutlineNativeBridge", { try await RichArticleTests().testRichArticleOutlineNativeBridge() }),
             ("RichArticleTests.testRichArticleBlockGapSelectionPreservesContent", { try await RichArticleTests().testRichArticleBlockGapSelectionPreservesContent() }),
+            ("RichArticleTests.testReaderPointerSelectionDoesNotExtendIntoFollowingGap", { try await RichArticleTests().testReaderPointerSelectionDoesNotExtendIntoFollowingGap() }),
             ("RichArticleTests.testRichArticleNumberingRestartsAtEachIndent", { try await RichArticleTests().testRichArticleNumberingRestartsAtEachIndent() }),
             ("RichArticleTests.testRichArticleDeletesAllHighlightedBlocks", { try await RichArticleTests().testRichArticleDeletesAllHighlightedBlocks() }),
             ("RichArticleTests.testRichArticleImageControlsAndCaptions", { try await RichArticleTests().testRichArticleImageControlsAndCaptions() }),
@@ -7226,6 +7261,7 @@ struct LeonBookUnitTests {
             ("DataIntegrityTests.testBackupDetectsSameSizeContentWithPreservedTimestamp", { try DataIntegrityTests().testBackupDetectsSameSizeContentWithPreservedTimestamp() }),
             ("NativeModelsTests.testNavigationSidebarFollowsTheCurrentSection", { await MainActor.run { NativeModelsTests().testNavigationSidebarFollowsTheCurrentSection() } }),
             ("NativeModelsTests.testLanguagePreferencesPersistAndLocalizationsResolve", { await MainActor.run { NativeModelsTests().testLanguagePreferencesPersistAndLocalizationsResolve() } }),
+            ("NativeModelsTests.testBodyFontSizeUpdatesOpenWindowsAndPersistsPerUser", { await MainActor.run { NativeModelsTests().testBodyFontSizeUpdatesOpenWindowsAndPersistsPerUser() } }),
             ("NativeModelsTests.testEnglishCatalogCoversEditorSurface", { NativeModelsTests().testEnglishCatalogCoversEditorSurface() }),
             ("NativeModelsTests.testEnglishLocalizationPreservesSubstitutionsAndTranslatesTemplates", { NativeModelsTests().testEnglishLocalizationPreservesSubstitutionsAndTranslatesTemplates() }),
             ("NativeModelsTests.testEnglishLocalizationCoversNativeAndWebSurfaces", { NativeModelsTests().testEnglishLocalizationCoversNativeAndWebSurfaces() }),

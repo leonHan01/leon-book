@@ -7,13 +7,13 @@ public struct NativeSettingsView: View {
     private var appPalette: NativeAppPalette { appearancePreferences.palette(system: systemColorScheme) }
 
     @ObservedObject var model: NativeAppModel
-    @ObservedObject var readingPreferences: NativeReadingPreferences
+    @StateObject private var readingPreferences: NativeReadingPreferences
     @ObservedObject var languagePreferences: NativeLanguagePreferences
     @Environment(\.colorScheme) private var systemColorScheme
 
     public init(model: NativeAppModel) {
         self.model = model
-        readingPreferences = NativeReadingPreferences()
+        _readingPreferences = StateObject(wrappedValue: NativeReadingPreferences())
         languagePreferences = .shared
     }
 
@@ -22,7 +22,7 @@ public struct NativeSettingsView: View {
         readingPreferences: NativeReadingPreferences
     ) {
         self.model = model
-        self.readingPreferences = readingPreferences
+        _readingPreferences = StateObject(wrappedValue: readingPreferences)
         languagePreferences = .shared
     }
 
@@ -33,7 +33,7 @@ public struct NativeSettingsView: View {
         appearancePreferences: NativeAppearancePreferences? = nil
     ) {
         self.model = model
-        self.readingPreferences = readingPreferences
+        _readingPreferences = StateObject(wrappedValue: readingPreferences)
         self.languagePreferences = languagePreferences
         self.appearancePreferences = appearancePreferences ?? .shared
     }
@@ -102,6 +102,13 @@ public struct NativeSettingsView: View {
             }
 
             Section(NativeLocalization.text("阅读与编辑排版")) {
+                typographySlider(
+                    title: "正文字号",
+                    value: $readingPreferences.profile.fontSize,
+                    range: NativeReadingProfile.fontSizeRange,
+                    step: 1,
+                    suffix: "pt"
+                )
                 Picker("正文字体", selection: $readingPreferences.profile.bodyFont) {
                     ForEach(NativeReadingFontFamily.allCases) { font in
                         Text(LocalizedStringKey(font.title)).tag(font)
@@ -123,13 +130,6 @@ public struct NativeSettingsView: View {
                     value: $readingPreferences.profile.readingWidth,
                     range: 520...1_400,
                     step: 20,
-                    suffix: "pt"
-                )
-                typographySlider(
-                    title: "正文字号",
-                    value: $readingPreferences.profile.fontSize,
-                    range: 13...30,
-                    step: 1,
                     suffix: "pt"
                 )
                 typographySlider(
@@ -411,7 +411,8 @@ public struct NativeSettingsView: View {
     ) -> some View {
         LabeledContent(title) {
             HStack(spacing: 10) {
-                Slider(value: value, in: range, step: step)
+                Slider(value: value, in: range, step: step) { Text(title) }
+                    .labelsHidden()
                     .frame(width: 240)
                 Text("\(Int(value.wrappedValue.rounded())) \(suffix)")
                     .monospacedDigit()

@@ -102,7 +102,7 @@ extension LocalBlogStore {
     private func requireActiveCommentMoment(_ id: String) throws -> String {
         let safeID = try requireSafeSegment(id, label: "微博 ID")
         guard try db().integer(
-            "SELECT COUNT(*) FROM moments WHERE id = ? AND deleted_at IS NULL",
+            "SELECT COUNT(*) FROM moments WHERE id = ? AND deleted_at IS NULL AND \(contentVisibility())",
             values: [.text(safeID)]
         ) == 1 else { throw NativeStoreError.notFound }
         return safeID

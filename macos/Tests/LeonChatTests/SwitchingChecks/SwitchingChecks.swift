@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 @testable import LeonChat
 
 private final class NetworkFixture: @unchecked Sendable {
@@ -324,6 +325,94 @@ struct SwitchingChecks {
         race.setActive(false)
         check(!race.conversations.contains(a), "late directory response cannot restore a permanently deleted conversation")
 
+        try await checkTimelineUpdates(api: api, room: a, directoryPaths: directoryPaths, check: check)
+
+        let visibilityStore = ChatStore(api: api), session = LeonChatSession(store: visibilityStore)
+        let firstHost = UUID(), secondHost = UUID(), pagePath = "/api/device-messages"
+        func host(visible: Bool, key: Bool = true) -> LeonChatSession.Host {
+            .init(foreground: true, key: key, visible: visible, open: {})
+        }
+        FixtureProtocol.fixture.setup(holding: directoryPaths.union([pagePath]))
+        session.update(firstHost, host: host(visible: true))
+        let initialPoll = await waitFor { FixtureProtocol.fixture.paths().filter { $0 == pagePath }.count == 1 }
+        session.update(secondHost, host: host(visible: true, key: false))
+        session.update(firstHost, host: host(visible: false))
+        check(initialPoll && visibilityStore.loadingMessages, "a second visible chat keeps syncing while the key window reads")
+        session.remove(secondHost)
+        visibilityStore.reconnect()
+        let hiddenPoll = await waitFor { FixtureProtocol.fixture.paths().filter { $0 == pagePath }.count > 1 }
+        check(!hiddenPoll && !visibilityStore.loadingMessages, "foreground reading stops the selected conversation poller")
+        session.update(firstHost, host: host(visible: true))
+        let resumed = await waitFor { FixtureProtocol.fixture.paths().filter { $0 == pagePath }.count == 2 }
+        check(resumed && visibilityStore.loadingMessages, "returning to chat immediately requests the current conversation")
+        session.remove(firstHost)
+
         if failures > 0 { exit(1) }
+    }
+
+    @MainActor private static func checkTimelineUpdates(
+        api: MessageAPI, room: Conversation, directoryPaths: Set<String>, check: (Bool, String) -> Void
+    ) async throws {
+        let store = ChatStore(api: api)
+        store.setActive(false)
+        defer { store.setActive(false) }
+        store.conversations = [room]
+        store.selectConversation(room.id)
+        func message(_ id: Int64, text: String = "history") -> Message {
+            Message(id: id, clientMessageId: "timeline-\(id)", deviceId: store.deviceId, sender: "test",
+                    platform: "macos", text: text, createdAt: id, conversationId: room.id,
+                    role: nil, agentId: nil, replyTo: nil)
+        }
+        store.messages = (2...5001).map { message(Int64($0)) }
+        let history = store.messages, ids = store.messageIDs, timeline = store.timelineItems
+        var storeUpdates = 0, draftUpdates = 0
+        let storeSubscription = store.objectWillChange.sink { storeUpdates += 1 }
+        let draftSubscription = store.composerDraft.$text.dropFirst().sink { _ in draftUpdates += 1 }
+        for index in 1...120 { store.composerDraft.text = "draft \(index)" }
+        storeSubscription.cancel(); draftSubscription.cancel()
+        let timelineReused = timeline.withUnsafeBufferPointer { previous in
+            store.timelineItems.withUnsafeBufferPointer { $0.baseAddress == previous.baseAddress }
+        }
+        check(storeUpdates == 0 && draftUpdates == 120 && timelineReused && store.draft == "draft 120" && store.canSend,
+              "120 draft edits in a 5,000-message room only notify the composer and reuse the timeline")
+
+        let confirmed = message(5002)
+        store.pending = [Outgoing(clientMessageId: confirmed.clientMessageId, deviceId: store.deviceId, sender: "test",
+                                  platform: "macos", text: confirmed.text, conversationId: room.id)]
+        let job = AgentJob(messageId: 2, agentId: "fixture", agentName: "Fixture", status: "FAILED", error: "test", phase: nil)
+        let operation = ContextOperation(id: "fixture", agentId: "fixture", agentName: "Fixture", status: "RUNNING",
+                                         error: "", result: "", createdAt: 2)
+        let path = "/api/device-messages"
+        func respond(with messages: [Message], hasMore: Bool = true) throws {
+            let page = MessagePage(messages: messages, hasMore: hasMore, jobs: [job], contextOperations: [operation])
+            FixtureProtocol.fixture.setup(holding: directoryPaths, responses: [path: try JSONEncoder().encode(page)])
+        }
+        try respond(with: [])
+        var historyUpdates = 0
+        let historySubscription = store.$messages.dropFirst().sink { _ in historyUpdates += 1 }
+        store.setActive(true)
+        let idlePageReceived = await waitFor { store.connected && !store.loadingMessages }
+        historySubscription.cancel()
+        check(idlePageReceived && historyUpdates == 0 && store.messages == history && store.messageIDs == ids && store.pending.count == 1
+              && store.timelineItems.prefix(3).map(\.id) == ["operation:fixture", "message:2", "job:2:fixture"],
+              "an empty poll preserves 5,000 cached messages and pending sends while updating job and context rows")
+        store.dismissJob(job)
+        check(store.timelineItems.prefix(2).map(\.id) == ["operation:fixture", "message:2"]
+              && store.timelineItems.count == 5001, "dismissing a job invalidates the cached timeline")
+
+        try respond(with: [confirmed], hasMore: false)
+        store.reconnect()
+        let appended = await waitFor { store.messages.last == confirmed }
+        check(appended && store.messageIDs.count == 5001 && store.timelineItems.last?.id == "message:5002" && store.pending.isEmpty,
+              "an incremental page appends its message, updates the timeline and confirms the pending send")
+        try respond(with: [message(1)])
+        await store.loadOlder()
+        check(store.messageIDs.first == 1 && store.messageIDs.count == 5002, "loading an older page prepends its messages")
+
+        let revised = message(2, text: "revised")
+        try respond(with: [message(2), message(1), revised], hasMore: false)
+        await store.loadOlder()
+        check(store.messages[1] == revised && store.messageIDs == Array(1...5002) && !store.hasOlder,
+              "an out-of-order overlapping page replaces duplicate IDs without changing scroll anchor ordering")
     }
 }

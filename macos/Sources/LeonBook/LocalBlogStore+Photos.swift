@@ -9,12 +9,15 @@ extension LocalBlogStore {
         try db().query("SELECT id, name FROM photo_albums ORDER BY created_at, id") { row in
             albums.append(NativePhotoAlbum(id: row.text(at: 0) ?? "", name: row.text(at: 1) ?? ""))
         }
+        let hiddenPaths = try hiddenMediaPaths()
         var names: [String: String] = [:]
         if files == nil {
             try db().query("""
-            SELECT media_json FROM articles WHERE media_json <> '[]'
-            UNION ALL SELECT images_json FROM moments WHERE images_json <> '[]'
-            UNION ALL SELECT images_json FROM question_answers WHERE images_json <> '[]'
+            SELECT media_json FROM articles WHERE media_json <> '[]' AND \(contentVisibility())
+            UNION ALL SELECT images_json FROM moments WHERE images_json <> '[]' AND \(contentVisibility())
+            UNION ALL SELECT answer.images_json FROM question_answers AS answer
+            JOIN questions AS q ON q.id = answer.question_id
+            WHERE answer.images_json <> '[]' AND \(contentVisibility("q.is_private"))
             """, checkingCancellation: true) { row in
                 guard let json = row.text(at: 0), let data = json.data(using: .utf8),
                       let media = try? JSONDecoder().decode([NativeMedia].self, from: data) else { return }
@@ -28,7 +31,7 @@ extension LocalBlogStore {
             memberships[url] = row.text(at: 2)
         }
         if let files {
-            let photos = files.map { photo in
+            let photos = files.filter { !hiddenPaths.contains($0.id) }.map { photo in
                 let name = names[photo.id] ?? photo.media.name
                 let albumID = memberships[photo.id]
                 guard name != photo.media.name || albumID != photo.albumID else { return photo }
@@ -54,6 +57,7 @@ extension LocalBlogStore {
                 guard let values = try? file.resourceValues(forKeys: keys),
                       values.isRegularFile == true, values.isSymbolicLink != true else { continue }
                 let url = "/media/\(directory.lastPathComponent)/\(file.lastPathComponent)"
+                guard !hiddenPaths.contains(url) else { continue }
                 photos.append(NativeLibraryPhoto(
                     media: NativeMedia(kind: "image", name: names[url] ?? file.lastPathComponent,
                                        size: values.fileSize ?? 0, url: url),

@@ -220,6 +220,7 @@ enum RichArticleFile {
         let updatedAt: String
         let publishedAt: String?
         let properties: [String: NativeArticlePropertyValue]
+        let isPrivate: Bool?
     }
 
     static func render(_ article: NativeArticle) throws -> String {
@@ -227,7 +228,7 @@ enum RichArticleFile {
             title: article.title, slug: article.slug, category: article.category,
             excerpt: article.excerpt, banner: article.banner, media: article.media,
             status: article.status, tags: article.tags, updatedAt: article.updatedAt,
-            publishedAt: article.publishedAt, properties: article.properties
+            publishedAt: article.publishedAt, properties: article.properties, isPrivate: article.isPrivate
         )
         let encoded = try JSONEncoder().encode(metadata).base64EncodedString()
         return """
@@ -261,7 +262,8 @@ enum RichArticleFile {
             title: metadata.title, body: String(source[start.lowerBound..<end.upperBound]),
             category: metadata.category, excerpt: metadata.excerpt, banner: metadata.banner,
             media: metadata.media, status: metadata.status, tags: metadata.tags,
-            publishedAt: metadata.publishedAt, properties: try NativeArticleProperties.validated(metadata.properties)
+            publishedAt: metadata.publishedAt, properties: try NativeArticleProperties.validated(metadata.properties),
+            isPrivate: metadata.isPrivate
         )
     }
 }

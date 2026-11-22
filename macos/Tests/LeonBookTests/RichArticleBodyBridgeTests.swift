@@ -58,7 +58,22 @@ final class RichArticleBodyBridgeTests {
         defer { RichArticleEditor.dismantleNSView(view, coordinator: coordinator); window.close() }
         view.loadHTMLString(RichArticleEditor.pageHTML, baseURL: nil)
         try await waitUntil { (try? await view.evaluateJavaScript("document.getElementById('document')?.contentEditable === 'true'")) as? Bool == true }
-        _ = try await view.evaluateJavaScript("const root = document.getElementById('document'); root.focus(); getSelection().setPosition(root.children[300].firstChild, 2); for (let i = 0; i < 40; i++) document.execCommand('insertText', false, '新');")
+        let fullJoins = try await view.evaluateJavaScript("""
+            const root = document.getElementById('document');
+            (() => {
+                root.focus(); getSelection().setPosition(root.children[300].firstChild, 2);
+                const join = Array.prototype.join;
+                let fullJoins = 0;
+                Array.prototype.join = function(...args) {
+                    if (this[0] === '<article data-leon-format="html-v1">' && this[this.length - 1] === '</article>') fullJoins++;
+                    return join.apply(this, args);
+                };
+                try { for (let i = 0; i < 40; i++) document.execCommand('insertText', false, '新'); }
+                finally { Array.prototype.join = join; }
+                return fullJoins;
+            })();
+            """) as? Int
+        try bridgeExpect(fullJoins == 0, "ordinary long-document input must not assemble the full HTML in WebKit")
         let expected = try await view.evaluateJavaScript("LeonArticle.serialize()") as! String
         try await waitUntil { html == expected }
         try bridgeExpect(recorder.patches >= 39 && recorder.transmittedCharacters < expected.utf16.count * 3, "typing must use small patches while updating the native binding")

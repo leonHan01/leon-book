@@ -1,5 +1,11 @@
+import AppKit
 import SwiftUI
 import CryptoKit
+
+@MainActor
+final class ChatDraft: ObservableObject {
+    @Published var text = ""
+}
 
 @MainActor
 final class ChatStore: ObservableObject {
@@ -59,9 +65,35 @@ final class ChatStore: ObservableObject {
         guard self.api === api else { throw CancellationError() }
         return result
     }
-    @Published var messages: [Message] = []
+    @Published var messages: [Message] = [] {
+        didSet {
+            cachedMessageIDs = nil
+            cachedTimelineItems = nil
+        }
+    }
+    private var cachedMessageIDs: [Int64]?
+    private var cachedTimelineItems: [TimelineItem]?
+
+    var messageIDs: [Int64] {
+        if let cachedMessageIDs { return cachedMessageIDs }
+        let ids = messages.map(\.id)
+        cachedMessageIDs = ids
+        return ids
+    }
+
+    var timelineItems: [TimelineItem] {
+        if let cachedTimelineItems { return cachedTimelineItems }
+        let items = TimelineItem.ordered(messages: messages, operations: contextOperations, jobs: visibleJobs)
+        cachedTimelineItems = items
+        return items
+    }
+
     @Published var pending: [Outgoing] = []
-    @Published var draft = ""
+    let composerDraft = ChatDraft()
+    var draft: String {
+        get { composerDraft.text }
+        set { composerDraft.text = newValue }
+    }
     @Published var draftDocuments:[DraftDocument]=[]
     @Published var importingDocuments=false
     private var documentDrafts:[String:[DraftDocument]]=[:]
@@ -111,10 +143,35 @@ final class ChatStore: ObservableObject {
         case .failure(let failure): error = friendly(failure)
         }
     }
+    @Published private(set) var imageCacheRevision = UUID()
+    private var imageLoader = ChatImageLoader()
+
+    private func imageSource(_ id: String) -> ChatImageLoader.Source {
+        let scope = pendingKey, api = api
+        return {
+            if let local = ChatImageFiles.read(id, scope: scope) { return local }
+            guard let api else { throw ClientError.message("请先连接服务器") }
+            return try await api.imageData(id)
+        }
+    }
+
     func imageData(_ id: String) async throws -> Data {
-        if let local = ChatImageFiles.read(id, scope: pendingKey) { return local }
-        guard let api else { throw ClientError.message("请先连接服务器") }
-        return try await api.imageData(id)
+        try await imageLoader.data(id, source: imageSource(id))
+    }
+
+    func imageThumbnail(_ id: String, pixels: Int) async throws -> NSImage {
+        try await imageLoader.thumbnail(id, pixels: pixels, source: imageSource(id))
+    }
+
+    func fullSizeImage(_ id: String) async throws -> NSImage {
+        try await imageLoader.fullSize(id, source: imageSource(id))
+    }
+
+    private func clearChatImages() {
+        imageLoader.cancel()
+        api?.clearImageCache()
+        imageLoader = ChatImageLoader()
+        imageCacheRevision = UUID()
     }
     @Published var agents: [AgentInfo] = []
     @Published var agentDetailId: String?
@@ -156,9 +213,13 @@ final class ChatStore: ObservableObject {
         } catch { if connection == connectionId { usageError = friendly(error) } }
     }
     @Published var conversations: [Conversation] = []
-    @Published var jobs: [AgentJob] = []
-    @Published private var dismissedJobKeys = Set<String>()
-    var visibleJobs: [AgentJob] { jobs.filter { $0.status != "FAILED" || !dismissedJobKeys.contains(dismissalKey($0)) } }
+    @Published var jobs: [AgentJob] = [] {
+        didSet { cachedTimelineItems = nil }
+    }
+    @Published private var dismissedJobKeys = Set<String>() {
+        didSet { cachedTimelineItems = nil }
+    }
+    private var visibleJobs: [AgentJob] { jobs.filter { $0.status != "FAILED" || !dismissedJobKeys.contains(dismissalKey($0)) } }
     var dismissedFailureCount: Int { jobs.filter { $0.status == "FAILED" && dismissedJobKeys.contains(dismissalKey($0)) }.count }
     private func dismissalKey(_ job: AgentJob) -> String {
         job.id + "#" + SHA256.hash(data: Data(job.error.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -231,7 +292,7 @@ final class ChatStore: ObservableObject {
         compressionRequests = compressionRequests.filter { !$0.key.hasPrefix(room + ":") }
         let prefix = pendingKey + ".archive." + room + ":"
         for key in ChatPreferences.defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) { ChatPreferences.defaults.removeObject(forKey: key) }
-        api?.clearImageCache()
+        clearChatImages()
     }
 
     @Published var clearBusy = false
@@ -269,7 +330,7 @@ final class ChatStore: ObservableObject {
             let prefix = pendingKey + ".archive." + room + ":"
             for key in ChatPreferences.defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) { ChatPreferences.defaults.removeObject(forKey: key) }
             compressionRequests = compressionRequests.filter { !$0.key.hasPrefix(room + ":") }
-            api.clearImageCache()
+            clearChatImages()
             if room == selectedConversationId {
                 quotedMessage=nil;quoteDrafts.removeValue(forKey:room)
                 draftDocuments=[]
@@ -287,7 +348,7 @@ final class ChatStore: ObservableObject {
             quotedMessage=nil;quoteDrafts.removeValue(forKey:selectedConversationId)
             messages = []; jobs = []; contextOperations = []; contextInfo = nil; hasOlder = false
             scrollPositions.removeValue(forKey:selectedConversationId);roomCache.removeValue(forKey: selectedConversationId); roomCacheOrder.removeAll { $0 == selectedConversationId }
-            api?.clearImageCache()
+            clearChatImages()
         }
         historyRevision = revision
     }
@@ -466,7 +527,9 @@ final class ChatStore: ObservableObject {
     }
     @Published var contextInfo: ConversationContext?
     @Published var contextError: String?
-    @Published var contextOperations: [ContextOperation] = []
+    @Published var contextOperations: [ContextOperation] = [] {
+        didSet { cachedTimelineItems = nil }
+    }
     @Published var compressionRequestBusy = false
     private var compressionRequests: [String: String] = [:]
     var contextActionActive: Bool { compressionRequestBusy || jobs.contains { $0.status == "PENDING" || $0.status == "RUNNING" } || contextOperations.contains { $0.active } }
@@ -600,7 +663,7 @@ final class ChatStore: ObservableObject {
     }
     func isSelected(_ agent: AgentInfo) -> Bool { selectedConversation?.kind == "direct" && selectedConversation?.agentId == agent.id }
     private func rememberRoom() {
-        let range=ConversationScrollPosition.cacheRange(ids:messages.map(\.id),anchor:scrollPositions[selectedConversationId]?.messageID)
+        let range=ConversationScrollPosition.cacheRange(ids:messageIDs,anchor:scrollPositions[selectedConversationId]?.messageID)
         let kept=Array(messages[range])
         roomCache[selectedConversationId] = RoomSnapshot(messages: kept, jobs: jobs, operations: contextOperations,
             context: contextInfo, loaded: initialLoaded || !messages.isEmpty, hasOlder: hasOlder || range.lowerBound>0, historyRevision: historyRevision)
@@ -738,6 +801,7 @@ final class ChatStore: ObservableObject {
         guard !token.isEmpty else { needsConnectionSetup = true; return }
         do {
             let base = try Endpoint.normalize(address)
+            clearChatImages()
             api = MessageAPI(base: base, token: token)
             restorePending(base: base, token: token)
             status = "正在连接…"
@@ -777,17 +841,18 @@ final class ChatStore: ObservableObject {
             selectedConversationId = "shared"; drafts = [:]; imageDrafts = [:]; draftImages = []; contextInfo = nil; contextError = nil; contextOperations = []; compressionRequests = [:]
             agents = directory; conversations = rooms; jobs = page.jobs ?? []
             poller?.cancel()
+            clearChatImages()
             api = candidate
             self.address = base.absoluteString
             self.sender = name
             ChatPreferences.defaults.set(self.address, forKey: "server")
             ChatPreferences.defaults.set(name, forKey: "sender")
             restorePending(base: base, token: secret)
-            messages = page.messages
+            messages = Self.sortedUniquePage(page.messages)
             historyRevision = page.historyRevision
             initialLoaded = true
             hasOlder = page.hasMore
-            reconcilePending()
+            reconcilePending(with: messages)
             draft = ""
             connected = true
             status = "已连接 · 自动同步"
@@ -860,7 +925,7 @@ final class ChatStore: ObservableObject {
                     self.receiveJobs(page.jobs ?? [])
                     let operations = page.contextOperations ?? []
                     if self.contextOperations != operations { self.contextOperations = operations }
-                    self.merge(page.messages)
+                    self.receiveMessages(page.messages)
                     if self.loadingMessages { self.loadingMessages = false }
                     if !self.connected { self.connected = true }
                     if self.status != "已连接 · 自动同步" { self.status = "已连接 · 自动同步" }
@@ -891,7 +956,7 @@ final class ChatStore: ObservableObject {
                 receiveHistoryRevision(revision); generation = UUID(); initialLoaded = false; beginPolling(); return
             }
             receiveHistoryRevision(page.historyRevision)
-            merge(page.messages)
+            receiveMessages(page.messages)
             hasOlder = page.hasMore
         } catch { if current == generation { self.error = friendly(error) } }
     }
@@ -936,16 +1001,32 @@ final class ChatStore: ObservableObject {
         } catch { if current == connectionId { self.error = friendly(error) } }
     }
 
-    private func merge(_ incoming: [Message]) {
-        var byId = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, $0) })
-        for message in incoming { byId[message.id] = message }
-        let merged = byId.values.sorted { $0.id < $1.id }
-        if messages != merged { messages = merged }
-        reconcilePending()
+    private static func sortedUniquePage(_ messages: [Message]) -> [Message] {
+        if zip(messages, messages.dropFirst()).allSatisfy({ $0.id < $1.id }) { return messages }
+        let byID = Dictionary(messages.lazy.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        return byID.values.sorted { $0.id < $1.id }
     }
-    private func reconcilePending() {
-        guard !pending.isEmpty else { return }
-        let confirmed = Set(messages.filter { $0.deviceId == deviceId }.map(\.clientMessageId))
+
+    private func receiveMessages(_ page: [Message]) {
+        guard !page.isEmpty else { return }
+        let incoming = Self.sortedUniquePage(page)
+        if messages.last.map({ $0.id < incoming[0].id }) ?? true {
+            messages.append(contentsOf: incoming)
+        } else if let first = messages.first, incoming[incoming.count - 1].id < first.id {
+            messages.insert(contentsOf: incoming, at: 0)
+        } else {
+            var byID = Dictionary(uniqueKeysWithValues: messages.lazy.map { ($0.id, $0) })
+            for message in incoming { byID[message.id] = message }
+            let merged = byID.values.sorted { $0.id < $1.id }
+            if messages != merged { messages = merged }
+        }
+        reconcilePending(with: incoming)
+    }
+
+    private func reconcilePending(with received: [Message]) {
+        guard !pending.isEmpty, !received.isEmpty else { return }
+        let confirmed = Set(received.lazy.filter { $0.deviceId == self.deviceId }.map(\.clientMessageId))
+        guard !confirmed.isEmpty else { return }
         let count = pending.count
         for message in pending where confirmed.contains(message.clientMessageId) { ChatImageFiles.remove(message.imageIds ?? [], scope: pendingKey);DocumentFiles.remove(message.documentIds ?? [],scope:pendingKey) }
         pending.removeAll { confirmed.contains($0.clientMessageId) }

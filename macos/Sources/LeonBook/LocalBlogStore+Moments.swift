@@ -5,12 +5,14 @@ extension LocalBlogStore {
 
     public func listMoments() throws -> [NativeMoment] {
         try prepare()
-        return try allMoments()
+        return try allMoments(includesHidden: false)
     }
 
     public func getMoment(id: String) throws -> NativeMoment {
         try prepare()
-        guard let moment = try moment(withID: id) else { throw NativeStoreError.notFound }
+        guard let moment = try moment(withID: id), permitsContent(isPrivate: moment.isPrivate) else {
+            throw NativeStoreError.notFound
+        }
         return moment
     }
 
@@ -65,7 +67,7 @@ extension LocalBlogStore {
         SELECT moment.id, moment.created_at, tag.tag
         FROM moments AS moment
         LEFT JOIN moment_tags AS tag ON tag.moment_id = moment.id
-        WHERE moment.deleted_at IS NULL
+        WHERE moment.deleted_at IS NULL AND \(contentVisibility("moment.is_private"))
         ORDER BY moment.created_at DESC, moment.id DESC, tag.normalized_tag
         """) { row in
             guard let id = row.text(at: 0), let createdAt = row.text(at: 1) else {
@@ -87,7 +89,8 @@ extension LocalBlogStore {
     public func saveMoment(
         text: String,
         textRuns: [NativeMomentTextRun],
-        images: [NativeMedia]
+        images: [NativeMedia],
+        isPrivate: Bool = false
     ) throws -> NativeMoment {
         try prepare()
         let normalizedInput = normalizedMomentText(text, textRuns: textRuns)
@@ -114,7 +117,8 @@ extension LocalBlogStore {
             tags: normalizedText.tags,
             text: normalizedText.text,
             textRuns: normalizedText.runs,
-            updatedAt: createdAt
+            updatedAt: createdAt,
+            isPrivate: isPrivate
         )
 
         try db().transaction {
@@ -135,11 +139,12 @@ extension LocalBlogStore {
         text: String,
         textRuns: [NativeMomentTextRun],
         images: [NativeMedia],
-        expectedUpdatedAt: String? = nil
+        expectedUpdatedAt: String? = nil,
+        isPrivate: Bool? = nil
     ) throws -> NativeMoment {
         try prepare()
         let safeID = try requireSafeSegment(id, label: "微博 ID")
-        guard let previous = try moment(withID: safeID) else { throw NativeStoreError.notFound }
+        let previous = try getMoment(id: safeID)
 
         if let expectedUpdatedAt, previous.updatedAt != expectedUpdatedAt { throw NativeStoreError.conflict }
         let normalizedInput = normalizedMomentText(text, textRuns: textRuns)
@@ -164,7 +169,8 @@ extension LocalBlogStore {
             tags: normalizedText.tags,
             text: normalizedText.text,
             textRuns: normalizedText.runs,
-            updatedAt: nextTimestamp(after: previous.updatedAt)
+            updatedAt: nextTimestamp(after: previous.updatedAt),
+            isPrivate: isPrivate ?? previous.isPrivate
         )
 
         try db().transaction {
@@ -185,7 +191,7 @@ extension LocalBlogStore {
     public func setMomentFavorite(id: String, isFavorite: Bool) throws -> NativeMoment {
         try prepare()
         let safeID = try requireSafeSegment(id, label: "微博 ID")
-        guard let previous = try moment(withID: safeID) else { throw NativeStoreError.notFound }
+        let previous = try getMoment(id: safeID)
 
         try db().execute(
             "UPDATE moments SET is_favorite = ? WHERE id = ?",
@@ -200,7 +206,8 @@ extension LocalBlogStore {
             tags: previous.tags,
             text: previous.text,
             textRuns: previous.textRuns,
-            updatedAt: previous.updatedAt
+            updatedAt: previous.updatedAt,
+            isPrivate: previous.isPrivate
         )
         do {
             try writeMomentSidecar(updated)
@@ -213,7 +220,7 @@ extension LocalBlogStore {
     public func deleteMoment(id: String, expectedUpdatedAt: String? = nil) throws {
         try prepare()
         let safeID = try requireSafeSegment(id, label: "微博 ID")
-        guard try moment(withID: safeID) != nil else { throw NativeStoreError.notFound }
+        _ = try getMoment(id: safeID)
 
         let deletedAt = timestamp(from: Date())
         let expiresAt = timestamp(afterDays: Self.trashRetentionDays)
@@ -247,9 +254,10 @@ extension LocalBlogStore {
         return result
     }
 
-    func allMoments(includingDeleted: Bool = false) throws -> [NativeMoment] {
+    func allMoments(includingDeleted: Bool = false, includesHidden: Bool = true) throws -> [NativeMoment] {
         var moments: [NativeMoment] = []
-        let whereClause = includingDeleted ? "" : "WHERE deleted_at IS NULL"
+        let active = includingDeleted ? "1" : "deleted_at IS NULL"
+        let whereClause = "WHERE \(active) AND \(includesHidden ? "1" : contentVisibility())"
         try db().query(momentSelect + " \(whereClause) ORDER BY created_at DESC, id DESC") { row in
             moments.append(try decodeMoment(row))
         }
@@ -295,7 +303,7 @@ extension LocalBlogStore {
         matching filter: NativeMomentFilter,
         before cursor: NativeMomentCursor?
     ) -> (whereClause: String, values: [SQLiteValue]) {
-        var predicates = ["deleted_at IS NULL"]
+        var predicates = ["deleted_at IS NULL", contentVisibility()]
         var values: [SQLiteValue] = []
 
         if filter.favoritesOnly {
@@ -431,8 +439,8 @@ extension LocalBlogStore {
         into database: SQLiteDatabase
     ) throws {
         try database.execute("""
-        INSERT INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO moments(id, created_at, updated_at, text, text_runs_json, images_json, tags_json, is_favorite, deleted_at, delete_expires_at, is_private)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             created_at = excluded.created_at,
             updated_at = excluded.updated_at,
@@ -442,7 +450,8 @@ extension LocalBlogStore {
             tags_json = excluded.tags_json,
             is_favorite = excluded.is_favorite,
             deleted_at = excluded.deleted_at,
-            delete_expires_at = excluded.delete_expires_at
+            delete_expires_at = excluded.delete_expires_at,
+            is_private = excluded.is_private
         """, values: [
             .text(moment.id),
             .text(moment.createdAt),
@@ -454,6 +463,7 @@ extension LocalBlogStore {
             .integer(moment.isFavorite ? 1 : 0),
             deletedAt.map(SQLiteValue.text) ?? .null,
             deleteExpiresAt.map(SQLiteValue.text) ?? .null,
+            .integer(moment.isPrivate ? 1 : 0),
         ])
         try replaceShortSearchDocument(
             type: "moment",
@@ -496,7 +506,8 @@ extension LocalBlogStore {
             tags: tags,
             text: text,
             textRuns: try decode(textRunsJSON),
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            isPrivate: row.integer(at: 11) == 1
         )
     }
 

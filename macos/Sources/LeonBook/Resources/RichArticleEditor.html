@@ -360,7 +360,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   // input/commands can serialize before MutationObserver's microtask runs.
   const serializedBlocks = new WeakMap();
   const selectionUnits = new WeakMap(), selectionOffsets = new WeakMap();
-  let serializedBody = null, serializedParts = [], needsPreparation = true;
+  let serializedBody = null, serializedParts = null, needsPreparation = true;
   const structuralSelector = 'div[data-type=columns],div[data-type=column],p,h1,h2,h3,h4,pre,aside,blockquote,table,td,th,figure,figcaption,img,audio,video,ul,ol,li,hr';
   function discardNodeCaches(node) {
     serializedBlocks.delete(node); selectionUnits.delete(node); selectionOffsets.delete(node);
@@ -368,7 +368,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   function invalidate(records) {
     for (const record of records) {
       if (record.target === root && record.type === 'attributes') continue;
-      serializedBody = null;
+      serializedBody = null; serializedParts = null;
       if (record.type === 'childList') for (const node of record.addedNodes) {
         // A moved subtree may have changed while detached from observation.
         const walker = document.createTreeWalker(node, NodeFilter.SHOW_ALL);
@@ -400,17 +400,19 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     serializedBlocks.set(node, fragment);
     return fragment;
   }
-  function serialize() {
+  function bodyParts() {
     invalidate(contentObserver.takeRecords());
-    if (serializedBody === null) {
-      serializedParts = [opening, ...[...root.childNodes].map(serializeNode), '</article>'];
-      serializedBody = serializedParts.join('');
-    }
-    return serializedBody;
+    return serializedParts ??= [opening, ...[...root.childNodes].map(serializeNode).filter(Boolean), '</article>'];
+  }
+  function serialize() {
+    const parts = bodyParts();
+    return serializedBody ??= parts.join('');
+  }
+  function sameBodyParts(previous, current) {
+    return previous === current || (previous?.length === current.length && previous.every((part, index) => part === current[index]));
   }
   function publishBody(forceFull = false) {
-    const body = serialize();
-    bodyBridge.publish(body, serializedParts, forceFull);
+    bodyBridge.publish(bodyParts(), forceFull);
   }
   function cellFor(node) {
     const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
@@ -516,7 +518,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   }
   function checkpoint() {
     const entry = history[historyIndex];
-    if (entry && entry.body === serialize()) entry.selection = captureSelection() || entry.selection;
+    if (entry && sameBodyParts(entry.parts, bodyParts())) entry.selection = captureSelection() || entry.selection;
   }
   const formatColors = [
     { name: '默认', color: '#252827', background: '#f0f1ef' },
@@ -740,9 +742,37 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     if (range.cloneContents().querySelector('br,hr,img,table,figure,audio,video')) return;
     selection.collapse(selection.focusNode, selection.focusOffset);
   }
+  function trimReaderTrailingBlockGap() {
+    const selection = getSelection();
+    if (editable || !selection?.rangeCount || selection.isCollapsed) return;
+    const range = selection.getRangeAt(0), end = range.endContainer;
+    if (!root.contains(range.startContainer) || !root.contains(end)) return;
+    const element = end.nodeType === Node.ELEMENT_NODE ? end : end.parentElement;
+    const blocks = 'p,h1,h2,h3,h4,pre,aside,blockquote';
+    let next;
+    if (element === root || element.matches('td,th,div[data-type=column]')) {
+      next = element.childNodes[range.endOffset];
+      while (next?.nodeType === Node.TEXT_NODE && !next.data.trim()) next = next.nextSibling;
+    } else next = element.closest(blocks);
+    if (!next || next.nodeType !== Node.ELEMENT_NODE || !next.matches(blocks)) return;
+    const previous = next.previousElementSibling;
+    if (!previous?.matches(blocks)) return;
+    // Only remove a boundary when no content at all from the next block was selected.
+    const prefix = document.createRange(); prefix.setStart(next, 0); prefix.setEnd(end, range.endOffset);
+    if (prefix.toString() || prefix.cloneContents().querySelector('br,hr,img,table,figure,audio,video,svg,canvas')) return;
+    const last = previous.lastChild;
+    const endNode = last?.nodeType === Node.TEXT_NODE ? last : previous;
+    const endOffset = endNode === previous ? previous.childNodes.length : last.length;
+    if (range.comparePoint(endNode, endOffset) !== 0) return;
+    const trimmed = range.cloneRange(); trimmed.setEnd(endNode, endOffset);
+    if (trimmed.collapsed) return;
+    const backward = selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
+    if (backward) selection.setBaseAndExtent(endNode, endOffset, range.startContainer, range.startOffset);
+    else selection.setBaseAndExtent(range.startContainer, range.startOffset, endNode, endOffset);
+  }
   root.addEventListener('pointerdown', () => { selectingWithPointer = true; resetReaderSelection(); hideSelectionToolbar(false); });
   document.addEventListener('pointerup', event => {
-    if (selectingWithPointer && event.button === 0) collapseBlockGapSelection();
+    if (selectingWithPointer && event.button === 0) { collapseBlockGapSelection(); trimReaderTrailingBlockGap(); }
     selectingWithPointer = false; updateSelectionToolbar();
     // Native comment preparation scans the article and refreshes SwiftUI.
     // Publish the final range once, after the pointer has finished selecting.
@@ -856,10 +886,10 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
   }
   function notify(coalesce = false) {
     if (composing) return;
-    prepareBlocks(); const body = serialize(); const now = Date.now();
-    if (history[historyIndex]?.body !== body) {
+    prepareBlocks(); const parts = bodyParts(); const now = Date.now();
+    if (!sameBodyParts(history[historyIndex]?.parts, parts)) {
       history.splice(historyIndex + 1);
-      const entry = { body, selection: captureSelection(), markdownExit: markdownTail && {
+      const entry = { parts, selection: captureSelection(), markdownExit: markdownTail && {
         point: selectionPoint(markdownTail.node, markdownTail.node.childNodes.length),
         tag: markdownTail.node.tagName, text: markdownTail.text
       } };
@@ -868,7 +898,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       if (history.length > 100) { history.shift(); historyIndex--; }
     } else if (history[historyIndex]) history[historyIndex].selection = captureSelection() || history[historyIndex].selection;
     lastEdit = coalesce ? now : 0;
-    bodyBridge.publish(body, serializedParts); scheduleResize();
+    bodyBridge.publish(parts); scheduleResize();
   }
   let lastHeight = -1;
   const scheduleResize = frameTask(resize);
@@ -1022,7 +1052,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     const index = historyIndex + delta; if (index < 0 || index >= history.length) return;
     history[historyIndex].selection = captureSelection() || history[historyIndex].selection;
     editorUI.reset(); columnLayout.reset(); hideSelectionToolbar(); pendingImagePastes.clear(); historyIndex = index; lastEdit = 0;
-    const parsed = document.createElement('template'); parsed.innerHTML = history[index].body;
+    const parsed = document.createElement('template'); parsed.innerHTML = history[index].parts.join('');
     articleImages.reset(); root.replaceChildren(articleImages.stageHTML(parsed.content.querySelector('article').innerHTML)); prepareBlocks(); closeMenu();
     markdownTail = null;
     if (!restoreSelection(history[index].selection, true)) focusBlock(root.firstElementChild);
@@ -1438,7 +1468,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
       const parsed = document.createElement('template'); parsed.innerHTML = body;
       articleImages.reset();
       root.replaceChildren(articleImages.stageHTML(cleanHTML(parsed.content.querySelector('article')?.innerHTML || '<p><br></p>')));
-      prepareBlocks(); history = [{ body: serialize(), selection: null }]; historyIndex = 0; lastEdit = 0; closeMenu();
+      prepareBlocks(); history = [{ parts: bodyParts(), selection: null }]; historyIndex = 0; lastEdit = 0; closeMenu();
     }
     bodyBridge.reset(body, serialize(), serializedParts, sessionID);
     if (!changed) articleImages.prepare();

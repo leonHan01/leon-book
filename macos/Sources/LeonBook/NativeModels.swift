@@ -231,6 +231,7 @@ public struct NativeBanner: Codable, Hashable {
 
 public struct NativeArticleSummary: Codable, Hashable, Identifiable {
     public let aliases: [String]
+    public let isPrivate: Bool
     public let banner: NativeBanner?
     public let category: String
     public let excerpt: String
@@ -261,9 +262,11 @@ public struct NativeArticleSummary: Codable, Hashable, Identifiable {
         tags: [String],
         title: String,
         updatedAt: String,
-        wordCount: Int
+        wordCount: Int,
+        isPrivate: Bool = false
     ) {
         self.aliases = NativeArticleAlias.normalized(aliases)
+        self.isPrivate = isPrivate
         self.banner = banner
         self.category = category
         self.excerpt = excerpt
@@ -295,7 +298,8 @@ public struct NativeArticleSummary: Codable, Hashable, Identifiable {
             tags: try container.decodeIfPresent([String].self, forKey: .tags) ?? [],
             title: try container.decodeIfPresent(String.self, forKey: .title) ?? "Untitled note",
             updatedAt: try container.decodeIfPresent(String.self, forKey: .updatedAt) ?? "",
-            wordCount: try container.decodeIfPresent(Int.self, forKey: .wordCount) ?? 0
+            wordCount: try container.decodeIfPresent(Int.self, forKey: .wordCount) ?? 0,
+            isPrivate: try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
         )
     }
 
@@ -947,6 +951,7 @@ public struct NativeActivityDay: Hashable, Identifiable {
 }
 
 public struct NativeArticle: Codable, Hashable, Identifiable {
+    public let isPrivate: Bool
     public let banner: NativeBanner?
     public let body: String
     public let category: String
@@ -973,7 +978,8 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
             slug: slug, status: status, tags: tags, title: title, updatedAt: updatedAt,
             publishedAt: publishedAt, wordCount: wordCount, pageViews: count,
             properties: properties, sourceRelativePath: sourceRelativePath,
-            sourceContentHash: sourceContentHash, sourceImportedAt: sourceImportedAt
+            sourceContentHash: sourceContentHash, sourceImportedAt: sourceImportedAt,
+            isPrivate: isPrivate
         )
     }
 
@@ -994,8 +1000,10 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
         properties: [String: NativeArticlePropertyValue] = [:],
         sourceRelativePath: String = "",
         sourceContentHash: String? = nil,
-        sourceImportedAt: String? = nil
+        sourceImportedAt: String? = nil,
+        isPrivate: Bool = false
     ) {
+        self.isPrivate = isPrivate
         self.banner = banner
         self.body = body
         self.category = category
@@ -1018,6 +1026,7 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
         banner = try container.decodeIfPresent(NativeBanner.self, forKey: .banner)
         body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
         category = try container.decodeIfPresent(String.self, forKey: .category) ?? "Uncategorized"
@@ -1056,12 +1065,14 @@ public struct NativeArticle: Codable, Hashable, Identifiable {
             tags: tags,
             title: title,
             updatedAt: updatedAt,
-            wordCount: wordCount ?? NativeWritingMetrics.characterCount(of: body)
+            wordCount: wordCount ?? NativeWritingMetrics.characterCount(of: body),
+            isPrivate: isPrivate
         )
     }
 }
 
 public struct NativeSaveArticle: Encodable {
+    public let isPrivate: Bool?
     public let banner: NativeBanner?
     public let body: String
     public let category: String
@@ -1087,8 +1098,10 @@ public struct NativeSaveArticle: Encodable {
         title: String,
         expectedUpdatedAt: String?,
         properties: [String: NativeArticlePropertyValue] = [:],
-        sourceRelativePath: String? = nil
+        sourceRelativePath: String? = nil,
+        isPrivate: Bool? = nil
     ) {
+        self.isPrivate = isPrivate
         self.banner = banner
         self.body = body
         self.category = category
@@ -1131,6 +1144,7 @@ public enum NativeArticleRevisionReason: String, Codable, Hashable {
 }
 
 public struct NativeArticleRevisionSnapshot: Codable, Hashable {
+    public let isPrivate: Bool
     public let banner: NativeBanner?
     public let body: String
     public let category: String
@@ -1152,8 +1166,10 @@ public struct NativeArticleRevisionSnapshot: Codable, Hashable {
         tags: [String],
         title: String,
         articleUpdatedAt: String?,
-        properties: [String: NativeArticlePropertyValue] = [:]
+        properties: [String: NativeArticlePropertyValue] = [:],
+        isPrivate: Bool = false
     ) {
+        self.isPrivate = isPrivate
         self.banner = banner
         self.body = body
         self.category = category
@@ -1177,12 +1193,14 @@ public struct NativeArticleRevisionSnapshot: Codable, Hashable {
             tags: article.tags,
             title: article.title,
             articleUpdatedAt: article.updatedAt,
-            properties: article.properties
+            properties: article.properties,
+            isPrivate: article.isPrivate
         )
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
         banner = try container.decodeIfPresent(NativeBanner.self, forKey: .banner)
         body = try container.decodeIfPresent(String.self, forKey: .body) ?? ""
         category = try container.decodeIfPresent(String.self, forKey: .category) ?? "Notes"

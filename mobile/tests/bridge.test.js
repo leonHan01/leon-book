@@ -304,3 +304,32 @@ test('downloads require a current attachment reference and reject links, travers
   deleted = true;
   assert.equal((await download('/media/article/封面.png')).status, 404);
 });
+
+test('paired clients opt in to the private snapshot without changing legacy reads', { skip: !process.env.LEONBOOK_TEST_CLI }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'leonbook-private-sync-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const root = join(directory, 'library');
+  const cli = (method, params) => automate(process.env.LEONBOOK_TEST_CLI, root, undefined, method, params);
+  const info = await cli('workspace.info', {});
+  const bridge = makeBridge({
+    databasePath: join(directory, 'journal.sqlite'), workspaceID,
+    workspacePath: info.result.workspace, automation: cli,
+    getGeneration: () => libraryGeneration(root), supportsContentPrivacy: true,
+  });
+  const url = await listen(bridge, t);
+  const talk = async input => (await call(url, bridge.token, input)).json();
+  assert.equal((await talk({ action: 'hello' })).supportsContentPrivacy, true);
+  const id = '62de177a-bd2f-414c-a957-3001992f8f40';
+  const slug = `mobile-${id}`;
+  const write = { action: 'push', id, generation: 'initial', method: 'articles.create',
+    params: { slug, title: 'Private sync', body: 'Local library body.', isPrivate: true } };
+  assert.equal((await talk(write)).error.code, 'invalid_request');
+  assert.equal((await talk({ ...write, includePrivate: true, compact: true })).result.isPrivate, true);
+
+  const read = { action: 'read', method: 'articles.get', params: { slug }, generation: 'initial' };
+  assert.equal((await talk(read)).error.code, 'not_found');
+  assert.equal((await talk({ ...read, includePrivate: true })).result.isPrivate, true);
+  const list = { action: 'read', method: 'articles.list', params: {}, generation: 'initial' };
+  assert.deepEqual((await talk(list)).result.items, []);
+  assert.equal((await talk({ ...list, includePrivate: true })).result.items[0].slug, slug);
+});

@@ -4,6 +4,7 @@ import AppKit
 struct ContentView: View {
     @ObservedObject var store: ChatStore
     let archiveLibrary: LeonBlogExporter.Destination?
+    @AppStorage(ChatTypography.bodySizeKey, store: ChatPreferences.defaults) private var bodySize = ChatTypography.defaultBodySize
     @Environment(\.controlActiveState) private var activeState
     @State private var archiveSheet: ArchiveSheet?
     @State private var showSettings = false
@@ -106,35 +107,12 @@ struct ContentView: View {
                     Button { showContext = true } label: { Label("上下文", systemImage: "brain") }
                         .disabled(!store.hasConnection || store.openingDirectConversation).help("查看对话摘要与上下文设置")
                     Button { store.reconnect() } label: { Image(systemName: "arrow.clockwise") }.help("立即同步")
-                    Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }.help("连接设置")
+                    Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }.help("聊天设置")
                 }.buttonStyle(.borderless).padding(.horizontal, 26).padding(.vertical, 24)
                 Divider()
                 timeline
                 Divider()
-                VStack(alignment: .leading, spacing: 10) {
-                    if store.selectedConversation?.kind != "direct" {
-                        HStack {
-                            Menu("@ Agent") {
-                                ForEach(store.availableAgents) { agent in Button("\(agent.name)  @\(agent.handle)") { store.mention(agent) } }
-                            }.disabled(store.availableAgents.isEmpty)
-                            Text("只有被 @ 的 Agent 会回复").font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                        }
-                    } else { Text("私聊 · Agent 将直接回复").font(.caption).foregroundStyle(.secondary) }
-                    if let quote=store.quotedMessage {QuoteCard(store:store,quote:quote,room:store.selectedConversationId,title:store.title,cancel:store.cancelQuote)}
-                    DocumentDraftsView(store:store)
-                    MentionComposer(store: store, onSend: send, onCommand: runCommand)
-                    HStack {
-                        DocumentPickerButton(store:store)
-                        Text("/ 命令 · ↵ 发送 · Shift+↵ 换行 · 最多 8,000 字符").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        if store.draft.utf16.count > 8000 { Text("已超出字数限制").font(.caption).foregroundStyle(.red) }
-                        Button(action: send) {
-                            Label("发送", systemImage: "arrow.up").padding(.horizontal, 10)
-                        }.buttonStyle(.borderedProminent).tint(accent).keyboardShortcut(.return, modifiers: .command)
-                            .disabled(!store.canSend)
-                    }
-                }.padding(20)
+                ChatComposer(store: store, draft: store.composerDraft, accent: accent, onSend: send, onCommand: runCommand)
             }.background(Color(nsColor: .windowBackgroundColor))
             }
         }
@@ -156,6 +134,7 @@ struct ContentView: View {
         .alert("暂未完成", isPresented: Binding(get: { activeState == .key && store.error != nil && !showSettings && !showNewGroup && !showContext && !showUsage && archiveSheet == nil && !showClearHistory && conversationToDelete == nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了") { store.error = nil }
         } message: { Text(store.error ?? "") }
+        .environment(\.chatBodyFontSize, ChatTypography.fontSize(bodySize))
         .focusedSceneValue(\.leonChatActions, LeonChatActions(openSettings: { showSettings = true }, sync: store.reconnect))
         .onChange(of: store.needsConnectionSetup) { _ in offerConnectionSetup() }
         .onChange(of: activeState) { _ in offerConnectionSetup() }
@@ -223,7 +202,7 @@ struct ContentView: View {
                             Text("选择 Agent 开始私聊，\n或在群聊中 @指定 Agent。").font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }.frame(maxWidth: .infinity).padding(.vertical, 100)
                     }
-                    ForEach(TimelineItem.ordered(messages: store.messages, operations: store.contextOperations, jobs: store.visibleJobs)) { item in
+                    ForEach(store.timelineItems) { item in
                         switch item {
                         case .message(let message):
                         bubble(text: message.text, sender: message.sender, detail: (message.role == "assistant" ? "Agent · " : "") + message.date.formatted(date: .abbreviated, time: .shortened), mine: message.deviceId == store.deviceId, agentId: message.agentId, imageIds: (message.images ?? []).map(\.id), message:message)
@@ -286,9 +265,9 @@ struct ContentView: View {
             .onPreferenceChange(TimelineLayoutKey.self) {layout in
                 guard viewport.room==store.selectedConversationId else {return};viewport.geometryChanged(layout,loaded:!store.loadingMessages)
             }
-            .onChange(of:store.messages.map(\.id)) {_ in
+            .onChange(of: store.messageIDs) { ids in
                 if viewport.room != store.selectedConversationId {enterTimeline(proxy)}
-                viewport.receivedRows(room:store.selectedConversationId,rows:store.messages.map(\.id),pending:store.currentPending.map(\.id),loaded:!store.loadingMessages)
+                viewport.receivedRows(room:store.selectedConversationId,rows:ids,pending:store.currentPending.map(\.id),loaded:!store.loadingMessages)
             }
             .onChange(of:store.currentPending.map(\.id)) {viewport.pendingChanged($0)}
             .onChange(of:store.loadingMessages) {viewport.loadedChanged(!$0)}
@@ -296,7 +275,7 @@ struct ContentView: View {
     }
     private func enterTimeline(_ proxy:ScrollViewProxy){
         let room=store.selectedConversationId,connection=store.searchConnectionID
-        viewport.enter(room:room,position:store.scrollPositions[room],rows:store.messages.map(\.id),pending:store.currentPending.map(\.id),loaded:!store.loadingMessages,proxy:proxy,anchor:{AnyHashable($0)}) {[weak store=store] position in
+        viewport.enter(room:room,position:store.scrollPositions[room],rows:store.messageIDs,pending:store.currentPending.map(\.id),loaded:!store.loadingMessages,proxy:proxy,anchor:{AnyHashable($0)}) {[weak store=store] position in
             guard let store,store.selectedConversationId==room,store.searchConnectionID==connection else {return};store.scrollPositions[room]=position
         }
     }
@@ -338,6 +317,49 @@ struct ContentView: View {
     }
 }
 
+private struct ChatComposer: View {
+    @ObservedObject var store: ChatStore
+    @ObservedObject var draft: ChatDraft
+    let accent: Color
+    let onSend: () -> Void
+    let onCommand: (ChatCommand) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if store.selectedConversation?.kind != "direct" {
+                HStack {
+                    Menu("@ Agent") {
+                        ForEach(store.availableAgents) { agent in
+                            Button("\(agent.name)  @\(agent.handle)") { store.mention(agent) }
+                        }
+                    }.disabled(store.availableAgents.isEmpty)
+                    Text("只有被 @ 的 Agent 会回复").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+            } else {
+                Text("私聊 · Agent 将直接回复").font(.caption).foregroundStyle(.secondary)
+            }
+            if let quote = store.quotedMessage {
+                QuoteCard(store: store, quote: quote, room: store.selectedConversationId, title: store.title, cancel: store.cancelQuote)
+            }
+            DocumentDraftsView(store: store)
+            MentionComposer(store: store, text: $draft.text, onSend: onSend, onCommand: onCommand)
+            HStack {
+                DocumentPickerButton(store: store)
+                Text("/ 命令 · ↵ 发送 · Shift+↵ 换行 · 最多 8,000 字符").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if draft.text.utf16.count > 8000 {
+                    Text("已超出字数限制").font(.caption).foregroundStyle(.red)
+                }
+                Button(action: onSend) {
+                    Label("发送", systemImage: "arrow.up").padding(.horizontal, 10)
+                }.buttonStyle(.borderedProminent).tint(accent).keyboardShortcut(.return, modifiers: .command)
+                    .disabled(!store.canSend)
+            }
+        }.padding(20)
+    }
+}
+
 @MainActor
 final class ConnectionDraft: ObservableObject {
     @Published var address = ""
@@ -346,8 +368,9 @@ final class ConnectionDraft: ObservableObject {
 }
 
 struct ConnectionView: View {
-    private enum Section: Hashable { case connection, notifications }
+    private enum Section: Hashable { case connection, display, notifications }
     @ObservedObject var store: ChatStore
+    @AppStorage(ChatTypography.bodySizeKey, store: ChatPreferences.defaults) private var bodySize = ChatTypography.defaultBodySize
     @Environment(\.dismiss) private var dismiss
     @StateObject private var draft = ConnectionDraft()
     @State private var section = Section.connection
@@ -357,16 +380,17 @@ struct ConnectionView: View {
             Text("设置").font(.title2.bold())
             Picker("设置分类", selection: $section) {
                 Text("连接").tag(Section.connection)
+                Text("显示").tag(Section.display)
                 Text("通知").tag(Section.notifications)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .disabled(store.configuring)
             Group {
-                if section == .connection {
-                    connectionSettings
-                } else {
-                    NotificationSettingsView()
+                switch section {
+                case .connection: connectionSettings
+                case .display: displaySettings
+                case .notifications: NotificationSettingsView()
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
@@ -397,6 +421,26 @@ struct ConnectionView: View {
             if draft.token.isEmpty { draft.token = token }
         }
         .interactiveDismissDisabled(store.configuring)
+    }
+
+    private var displaySettings: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Stepper(value: Binding(
+                get: { Int(ChatTypography.fontSize(bodySize)) },
+                set: { bodySize = $0 }
+            ), in: ChatTypography.bodySizeRange) {
+                LabeledContent("消息正文字号") {
+                    Text("\(Int(ChatTypography.fontSize(bodySize))) pt").monospacedDigit()
+                }
+            }
+            Text("聊天消息预览")
+                .font(.system(size: ChatTypography.fontSize(bodySize)))
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
+            Button("恢复默认字号") { bodySize = ChatTypography.defaultBodySize }
+                .disabled(bodySize == ChatTypography.defaultBodySize)
+        }
     }
 
     private var connectionSettings: some View {

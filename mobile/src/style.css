@@ -475,3 +475,9 @@ body:has(.photo-gallery[open]) { overflow: hidden; }
   .sheet { width: 100%; max-width: 100%; margin: auto 0 0; border-radius: 18px 18px 0 0; }
   .versions { grid-template-columns: 1fr; }
 }
+
+.header-actions { display: flex; gap: .35rem; align-items: center; }
+.header-actions button { white-space: nowrap; }
+.header-actions [aria-pressed="true"] { font-weight: 700; }
+.privacy-field { display: flex; gap: .5rem; align-items: center; }
+.privacy-field input { width: auto; }

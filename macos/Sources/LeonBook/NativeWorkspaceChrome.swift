@@ -52,6 +52,16 @@ struct NativeWorkspaceRail: View {
 
             Spacer(minLength: 24)
 
+            Button(action: model.togglePrivacyMode) {
+                NativeIcon.image(model.privacyModeEnabled ? "lock.open.fill" : "lock.fill", size: NativeIcon.Size.toolbar)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(NativeChromeIconButtonStyle(isSelected: model.privacyModeEnabled))
+            .help(Text(LocalizedStringKey(model.privacyModeEnabled ? "关闭隐私模式" : "开启隐私模式")))
+            .accessibilityLabel(Text(LocalizedStringKey(model.privacyModeEnabled ? "关闭隐私模式" : "开启隐私模式")))
+            .disabled(model.isLoading || model.isSwitchingWorkspace || model.isSaving || model.isPublishingMoment
+                      || model.isPublishingQuestion || model.isPublishingQuestionAnswer)
+
             destination(.trash, title: "回收站", icon: "trash")
             destination(.settings, title: "设置", icon: "gearshape")
         }

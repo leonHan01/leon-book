@@ -175,13 +175,14 @@ extension NativeAppModel {
     }
 
     func beginEditingMoment(_ moment: NativeMoment) {
+        guard privacyModeEnabled || !moment.isPrivate else { return }
         guard !isPublishingMoment else { return }
         if isMomentDraftDirty {
             guard confirmDiscardMomentDraft() else { return }
             discardUnreferencedMedia(momentDraft.images)
         }
         editingMomentID = moment.id
-        momentDraft = editableMomentDraft(from: moment)
+        momentDraft = concealedMomentDrafts.removeValue(forKey: moment.id) ?? editableMomentDraft(from: moment)
         errorMessage = nil
     }
 
@@ -342,7 +343,7 @@ extension NativeAppModel {
         let content = moment.displayContent
         let tagsText = moment.tags.map { "#\($0)" }.joined(separator: " ")
         guard !tagsText.isEmpty else {
-            return NativeMomentDraft(text: content.text, textRuns: content.runs, images: moment.images)
+            return NativeMomentDraft(text: content.text, textRuns: content.runs, images: moment.images, isPrivate: moment.isPrivate)
         }
 
         let separator = content.text.isEmpty ? "" : " "
@@ -351,7 +352,8 @@ extension NativeAppModel {
             textRuns: content.runs + [
                 NativeMomentTextRun(text: separator + tagsText, bold: false, color: nil),
             ],
-            images: moment.images
+            images: moment.images,
+            isPrivate: moment.isPrivate
         )
     }
 

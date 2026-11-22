@@ -16,10 +16,10 @@ const reads = new Set([
   'articles.list', 'articles.get', 'articles.folders', 'moments.list', 'moments.get', 'todos.list', 'todos.get',
 ]);
 const writes = new Map(Object.entries({
-  'articles.create': ['slug', 'title', 'body', 'format', 'destinationFolder'],
-  'articles.update': ['slug', 'expectedUpdatedAt', 'title', 'body', 'format'],
-  'moments.create': ['text'],
-  'moments.update': ['id', 'expectedUpdatedAt', 'text'],
+  'articles.create': ['slug', 'title', 'body', 'format', 'destinationFolder', 'isPrivate'],
+  'articles.update': ['slug', 'expectedUpdatedAt', 'title', 'body', 'format', 'isPrivate'],
+  'moments.create': ['text', 'isPrivate'],
+  'moments.update': ['id', 'expectedUpdatedAt', 'text', 'isPrivate'],
   'todos.create': ['title', 'notes', 'priority', 'dueDay'],
   'todos.update': ['id', 'expectedRevision', 'title', 'notes', 'priority', 'dueDay'],
   'todos.complete': ['id', 'expectedRevision', 'completed'],
@@ -86,7 +86,7 @@ function cleanResponse(response) {
 }
 
 export function makeBridge({ databasePath, workspaceID, workspacePath, automation, getGeneration = async () => null,
-  tls, allowLegacyToken = true, now = Date.now }) {
+  tls, allowLegacyToken = true, supportsContentPrivacy = false, now = Date.now }) {
   const token = allowLegacyToken ? randomBytes(32).toString('base64url') : null;
   const journal = new DatabaseSync(databasePath);
   journal.exec(`
@@ -110,12 +110,14 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
   let busy = false;
   const inFlight = new Set();
 
-  async function push({ id, method, params, generation: expected, compact }, files = []) {
+  async function push({ id, method, params, generation: expected, compact, includePrivate }, files = []) {
     if (typeof id !== 'string' || !operationID.test(id) ||
         !object(params) || !writes.has(method) || Object.keys(params).some(key => !writes.get(method).includes(key))) {
       return invalid();
     }
     if (method === 'articles.create' && params.slug !== `mobile-${id}`) return invalid();
+    const privateSync = supportsContentPrivacy && includePrivate === true;
+    if (Object.hasOwn(params, 'isPrivate') && (typeof params.isPrivate !== 'boolean' || !privateSync)) return invalid();
     const { destinationFolder, ...automationParams } = params;
     if (Object.hasOwn(params, 'destinationFolder')) {
       if (!validArticleDestination(destinationFolder)) return invalid('请选择有效的文章目录。');
@@ -142,7 +144,11 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
       if (record.generation !== generation) return restored;
       // After a bridge crash, the content write may have committed. An unfinished
       // claim survives the restart and prevents a blind replay of that write.
-      return record.response ? JSON.parse(record.response) : unknown;
+      const previous = record.response ? JSON.parse(record.response) : unknown;
+      if (!privateSync && previous.result?.isPrivate === true) {
+        return { error: { code: 'not_found', message: messages.not_found } };
+      }
+      return previous;
     }
     let result;
     try {
@@ -150,7 +156,7 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
       const attachments = staged.length ? { files: staged, ...(inlineIDs.size ? { inlineImages: true } : {}) } : {};
       const wantsReceipt = generation !== null && compact === true && method.startsWith('articles.');
       const response = generation !== null
-        ? await automation('mobile.mutate', { method, params: automationParams, generation, compact: wantsReceipt, ...attachments })
+        ? await automation('mobile.mutate', { method, params: automationParams, generation, compact: wantsReceipt, ...(privateSync ? { includePrivate: true } : {}), ...attachments })
         : staged.length ? await automation('mobile.saveWithAttachments', { method, params: automationParams, ...attachments })
           : await automation(method, automationParams);
       if (response.error?.code === 'busy') {
@@ -235,10 +241,14 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
     const input = await readBody(req);
     if (!object(input) || input.workspaceID !== workspaceID) { send(400, invalid('请检查配对工作区。')); return; }
     const { action, method, params, generation } = input;
+    const read = (method, params) => supportsContentPrivacy && input.includePrivate === true &&
+      /^(articles|moments)\.(list|get)$/.test(method)
+      ? automation('mobile.read', { method, params })
+      : automation(method, params);
     if (action === 'hello') {
       send(200, {
         workspaceID, generation: (await getGeneration()) ?? undefined, supportsArticleFolders: true, supportsArticleDestination: true,
-        supportsInlineArticleImages: true,
+        supportsInlineArticleImages: true, ...(supportsContentPrivacy ? { supportsContentPrivacy: true } : {}),
       });
       return;
     }
@@ -247,13 +257,13 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
     let attachment;
     try {
       if (action === 'attachment') {
-        attachment = await openAttachment(workspacePath, automation, input);
+        attachment = await openAttachment(workspacePath, read, input);
       } else if (action === 'push') {
         const response = await push(input);
         send(response ? 200 : 503, response ?? { error: { code: 'busy' } });
       } else if (action === 'read' && reads.has(method) && object(params)) {
         if (generation !== undefined && generation !== await getGeneration()) { send(200, restored); return; }
-        const response = await automation(method, params);
+        const response = await read(method, params);
         if (generation !== undefined && generation !== await getGeneration()) { send(200, restored); return; }
         send(response.error?.code === 'busy' ? 503 : 200, cleanResponse(response));
       } else {

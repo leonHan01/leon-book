@@ -226,6 +226,7 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
     public let id: String
     public let images: [NativeMedia]
     public let isFavorite: Bool
+    public let isPrivate: Bool
     public let tags: [String]
     public let text: String
     public let textRuns: [NativeMomentTextRun]
@@ -240,8 +241,10 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         tags: [String] = [],
         text: String,
         textRuns: [NativeMomentTextRun],
-        updatedAt: String
+        updatedAt: String,
+        isPrivate: Bool = false
     ) {
+        self.isPrivate = isPrivate
         self.commentCount = commentCount
         self.createdAt = createdAt
         self.id = id
@@ -259,6 +262,7 @@ public struct NativeMoment: Codable, Hashable, Identifiable {
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString.lowercased()
         images = try container.decodeIfPresent([NativeMedia].self, forKey: .images) ?? []
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
         isFavorite = try container.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
         text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? NativeMomentTag.extract(from: text)

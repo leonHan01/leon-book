@@ -11,6 +11,7 @@ public actor LocalBlogStore {
     static let reservedMediaDirectories: Set<String> = ["inbox", "moments", "question-answers", "whiteboards", "canvases", "photo-library", "media-library", "dashboard"]
 
     let rootURL: URL
+    let contentPrivacy: NativeContentPrivacy?
     private var database: SQLiteDatabase?
     private var isPrepared = false
     private var jsonBackupVerified = false
@@ -49,6 +50,11 @@ public actor LocalBlogStore {
     // MARK: - Lifecycle
 
     public init(rootURL: URL = LocalBlogStore.defaultRootURL) {
+        self.init(rootURL: rootURL, contentPrivacy: nil)
+    }
+
+    init(rootURL: URL, contentPrivacy: NativeContentPrivacy?) {
+        self.contentPrivacy = contentPrivacy
         let standardizedRoot = rootURL.standardizedFileURL
         self.rootURL = standardizedRoot
         markdownWorkspaceSource = Self.loadMarkdownWorkspaceSource(from: standardizedRoot)
@@ -202,7 +208,8 @@ public actor LocalBlogStore {
                     properties: properties,
                     sourceRelativePath: article.sourceRelativePath,
                     sourceContentHash: article.sourceContentHash,
-                    sourceImportedAt: article.sourceImportedAt
+                    sourceImportedAt: article.sourceImportedAt,
+                    isPrivate: article.isPrivate
                 )
             let record = try MarkdownArticleSource.write(
                 changed,
@@ -281,7 +288,17 @@ public actor LocalBlogStore {
             }
             bookmarks.append(try decode(json))
         }
-        return bookmarks
+        guard !showsPrivateContent else { return bookmarks }
+        var hiddenSlugs = Set<String>()
+        try db().query("SELECT slug FROM articles WHERE is_private = 1") { row in
+            if let slug = row.text(at: 0) { hiddenSlugs.insert(slug) }
+        }
+        return bookmarks.filter { bookmark in
+            switch bookmark.target {
+            case .article(let slug), .heading(let slug, _, _): return !hiddenSlugs.contains(slug)
+            case .search, .graph: return true
+            }
+        }
     }
 
     @discardableResult
@@ -343,7 +360,9 @@ public actor LocalBlogStore {
     public func getArticle(slug: String) throws -> NativeArticle {
         try prepare()
         let safeSlug = try requireSafeSegment(slug, label: "文章 slug")
-        guard let article = try storedArticle(withSlug: safeSlug) else { throw NativeStoreError.notFound }
+        guard let article = try storedArticle(withSlug: safeSlug), permitsContent(isPrivate: article.isPrivate) else {
+            throw NativeStoreError.notFound
+        }
         return article
     }
 
@@ -387,7 +406,8 @@ public actor LocalBlogStore {
             publishedAt: nil,
             wordCount: wordCount(extraction.extractedBody),
             properties: [:],
-            sourceRelativePath: MarkdownArticleSource.defaultRelativePath(for: targetSlug)
+            sourceRelativePath: MarkdownArticleSource.defaultRelativePath(for: targetSlug),
+            isPrivate: source.isPrivate
         )
         let saved = try persistArticleRefactor([
             (previous: source, updated: sourceUpdated),
@@ -456,7 +476,8 @@ public actor LocalBlogStore {
                 publishedAt: nil,
                 wordCount: wordCount(section.body),
                 properties: [:],
-                sourceRelativePath: MarkdownArticleSource.defaultRelativePath(for: target.slug)
+                sourceRelativePath: MarkdownArticleSource.defaultRelativePath(for: target.slug),
+                isPrivate: source.isPrivate
             )))
         }
 
@@ -508,7 +529,8 @@ public actor LocalBlogStore {
                 article,
                 body: retargeted,
                 updatedAt: nextTimestamp(after: article.updatedAt),
-                media: media
+                media: media,
+                isPrivate: article.isPrivate || (article.slug == destination.slug && source.isPrivate)
             )))
         }
         let saved = try persistArticleRefactor(changes, removing: source)
@@ -551,7 +573,8 @@ public actor LocalBlogStore {
         _ article: NativeArticle,
         body: String,
         updatedAt: String,
-        media: [NativeMedia]? = nil
+        media: [NativeMedia]? = nil,
+        isPrivate: Bool? = nil
     ) -> NativeArticle {
         NativeArticle(
             banner: article.banner,
@@ -570,7 +593,8 @@ public actor LocalBlogStore {
             properties: article.properties,
             sourceRelativePath: article.sourceRelativePath,
             sourceContentHash: article.sourceContentHash,
-            sourceImportedAt: article.sourceImportedAt
+            sourceImportedAt: article.sourceImportedAt,
+            isPrivate: isPrivate ?? article.isPrivate
         )
     }
 
@@ -959,6 +983,7 @@ public actor LocalBlogStore {
             throw NativeStoreError.reservedSlug
         }
         let previous = try storedArticle(withSlug: slug)
+        if let previous, !permitsContent(isPrivate: previous.isPrivate) { throw NativeStoreError.notFound }
 
         if let expected = article.expectedUpdatedAt {
             guard previous?.updatedAt == expected else { throw NativeStoreError.conflict }
@@ -1030,7 +1055,8 @@ public actor LocalBlogStore {
             properties: properties,
             sourceRelativePath: sourceRelativePath,
             sourceContentHash: previous?.sourceContentHash,
-            sourceImportedAt: previous?.sourceImportedAt
+            sourceImportedAt: previous?.sourceImportedAt,
+            isPrivate: article.isPrivate ?? previous?.isPrivate ?? false
         )
         var sourcedSaved = saved
         var writtenHash: String?
@@ -1076,6 +1102,9 @@ public actor LocalBlogStore {
                         createdAt: updatedAt,
                         updatedAt: updatedAt
                     )
+                }
+                if article.isPrivate != nil {
+                    try db().execute("UPDATE articles SET privacy_override = NULL WHERE slug = ?", values: [.text(slug)])
                 }
                 try insertArticle(sourcedSaved, into: db())
                 if let activityType {
@@ -1149,7 +1178,8 @@ public actor LocalBlogStore {
                     properties: previous.properties,
                     sourceRelativePath: previous.sourceRelativePath,
                     sourceContentHash: previous.sourceContentHash,
-                    sourceImportedAt: previous.sourceImportedAt
+                    sourceImportedAt: previous.sourceImportedAt,
+                    isPrivate: previous.isPrivate
                 )
             ))
         }
@@ -1669,7 +1699,7 @@ public actor LocalBlogStore {
     func allArticleSummaries() throws -> [NativeArticleSummary] {
         var articles: [NativeArticleSummary] = []
         try db().query(
-            "\(articleSummarySelect) WHERE deleted_at IS NULL ORDER BY updated_at DESC"
+            "\(articleSummarySelect) WHERE deleted_at IS NULL AND \(contentVisibility()) ORDER BY updated_at DESC"
         ) { row in
             articles.append(try decodeArticleSummary(row))
         }
@@ -1826,8 +1856,8 @@ public actor LocalBlogStore {
         INSERT INTO articles(
             slug, title, body, category, excerpt, banner_json, media_json, status,
             tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at,
-            properties_json, source_relative_path, source_content_hash, source_imported_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            properties_json, source_relative_path, source_content_hash, source_imported_at, is_private
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(slug) DO UPDATE SET
             title = excluded.title,
             body = excluded.body,
@@ -1846,7 +1876,8 @@ public actor LocalBlogStore {
             properties_json = excluded.properties_json,
             source_relative_path = excluded.source_relative_path,
             source_content_hash = excluded.source_content_hash,
-            source_imported_at = excluded.source_imported_at
+            source_imported_at = excluded.source_imported_at,
+            is_private = COALESCE(articles.privacy_override, excluded.is_private)
         """, values: [
             .text(article.slug),
             .text(article.title),
@@ -1870,6 +1901,7 @@ public actor LocalBlogStore {
             .text(article.sourceRelativePath),
             article.sourceContentHash.map(SQLiteValue.text) ?? .null,
             article.sourceImportedAt.map(SQLiteValue.text) ?? .null,
+            .integer(article.isPrivate ? 1 : 0),
         ])
 
         let isActive = deletedAt == nil
@@ -1972,7 +2004,8 @@ public actor LocalBlogStore {
             properties: try decode(row.text(at: 15) ?? "{}"),
             sourceRelativePath: row.text(at: 16) ?? "\(slug).md",
             sourceContentHash: row.text(at: 17),
-            sourceImportedAt: row.text(at: 18)
+            sourceImportedAt: row.text(at: 18),
+            isPrivate: row.integer(at: 19) == 1
         )
     }
 
@@ -2002,7 +2035,8 @@ public actor LocalBlogStore {
             tags: try decode(tagsJSON),
             title: title,
             updatedAt: updatedAt,
-            wordCount: row.integer(at: 9) ?? 0
+            wordCount: row.integer(at: 9) ?? 0,
+            isPrivate: row.integer(at: 13) == 1
         )
     }
 
@@ -2150,7 +2184,8 @@ public actor LocalBlogStore {
             properties: article.properties,
             sourceRelativePath: article.sourceRelativePath,
             sourceContentHash: article.sourceContentHash,
-            sourceImportedAt: article.sourceImportedAt
+            sourceImportedAt: article.sourceImportedAt,
+            isPrivate: article.isPrivate
         )
     }
 

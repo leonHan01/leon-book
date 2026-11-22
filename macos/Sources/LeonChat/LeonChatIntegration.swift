@@ -5,11 +5,12 @@ import UserNotifications
 /// One connection and outbox across LeonBook windows and navigation changes.
 @MainActor
 final class LeonChatSession {
-    static let shared = LeonChatSession()
-    let store = ChatStore()
+    static let shared = LeonChatSession(store: ChatStore(), notifications: .shared)
+    let store: ChatStore
+    private let notifications: ChatNotifications?
     private(set) var started = false
     private var routing = false
-    private var appActive: Bool?
+    private var chatPollingActive: Bool?
     private var lastKeyHostID: UUID?
 
     struct Host {
@@ -20,12 +21,15 @@ final class LeonChatSession {
     }
     private var hosts: [UUID: Host] = [:]
 
-    private init() {}
+    init(store: ChatStore, notifications: ChatNotifications? = nil) {
+        self.store = store
+        self.notifications = notifications
+    }
 
     func startIfNeeded(forVisibleChat visible: Bool = false) {
-        let notifications = ChatNotifications.shared
-        guard !started, visible || notifications.enabled || notifications.route != nil else { return }
+        guard !started, visible || notifications?.enabled == true || notifications?.route != nil else { return }
         started = true
+        updatePolling()
         Task {
             await store.start()
             bind()
@@ -51,21 +55,26 @@ final class LeonChatSession {
             ?? hosts.values.first { $0.foreground }
     }
 
+    private func updatePolling() {
+        let chatVisible = hosts.values.contains { $0.foreground && $0.visible }
+        if chatPollingActive != chatVisible {
+            chatPollingActive = chatVisible
+            store.setActive(chatVisible)
+        }
+    }
+
     private func bind() {
         guard started else { return }
+        updatePolling()
         let foreground = hosts.values.contains { $0.foreground }
-        if appActive != foreground {
-            appActive = foreground
-            store.setActive(foreground)
-        }
         let front = frontHost
-        ChatNotifications.shared.bind(api: store.notificationAPI, device: store.notificationDevice,
+        notifications?.bind(api: store.notificationAPI, device: store.notificationDevice,
             room: front?.visible == true ? store.selectedConversationId : nil, foreground: foreground)
         openPendingNotification()
     }
 
     func openPendingNotification() {
-        let notifications = ChatNotifications.shared
+        guard let notifications else { return }
         if notifications.route != nil { startIfNeeded() }
         guard !routing, let route = notifications.route, frontHost != nil,
               let api = store.notificationAPI else { return }

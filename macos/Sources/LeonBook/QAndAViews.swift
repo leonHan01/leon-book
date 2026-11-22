@@ -463,10 +463,26 @@ private struct QuestionDetailView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Spacer()
+                Button {
+                    Task { await model.changeQuestionPrivacy(question) }
+                } label: {
+                    Label(
+                        LocalizedStringKey(question.isPrivate ? "取消私密" : "设为私密"),
+                        nativeIcon: question.isPrivate ? "lock.open" : "lock"
+                    )
+                }
+                .buttonStyle(.borderless)
+                .disabled(model.isBackingUp || model.isPublishingQuestionAnswer)
+
                 Button { showsAIChat.toggle() } label: {
                     Label("AI 阅读助手", nativeIcon: "sparkles", iconSize: 13)
                 }
                 .buttonStyle(.borderless)
+            }
+            if question.isPrivate {
+                Label("私密", nativeIcon: "lock.fill", iconSize: 12)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Text(question.title)
                 .font(.system(size: 26, weight: .bold))
@@ -719,6 +735,7 @@ private struct QuestionComposerSheet: View {
     @State private var title = ""
     @State private var bodyText = ""
     @State private var tagsText = ""
+    @State private var isPrivate = false
 
     private var parsedTags: [String] { NativeQuestionTag.parse(tagsText) }
 
@@ -772,12 +789,13 @@ private struct QuestionComposerSheet: View {
             }
 
             HStack {
+                Toggle("私密", isOn: $isPrivate).toggleStyle(.checkbox)
                 Spacer()
                 Button("取消") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button {
                     Task {
-                        if await model.publishQuestion(title: title, body: bodyText, tagsText: tagsText) {
+                        if await model.publishQuestion(title: title, body: bodyText, tagsText: tagsText, isPrivate: isPrivate) {
                             dismiss()
                         }
                     }

@@ -22,7 +22,7 @@ function reset(parts, source = parts.join('')) {
 }
 function publish(parts) {
   const expected = parts.join('');
-  bridge.publish(expected, parts);
+  bridge.publish(parts);
   assert.equal(native, expected, 'native body must be current before publish returns');
 }
 const original = [opening, ...Array.from({ length: 2000 }, (_, index) => `<p data-block-id="${index}">${'正文😀'.repeat(20)}</p>`), closing];
@@ -41,6 +41,6 @@ parts = [opening, '<p>粘贴</p>', ...parts.slice(1)]; publish(parts);
 publish(original); // undo / complete replacement
 reset(original, opening + '<p>未规范化</p>' + closing); publish(original);
 assert(messages[0].body, 'first normalized body must establish a complete baseline');
-bridge.publish(native, original, true);
+bridge.publish(original, true);
 assert(messages.at(-1).body, 'resynchronization must provide a complete snapshot');
 console.log(`PASS article body bridge: 100 immediate edits, ${characters} changed characters instead of full documents; Unicode, undo, replacement and resync verified`);

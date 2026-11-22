@@ -2,7 +2,7 @@ import Foundation
 
 extension LocalBlogStore {
     var articleSelect: String {
-        "SELECT slug, title, body, category, excerpt, banner_json, media_json, status, tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at, properties_json, source_relative_path, source_content_hash, source_imported_at FROM articles"
+        "SELECT slug, title, body, category, excerpt, banner_json, media_json, status, tags_json, updated_at, published_at, word_count, page_views, deleted_at, delete_expires_at, properties_json, source_relative_path, source_content_hash, source_imported_at, is_private FROM articles"
     }
 
     func qualifiedArticleSelect(_ alias: String) -> String {
@@ -10,19 +10,19 @@ extension LocalBlogStore {
             "slug", "title", "body", "category", "excerpt", "banner_json", "media_json", "status",
             "tags_json", "updated_at", "published_at", "word_count", "page_views", "deleted_at",
             "delete_expires_at", "properties_json", "source_relative_path", "source_content_hash",
-            "source_imported_at",
+            "source_imported_at", "is_private",
         ].map { "\(alias).\($0)" }.joined(separator: ", ")
         return "SELECT \(columns) FROM articles AS \(alias)"
     }
 
     var articleSummarySelect: String {
-        "SELECT slug, title, category, excerpt, banner_json, status, tags_json, updated_at, published_at, word_count, page_views, properties_json, source_relative_path FROM articles"
+        "SELECT slug, title, category, excerpt, banner_json, status, tags_json, updated_at, published_at, word_count, page_views, properties_json, source_relative_path, is_private FROM articles"
     }
 
     func qualifiedArticleSummarySelect(_ alias: String) -> String {
         let columns = [
             "slug", "title", "category", "excerpt", "banner_json", "status", "tags_json", "updated_at",
-            "published_at", "word_count", "page_views", "properties_json", "source_relative_path",
+            "published_at", "word_count", "page_views", "properties_json", "source_relative_path", "is_private",
         ].map { "\(alias).\($0)" }.joined(separator: ", ")
         return "SELECT \(columns) FROM articles AS \(alias)"
     }
@@ -31,7 +31,7 @@ extension LocalBlogStore {
         """
         SELECT id, created_at, updated_at, text, text_runs_json, images_json, tags_json,
                is_favorite, deleted_at, delete_expires_at,
-               (SELECT COUNT(*) FROM moment_comments WHERE moment_id = moments.id)
+               (SELECT COUNT(*) FROM moment_comments WHERE moment_id = moments.id), is_private
         FROM moments
         """
     }
@@ -40,7 +40,7 @@ extension LocalBlogStore {
         """
         SELECT q.id, q.title, q.body, q.tags_json, q.created_at, q.updated_at,
                (SELECT COUNT(*) FROM question_answers AS a WHERE a.question_id = q.id) AS answer_count,
-               q.view_count
+               q.view_count, q.is_private
         FROM questions AS q
         """
     }
