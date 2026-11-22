@@ -1,21 +1,45 @@
 import Foundation
 
 struct MobileStagedAttachment: Decodable {
+    let id: String?
     let path: String
     let name: String
     let kind: String
 }
 
 extension LocalBlogStore {
+    private static let mobileImageSource = try! NSRegularExpression(
+        pattern: #" src="/leonbook-inline/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})""#
+    )
+
     func saveMobileAttachments(
         method: String,
         parameters: AutomationParameters,
-        files: [MobileStagedAttachment]
+        files: [MobileStagedAttachment],
+        inlineImages: Bool
     ) async throws -> AutomationValue {
         let isArticle = method.hasPrefix("articles.")
         let existingField = isArticle ? "media" : "images"
         guard (1...9).contains(files.count), parameters.values[existingField] == nil else {
             throw AutomationFailure("invalid_params", "Supply new staged files without replacing existing attachments")
+        }
+        var inlineBody: NSMutableString?
+        var inlineSources: [(range: NSRange, index: Int)] = []
+        if inlineImages {
+            let body: String = try parameters.required("body")
+            guard isArticle, try parameters.required("format", as: String.self) == "html" else {
+                throw AutomationFailure("invalid_params", "Inline images require an HTML article")
+            }
+            let source = body as NSString
+            for match in Self.mobileImageSource.matches(in: body, range: NSRange(location: 0, length: source.length)) {
+                let id = source.substring(with: match.range(at: 1))
+                guard let index = files.firstIndex(where: { $0.kind == "image" && $0.id == id }) else {
+                    throw AutomationFailure("invalid_params", "Inline image is missing its upload")
+                }
+                inlineSources.append((match.range, index))
+            }
+            guard !inlineSources.isEmpty else { throw AutomationFailure("invalid_params", "Inline images are missing") }
+            inlineBody = NSMutableString(string: body)
         }
 
         try prepare()
@@ -74,6 +98,12 @@ extension LocalBlogStore {
             }
             var values = parameters.values
             values[existingField] = try .encoded(existing + added)
+            if let inlineBody {
+                for (range, index) in inlineSources.reversed() {
+                    inlineBody.replaceCharacters(in: range, with: " src=\"\(added[index].url)\"")
+                }
+                values["body"] = .string(inlineBody as String)
+            }
             let save = AutomationParameters(values: values)
             if isArticle {
                 return try .encoded(automationSaveArticle(method: method, parameters: save))

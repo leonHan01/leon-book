@@ -127,8 +127,11 @@ body.readonly #document[data-sticky-audio=true] > figure[data-type=audio]:first-
 #selection-colors .color-swatch:hover, #selection-colors .color-swatch:focus-visible, #selection-colors .color-swatch[aria-checked=true] { outline: 2px solid #8db2e5; outline-offset: 2px; }
 #selection-colors .reset-color { width: 100%; margin-top: 12px; padding: 7px; border: 1px solid #e7ebf1; border-radius: 6px; background: #f7f9fc; color: #6c7b8f; font-size: 11px; outline: none; }
 #selection-colors .reset-color:hover { background: #eaf3ff; color: #477cbd; }
+/* Page scrolling belongs to the enclosing native ScrollView. */
+html.embedded-reader { overflow: hidden; }
 body.readonly #toolbar { display: none; }
-body.readonly #document { padding: 0 0 12px; min-height: 0; }
+/* Keep heading margins inside the height reported to the native reader. */
+body.readonly #document { display: flow-root; padding: 0 0 12px; min-height: 0; }
 body.readonly #document p:only-child:has(>br:only-child)::before { content: none; }
 /* editor-interactions-style */
 /* editor-columns-style */
@@ -1427,6 +1430,7 @@ body.readonly #document p:only-child:has(>br:only-child)::before { content: none
     const changed = documentID !== id || serialize() !== body;
     if (documentID !== id) lastHeight = -1;
     documentID = id; editable = canEdit; embeddedReader = isEmbeddedReader; document.body.classList.toggle('readonly', !editable);
+    document.documentElement.classList.toggle('embedded-reader', embeddedReader && !editable);
     root.contentEditable = String(editable); document.documentElement.style.setProperty('--size', size + 'px');
     if (changed || !editable) { closeTools(); selectingWithPointer = false; resetReaderSelection(); hideSelectionToolbar(); pendingImagePastes.clear(); editorUI.reset(); columnLayout.reset(); whiteboards.reset(); audioBlocks.reset(); }
     if (changed) {

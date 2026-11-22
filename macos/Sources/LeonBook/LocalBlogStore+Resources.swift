@@ -1,6 +1,17 @@
 import Foundation
 
 extension LocalBlogStore {
+    func listWorkspaceArticleFolders() throws -> [String] {
+        try prepare()
+        let folders = try workspaceResourceRecords(
+            at: articlesURL,
+            storage: .markdownSource,
+            includesFiles: false,
+            placementFolder: { _ in "" }
+        )
+        return Set(folders.map { NativeArticleDirectoryPolicy.displayFolderPath($0.relativePath) }).sorted()
+    }
+
     func listWorkspaceResources() throws -> [NativeWorkspaceResourceNode] {
         try prepare()
         let articles = try allArticleSummaries()
@@ -146,6 +157,7 @@ extension LocalBlogStore {
         at rootURL: URL,
         storage: NativeWorkspaceResourceStorage,
         includesDirectories: Bool = true,
+        includesFiles: Bool = true,
         placementFolder: (String) -> String,
         ownerArticleSlug: (String) -> String? = { _ in nil },
         displayName: (String) -> String? = { _ in nil }
@@ -184,7 +196,7 @@ extension LocalBlogStore {
                         absolutePath: resolved.path
                     ))
                 }
-            } else {
+            } else if includesFiles {
                 records.append(NativeWorkspaceResourceRecord(
                     kind: .file,
                     storage: storage,

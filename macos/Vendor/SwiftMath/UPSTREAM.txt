@@ -1,0 +1,9 @@
+SwiftMath 1.7.3 (MIT)
+https://github.com/mgriebling/SwiftMath
+Revision: fa8244ed032f4a1ade4cb0571bf87d2f1a9fd2d7
+
+Sources and mathFonts.bundle are included for reproducible offline builds.
+Local changes: remove the upstream test target (tests are not vendored); route
+font resource lookup through MathResources so signed macOS apps load fonts from
+Contents/Resources/SwiftMath_SwiftMath.bundle, with the SwiftPM bundle as fallback.
+Upstream source license is in LICENSE; font licenses remain in mathFonts.bundle.

@@ -1,4 +1,5 @@
 import AppKit
+import LeonChat
 import SwiftUI
 
 public struct ContentView: View {
@@ -7,6 +8,7 @@ public struct ContentView: View {
     private var appPalette: NativeAppPalette { appearancePreferences.palette(system: systemColorScheme) }
 
     @ObservedObject var model: NativeAppModel
+    @ObservedObject private var chatNavigation: NativeNavigationState
     @StateObject private var workspaceLayout: NativeWorkspaceLayoutState
     @StateObject private var readingPreferences: NativeReadingPreferences
     @StateObject private var pageStateCache: NativeNavigationPageStateCache
@@ -14,6 +16,7 @@ public struct ContentView: View {
 
     public init(model: NativeAppModel) {
         self.model = model
+        self.chatNavigation = model.navigation
         _workspaceLayout = StateObject(wrappedValue: NativeWorkspaceLayoutState())
         _readingPreferences = StateObject(wrappedValue: NativeReadingPreferences())
         _pageStateCache = StateObject(wrappedValue: NativeNavigationPageStateCache())
@@ -94,6 +97,12 @@ public struct ContentView: View {
             persistPortableUIState(for: model.currentUser.id)
         }
         .onOpenURL(perform: model.handleAutomationURL)
+        .leonChatHost(
+            isVisible: chatNavigation.section == .chat,
+            archiveRoot: model.storageReady ? model.dataRootDirectoryPath : nil,
+            archiveUser: model.storageReady ? model.currentUser.id : nil,
+            openChat: { model.section = .chat }
+        )
         .nativeAppTheme()
     }
 
@@ -374,6 +383,7 @@ private struct NativeNavigationDetail: View {
     var body: some View {
         switch section {
         case .dashboard: DashboardView(model: model).id(model.workspaceGeneration)
+        case .chat: LeonChatView()
         case .articles: ArticleListView(model: model)
         case .graph: ArticleGraphView(model: model, pageState: pageStateCache.graph)
         case .canvas: InfiniteCanvasView(model: model)

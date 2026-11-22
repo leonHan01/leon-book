@@ -1,4 +1,5 @@
 import { attachmentLimit, supportsMomentUpload, uploadBatchLimit, uploadFileCount } from '../shared/attachments.js';
+import { articleSourcePath, defaultArticleFolder, validArticleDestination } from '../shared/article-placement.js';
 import { keyOf, lookup, queueEdit, resolveEdit, revision, versions } from './sync.js';
 
 const now = () => new Date().toISOString();
@@ -25,7 +26,7 @@ export function validateUploadSelection(kind, original, files) {
   return size;
 }
 
-export function saveEditor(state, kind, original, fields, files) {
+export function saveEditor(state, kind, original, fields, files, { articleDestination } = {}) {
   const creating = !original;
   const operationID = uuid();
   const key = creating ? (kind === 'articles' ? `mobile-${operationID}` : `local-${operationID}`) : keyOf(kind, original);
@@ -41,6 +42,8 @@ export function saveEditor(state, kind, original, fields, files) {
     if (pendingBytes > 128 * 1024 * 1024) throw new Error('手机已有 128 MiB 待上传附件，请先同步一部分。');
   }
   const isCreate = creating || pending?.method === `${kind}.create`;
+  const choosesFolder = kind === 'articles' && isCreate && articleDestination !== undefined;
+  if (choosesFolder && !validArticleDestination(articleDestination)) throw new Error('请选择有效的文章目录。');
   const base = isCreate
     ? (kind === 'articles' ? identity : {})
     : { ...identity, [versions[kind]]: revision(kind, original) };
@@ -54,9 +57,14 @@ export function saveEditor(state, kind, original, fields, files) {
     patch.format = fields.format;
   }
   const filesChanged = selected.length !== previousFiles.length || selected.some((file, index) => file.id !== previousFiles[index]?.id);
-  if (!Object.keys(patch).length && !filesChanged) return state;
+  const folderChanged = choosesFolder && articleDestination !== (pending?.params.destinationFolder ?? defaultArticleFolder);
+  if (!Object.keys(patch).length && !filesChanged && !folderChanged) return state;
   if (pending?.attempted || pending?.error) throw new Error('这条内容有待确认的同步，请先同步或处理冲突。');
   const params = { ...pending?.params, ...base, ...patch };
+  if (choosesFolder) {
+    if (articleDestination === defaultArticleFolder) delete params.destinationFolder;
+    else params.destinationFolder = articleDestination;
+  }
   const baseFields = { ...pending?.baseFields };
   if (!isCreate) {
     for (const field of Object.keys(patch)) {
@@ -79,6 +87,7 @@ export function saveEditor(state, kind, original, fields, files) {
     ...(kind === 'moments' ? { createdAt: now() } : {}),
     updatedAt: now(), ...original, ...identity, ...fields,
   };
+  if (choosesFolder) preview.sourceRelativePath = articleSourcePath(articleDestination, key);
   if (!isCreate && !selected.length && pending?.method === `${kind}.update` &&
       Object.keys(params).every(field => Object.hasOwn(base, field))) {
     return resolveEdit(state, pending, preview);

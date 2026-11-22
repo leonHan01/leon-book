@@ -50,7 +50,7 @@ final class NativeModelsTests {
     @MainActor
     func testNavigationSidebarFollowsTheCurrentSection() {
         let navigation = NativeNavigationState()
-        let independentSections: [NativeSection] = [.dashboard, .canvas, .photos, .moments, .qAndA, .todos, .graph, .trash, .settings]
+        let independentSections: [NativeSection] = [.dashboard, .chat, .canvas, .photos, .moments, .qAndA, .todos, .graph, .trash, .settings]
         for section in independentSections {
             navigation.section = section
             XCTAssertFalse(navigation.section.showsArticleDirectory, "\(section) must not show article directories")
@@ -7126,6 +7126,9 @@ struct LeonBookUnitTests {
             ("ArticleLibraryPerformanceTests.testMetadataMergePreservesConcurrentReloadAndPageViews", { try await ArticleLibraryPerformanceTests().testMetadataMergePreservesConcurrentReloadAndPageViews() }),
             ("RichArticleBodyBridgeTests.testBodyPatchesValidateSessionRevisionAndUnicode", { try RichArticleBodyBridgeTests().testBodyPatchesValidateSessionRevisionAndUnicode() }),
             ("RichArticleBodyBridgeTests.testIncrementalBridgeKeepsNativeBodyCurrentThroughUndoAndReload", { try await RichArticleBodyBridgeTests().testIncrementalBridgeKeepsNativeBodyCurrentThroughUndoAndReload() }),
+            ("RichArticleTests.testEmbeddedReaderSuppressesPageScrollbarsUntilNativeHeightCatchesUp", { try await RichArticleTests().testEmbeddedReaderSuppressesPageScrollbarsUntilNativeHeightCatchesUp() }),
+            ("RichArticleTests.testReaderUsesOnlyNativeScrollViewWhileScrollingAndResizing", { try await RichArticleTests().testReaderUsesOnlyNativeScrollViewWhileScrollingAndResizing() }),
+            ("RichArticleTests.testReaderReportedHeightContainsHeadingMarginsWithoutInnerScroll", { try await RichArticleTests().testReaderReportedHeightContainsHeadingMarginsWithoutInnerScroll() }),
             ("RichArticleTests.testReaderImagesFollowNativeViewportAndPreserveSources", { try await RichArticleTests().testReaderImagesFollowNativeViewportAndPreserveSources() }),
             ("RichArticleTests.testRichArticleSelectionWorkStaysWithinSelectedBlocks", { try await RichArticleTests().testRichArticleSelectionWorkStaysWithinSelectedBlocks() }),
             ("RichArticleTests.testRichArticleTableAxisWorkTracksVisibleRows", { try await RichArticleTests().testRichArticleTableAxisWorkTracksVisibleRows() }),

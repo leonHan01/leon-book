@@ -9,6 +9,32 @@ const drafts = { title: '手机标题', notes: '原始备注', priority: 1, dueD
 const makeState = () => ({ ...emptyState(), pairing, todos: [todo] });
 const emptyPage = { result: { items: [], hasMore: false } };
 
+test('a draft can change its destination offline and keeps that destination until the Mac supports it', async () => {
+  const fields = { title: '离线草稿', body: '正文', format: 'text' };
+  const saved = saveEditor(makeState(), 'articles', null, fields, [], { articleDestination: '工作/设计' });
+  const [draft] = saved.articles;
+  const [original] = saved.outbox;
+  assert.equal(draft.sourceRelativePath, `工作/设计/${draft.slug}.html`);
+
+  const moved = saveEditor(saved, 'articles', draft, fields, [], { articleDestination: '日记/今天' });
+  const [operation] = moved.outbox;
+  assert.equal(operation.id, original.id);
+  assert.equal(operation.params.destinationFolder, '日记/今天');
+  assert.equal(moved.articles[0].sourceRelativePath, `日记/今天/${draft.slug}.html`);
+  const olderMac = await new SyncEngine(moved, async () => {}, async (action, args) => {
+    if (action === 'hello') return { workspaceID: pairing.workspaceID };
+    assert.equal(action, 'read');
+    return args.method === 'todos.list' ? { result: [] } : emptyPage;
+  }).run();
+  assert.equal(olderMac.outbox[0].attempted, false);
+  assert.match(olderMac.outbox[0].transferError, /升级 Mac/);
+  assert.deepEqual(olderMac.articles, moved.articles);
+
+  const defaultFolder = saveEditor(olderMac, 'articles', olderMac.articles[0], fields, [], { articleDestination: '未分类' });
+  assert.equal(defaultFolder.outbox[0].params.destinationFolder, undefined);
+  assert.equal(defaultFolder.outbox[0].transferError, undefined);
+});
+
 test('sync aborts when the response headers arrived but the JSON body stalls', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let reachedBody;
@@ -25,7 +51,22 @@ test('sync aborts when the response headers arrived but the JSON body stalls', a
   const signal = await reading;
   t.mock.timers.tick(50_000);
   assert.equal(signal.aborted, true);
-  assert.match((await result).message, /超时/);
+  const error = await result;
+  assert.equal(error.code, 'sync_timeout');
+  assert.match(error.message, /超时/);
+});
+
+test('a busy attachment lookup does not make a sync push fail or change its payload', async t => {
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (_url, { body }) => {
+    sent.push(body);
+    if (sent.length === 1) return { status: 503 };
+    return { status: 200, ok: true, json: async () => ({ result: todo }) };
+  });
+  const push = { id: 'same-operation', method: 'todos.update', params: { id: todo.id, expectedRevision: 1, title: 'changed' } };
+  assert.deepEqual(await request(pairing, 'push', push), { result: todo });
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0], sent[1]);
 });
 
 test('loss of response keeps the same payload durable and retry acknowledges it once', async () => {
@@ -251,8 +292,15 @@ test('changing only a title preserves rich article body and completion uses todo
 
 function itemFields(item) { return { title: item.title, body: item.body, format: 'html' }; }
 
-test('private LAN pairing requires HTTPS and a bare origin', () => {
+test('certificate-free pairing accepts private IPs while public cleartext and non-origin URLs are rejected', () => {
   assert.deepEqual(parsePairing(JSON.stringify(pairing)), pairing);
-  assert.throws(() => parsePairing(JSON.stringify({ ...pairing, url: 'http://192.168.1.8:8765' })));
+  for (const host of ['192.168.1.8', '10.0.0.9', '172.16.0.1', '172.31.255.254', '127.0.0.1', '[::1]']) {
+    const lan = { ...pairing, url: `http://${host}:8765` };
+    assert.deepEqual(parsePairing(JSON.stringify(lan)), lan);
+  }
+  for (const host of ['8.8.8.8', '0.0.0.0', '172.15.0.1', '172.32.0.1', '192.169.0.1', 'example.com']) {
+    assert.throws(() => parsePairing(JSON.stringify({ ...pairing, url: `http://${host}:8765` })), /配对信息无效/);
+  }
+  assert.throws(() => parsePairing(JSON.stringify({ ...pairing, url: 'http://192.168.1.8:8765/redirect' })));
   assert.throws(() => parsePairing(JSON.stringify({ ...pairing, url: 'https://mac.local/path' })));
 });

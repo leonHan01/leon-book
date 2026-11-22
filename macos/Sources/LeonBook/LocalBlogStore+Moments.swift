@@ -330,8 +330,8 @@ extension LocalBlogStore {
         }
 
         if let cursor {
-            predicates.append("(created_at < ? OR (created_at = ? AND id < ?))")
-            values.append(.text(cursor.createdAt))
+            // A tuple comparison lets SQLite seek directly into the feed index.
+            predicates.append("(created_at, id) < (?, ?)")
             values.append(.text(cursor.createdAt))
             values.append(.text(cursor.id))
         }

@@ -50,7 +50,10 @@ unset LEON_BOOK_BUILD_CONFIGURATION LEON_BOOK_BUILD_SYSTEM LEON_BOOK_FORCE_SWIFT
 reset_fixture() {
   rm -rf "$PROJECT/macos/Sources" "$PROJECT/macos/Resources" "$PROJECT/macos/dist"
   mkdir -p "$PROJECT/macos/Sources/LeonBook" "$PROJECT/macos/Resources" \
-    "$APP/MacOS" "$APP/Resources/LeonBookMac_LeonBook.bundle"
+    "$APP/MacOS" "$APP/Resources/LeonBookMac_LeonBook.bundle" \
+    "$APP/Resources/LeonBookMac_LeonChat.bundle/MarkdownRuntime" \
+    "$APP/Resources/SwiftMath_SwiftMath.bundle/mathFonts.bundle"
+  touch "$APP/Resources/LeonBookMac_LeonChat.bundle/MarkdownRuntime/markdown.html"
   touch "$PROJECT/macos/Package.swift" "$PROJECT/macos/Sources/LeonBook/Example.swift" \
     "$PROJECT/macos/Resources/Info.plist" "$PROJECT/macos/scripts/swift-sdk.sh"
   find "$PROJECT/macos" -exec touch -t 202001010000 {} +

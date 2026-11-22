@@ -110,6 +110,7 @@ struct NativeNavigationLoadingView: View {
     private var title: LocalizedStringKey {
         switch section {
         case .dashboard: return "概览"
+        case .chat: return "聊天"
         case .articles: return "全部文章"
         case .graph: return "关系图"
         case .canvas: return "无限画布"

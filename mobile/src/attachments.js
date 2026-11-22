@@ -4,6 +4,7 @@ import { Share } from '@capacitor/share';
 import { attachmentKind, attachmentLimit, attachmentType, mediaPath } from '../shared/attachments.js';
 import { uuid } from './editor.js';
 import { loadAttachment, storeAttachment } from './storage.js';
+import { fetchWithBusyRetry } from './sync.js';
 
 const attachmentErrors = {
   401: '配对已失效，请重新连接 Mac。',
@@ -21,11 +22,11 @@ async function fetchAttachment(pairing, kind, key, ref, signal) {
   try {
     let response;
     try {
-      response = await fetch(`${pairing.url}/v1/sync`, {
+      response = await fetchWithBusyRetry(() => fetch(`${pairing.url}/v1/sync`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pairing.token}` },
         body: JSON.stringify({ action: 'attachment', workspaceID: pairing.workspaceID, kind, key, path: ref.path }),
         cache: 'no-store', redirect: 'error', signal: controller.signal,
-      });
+      }), controller.signal);
     } catch {
       throw new Error('无法连接 Mac，请检查同步服务和网络。');
     }
@@ -59,7 +60,7 @@ async function fetchAttachment(pairing, kind, key, ref, signal) {
   }
 }
 
-async function downloadAttachment(pairing, kind, key, ref, signal) {
+export async function downloadAttachment(pairing, kind, key, ref, signal) {
   const blob = await fetchAttachment(pairing, kind, key, ref, signal);
   if (signal.aborted) return null;
   try {
@@ -101,9 +102,15 @@ function exportAttachment(blob, ref) {
 }
 
 function previewTag(mime) {
-  if (['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'].includes(mime)) return 'img';
+  if (/^image\/(jpeg|png|gif|webp|avif|heic|heif)$/.test(mime)) return 'img';
   if (/^audio\/(?:mpeg|mp4|wav|ogg|aac)$/.test(mime)) return 'audio';
   if (/^video\/(?:mp4|quicktime|webm)$/.test(mime)) return 'video';
+}
+
+export function previewImageBlob(blob, name) {
+  const mime = blob.type.startsWith('image/') ? blob.type : attachmentType(name, 'image');
+  if (previewTag(mime) === 'img') return mime === blob.type ? blob : blob.slice(0, blob.size, mime);
+  return null;
 }
 
 export async function cacheUploadedAttachments(pairing, method, record, files) {
@@ -121,15 +128,16 @@ export async function cacheUploadedAttachments(pairing, method, record, files) {
   }
 }
 
-export function pendingAttachmentCard(file, dialog) {
-  const type = attachmentType(file.name, attachmentKind(file.name));
+export function pendingAttachmentCard(file, dialog, openImage) {
+  const kind = attachmentKind(file.name);
+  const type = attachmentType(file.name, kind);
   return attachmentCard({
-    ref: { name: file.name, path: encodeURIComponent(file.name) }, dialog,
+    ref: { name: file.name, path: encodeURIComponent(file.name), kind }, dialog, openImage,
     localBlob: file.blob.slice(0, file.blob.size, type),
   });
 }
 
-export function attachmentCard({ ref, kind, key, pairing, dialog, localBlob, offlineOnly = false }) {
+export function attachmentCard({ ref, kind, key, pairing, dialog, localBlob, offlineOnly = false, queueImage, openImage }) {
   const card = document.createElement('span');
   card.className = 'attachment';
   const name = document.createElement('strong');
@@ -154,15 +162,25 @@ export function attachmentCard({ ref, kind, key, pairing, dialog, localBlob, off
   function display(blob, cached) {
     if (controller.signal.aborted) return;
     status.textContent = localBlob ? '已保存在手机，待同步' : cached ? '可离线查看' : '本次可查看，未能保存到手机';
-    const tag = previewTag(blob.type);
+    const mime = ref.kind === 'image' && blob.type === 'application/octet-stream'
+      ? attachmentType(ref.name, 'image') : blob.type;
+    const tag = previewTag(mime);
     if (tag && !blobURL) {
       const media = document.createElement(tag);
-      blobURL = URL.createObjectURL(blob);
+      blobURL = URL.createObjectURL(mime === blob.type ? blob : blob.slice(0, blob.size, mime));
       if (tag === 'img') { media.alt = ref.name; media.loading = 'lazy'; }
       else { media.controls = true; media.preload = 'metadata'; media.playsInline = true; }
       media.addEventListener('error', () => { status.textContent = '手机暂无法预览此格式，可以导出文件。'; });
       media.src = blobURL;
-      view.append(media);
+      if (tag === 'img' && openImage) {
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = 'attachment-image-button';
+        open.setAttribute('aria-label', `全屏查看 ${ref.name}`);
+        open.addEventListener('click', () => openImage(blob));
+        open.append(media);
+        view.append(open);
+      } else view.append(media);
     }
     action.disabled = false;
     action.textContent = '导出文件';
@@ -180,6 +198,7 @@ export function attachmentCard({ ref, kind, key, pairing, dialog, localBlob, off
     return card;
   }
   action.onclick = async () => {
+    if (controller.signal.aborted) return;
     action.disabled = true;
     status.textContent = '正在从 Mac 下载…';
     try {
@@ -198,6 +217,10 @@ export function attachmentCard({ ref, kind, key, pairing, dialog, localBlob, off
     loadAttachment(pairing.workspaceID, ref).catch(() => null).then(blob => {
       if (controller.signal.aborted) return;
       if (blob) display(blob, true);
+      else if (queueImage && ref.kind === 'image' && !tooLarge && !offlineOnly) {
+        status.textContent = '等待下载图片…';
+        queueImage(action.onclick);
+      }
       else {
         status.textContent = tooLarge ? attachmentErrors[413] : offlineOnly ? '尚未下载，请同步结束后从列表重新打开。' : '未下载';
         action.disabled = tooLarge || offlineOnly;

@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { isPrivateIPv4 } from '../shared/network.js';
 import { makeBridge } from './bridge.js';
 import { managedTLS } from './managed-tls.js';
 
@@ -49,11 +50,11 @@ async function main() {
   const { values } = parseArgs({ options: {
     root: { type: 'string' }, user: { type: 'string' }, cli: { type: 'string' },
     host: { type: 'string', default: '127.0.0.1' }, port: { type: 'string', default: '8765' },
-    managed: { type: 'boolean' }, 'control-stdio': { type: 'boolean' }, 'state-dir': { type: 'string' },
+    managed: { type: 'boolean' }, 'lan-http': { type: 'boolean' }, 'control-stdio': { type: 'boolean' }, 'state-dir': { type: 'string' },
     url: { type: 'string' }, cert: { type: 'string' }, key: { type: 'string' }, help: { type: 'boolean' },
   } });
   if (values.help) {
-    console.log('用法：./scripts/leonblog mobile-sync --root 数据根目录 [--user 用户ID] [--host Mac 的IP] [--port 8765] [--url https://手机访问的地址] [--cert 证书 --key 私钥] [--cli CLI路径]');
+    console.log('用法：./scripts/leonblog mobile-sync --root 数据根目录 [--user 用户ID] [--host Mac 的IP] [--port 8765] [--lan-http | --cert 证书 --key 私钥] [--url https://手机访问的地址] [--cli CLI路径]');
     return;
   }
   const port = Number(values.port);
@@ -61,15 +62,21 @@ async function main() {
     throw new Error('请指定有效的 --root、监听 IP 和端口。');
   }
   const local = ['127.0.0.1', '::1'].includes(values.host);
+  const lanHTTP = values['lan-http'];
+  if (lanHTTP && (!isPrivateIPv4(values.host) || values.cert || values.key || values.managed)) {
+    throw new Error('局域网 HTTP 需要一个私有 IPv4 地址，且不能同时指定证书。');
+  }
   if ((values.managed && (values.cert || values.key)) || Boolean(values.cert) !== Boolean(values.key) ||
-      (!local && !values.cert && !values.managed)) {
+      (!local && !lanHTTP && !values.cert && !values.managed)) {
     throw new Error('局域网监听需要同时指定 --cert 和 --key。');
   }
   const host = isIP(values.host) === 6 ? `[${values.host}]` : values.host;
-  const url = new URL(values.url ?? `${values.cert || values.managed ? 'https' : 'http'}://${host}:${port}`);
+  const listenURL = new URL(`${values.cert || values.managed ? 'https' : 'http'}://${host}:${port}`);
+  const url = new URL(values.url ?? listenURL);
+  if (lanHTTP && url.origin !== listenURL.origin) throw new Error('局域网 HTTP 的配对地址必须与监听地址一致。');
   if (url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
-      (url.protocol !== 'https:' && (url.protocol !== 'http:' || !local || url.hostname !== host))) {
-    throw new Error('手机配对地址需要使用 HTTPS。HTTP 仅用于本机开发。');
+      (url.protocol !== 'https:' && (url.protocol !== 'http:' || (!local && !lanHTTP) || url.hostname !== host))) {
+    throw new Error('请使用有效的 HTTPS 或当前 Mac 的局域网 HTTP 地址。');
   }
   const root = await realpath(values.root);
   if (!(await stat(join(root, 'workspaces'))).isDirectory() || !(await stat(join(root, 'users.json'))).isFile()) {
@@ -124,6 +131,7 @@ async function main() {
     write({ type: 'status', ...devices.status() });
   } else {
     console.log(`LeonBook 手机同步已开启，工作区 ${userID}。将下一行粘贴到手机的「连接 Mac」。`);
+    if (lanHTTP) console.log('当前为局域网 HTTP，同步内容和凭证以明文传输。');
     console.log(JSON.stringify({ url: url.origin, token, workspaceID }));
     console.log('按 Ctrl+C 停止同步。此终端凭证只在本次服务运行期间有效。');
   }

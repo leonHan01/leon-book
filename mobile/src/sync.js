@@ -1,6 +1,9 @@
+import { isPrivateIPv4 } from '../shared/network.js';
+import { inlineArticleIDs, replaceInlineArticleImages } from '../shared/inline-article-images.js';
+
 export const collections = ['articles', 'moments', 'todos'];
 export function emptyState() {
-  return { version: 1, pairing: null, articles: [], moments: [], todos: [], outbox: [], lastSync: null };
+  return { version: 1, pairing: null, articles: [], articleFolders: [], moments: [], todos: [], outbox: [], lastSync: null };
 }
 
 export function upgradeSyncState(state) {
@@ -22,8 +25,8 @@ export function parsePairing(text, now = Date.now()) {
     if (typeof value.url !== 'string') throw invalidPairing();
     url = new URL(value.url);
   } catch { throw invalidPairing(); }
-  const loopback = ['127.0.0.1', '[::1]'].includes(url.hostname);
-  if (!(url.protocol === 'https:' || (url.protocol === 'http:' && loopback)) || url.username || url.password ||
+  const local = ['127.0.0.1', '[::1]'].includes(url.hostname) || isPrivateIPv4(url.hostname);
+  if (!(url.protocol === 'https:' || (url.protocol === 'http:' && local)) || url.username || url.password ||
       url.pathname !== '/' || url.search || url.hash ||
       typeof value.workspaceID !== 'string' || !/^[\w-]{16,128}$/.test(value.workspaceID)) {
     throw invalidPairing();
@@ -51,7 +54,7 @@ export async function pairDevice(invitation, name) {
         body: JSON.stringify({ workspaceID: invitation.workspaceID, code: invitation.code, name }), signal: controller.signal,
       });
     } catch {
-      throw new Error('无法连接 Mac。请确认同一局域网、Mac 同步已开启，以及手机已信任同步证书。');
+      throw new Error('无法连接 Mac。请确认手机和 Mac 在同一 Wi-Fi、Mac 已启动同步，并使用当前显示的配对码。');
     }
     if (response.status === 403) throw new Error('配对码不可用，请在 Mac 上生成新的二维码后重试。');
     if (!response.ok) throw new Error('Mac 未接受配对，请检查同步服务。');
@@ -65,6 +68,27 @@ export async function pairDevice(invitation, name) {
 export const versions = { articles: 'expectedUpdatedAt', moments: 'expectedUpdatedAt', todos: 'expectedRevision' };
 export const revision = (kind, item) => kind === 'todos' ? item.revision : item.updatedAt;
 export const lookup = (kind, key) => ({ [kind === 'articles' ? 'slug' : 'id']: key });
+
+export async function fetchWithBusyRetry(send, signal) {
+  let response = await send();
+  // A 503 from the bridge means the request was rejected before execution.
+  for (const delay of [180, 420]) {
+    if (response.status !== 503 || signal.aborted) break;
+    void response.body?.cancel().catch(() => {});
+    await new Promise(resolve => {
+      const timer = setTimeout(done, delay);
+      function done() {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', done);
+        resolve();
+      }
+      signal.addEventListener('abort', done, { once: true });
+    });
+    if (signal.aborted) throw signal.reason;
+    response = await send();
+  }
+  return response;
+}
 
 export async function request(pairing, action, args = {}) {
   const { files, ...parameters } = args;
@@ -85,19 +109,21 @@ export async function request(pairing, action, args = {}) {
   try {
     let response;
     try {
-      response = await fetch(`${pairing.url}${uploading ? '/v1/push-with-files' : '/v1/sync'}`, {
+      response = await fetchWithBusyRetry(() => fetch(`${pairing.url}${uploading ? '/v1/push-with-files' : '/v1/sync'}`, {
         method: 'POST', headers, body,
         redirect: 'error', signal: controller.signal, cache: 'no-store',
-      });
-    } catch { throw new Error('连接 Mac 失败。请检查网络、配对地址和 Mac 同步服务。'); }
-    if (response.status === 401) throw new Error('此设备的配对已失效，请在 Mac 重新生成配对码。');
-    if (response.status === 503) throw new Error('Mac 正在处理其他请求，请稍后继续同步。');
+      }), controller.signal);
+    } catch {
+      throw readError({ code: 'mac_unreachable', message: '连接 Mac 失败。请检查网络、配对地址和 Mac 同步服务。' });
+    }
+    if (response.status === 401) throw readError({ code: 'pairing_expired', message: '此设备的配对已失效，请在 Mac 重新生成配对码。' });
+    if (response.status === 503) throw readError({ code: 'mac_busy', message: 'Mac 正在处理其他请求，请稍后继续同步。' });
     if (uploading && response.status === 404) throw new Error('请更新并重启 Mac 的同步服务后再上传附件。');
     if (!response.ok) throw new Error('Mac 未接受同步请求，请检查配对信息。');
     // Fetch resolves at the headers. Keep the deadline in force while reading the body.
     return await response.json();
   } catch (error) {
-    if (controller.signal.aborted) throw new Error('与 Mac 同步超时，请检查网络后重试。');
+    if (controller.signal.aborted) throw readError({ code: 'sync_timeout', message: '与 Mac 同步超时，请检查网络后重试。' });
     throw error;
   } finally { clearTimeout(timeout); }
 }
@@ -116,6 +142,7 @@ export function queueEdit(state, kind, key, method, params, preview, uuid, { fil
   const op = previous
     ? { ...previous, params }
     : { id: uuid(), kind, key, method, params, attempted: false };
+  delete op.transferError;
   if (baseFields) op.baseFields = baseFields;
   if (files?.length) op.files = files;
   else if (files) delete op.files;
@@ -176,6 +203,7 @@ const restored = {
 };
 const snapshotChanged = { code: 'snapshot_changed', message: 'Mac 上的资料在同步过程中已变化，请重试。' };
 const collectionLabels = { articles: '文章', moments: '微博', todos: '待办' };
+const destinationUpgrade = '请升级 Mac 版 LeonBook，再同步指定目录的文章。';
 
 export class SyncEngine {
   constructor(state, persist, rpc) {
@@ -206,6 +234,19 @@ export class SyncEngine {
     for (const original of [...this.state.outbox]) {
       if (original.error || (onlyOperationID && original.id !== onlyOperationID)) continue;
       let next = structuredClone(this.state);
+      let upgrade;
+      if (original.kind === 'articles' && identity.supportsInlineArticleImages !== true && inlineArticleIDs(original.params.body).size) {
+        upgrade = '请升级 Mac 版 LeonBook，再同步含正文插图的文章。';
+      } else if (original.method === 'articles.create' && original.params.destinationFolder && identity.supportsArticleDestination !== true) {
+        upgrade = destinationUpgrade;
+      }
+      if (upgrade) {
+        if (original.transferError !== upgrade) {
+          next.outbox.find(op => op.id === original.id).transferError = upgrade;
+          await this.commit(next);
+        }
+        continue;
+      }
       next.outbox.find(op => op.id === original.id).attempted = true;
       await this.commit(next);
       let response;
@@ -236,6 +277,9 @@ export class SyncEngine {
           if (uploadedAttachments?.length) {
             const media = new Map([...(local?.media ?? []), ...uploadedAttachments].map(item => [item.url, item]));
             record.media = [...media.values()];
+            const paths = new Map((original.files ?? []).flatMap((file, index) =>
+              uploadedAttachments[index]?.url ? [[file.id, uploadedAttachments[index].url]] : []));
+            if (typeof record.body === 'string') record.body = replaceInlineArticleImages(record.body, paths);
           }
         }
         next.outbox = next.outbox.filter(op => op.id !== original.id);
@@ -265,10 +309,23 @@ export class SyncEngine {
       const pending = new Set(this.state.outbox.filter(op => op.kind === kind).map(op => op.key));
       next[kind] = [...next[kind].filter(item => pending.has(keyOf(kind, item))),
         ...records.filter(item => !pending.has(keyOf(kind, item)))];
+      if (kind === 'articles' && identity.supportsArticleFolders) {
+        try {
+          const response = await this.rpc('read', { ...context, method: 'articles.folders', params: {} });
+          if (response.error) throw readError(response.error);
+          if (!Array.isArray(response.result) || response.result.some(path => typeof path !== 'string')) {
+            throw new Error('Mac 返回的目录格式有误。');
+          }
+          next.articleFolders = response.result;
+        } catch (error) {
+          if (error.code !== 'method_not_found') failures.push(`文章目录：${error.message}`);
+          if (error.code === 'workspace_restored') break;
+        }
+      }
       await this.commit(next);
     }
     if (failures.length) throw new Error(failures.join('；'));
-    await this.commit({ ...this.state, lastSync: new Date().toISOString(), lastSyncError: null });
+    await this.commit({ ...this.state, lastSync: new Date().toISOString(), lastSyncError: null, lastSyncErrorCode: null });
     return this.state;
   }
   async pullCollection(kind, context) {

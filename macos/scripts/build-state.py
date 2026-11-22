@@ -29,7 +29,7 @@ def capture(macos):
         "Package.swift", "Package.resolved", "scripts/build-app.sh",
         "scripts/swift-sdk.sh", "scripts/swift-cache.sh", "scripts/build-state.py",
     )]
-    for folder in ("Sources", "Resources"):
+    for folder in ("Sources", "Resources", "Vendor"):
         inputs.extend(sorted((macos / folder).rglob("*")))
     state = {"version": 1, "native": {}, "editor": {}}
     for path in inputs:
@@ -69,6 +69,10 @@ def status(app, configuration, system, current):
             if not path.is_file() or not os.access(path, os.X_OK):
                 return "build"
         if not bundle.is_dir():
+            return "build"
+        if not (resources / "LeonBookMac_LeonChat.bundle/MarkdownRuntime/markdown.html").is_file():
+            return "build"
+        if not (resources / "SwiftMath_SwiftMath.bundle/mathFonts.bundle").is_dir():
             return "build"
         if (resources / "leonbook-build-configuration").read_text().strip() != configuration:
             return "build"

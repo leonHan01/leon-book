@@ -36,14 +36,16 @@ SWIFT_ARGUMENTS=(
 )
 
 swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}"
+BIN_PATH="$(swift build "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" --show-bin-path)"
 # Build failures still stop immediately; a failed suite must not hide the
 # results of the remaining independent checks.
 FAILED_SUITES=()
 for TEST_PRODUCT in LeonBookModuleTests LeonBookTests LeonBookChecks LeonBookStoreChecks LeonBookAutomationTests; do
-    if ! swift run "${SWIFT_ARGUMENTS[@]}" "${SDK_ARGUMENTS[@]}" --skip-build "${TEST_PRODUCT}"; then
+    if ! "${BIN_PATH}/${TEST_PRODUCT}"; then
         FAILED_SUITES+=("${TEST_PRODUCT}")
     fi
 done
+if ! "${SCRIPT_DIR}/test-chat.sh"; then FAILED_SUITES+=("LeonChat"); fi
 if (( ${#FAILED_SUITES[@]} > 0 )); then
     print -u2 -- "Failed suites: ${FAILED_SUITES[*]}"
     exit 1

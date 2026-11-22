@@ -5,11 +5,14 @@ import { attachmentCacheLimit } from '../shared/attachments.js';
 let connection;
 function database() {
   connection ??= new Promise((resolve, reject) => {
-    const request = indexedDB.open('leonbook-mobile', 2);
+    const request = indexedDB.open('leonbook-mobile', 3);
     request.onupgradeneeded = event => {
       if (event.oldVersion < 1) request.result.createObjectStore('state');
-      const files = request.result.createObjectStore('attachments');
-      files.createIndex('retention', ['usedAt', 'size']);
+      if (event.oldVersion < 2) {
+        const files = request.result.createObjectStore('attachments');
+        files.createIndex('retention', ['usedAt', 'size']);
+      }
+      if (event.oldVersion < 3) request.result.createObjectStore('articleDrafts');
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -27,17 +30,49 @@ export async function loadState() {
     tx.onerror = () => reject(tx.error);
   });
 }
-export async function saveState(state, { clearAttachments = false } = {}) {
+const draftRange = workspace => IDBKeyRange.bound([workspace], [workspace, []]);
+
+export async function saveState(state, { clearAttachments = false, removeDraft, adoptLocalDrafts } = {}) {
   const db = await database();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(clearAttachments ? ['state', 'attachments'] : 'state', 'readwrite');
+    const stores = ['state'];
+    if (clearAttachments) stores.push('attachments');
+    if (removeDraft || adoptLocalDrafts) stores.push('articleDrafts');
+    const tx = db.transaction(stores, 'readwrite');
     tx.objectStore('state').put(structuredClone(state), 'current');
     if (clearAttachments) tx.objectStore('attachments').clear();
+    if (removeDraft) tx.objectStore('articleDrafts').delete(removeDraft);
+    if (adoptLocalDrafts) {
+      const drafts = tx.objectStore('articleDrafts');
+      const cursor = drafts.openCursor(draftRange(''));
+      cursor.onsuccess = () => {
+        const entry = cursor.result;
+        if (!entry) return;
+        drafts.put(entry.value, [adoptLocalDrafts, entry.key[1]]);
+        entry.delete();
+        entry.continue();
+      };
+    }
     tx.oncomplete = resolve;
     tx.onabort = () => reject(tx.error ?? new Error('本机存储失败，请保留编辑内容后重试。'));
     tx.onerror = () => reject(tx.error);
   });
 }
+
+async function articleDraftTransaction(mode, action) {
+  const db = await database();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('articleDrafts', mode);
+    const request = action(tx.objectStore('articleDrafts'));
+    tx.oncomplete = () => resolve(request.result);
+    tx.onabort = () => reject(tx.error ?? new Error('无法将草稿保存到手机。'));
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export const loadArticleDrafts = workspace => articleDraftTransaction('readonly', store => store.getAll(draftRange(workspace)));
+export const saveArticleDraft = (key, draft) => articleDraftTransaction('readwrite', store => store.put(draft, key));
+export const removeArticleDraft = key => articleDraftTransaction('readwrite', store => store.delete(key));
 
 async function attachmentsTransaction(action) {
   const db = await database();

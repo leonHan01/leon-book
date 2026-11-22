@@ -34,6 +34,7 @@ struct NativeWorkspaceRail: View {
     var body: some View {
         VStack(spacing: 10) {
             destination(.dashboard, title: "概览", icon: "house")
+            destination(.chat, title: "聊天", icon: "bubble.left.and.bubble.right")
             destination(.moments, title: "微博", icon: "quote.bubble")
             destination(.articles, title: "全部文章", icon: "doc")
             destination(.canvas, title: "无限画布", icon: "square.dashed")

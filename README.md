@@ -8,6 +8,8 @@ A native macOS workspace for writing, collecting ideas, and organizing personal 
 
 Built with **SwiftUI, AppKit, WebKit, and SQLite**. Core writing and library features work offline; the app runs without a Node.js service, an external browser, or a local HTTP server. Articles and media stay in your chosen data directory.
 
+The new **Chat** destination integrates LeonApp for Mac: agents and groups, messages and attachments, search and favorites, branches, context, notifications, usage, and conversation archives. Configure the chat server and token on first use. Archives become drafts in the current LeonBook library and user. See the [integration and feature mapping](docs/LEON_CHAT_INTEGRATION.md).
+
 [Quick start](#quick-start) · [Features](#features) · [Data and backups](#data-and-backups) · [Automation](#automation) · [Development](#development)
 
 ## Quick start

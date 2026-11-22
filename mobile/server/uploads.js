@@ -81,7 +81,7 @@ export async function readUpload(req, directory) {
     if (!file.size || file.size > attachmentLimit || total > uploadBatchLimit) return { error: 'message_too_large' };
     const path = `${file.path}.${uploadExtension(name)}`;
     await rename(file.path, path);
-    result.push({ path, name, kind: attachmentKind(name), digest: file.digest });
+    result.push({ id: descriptor.id, path, name, kind: attachmentKind(name), digest: file.digest });
     files.delete(descriptor.id);
   }
   return { metadata, files: result };

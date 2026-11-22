@@ -95,10 +95,10 @@ if let managementScript = try? String(
     encoding: .utf8
 ) {
     expect(managementScript.contains("leonblog restart"), "management CLI should document the restart command")
-    expect(
-        managementScript.contains("restart_native_app() {\n  quit_native_app\n  build_native_app\n  launch_native_app\n}"),
-        "restart should quit the running app before rebuilding and relaunching"
-    )
+    // test-leonblog.sh exercises restart order for both fresh and stale builds.
+    expect(managementScript.range(of: #"restart_native_app\(\) \{[^}]*\bquit_native_app\s+open_native_app\b"#,
+                                  options: .regularExpression) != nil,
+           "restart should quit before opening or conditionally rebuilding the app")
     expect(
         managementScript.contains("MACOS_BUNDLE_IDENTIFIER=\"com.leon-book.macos\"")
             && managementScript.contains("tell application id \\\"$MACOS_BUNDLE_IDENTIFIER\\\" to quit"),
@@ -169,8 +169,13 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("NativeAVPlayerView: NSViewRepresentable"), "article reader should bridge AVPlayerView directly")
     expect(articleViews.contains("AVPlayerView()"), "article reader should use AVPlayerView for embedded playback")
     expect(articleViews.contains("controlsStyle = .inline"), "embedded video should expose inline playback controls")
-    expect(articleViews.contains("showsFullScreenToggleButton = true"), "embedded video should expose a fullscreen control")
-    expect(articleViews.contains("LazyVStack(alignment: .leading, spacing: 24)"), "article media should be created lazily while scrolling")
+    expect(articleViews.contains("showsFullScreenToggleButton = !isAudio"), "embedded video should expose a fullscreen control without exposing it for audio")
+    let richEditor = try String(contentsOfFile: sourcePath("RichArticleEditor.swift"), encoding: .utf8)
+    let articleImages = try String(contentsOfFile: sourcePath("Resources/RichArticleImages.js"), encoding: .utf8)
+    expect(richEditor.contains("window.LeonArticle.setReaderViewport(top, height)")
+           && articleImages.contains("item.bottom >= lower")
+           && articleImages.contains("for (const item of visible) load(item.image, item.state)"),
+           "the article reader should defer image loads using the native viewport")
     expect(articleViews.contains("NativeInlineVideoPlayerModel"), "embedded video should use an explicit playback lifecycle model")
     expect(articleViews.contains("allowsVideoFrameAnalysis = false"), "embedded video should disable expensive automatic frame analysis")
     expect(articleViews.contains("updatesNowPlayingInfoCenter = false"), "inline players should not compete for the system Now Playing center")
@@ -222,7 +227,8 @@ if var articleViews = try? String(contentsOfFile: sourcePath("ArticleViews.swift
     expect(articleViews.contains("override func performDragOperation"), "native body editor should handle image drops")
     expect(articleViews.contains("characterIndexForInsertion(at: dropPoint)"), "dropped images should be inserted at the drop location")
     expect(articleViews.contains("NativeMarkdownLiveStyler.apply"), "inline live preview should style editable Markdown in place")
-    expect(articleViews.contains("MarkdownPreview("), "split mode should retain the complete rendered Markdown preview")
+    expect(articleViews.contains("RichArticleEditor(\n            html: $editorSession.draft.body"),
+           "the writing canvas should edit the entire rich-text body through its HTML binding")
     expect(articleViews.contains("let showsSidebar = editorMode != .focus && workspaceLayout.isEditorSidebarVisible"), "focus mode should hide the editor sidebar")
     expect(articleViews.contains("ForEach(NativeEditorSidebarPane.allCases)"), "article editor should switch among settings, properties, outline, and links")
     expect(articleViews.contains("private var editorPropertiesSidebar"), "article editor should expose editable properties")
@@ -336,10 +342,15 @@ if let markdownRenderer = try? String(contentsOfFile: sourcePath("MarkdownRender
 }
 
 if let settingsView = try? String(contentsOfFile: sourcePath("NativeSettingsView.swift"), encoding: .utf8) {
-    expect(settingsView.contains("Markdown 工作区 / Obsidian Vault"), "settings should expose Markdown workspace modes")
-    expect(settingsView.contains("NativeMarkdownWorkspaceMode.allCases"), "settings should offer copy, read-only mount, and direct-edit modes")
+    expect(settingsView.contains("if model.activeMarkdownWorkspaceMode.isMounted"),
+           "settings should show source controls for existing mounted Markdown workspaces")
     expect(settingsView.contains("model.markdownSourceDirectoryPath"), "settings should show the active Markdown source directory")
-    expect(settingsView.contains("model.confirmObsidianImport()"), "Obsidian import should require an explicit confirmation")
+    expect(settingsView.contains("Button(\"切回应用内资料库\") { model.useNativeArticleLibrary() }"),
+           "mounted workspaces should retain a way back to the managed library")
+    let importModel = try String(contentsOfFile: sourcePath("NativeAppModel+Import.swift"), encoding: .utf8)
+    expect(importModel.range(of: #"func confirmObsidianImport\(\)[\s\S]*?guard alert\.runModal\(\) == \.alertFirstButtonReturn else \{ return \}"#,
+                             options: .regularExpression) != nil,
+           "the retained Obsidian import path should require explicit confirmation")
     expect(settingsView.contains("命令与快捷键"), "settings should expose command hotkey customization")
     expect(settingsView.contains("阅读与编辑排版"), "settings should expose reading and editor typography")
     expect(settingsView.contains("NativeShortcutCaptureNSView"), "settings should record native keyboard shortcuts")
@@ -404,7 +415,7 @@ if let contentView = try? String(contentsOfFile: sourcePath("ContentView.swift")
     expect(sidebar.contains("model.selectUser(user)"), "sidebar should allow switching user-isolated workspaces")
     expect(contentView.contains("ArticleTagFilterBar"), "article list should expose hashtag filters")
     expect(contentView.contains("ArticleLibraryView(model: model)"), "article library should use its independent views")
-    expect(sidebar.contains("Section(\"收藏\")"), "sidebar should list saved bookmarks")
+    expect(sidebar.contains("Section(NativeLocalization.text(\"收藏\"))") && sidebar.contains("model.openBookmark(bookmark)"), "sidebar should list saved bookmarks")
     expect(contentView.contains(".onOpenURL(perform: model.handleAutomationURL)"), "main window should receive leonbook URLs")
     let articleLibraryView = try? String(contentsOfFile: sourcePath("ArticleLibraryViews.swift"), encoding: .utf8)
     expect(
@@ -640,6 +651,7 @@ if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
         "NativeAppModel+ArticleLibrary.swift",
         "NativeAppModel+Backup.swift",
         "NativeAppModel+Import.swift",
+        "NativeAppModel+Moments.swift",
         "NativeAppModel+Search.swift",
         "NativeAppModel+Workspace.swift",
         "NativeAppModelSupport.swift",
@@ -654,7 +666,10 @@ if var appModel = try? String(contentsOfFile: sourcePath("NativeAppModel.swift")
     expect(appModel.contains("![粘贴的图片]"), "pasted images should be inserted as Markdown image links")
     expect(appModel.contains("func chooseMomentImages()"), "NativeAppModel should choose moment images")
     expect(appModel.contains("func chooseMomentVideo()"), "NativeAppModel should choose MP4 moment videos")
-    expect(appModel.contains("panel.allowedContentTypes = [.mpeg4Movie]"), "Moment video picker should only expose MP4 files")
+    expect(appModel.range(of: #"func chooseMomentVideo\(\) \{\s*chooseMomentAVMedia\(isAudio: false\)"#,
+                          options: .regularExpression) != nil
+           && appModel.contains("panel.allowedContentTypes = isAudio ? [.mp3] : [.mpeg4Movie]"),
+           "the shared media picker should expose MP4 for video and MP3 for audio")
     expect(appModel.contains("func uploadMomentPastedImages"), "NativeAppModel should save pasted and dropped moment images")
     expect(appModel.contains("temporaryNamePrefix: \"moment-image\""), "moment paste temp files should use a stable descriptive prefix")
     expect(appModel.contains("UUID().uuidString.lowercased()"), "media temp files should interpolate a unique UUID")
@@ -827,12 +842,17 @@ if var momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("MomentRichTextEditor("), "Moments should support rich text publishing")
     expect(momentViews.contains("richTextController.toggleBold()"), "Moments should support bold text")
     expect(momentViews.contains("richTextController.apply(color:"), "Moments should support text colors")
-    expect(momentViews.contains("最多 9 个图片或视频 · 视频仅支持 MP4"), "Moments should communicate the media limit and MP4 requirement")
+    expect(momentViews.contains("Text(\"\\(model.momentDraft.images.count) / 9\")")
+           && momentViews.contains("可从访达拖入 MP4 视频"),
+           "the moment composer should show the media count and MP4 drop format")
     expect(momentViews.contains("MomentInlineVideoPlayer(media: video, store: store)"), "Moment feeds should play videos inline")
     expect(momentViews.contains("MomentAVPlayerView: NSViewRepresentable"), "Moment videos should use a native AVPlayerView bridge")
     expect(momentViews.contains("NativeInlineVideoPlayerModel(mediaID: media.url)"), "Moment videos should reuse the lazy playback lifecycle")
-    expect(momentViews.contains(".onDisappear {\n            playback.release()"), "Offscreen moment videos should release playback resources")
-    expect(momentViews.contains("LazyVStack(spacing: 16)"), "Moment history should display one post per row")
+    expect(momentViews.contains("guard isNearViewport, let visiblePosterPixelSize else {\n                playback.release(discardPoster: true)")
+           && momentViews.contains(".onDisappear {\n            playback.release(discardPoster: true)"),
+           "moment videos should release players and posters offscreen and on removal")
+    expect(momentViews.contains("if columnCount == 1 {\n            momentCards(for: moments)"),
+           "the single-column moment layout should keep posts in one column")
     expect(momentViews.contains("MomentImageBrowserView"), "Moments should present an image browser")
     expect(momentViews.contains(".accessibilityElement(children: .ignore)"), "Moment image grids should expose one accessibility node instead of one node per thumbnail")
     expect(momentViews.contains(".accessibilityAction { onOpenImage(0) }"), "The combined moment image node should open the image browser")
@@ -880,8 +900,13 @@ if var momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("doubleColumnWaterfall"), "Moment feed should offer a double-column waterfall layout")
     expect(momentViews.contains("threeColumnWaterfall"), "Moment feed should offer a three-column waterfall layout")
     expect(momentViews.contains("fourColumnWaterfall"), "Moment feed should offer a four-column waterfall layout")
-    expect(momentViews.contains("momentWaterfallColumns(for: group.moments)"), "Multi-column moment feed should use lazy waterfall columns")
-    expect(momentViews.contains("private func momentColumn"), "Moment waterfall columns should distribute cards without eager size measurement")
+    expect(momentViews.contains("NativeMomentColumns.distribute(moments, columnCount: columnCount)")
+           && momentViews.contains("momentCards(for: columns[index])"),
+           "the waterfall should project posts into separate virtual columns")
+    let virtualColumn = try String(contentsOfFile: sourcePath("MomentVirtualColumn.swift"), encoding: .utf8)
+    expect(momentViews.contains("MomentVirtualColumn(moments: moments)")
+           && virtualColumn.contains("ForEach(visible)") && virtualColumn.contains("viewport.layout"),
+           "moment columns should mount only cards selected by the viewport")
     expect(!momentViews.contains("MomentMasonryLayout: Layout"), "Moment waterfall should not eagerly measure every card through a custom Layout")
     expect(momentViews.contains("NSEvent.addLocalMonitorForEvents(matching: .keyDown)"), "Image browser should capture keyboard navigation")
     expect(momentViews.contains("navigationModifiers"), "Image browser should allow unmodified arrow keys")
@@ -892,15 +917,27 @@ if var momentViews = try? String(contentsOfFile: sourcePath("MomentViews.swift")
     expect(momentViews.contains("CGImageSourceCreateThumbnailAtIndex"), "Moment previews should downsample images")
     expect(momentViews.contains("@Environment(\\.displayScale)"), "Moment thumbnails should account for the display scale")
     expect(momentViews.contains("MomentThumbnailSizing.maxPixelSize"), "Moment feed should size thumbnails for their rendered tiles")
-    expect(momentViews.contains("loadMode: .thumbnail(maxPixelSize: thumbnailMaxPixelSize)"), "Moment feed should render right-sized image thumbnails")
+    expect(momentViews.contains("MomentImage(media: media, store: store, maxPixelSize: MomentThumbnailSizing.maxPixelSize(")
+           && momentViews.contains(".thumbnail(maxPixelSize: maxPixelSize)"),
+           "moment thumbnail requests should use the size measured for the tile")
     expect(momentViews.contains("let momentTimeline = model.momentTimeline"), "Moment timeline should be derived once per feed render")
-    expect(momentViews.contains("maximumConcurrentDecodes: 2"), "Moment thumbnail decoding should leave CPU capacity for navigation")
-    expect(momentViews.contains("Task.detached(priority: .utility)"), "Moment thumbnail decoding should not compete at user-initiated priority")
+    let mediaResources = try String(contentsOfFile: sourcePath("NativeMediaResources.swift"), encoding: .utf8)
+    expect(imagePipeline.contains("static let shared = NativeImagePipeline(scheduler: .shared)")
+           && mediaResources.contains("static let shared = NativeMediaDecodeScheduler(maximumConcurrentDecodes: 2)"),
+           "moment thumbnails should use the two shared decode slots")
+    expect(imagePipeline.contains("priority: mode == .fullSize ? .userInitiated : .utility")
+           && mediaResources.contains("Task.detached(priority: job.priority)"),
+           "only explicit original loads should receive user-initiated decoding priority")
     expect(momentViews.contains("guard !Task.isCancelled else"), "Moment thumbnail views should ignore canceled results")
     expect(momentViews.contains("image-thumbnails"), "Moment thumbnails should persist in the shared system cache")
-    expect(imagePipeline.contains("private var inFlight"), "shared image loading should coalesce duplicate decode requests")
-    expect(imagePipeline.contains("maximumConcurrentDecodes: 2"), "shared image loading should cap concurrent decodes")
-    expect(momentViews.contains("NativeImagePipeline.shared.image"), "moment images should use the shared image pipeline")
+    expect(imagePipeline.contains(#"scheduler.decode(key: "image|\(key)""#)
+           && mediaResources.contains("jobs[key]?.subscribers[subscriber] = continuation"),
+           "the shared scheduler should join duplicate image requests by key")
+    expect(mediaResources.contains("while active < maximumConcurrentJobs, !pending.isEmpty"),
+           "the shared scheduler should bound active decode jobs")
+    expect(momentViews.contains("@Environment(\\.nativeImagePipeline)")
+           && momentViews.contains("await imagePipeline.image(from: url, mode: .thumbnail"),
+           "moment previews should request thumbnails from the shared image pipeline")
     expect(momentViews.contains(".aspectRatio(contentMode: .fit)"), "Moment thumbnails should show the complete image")
     expect(momentViews.contains("Color.clear"), "Moment image canvases should reveal the card background instead of forcing white")
     expect(momentViews.contains("mode: .fullSize"), "Image browser should load the selected image at full size")

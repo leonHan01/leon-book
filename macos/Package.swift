@@ -12,7 +12,27 @@ let package = Package(
         .executable(name: "LeonBook", targets: ["LeonBookApp"]),
         .executable(name: "LeonBookCLI", targets: ["LeonBookCLI"]),
     ],
+    dependencies: [.package(path: "Vendor/SwiftMath")],
     targets: [
+        .target(
+            name: "LeonChat",
+            dependencies: [.product(name: "SwiftMath", package: "SwiftMath")],
+            path: "Sources/LeonChat",
+            resources: [.copy("Resources/MarkdownRuntime")]
+        ),
+        .executableTarget(name: "LeonChatMessageChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/MessageChecks"),
+        .executableTarget(name: "LeonChatMarkdownChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/MarkdownChecks"),
+        .executableTarget(name: "LeonChatMathChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/MathChecks"),
+        .executableTarget(name: "LeonChatTableLayoutChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/TableLayoutChecks"),
+        .executableTarget(name: "LeonChatRichMarkdownChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/RichMarkdownChecks", resources: [.copy("Fixtures")]),
+        .executableTarget(name: "LeonChatImageChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/ImageChecks"),
+        .executableTarget(name: "LeonChatComposerChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/ComposerChecks"),
+        .executableTarget(name: "LeonChatArchiveChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/ArchiveChecks"),
+        .executableTarget(name: "LeonChatArchiveFlowChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/ArchiveFlowChecks"),
+        .executableTarget(name: "LeonChatSwitchingChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/SwitchingChecks"),
+        .executableTarget(name: "LeonChatSearchChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/SearchChecks"),
+        .executableTarget(name: "LeonChatContextMemoryChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/ContextMemoryChecks"),
+        .executableTarget(name: "LeonChatIntegrationChecks", dependencies: ["LeonChat"], path: "Tests/LeonChatTests/IntegrationChecks"),
         .systemLibrary(
             name: "CSQLite",
             path: "Sources/CSQLite"
@@ -60,6 +80,7 @@ let package = Package(
             name: "LeonBook",
             dependencies: [
                 "CSQLite",
+                "LeonChat",
                 "LeonBookExtensionKit",
                 "LeonBookModuleKit",
                 "LeonBookSearchModule",

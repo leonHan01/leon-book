@@ -9,12 +9,14 @@ import { pipeline } from 'node:stream/promises';
 import { openAttachment } from './attachments.js';
 import { deviceRegistry } from './devices.js';
 import { operationID, readUpload } from './uploads.js';
+import { articleSourcePath, validArticleDestination } from '../shared/article-placement.js';
+import { inlineArticleIDs } from '../shared/inline-article-images.js';
 
 const reads = new Set([
-  'articles.list', 'articles.get', 'moments.list', 'moments.get', 'todos.list', 'todos.get',
+  'articles.list', 'articles.get', 'articles.folders', 'moments.list', 'moments.get', 'todos.list', 'todos.get',
 ]);
 const writes = new Map(Object.entries({
-  'articles.create': ['slug', 'title', 'body', 'format'],
+  'articles.create': ['slug', 'title', 'body', 'format', 'destinationFolder'],
   'articles.update': ['slug', 'expectedUpdatedAt', 'title', 'body', 'format'],
   'moments.create': ['text'],
   'moments.update': ['id', 'expectedUpdatedAt', 'text'],
@@ -114,10 +116,21 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
       return invalid();
     }
     if (method === 'articles.create' && params.slug !== `mobile-${id}`) return invalid();
+    const { destinationFolder, ...automationParams } = params;
+    if (Object.hasOwn(params, 'destinationFolder')) {
+      if (!validArticleDestination(destinationFolder)) return invalid('请选择有效的文章目录。');
+      automationParams.sourceRelativePath = articleSourcePath(destinationFolder, params.slug);
+    }
     // Operations use flat parameter maps, so key ordering does not affect retries.
     if (Object.values(params).some(value => value !== null && typeof value === 'object')) return invalid();
     const payload = [method, Object.entries(params).sort(([a], [b]) => a.localeCompare(b))];
     if (files.length) payload.push(files.map(({ name, kind, digest }) => [name, kind, digest]));
+    const inlineIDs = method.startsWith('articles.') ? inlineArticleIDs(params.body) : new Set();
+    if (inlineIDs.size) {
+      const images = new Set(files.filter(file => file.kind === 'image').map(file => file.id));
+      if (params.format !== 'html' || [...inlineIDs].some(id => !images.has(id))) return invalid('正文插图缺少对应的图片文件。');
+      payload.push(files.map(file => file.id));
+    }
     const fingerprint = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
     const generation = await getGeneration();
     if ((expected !== undefined && expected !== generation) ||
@@ -133,12 +146,13 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
     }
     let result;
     try {
-      const staged = files.map(({ path, name, kind }) => ({ path, name, kind }));
+      const staged = files.map(({ id, path, name, kind }) => ({ path, name, kind, ...(inlineIDs.size ? { id } : {}) }));
+      const attachments = staged.length ? { files: staged, ...(inlineIDs.size ? { inlineImages: true } : {}) } : {};
       const wantsReceipt = generation !== null && compact === true && method.startsWith('articles.');
       const response = generation !== null
-        ? await automation('mobile.mutate', { method, params, generation, compact: wantsReceipt, ...(staged.length ? { files: staged } : {}) })
-        : staged.length ? await automation('mobile.saveWithAttachments', { method, params, files: staged })
-          : await automation(method, params);
+        ? await automation('mobile.mutate', { method, params: automationParams, generation, compact: wantsReceipt, ...attachments })
+        : staged.length ? await automation('mobile.saveWithAttachments', { method, params: automationParams, ...attachments })
+          : await automation(method, automationParams);
       if (response.error?.code === 'busy') {
         remove.run(workspaceID, id);
         return null;
@@ -221,7 +235,13 @@ export function makeBridge({ databasePath, workspaceID, workspacePath, automatio
     const input = await readBody(req);
     if (!object(input) || input.workspaceID !== workspaceID) { send(400, invalid('请检查配对工作区。')); return; }
     const { action, method, params, generation } = input;
-    if (action === 'hello') { send(200, { workspaceID, generation: (await getGeneration()) ?? undefined }); return; }
+    if (action === 'hello') {
+      send(200, {
+        workspaceID, generation: (await getGeneration()) ?? undefined, supportsArticleFolders: true, supportsArticleDestination: true,
+        supportsInlineArticleImages: true,
+      });
+      return;
+    }
     if (busy) { send(503, { error: { code: 'busy' } }); return; }
     busy = true;
     let attachment;

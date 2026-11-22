@@ -2,7 +2,6 @@ import AppKit
 import CoreImage
 import Darwin
 import SwiftUI
-import UniformTypeIdentifiers
 
 @MainActor
 final class NativeMobileSyncController: ObservableObject {
@@ -24,7 +23,6 @@ final class NativeMobileSyncController: ObservableObject {
     private struct Message: Decodable {
         let type: String
         let url: String?
-        let certificate: String?
         let invitation: Invitation?
         let devices: [Device]?
         let expiresAt: Double?
@@ -40,7 +38,6 @@ final class NativeMobileSyncController: ObservableObject {
     static let shared = NativeMobileSyncController()
     @Published private(set) var workspace: Workspace?
     @Published private(set) var url: String?
-    @Published private(set) var certificate: String?
     @Published private(set) var devices: [Device] = []
     @Published private(set) var invitation: Invitation?
     @Published private(set) var error: String?
@@ -70,7 +67,7 @@ final class NativeMobileSyncController: ObservableObject {
         child.arguments = [
             resources.appendingPathComponent("server/main.js").path,
             "--root", workspace.root, "--user", workspace.userID, "--cli", cli.path,
-            "--host", address, "--port", String(port), "--managed", "--control-stdio",
+            "--host", address, "--port", String(port), "--lan-http", "--control-stdio",
         ]
         child.standardInput = control
         child.standardOutput = messages
@@ -136,7 +133,6 @@ final class NativeMobileSyncController: ObservableObject {
             switch message.type {
             case "ready":
                 url = message.url
-                certificate = message.certificate
             case "invite":
                 invitation = message.invitation
             case "status":
@@ -160,7 +156,6 @@ final class NativeMobileSyncController: ObservableObject {
         outputBuffer.removeAll()
         workspace = nil
         url = nil
-        certificate = nil
         invitation = nil
         devices = []
         stopping = false
@@ -181,7 +176,6 @@ struct NativeMobileSyncSettings: View {
     @AppStorage("leonBook.mobileSync.port") private var port = "8765"
     @State private var availableAddresses: [String] = []
     @State private var selectedDevice: NativeMobileSyncController.Device?
-    @State private var exportError: String?
 
     private var workspace: NativeMobileSyncController.Workspace {
         .init(root: model.dataRootDirectoryPath, userID: model.currentUser.id, name: model.currentUser.name)
@@ -194,18 +188,16 @@ struct NativeMobileSyncSettings: View {
 
     var body: some View {
         Section("手机同步") {
-            Text("在 Mac 与手机连接同一局域网时同步文章、微博、待办和附件。")
+            Text("手机和 Mac 连上同一个 Wi-Fi 后，扫码同步文章、微博、待办和附件。")
                 .foregroundStyle(.secondary)
+            Text("内容和配对凭证通过局域网 HTTP 明文传输，请在信任的 Wi-Fi 上使用。")
+                .font(.caption).foregroundStyle(.secondary)
             if let active = sync.workspace {
                 LabeledContent("同步工作区", value: active.name)
                 LabeledContent("服务状态", value: sync.stopping ? "正在停止…" : sync.url == nil ? "正在启动…" : "已开启")
                 if ownsService, let url = sync.url {
                     LabeledContent("连接地址") { Text(url).textSelection(.enabled) }
-                    Text("首次使用这台 Mac，请把同步证书安装到手机并信任，然后在 LeonBook 中扫码。之后重启服务会保留已有设备。")
-                        .font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        Button("导出同步证书", action: exportCertificate)
-                            .disabled(sync.certificate == nil)
                         Button("生成配对二维码") { sync.createInvitation() }
                         Button("停止同步") { sync.stop() }
                     }
@@ -230,7 +222,7 @@ struct NativeMobileSyncSettings: View {
                     .disabled(!model.storageReady || !availableAddresses.contains(address) || validPort == nil)
                 }
             }
-            if let error = exportError ?? sync.error {
+            if let error = sync.error {
                 Text(error).foregroundStyle(.red)
             }
         }
@@ -318,23 +310,16 @@ struct NativeMobileSyncSettings: View {
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(endpoint, socklen_t(endpoint.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
             let ip = String(cString: host)
-            if !ip.hasPrefix("169.254."), !addresses.contains(ip) { addresses.append(ip) }
+            if Self.isPrivateIPv4(ip), !addresses.contains(ip) { addresses.append(ip) }
         }
         availableAddresses = addresses
         if !addresses.contains(address) { address = addresses.first ?? "" }
     }
 
-    private func exportCertificate() {
-        guard let source = sync.certificate else { return }
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "leonbook-ca.cer"
-        panel.allowedContentTypes = [UTType(filenameExtension: "cer") ?? .data]
-        guard panel.runModal() == .OK, let target = panel.url else { return }
-        do {
-            try Data(contentsOf: URL(fileURLWithPath: source)).write(to: target, options: .atomic)
-            exportError = nil
-        } catch {
-            exportError = error.localizedDescription
-        }
+    private static func isPrivateIPv4(_ address: String) -> Bool {
+        let parts = address.split(separator: ".").compactMap { UInt8($0) }
+        guard parts.count == 4 else { return false }
+        return parts[0] == 10 || (parts[0] == 172 && (16...31).contains(parts[1])) ||
+            (parts[0] == 192 && parts[1] == 168)
     }
 }

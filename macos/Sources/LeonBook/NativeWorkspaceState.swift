@@ -65,6 +65,7 @@ struct NativeEditorDraft: Equatable {
 
 enum NativeSection: Hashable {
     case dashboard
+    case chat
     case articles
     case graph
     case canvas

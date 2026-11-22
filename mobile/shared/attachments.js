@@ -5,6 +5,7 @@ export const uploadFileCount = 9;
 
 const previewTypes = new Map(Object.entries({
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif',
+  heic: 'image/heic', heif: 'image/heif',
   mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
   mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg',
 }));
@@ -15,7 +16,7 @@ export function uploadName(name) {
 }
 export function attachmentKind(name) {
   const ext = uploadExtension(name);
-  return previewTypes.get(ext)?.split('/')[0] ?? (['heic', 'heif'].includes(ext) ? 'image' : 'file');
+  return previewTypes.get(ext)?.split('/')[0] ?? 'file';
 }
 export function attachmentType(name, kind) {
   const mime = previewTypes.get(uploadExtension(name));

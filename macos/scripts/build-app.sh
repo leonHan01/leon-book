@@ -156,6 +156,14 @@ else
     print -u2 -- "Missing SwiftPM resource bundle: ${BIN_PATH}/LeonBookMac_LeonBook.bundle"
     exit 1
 fi
+for RESOURCE_BUNDLE in LeonBookMac_LeonChat.bundle SwiftMath_SwiftMath.bundle; do
+    if [[ ! -d "${BIN_PATH}/${RESOURCE_BUNDLE}" ]]; then
+        print -u2 -- "Missing chat resource bundle: ${RESOURCE_BUNDLE}"
+        exit 1
+    fi
+    COPYFILE_DISABLE=1 cp -R "${BIN_PATH}/${RESOURCE_BUNDLE}" "${CONTENTS_DIR}/Resources/"
+done
+COPYFILE_DISABLE=1 cp "${MACOS_DIR}/Vendor/SwiftMath/LICENSE" "${CONTENTS_DIR}/Resources/SwiftMath-LICENSE.txt"
 sign_and_publish
 
 print -- "[INFO] 打包与签名完成（耗时 $((SECONDS - PACKAGING_STARTED_AT)) 秒）。"

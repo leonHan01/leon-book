@@ -141,6 +141,8 @@ public actor AutomationService {
         switch method {
         case "articles.list":
             return try page(await store.listArticles(includeDrafts: p.flag("includeDrafts", default: true)), p) { [$0.slug, $0.updatedAt] }
+        case "articles.folders":
+            return try .encoded(await store.listWorkspaceArticleFolders())
         case "articles.get":
             let article = try await store.getArticle(slug: p.required("slug"))
             if let offset: Int = try p.optional("bodyOffset") {
@@ -222,7 +224,9 @@ public actor AutomationService {
             let result: AutomationValue
             if let files {
                 try await authorizeArticleUpdate(method, nested, store)
-                result = try await store.saveMobileAttachments(method: method, parameters: nested, files: files)
+                result = try await store.saveMobileAttachments(
+                    method: method, parameters: nested, files: files, inlineImages: p.flag("inlineImages")
+                )
             } else {
                 result = try await execute(method, nested, store, user)
             }

@@ -144,7 +144,9 @@ struct ArticleReaderView: View {
         usesCompactInspector: Bool
     ) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 24) {
+            // The body is one self-sizing web view; measure every section so
+            // scrolling cannot change estimated content height.
+            VStack(alignment: .leading, spacing: 24) {
                 ArticlePathBreadcrumb(
                     sourceRelativePath: article.sourceRelativePath,
                     draftFolderPath: nil,

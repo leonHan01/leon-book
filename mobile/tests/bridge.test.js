@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { makeBridge } from '../server/bridge.js';
 import { automate, libraryGeneration } from '../server/main.js';
 import { attachmentLimit } from '../shared/attachments.js';
-import { request } from '../src/sync.js';
+import { emptyState, request, SyncEngine } from '../src/sync.js';
+import { buildArticleDirectory } from '../src/article-directories.js';
 
 async function listen(bridge, t) {
   await new Promise((resolve, reject) => {
@@ -28,6 +29,37 @@ function call(url, token, data, origin = 'https://localhost') {
   });
 }
 
+test('sync reads nested and empty sidebar folders from the real Mac CLI', { skip: !process.env.LEONBOOK_TEST_CLI }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'leonbook-cli-folders-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const root = join(directory, 'library');
+  const cli = (method, params) => automate(process.env.LEONBOOK_TEST_CLI, root, undefined, method, params);
+  const info = await cli('workspace.info', {});
+  const workspacePath = join(await realpath(root), 'workspaces', info.result.user.id);
+  const bridge = makeBridge({ databasePath: join(directory, 'journal.sqlite'), workspaceID, workspacePath, automation: cli });
+  const url = await listen(bridge, t);
+  const pairing = { url: new URL(url).origin, token: bridge.token, workspaceID };
+
+  const created = await cli('folders.create', { path: '工作/设计/空目录' });
+  assert.equal(created.error, undefined);
+  await writeFile(join(workspacePath, 'articles', '工作', '设计', 'attachment.txt'), 'not a folder');
+  const article = await cli('articles.create', {
+    title: '设计笔记', body: '内容', sourceRelativePath: '工作/设计/notes.md',
+  });
+  assert.ok(article.result?.slug, JSON.stringify(article.error));
+
+  const read = { action: 'read', method: 'articles.folders', params: {} };
+  assert.equal((await call(url, 'incorrect', read)).status, 401);
+  const rpc = (action, params) => request(pairing, action, params);
+  const synced = await new SyncEngine({ ...emptyState(), pairing }, async () => {}, rpc).run();
+  assert.ok(synced.articleFolders.includes('工作/设计/空目录'));
+  assert.ok(synced.articleFolders.every(path => !path.startsWith('/') && !path.endsWith('.txt')));
+  const tree = buildArticleDirectory(synced.articles, synced.articleFolders);
+  assert.deepEqual(tree.get('工作').folders.map(folder => folder.path), ['工作/设计']);
+  assert.deepEqual(tree.get('工作/设计').articles.map(item => item.slug), [article.result.slug]);
+  assert.deepEqual(tree.get('工作/设计/空目录').articles, []);
+});
+
 test('bridge restricts callers and never replays acknowledged or uncertain writes', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'leonbook-bridge-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -44,6 +76,9 @@ test('bridge restricts callers and never replays acknowledged or uncertain write
   assert.equal((await call(url, bridge.token, request, 'https://example.test')).status, 403);
   assert.equal((await call(url, bridge.token, { action: 'read', method: 'backup.list', params: {} })).status, 400);
   assert.equal((await call(url, bridge.token, { ...request, method: 'users.select' })).status, 200);
+  const nestedCreate = { ...request, method: 'articles.create',
+    params: { slug: `mobile-${request.id}`, title: '草稿', body: '正文', destinationFolder: '工作/../其他' } };
+  assert.equal((await (await call(url, bridge.token, nestedCreate)).json()).error.code, 'invalid_request');
   assert.equal(calls, 0);
   const first = await (await call(url, bridge.token, request)).json();
   assert.deepEqual(first, { result: { id: 'saved', text: 'save once' } });
@@ -189,8 +224,14 @@ test('Mac saves uploads along with the record and preserves existing files acros
 
   const createID = '110ee745-6827-42f7-98ba-28b16d090eea';
   const slug = `mobile-${createID}`;
-  const create = { id: createID, method: 'articles.create', params: { slug, body: '正文', format: 'text', title: '手机文章' },
+  const destinationFolder = '工作/设计';
+  assert.equal((await cli('folders.create', { path: destinationFolder })).error, undefined);
+  const create = { id: createID, method: 'articles.create',
+    params: { slug, body: '<h2>正文</h2><p><img src="/leonbook-inline/' + photo.id + '" alt="例图"></p>',
+      format: 'html', title: '手机文章', destinationFolder },
     files: [photo], generation: 'initial', compact: true };
+  const missing = await request(pairing, 'push', { ...create, files: [] });
+  assert.equal(missing.error?.code, 'invalid_request');
   const article = await request(pairing, 'push', create);
   assert.equal(article.receipt, true, JSON.stringify(article));
   assert.equal(article.result?.uploadedAttachments[0]?.name, '手机照片.png');
@@ -198,6 +239,11 @@ test('Mac saves uploads along with the record and preserves existing files acros
   assert.deepEqual(await request(pairing, 'push', create), article);
   const changed = (await cli('articles.update', { slug, expectedUpdatedAt: article.result.updatedAt, title: 'Mac 改过' })).result;
   assert.equal(changed?.title, 'Mac 改过');
+  assert.ok(changed.body.includes('src="' + article.result.uploadedAttachments[0].url + '"'));
+  assert.ok(!changed.body.includes('/leonbook-inline/'));
+  assert.ok(changed.body.includes('<h2>正文</h2>'));
+  assert.equal(changed.sourceRelativePath, `${destinationFolder}/${slug}.html`);
+  assert.match(await readFile(join(workspacePath, 'articles', destinationFolder, `${slug}.html`), 'utf8'), /Mac 改过/);
   const action = { id: '7709ef0f-cee4-4458-b31c-2791d88467d5', method: 'articles.update',
     params: { slug, expectedUpdatedAt: article.result.updatedAt, title: '手机修改' }, files: [photo] };
   const conflict = await request(pairing, 'push', action);
