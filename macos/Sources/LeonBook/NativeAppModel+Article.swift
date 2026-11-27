@@ -570,11 +570,13 @@ extension NativeAppModel {
     }
 
     func loadArticleRelations(for article: NativeArticle) async {
+        let activeStore = store
         let generation = workspaceGeneration
         let navigation = articleNavigationGeneration
         do {
-            let relations = try await store.articleRelations(for: article.slug)
+            let relations = try await activeStore.articleRelations(for: article.slug)
             guard !Task.isCancelled, generation == workspaceGeneration,
+                  store === activeStore,
                   navigation == articleNavigationGeneration,
                   selectedArticle?.slug == article.slug,
                   selectedArticle?.updatedAt == article.updatedAt else { return }
@@ -582,7 +584,7 @@ extension NativeAppModel {
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled, generation == workspaceGeneration,
+            guard !Task.isCancelled, generation == workspaceGeneration, store === activeStore,
                   navigation == articleNavigationGeneration else { return }
             errorMessage = error.localizedDescription
         }

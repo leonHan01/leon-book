@@ -15,30 +15,34 @@ struct NativeNavigationPageRequest: Hashable {
 struct NativeDeferredNavigationContent<Content: View>: View {
     let request: NativeNavigationPageRequest
     var sidebarWidth: CGFloat? = nil
-    var waitForLoadingFrame: @MainActor () async throws -> Void = {
-        // Yield through a display interval instead of starting heavy work from
-        // onAppear/Task.yield, which can still run before the loading frame.
-        try await Task.sleep(nanoseconds: 20_000_000)
-    }
+    var waitForLoadingFrame: (@MainActor () async throws -> Void)? = nil
     @ViewBuilder var content: (NativeNavigationPageRequest) -> Content
     @State private var mountedRequest: NativeNavigationPageRequest?
 
+    private var activeMountedRequest: NativeNavigationPageRequest? {
+        if waitForLoadingFrame == nil && !request.section.requiresDeferredMount {
+            return request
+        }
+        return mountedRequest
+    }
+
     var body: some View {
-        let isReady = mountedRequest == request
+        let currentMounted = activeMountedRequest
+        let isReady = currentMounted == request
         ZStack {
             // Retire the outgoing page after the loading frame as well. Its
             // snapshot must not follow the newly requested section underneath.
-            if let mountedRequest, mountedRequest.workspaceGeneration == request.workspaceGeneration {
-                content(mountedRequest)
-                    .animation(nil, value: mountedRequest)
+            if let currentMounted, currentMounted.workspaceGeneration == request.workspaceGeneration {
+                content(currentMounted)
+                    .animation(nil, value: currentMounted)
                     .opacity(isReady ? 1 : 0)
                     .allowsHitTesting(isReady)
                     .accessibilityHidden(!isReady)
             }
-            NativeNavigationLoadingView(section: request.section, sidebarWidth: sidebarWidth, isActive: !isReady)
-                .opacity(isReady ? 0 : 1)
-                .allowsHitTesting(false)
-                .accessibilityHidden(isReady)
+            if !isReady {
+                NativeNavigationLoadingView(section: request.section, sidebarWidth: sidebarWidth, isActive: true)
+                    .allowsHitTesting(false)
+            }
         }
         .transaction { transaction in
             if !isReady {
@@ -46,9 +50,33 @@ struct NativeDeferredNavigationContent<Content: View>: View {
                 transaction.disablesAnimations = true
             }
         }
+        .background {
+            NativeNavigationFocusBoundary(request: request)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .task(id: request) {
+            if let waitForLoadingFrame {
+                do {
+                    try await waitForLoadingFrame()
+                    try Task.checkCancellation()
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        mountedRequest = request
+                    }
+                } catch {
+                    // Changing destination/workspace or closing the window cancels
+                    // the pending mount. No superseded content should be constructed.
+                }
+                return
+            }
+            guard request.section.requiresDeferredMount else {
+                mountedRequest = request
+                return
+            }
             do {
-                try await waitForLoadingFrame()
+                // Yield through a display interval instead of starting heavy work from
+                // onAppear/Task.yield, which can still run before the loading frame.
+                try await Task.sleep(nanoseconds: 20_000_000)
                 try Task.checkCancellation()
                 withAnimation(.easeOut(duration: 0.12)) {
                     mountedRequest = request
@@ -58,6 +86,27 @@ struct NativeDeferredNavigationContent<Content: View>: View {
                 // the pending mount. No superseded content should be constructed.
             }
         }
+    }
+}
+
+private struct NativeNavigationFocusBoundary: NSViewRepresentable {
+    let request: NativeNavigationPageRequest
+
+    final class Anchor: NSView {
+        var previousRequest: NativeNavigationPageRequest?
+    }
+
+    func makeNSView(context: Context) -> Anchor { Anchor() }
+
+    func updateNSView(_ anchor: Anchor, context: Context) {
+        let previous = anchor.previousRequest
+        anchor.previousRequest = request
+        // An outgoing view can remain mounted during the loading frame or
+        // while it is inactive. Only end editing in the window that owns it.
+        guard let previous, previous != request,
+              let window = anchor.window, let focused = window.firstResponder as? NSView,
+              focused is NSTextView || sequence(first: focused, next: { $0.superview }).contains(where: { $0 is WKWebView }) else { return }
+        window.makeFirstResponder(nil)
     }
 }
 
@@ -146,15 +195,7 @@ private struct NativeNavigationLoadingSpinner: NSViewRepresentable {
     func updateNSView(_ indicator: NSProgressIndicator, context: Context) {
         guard context.coordinator.isAnimating != isAnimating else { return }
         context.coordinator.isAnimating = isAnimating
-        if isAnimating {
-            // The outgoing page remains alive for one display interval. End
-            // its text focus now so typing cannot reach an invisible editor.
-            if let window = indicator.window, let focused = window.firstResponder as? NSView,
-               focused is NSTextView || sequence(first: focused, next: { $0.superview }).contains(where: { $0 is WKWebView }) {
-                window.makeFirstResponder(nil)
-            }
-            indicator.startAnimation(nil)
-        }
+        if isAnimating { indicator.startAnimation(nil) }
         else { indicator.stopAnimation(nil) }
     }
 

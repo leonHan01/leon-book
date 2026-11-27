@@ -66,13 +66,16 @@ struct MomentFeedView: View {
 
                 VStack(alignment: .leading, spacing: 14) {
                     HStack(spacing: 10) {
-                        TextField("搜索正文、标签或日期", text: $model.momentSearchText)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(minWidth: 220, maxWidth: 380)
-                            .help("可搜索正文、#标签、2026-08-22 或 2026年8月22日")
-                            .onChange(of: model.momentSearchText) { _ in
+                        TextField("搜索正文、标签或日期", text: Binding(
+                            get: { model.momentSearchText },
+                            set: {
+                                model.momentSearchText = $0
                                 model.refreshMomentFeed(after: 0.25)
                             }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 220, maxWidth: 380)
+                        .help("可搜索正文、#标签、2026-08-22 或 2026年8月22日")
 
                         Menu {
                             ForEach(MomentFeedLayout.allCases) { layout in
@@ -498,11 +501,17 @@ private enum MomentFeedLayout: String, CaseIterable, Identifiable {
 private struct MomentComposerSection: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
-    @ObservedObject var model: NativeAppModel
+    let model: NativeAppModel
+    @ObservedObject var composer: NativeMomentComposerState
     @State private var isExpanded = false
     @State private var isDropTargeted = false
 
-    private var isEditing: Bool { model.editingMomentID != nil }
+    init(model: NativeAppModel) {
+        self.model = model
+        _composer = ObservedObject(wrappedValue: model.momentComposer)
+    }
+
+    private var isEditing: Bool { composer.editingMomentID != nil }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -553,9 +562,9 @@ private struct MomentComposerSection: View {
         }
         .onAppear {
             // Do not hide an unsaved draft or an edit session when returning to this page.
-            isExpanded = isEditing || !model.momentDraft.isEmpty
+            isExpanded = isEditing || !composer.draft.isEmpty
         }
-        .onChange(of: model.editingMomentID) { editingMomentID in
+        .onChange(of: composer.editingMomentID) { editingMomentID in
             if editingMomentID != nil {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     isExpanded = true
@@ -569,8 +578,14 @@ private struct MomentComposerView: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var composer: NativeMomentComposerState
     @StateObject private var richTextController = MomentRichTextController()
     @State private var isDropTargeted = false
+
+    init(model: NativeAppModel) {
+        self.model = model
+        _composer = ObservedObject(wrappedValue: model.momentComposer)
+    }
 
     private var tags: [String] {
         NativeMomentTag.extract(from: model.momentDraft.text)
@@ -589,8 +604,8 @@ private struct MomentComposerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             MomentRichTextEditor(
-                text: $model.momentDraft.text,
-                textRuns: $model.momentDraft.textRuns,
+                text: $composer.draft.text,
+                textRuns: $composer.draft.textRuns,
                 controller: richTextController,
                 onPasteImages: model.uploadMomentPastedImages,
                 onDropVideos: model.uploadMomentVideos,
@@ -778,7 +793,7 @@ private struct MomentComposerView: View {
 
                 Spacer()
 
-                Toggle("私密", isOn: $model.momentDraft.isPrivate)
+                Toggle("私密", isOn: $composer.draft.isPrivate)
                     .toggleStyle(.checkbox)
                     .disabled(model.isPublishingMoment)
 

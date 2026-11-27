@@ -13,6 +13,10 @@ extension NativeAppModel {
         workspaceResourceIndex.items
     }
 
+    var workspaceArticleDirectory: [NativeWorkspaceResourceNode] {
+        workspaceResourceIndex.articleDirectory
+    }
+
     var workspaceFolderPaths: [String] {
         workspaceResourceIndex.folderPaths
     }
@@ -198,7 +202,10 @@ extension NativeAppModel {
                 _ = try await store.trashWorkspaceSourceItems(
                     relativePaths: eligible.compactMap(\.sourceRelativePath)
                 )
-                try await reload()
+                try await reloadAfterArticleLibraryMutation(
+                    refreshesTrash: true,
+                    refreshesSelectedArticle: true
+                )
                 reconcileArticleNavigationAfterWorkspaceMutation()
                 scheduleBackup()
                 errorMessage = nil
@@ -231,7 +238,9 @@ extension NativeAppModel {
             defer { loadingOperations.end(loadingID) }
             do {
                 _ = try await store.moveWorkspaceSourceItems(moves)
-                try await reload()
+                try await reloadAfterArticleLibraryMutation(
+                    refreshesSelectedArticle: true
+                )
                 selectedArticleFolderPath = retargetedFolderPath
                 pendingNewArticleFolderPath = retargetedDraftFolderPath
                 reconcileArticleNavigationAfterWorkspaceMutation()

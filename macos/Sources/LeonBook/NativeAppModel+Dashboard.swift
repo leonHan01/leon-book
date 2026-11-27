@@ -21,6 +21,7 @@ extension NativeAppModel {
             dashboard = loaded
             isDashboardLoaded = true
             dashboardLoadError = nil
+            ensureDashboardTodosLoaded()
         } catch {
             guard generation == workspaceGeneration, request == dashboardLoadGeneration else { return }
             isDashboardLoaded = false
@@ -38,6 +39,7 @@ extension NativeAppModel {
             let saved = try await activeStore.saveDashboard(document)
             guard generation == workspaceGeneration else { return false }
             dashboard = saved
+            ensureDashboardTodosLoaded()
             errorMessage = nil
             scheduleBackup()
             NativeWorkspaceWindows.reloadDashboards(in: activeStore.rootURL, excluding: self)

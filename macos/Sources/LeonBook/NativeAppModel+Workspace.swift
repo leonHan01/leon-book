@@ -30,11 +30,11 @@ extension NativeAppModel {
         let generation = workspaceGeneration
         let activeStore = store
         let summaries = try await activeStore.listArticles()
-        guard !Task.isCancelled, generation == workspaceGeneration else { return }
+        guard !Task.isCancelled, generation == workspaceGeneration, store === activeStore else { return }
         await replaceArticleSummaries(summaries)
         let resources = try await activeStore.listWorkspaceResources()
         let loadedBookmarks = try await activeStore.listBookmarks()
-        guard !Task.isCancelled, generation == workspaceGeneration else { return }
+        guard !Task.isCancelled, generation == workspaceGeneration, store === activeStore else { return }
         workspaceResources = resources
         bookmarks = loadedBookmarks
         if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -43,30 +43,160 @@ extension NativeAppModel {
         try await reloadKnowledgeGraph()
     }
 
-    private func reloadWorkspaceAncillaryState(generation: Int) async throws {
-        guard generation == workspaceGeneration else { return }
-        await reloadDashboard()
-        guard generation == workspaceGeneration else { return }
-        try await reloadMomentFeed(refreshesFacets: true)
-        guard generation == workspaceGeneration else { return }
-        try await reloadQuestionList()
-        guard generation == workspaceGeneration else { return }
-        try await reloadTodos()
-        guard generation == workspaceGeneration else { return }
-        let loadedTrash = try await store.listTrash()
-        guard generation == workspaceGeneration else { return }
-        trashItems = loadedTrash
-        let loadedActivity = try await store.listActivity(since: activityWindowStart())
-        guard generation == workspaceGeneration else { return }
-        activity = loadedActivity
+    func reloadAfterArticleLibraryMutation(
+        refreshesTrash: Bool = false,
+        refreshesActivity: Bool = false,
+        refreshesSelectedArticle: Bool = false
+    ) async throws {
+        let generation = workspaceGeneration
+        try await reloadArticleLibraryState()
+        guard !Task.isCancelled, generation == workspaceGeneration else { return }
+        if refreshesTrash {
+            let loadedTrash = try await store.listTrash()
+            guard !Task.isCancelled, generation == workspaceGeneration else { return }
+            trashItems = loadedTrash
+            loadedAncillaryDomains.insert(.trash)
+        }
+        if refreshesActivity {
+            let loadedActivity = try await store.listActivity(since: activityWindowStart())
+            guard !Task.isCancelled, generation == workspaceGeneration else { return }
+            activity = loadedActivity
+            loadedAncillaryDomains.insert(.activity)
+        }
+        if refreshesSelectedArticle,
+           !isEditorDirty,
+           let selectedSlug,
+           let selected = articleSummary(for: selectedSlug) {
+            let previousSection = section
+            try await displayArticle(
+                selected,
+                disposition: .refreshActiveTab,
+                recordsPageView: false
+            )
+            if previousSection != .reader {
+                section = previousSection
+            }
+        }
     }
 
+    private func reloadWorkspaceAncillaryState(generation: Int) async throws {
+        guard generation == workspaceGeneration else { return }
+        let activeStore = store
+        let activityStart = activityWindowStart()
+        async let trashLoad = activeStore.listTrash()
+        async let activityLoad = activeStore.listActivity(since: activityStart)
+        async let dashboardLoad: Void = reloadDashboard()
+        async let momentsLoad: Void = reloadMomentFeed(refreshesFacets: true)
+        async let questionsLoad: Void = reloadQuestionList()
+        async let todosLoad: Void = reloadTodos()
+
+        let (loadedTrash, loadedActivity, _, _, _, _) = try await (
+            trashLoad,
+            activityLoad,
+            dashboardLoad,
+            momentsLoad,
+            questionsLoad,
+            todosLoad
+        )
+        guard !Task.isCancelled, generation == workspaceGeneration else { return }
+        trashItems = loadedTrash
+        activity = loadedActivity
+        loadedAncillaryDomains.formUnion([.dashboard, .questions, .todos, .trash, .activity])
+    }
+
+    /// On workspace startup/switch, load only what the active screen needs
+    /// (Dashboard + Activity + lightweight moment count + todos if shown on Dashboard),
+    /// and defer Moments/Q&A/Todos/Trash until the user navigates to those tabs.
     private func scheduleWorkspaceAncillaryReload(generation: Int) {
         workspaceAncillaryLoadTask?.cancel()
         workspaceAncillaryLoadTask = Task { [weak self] in
             guard let self, generation == self.workspaceGeneration else { return }
             do {
-                try await self.reloadWorkspaceAncillaryState(generation: generation)
+                let activeStore = self.store
+                let activityStart = self.activityWindowStart()
+                async let dashboardLoad: Void = self.reloadDashboard()
+                async let activityLoad = activeStore.listActivity(since: activityStart)
+                async let momentCountLoad = activeStore.countMoments(matching: NativeMomentFilter())
+                let (_, loadedActivity, momentCount) = try await (dashboardLoad, activityLoad, momentCountLoad)
+                guard !Task.isCancelled, generation == self.workspaceGeneration else { return }
+                self.activity = loadedActivity
+                if !self.loadedAncillaryDomains.contains(.moments) {
+                    self.totalMomentCount = momentCount
+                }
+                self.loadedAncillaryDomains.formUnion([.dashboard, .activity])
+                self.ensureAncillaryDataLoaded(for: self.section)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled, generation == self.workspaceGeneration else { return }
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func ensureAncillaryDataLoaded(for section: NativeSection) {
+        guard storageReady else { return }
+        let generation = workspaceGeneration
+        switch section {
+        case .dashboard:
+            ensureAncillaryDomainLoaded(.dashboard, generation: generation)
+            ensureAncillaryDomainLoaded(.activity, generation: generation)
+            ensureDashboardTodosLoaded()
+        case .moments:
+            ensureAncillaryDomainLoaded(.moments, generation: generation)
+        case .qAndA:
+            ensureAncillaryDomainLoaded(.questions, generation: generation)
+        case .todos:
+            if isTodoModuleEnabled {
+                ensureAncillaryDomainLoaded(.todos, generation: generation)
+            }
+        case .trash:
+            ensureAncillaryDomainLoaded(.trash, generation: generation)
+        case .articles, .reader, .editor, .graph, .canvas, .chat, .photos, .mediaLibrary, .settings:
+            break
+        }
+    }
+
+    func ensureDashboardTodosLoaded() {
+        guard storageReady, section == .dashboard, isTodoModuleEnabled,
+              (dashboardEditing.draft ?? dashboard).modules.contains(where: { $0.kind == .todos }) else { return }
+        ensureAncillaryDomainLoaded(.todos, generation: workspaceGeneration)
+    }
+
+    private func ensureAncillaryDomainLoaded(_ domain: NativeAncillaryDomain, generation: Int) {
+        guard generation == workspaceGeneration,
+              !loadedAncillaryDomains.contains(domain),
+              ancillaryDomainTasks[domain] == nil else { return }
+        ancillaryDomainTasks[domain] = Task { [weak self] in
+            defer {
+                if let self, generation == self.workspaceGeneration {
+                    self.ancillaryDomainTasks.removeValue(forKey: domain)
+                }
+            }
+            guard let self, !Task.isCancelled, generation == self.workspaceGeneration,
+                  !self.loadedAncillaryDomains.contains(domain) else { return }
+            do {
+                switch domain {
+                case .dashboard:
+                    await self.reloadDashboard()
+                case .moments:
+                    try await self.reloadMomentFeed(refreshesFacets: true)
+                    return
+                case .questions:
+                    try await self.reloadQuestionList()
+                case .todos:
+                    try await self.reloadTodos()
+                case .trash:
+                    let items = try await self.store.listTrash()
+                    guard !Task.isCancelled, generation == self.workspaceGeneration else { return }
+                    self.trashItems = items
+                case .activity:
+                    let items = try await self.store.listActivity(since: self.activityWindowStart())
+                    guard !Task.isCancelled, generation == self.workspaceGeneration else { return }
+                    self.activity = items
+                }
+                guard !Task.isCancelled, generation == self.workspaceGeneration else { return }
+                self.loadedAncillaryDomains.insert(domain)
             } catch is CancellationError {
                 return
             } catch {

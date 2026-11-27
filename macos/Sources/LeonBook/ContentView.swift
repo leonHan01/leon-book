@@ -24,12 +24,16 @@ public struct ContentView: View {
 
     public var body: some View {
         HStack(spacing: 0) {
-            NativeWorkspaceRail(model: model, navigation: model.navigation)
-                // Optional toolbar items change the window's top safe area.
-                // Anchor global navigation to the window, with a stable inset
-                // below its title-bar controls, instead of following that area.
-                .padding(.top, NativeWorkspaceRail.titlebarClearance)
-                .ignoresSafeArea(.container, edges: .top)
+            GeometryReader { proxy in
+                NativeWorkspaceRail(model: model, navigation: model.navigation)
+                    // Optional toolbar items change the window's top safe area.
+                    // Anchor global navigation to the window, with a stable inset
+                    // below its title-bar controls, instead of following that area.
+                    .padding(.top, NativeWorkspaceRail.titlebarClearance)
+                    .frame(width: 52, height: proxy.size.height, alignment: .top)
+            }
+            .frame(width: 52)
+            .ignoresSafeArea(.container, edges: .top)
 
             NativeNavigationWorkspace(
                 model: model,
@@ -262,17 +266,44 @@ private struct NativeNavigationWorkspace: View {
     @State private var isSidebarDividerHovered = false
 
     var body: some View {
-        NativeDeferredNavigationContent(
-            request: NativeNavigationPageRequest(
-                section: navigation.section,
-                revision: navigation.revision,
-                workspaceGeneration: model.workspaceGeneration
-            ),
-            sidebarWidth: navigation.section.hasNavigationSidebar && isSidebarVisible
-                ? CGFloat(workspaceLayout.navigationSidebarWidth) : nil
-        ) { mountedRequest in
-            workspaceContent(for: mountedRequest.section)
+        // These destinations do not use stack navigation. A stable SwiftUI
+        // shell avoids constructing and measuring a NavigationSplitView's
+        // AppKit controllers whenever the selected destination changes, and
+        // keeps the shared sidebar alive across article list/reader/editor switches.
+        HStack(spacing: 0) {
+            if navigation.section.hasNavigationSidebar && isSidebarVisible {
+                NativeSidebar(model: model, section: navigation.section, isPresentingNewUser: $isPresentingNewUser)
+                    .frame(width: CGFloat(workspaceLayout.navigationSidebarWidth))
+                    .clipShape(NativeWorkspaceSurfaceShape())
+                sidebarDivider
+            }
+
+            VStack(spacing: 0) {
+                if !navigation.section.hasNavigationSidebar {
+                    NativeWorkspaceHeader(
+                        model: model,
+                        isPresentingNewUser: $isPresentingNewUser,
+                        showsWorkspaceStatus: true
+                    )
+                    .background(appPalette.sidebar)
+                    .clipShape(NativeWorkspaceSurfaceShape())
+                    Divider()
+                }
+
+                NativeDeferredNavigationContent(
+                    request: NativeNavigationPageRequest(
+                        section: navigation.section,
+                        revision: navigation.revision,
+                        workspaceGeneration: model.workspaceGeneration
+                    )
+                ) { mountedRequest in
+                    detail(for: mountedRequest.section)
+                }
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                .clipped()
+            }
         }
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .toolbar {
             if navigation.section.hasNavigationSidebar {
                 ToolbarItem(placement: .navigation) {
@@ -285,34 +316,6 @@ private struct NativeNavigationWorkspace: View {
             }
         }
         .onChange(of: navigation.section) { _ in sidebarDragStart = nil }
-    }
-
-    private func workspaceContent(for section: NativeSection) -> some View {
-        // These destinations do not use stack navigation. A stable SwiftUI
-        // shell avoids constructing and measuring a NavigationSplitView's
-        // AppKit controllers whenever the selected destination changes.
-        HStack(spacing: 0) {
-            if section.hasNavigationSidebar && isSidebarVisible {
-                NativeSidebar(model: model, section: section, isPresentingNewUser: $isPresentingNewUser)
-                    .frame(width: CGFloat(workspaceLayout.navigationSidebarWidth))
-                    .clipShape(NativeWorkspaceSurfaceShape())
-                sidebarDivider
-            }
-
-            VStack(spacing: 0) {
-                if !section.hasNavigationSidebar {
-                    NativeWorkspaceHeader(
-                        model: model,
-                        isPresentingNewUser: $isPresentingNewUser,
-                        showsWorkspaceStatus: true
-                    )
-                    .background(appPalette.sidebar)
-                    .clipShape(NativeWorkspaceSurfaceShape())
-                    Divider()
-                }
-                detail(for: section)
-            }
-        }
     }
 
     private var sidebarDivider: some View {
@@ -378,14 +381,57 @@ private struct NativeNavigationDetail: View {
     @ObservedObject var workspaceLayout: NativeWorkspaceLayoutState
     @ObservedObject var readingPreferences: NativeReadingPreferences
     @ObservedObject var pageStateCache: NativeNavigationPageStateCache
+    @State private var retainedSections: [NativeSection] = []
+    @State private var retainedWorkspaceGeneration: Int?
 
     var body: some View {
-        switch section {
+        let activeSections = activeRetainedSections
+        ZStack {
+            ForEach(activeSections, id: \.self) { retained in
+                let isActive = retained == section
+                pageView(for: retained)
+                    .opacity(isActive ? 1 : 0)
+                    .allowsHitTesting(isActive)
+                    .accessibilityHidden(!isActive)
+            }
+            if !section.retainsViewWhenInactive {
+                pageView(for: section)
+            }
+        }
+        .onAppear { syncRetainedSections() }
+        .onChange(of: section) { _ in syncRetainedSections() }
+        .onChange(of: model.workspaceGeneration) { _ in syncRetainedSections() }
+    }
+
+    private var activeRetainedSections: [NativeSection] {
+        guard retainedWorkspaceGeneration == model.workspaceGeneration else {
+            return section.retainsViewWhenInactive ? [section] : []
+        }
+        if section.retainsViewWhenInactive && !retainedSections.contains(section) {
+            return retainedSections + [section]
+        }
+        return retainedSections
+    }
+
+    private func syncRetainedSections() {
+        if retainedWorkspaceGeneration != model.workspaceGeneration {
+            retainedWorkspaceGeneration = model.workspaceGeneration
+            retainedSections = section.retainsViewWhenInactive ? [section] : []
+            return
+        }
+        if section.retainsViewWhenInactive && !retainedSections.contains(section) {
+            retainedSections.append(section)
+        }
+    }
+
+    @ViewBuilder
+    private func pageView(for target: NativeSection) -> some View {
+        switch target {
         case .dashboard: DashboardView(model: model).id(model.workspaceGeneration)
         case .chat:
             LeonChatView(archiveRoot: model.storageReady ? model.dataRootDirectoryPath : nil,
                          archiveUser: model.storageReady ? model.currentUser.id : nil)
-        case .articles: ArticleListView(model: model)
+        case .articles: ArticleLibraryView(model: model)
         case .graph: ArticleGraphView(model: model, pageState: pageStateCache.graph)
         case .canvas: InfiniteCanvasView(model: model)
         case .photos: NativePhotoLibraryView(model: model).id(model.workspaceGeneration)
@@ -465,6 +511,8 @@ struct ActivityHeatmapView: View {
     var showsTitle = true
 
     @State private var heatmapWidth: CGFloat = 0
+    @State private var cachedWeeks: [[HeatmapDay]] = []
+    @State private var cachedTotal = 0
 
     private let minimumCellSize: CGFloat = 12
     private let cellSpacing: CGFloat = 3
@@ -475,13 +523,8 @@ struct ActivityHeatmapView: View {
         return max(minimumCellSize, availableCellsWidth / CGFloat(weekCount))
     }
 
-    private var total: Int { activity.reduce(0) { $0 + $1.count } }
-
-    private var activityByDate: [String: Int] {
-        Dictionary(uniqueKeysWithValues: activity.map { ($0.date, $0.count) })
-    }
-
-    private var weeks: [[HeatmapDay]] {
+    private func computeWeeks() -> [[HeatmapDay]] {
+        let activityByDate = Dictionary(uniqueKeysWithValues: activity.map { ($0.date, $0.count) })
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let firstTrackedDay = calendar.date(byAdding: .day, value: -364, to: today) ?? today
@@ -489,6 +532,7 @@ struct ActivityHeatmapView: View {
         let weekdayOffset = (weekday - calendar.firstWeekday + 7) % 7
         let firstCalendarDay = calendar.date(byAdding: .day, value: -weekdayOffset, to: firstTrackedDay) ?? firstTrackedDay
         var days: [HeatmapDay] = []
+        days.reserveCapacity(378)
         var currentDay = firstCalendarDay
 
         while currentDay <= today {
@@ -500,8 +544,14 @@ struct ActivityHeatmapView: View {
         return stride(from: 0, to: days.count, by: 7).map { Array(days[$0..<min($0 + 7, days.count)]) }
     }
 
+    private func refreshCache() {
+        cachedWeeks = computeWeeks()
+        cachedTotal = activity.reduce(0) { $0 + $1.count }
+    }
+
     var body: some View {
-        let heatmapWeeks = weeks
+        let heatmapWeeks = cachedWeeks.isEmpty ? computeWeeks() : cachedWeeks
+        let total = cachedWeeks.isEmpty ? activity.reduce(0) { $0 + $1.count } : cachedTotal
         let size = cellSize(weekCount: heatmapWeeks.count)
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
@@ -562,6 +612,8 @@ struct ActivityHeatmapView: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
+        .onAppear { refreshCache() }
+        .onChange(of: activity) { _ in refreshCache() }
     }
 
     private func weekdayLabels(cellSize: CGFloat) -> some View {

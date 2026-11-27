@@ -54,6 +54,7 @@ public final class NativeAppModel: ObservableObject {
                 articleNavigationGeneration += 1
             }
             navigation.section = newValue
+            ensureAncillaryDataLoaded(for: newValue)
         }
     }
     @Published var articles: [NativeArticleSummary] = []
@@ -74,8 +75,16 @@ public final class NativeAppModel: ObservableObject {
     @Published var isSavingMomentComment = false
     @Published var totalMomentCount = 0
     @Published var filteredMomentCount = 0
-    @Published var questionSession = NativeQuestionSessionState()
-    @Published var todoSession = NativeTodoSession()
+    let questionSessionStore = NativeQuestionSessionStore()
+    let todoSessionStore = NativeTodoSessionStore()
+    var questionSession: NativeQuestionSessionState {
+        get { questionSessionStore.state }
+        set { questionSessionStore.state = newValue }
+    }
+    var todoSession: NativeTodoSession {
+        get { todoSessionStore.state }
+        set { todoSessionStore.state = newValue }
+    }
     var todoLoadGeneration = 0
     var questions: [NativeQuestion] {
         get { questionSession.questions }
@@ -177,8 +186,15 @@ public final class NativeAppModel: ObservableObject {
         get { editorSession.isAutosaving }
         set { editorSession.isAutosaving = newValue }
     }
-    @Published var momentDraft = NativeMomentDraft()
-    @Published var editingMomentID: String?
+    let momentComposer = NativeMomentComposerState()
+    var momentDraft: NativeMomentDraft {
+        get { momentComposer.draft }
+        set { momentComposer.draft = newValue }
+    }
+    var editingMomentID: String? {
+        get { momentComposer.editingMomentID }
+        set { momentComposer.editingMomentID = newValue }
+    }
     @Published var selectedArticleTags: Set<String> = []
     @Published var selectedArticleFolderPath: String?
     @Published var pendingNewArticleFolderPath: String?
@@ -235,7 +251,10 @@ public final class NativeAppModel: ObservableObject {
     @Published var isSearchingArticles = false
     @Published var articleSearchMatchSlugs: Set<String> = []
     @Published var articleSearchResolvedText = ""
-    @Published var bookmarks: [NativeBookmark] = []
+    @Published var bookmarks: [NativeBookmark] = [] {
+        didSet { bookmarkedTargets = Set(bookmarks.map(\.target)) }
+    }
+    private(set) var bookmarkedTargets: Set<NativeBookmarkTarget> = []
     @Published var pendingArticleScrollAnchor: String?
     @Published var articleScrollRevision = UUID()
 
@@ -251,8 +270,14 @@ public final class NativeAppModel: ObservableObject {
             loadingOperations.reset()
             articleLibraryUpdateCoordinator.cancel()
             articleGraphLoadGeneration += 1
+            loadedAncillaryDomains.removeAll()
+            for task in ancillaryDomainTasks.values { task.cancel() }
+            ancillaryDomainTasks.removeAll()
+            if isLoadingMoreMoments { isLoadingMoreMoments = false }
         }
     }
+    var loadedAncillaryDomains: Set<NativeAncillaryDomain> = []
+    var ancillaryDomainTasks: [NativeAncillaryDomain: Task<Void, Never>] = [:]
     var pendingEditorMediaCleanup: [NativeMedia] = []
     var editorOriginalArticle: NativeArticle?
     var backupTask: Task<Void, Never>?
@@ -363,6 +388,7 @@ public final class NativeAppModel: ObservableObject {
         backupOverviewTask?.cancel()
         compatibilityExportTask?.cancel()
         workspaceAncillaryLoadTask?.cancel()
+        for task in ancillaryDomainTasks.values { task.cancel() }
         privacyReloadTask?.cancel()
         momentSearchTask?.cancel()
         questionSearchTask?.cancel()
@@ -388,6 +414,7 @@ public final class NativeAppModel: ObservableObject {
         input: Input,
         using builder: @escaping @Sendable (Input) -> Projection
     ) async -> Projection? {
+        let workspace = workspaceGeneration
         let token = projectionRebuilds.begin(kind)
         if let projectionRebuildWillBuild {
             await projectionRebuildWillBuild(kind)
@@ -395,7 +422,8 @@ public final class NativeAppModel: ObservableObject {
         let projection = await Task.detached(priority: .userInitiated) {
             builder(input)
         }.value
-        guard projectionRebuilds.isCurrent(token) else { return nil }
+        guard !Task.isCancelled, workspace == workspaceGeneration,
+              projectionRebuilds.isCurrent(token) else { return nil }
         return projection
     }
 
@@ -501,6 +529,7 @@ public final class NativeAppModel: ObservableObject {
         _ records: [NativeMomentFacetRecord],
         calendar: Calendar = .current
     ) async {
+        guard !Task.isCancelled else { return }
         guard !records.isEmpty else {
             clearMomentFacetRecords()
             return
@@ -843,27 +872,45 @@ public final class NativeAppModel: ObservableObject {
         )
     }
 
-    func reloadMomentFeed(refreshesFacets: Bool = false) async throws {
+    func reloadMomentFeed(refreshesFacets: Bool = false, showing moment: NativeMoment? = nil) async throws {
+        guard !Task.isCancelled else { return }
+        let activeStore = store
+        let workspace = workspaceGeneration
         momentFeedGeneration += 1
         let generation = momentFeedGeneration
         isLoadingMoreMoments = true
-        defer { if generation == momentFeedGeneration { isLoadingMoreMoments = false } }
+        defer {
+            if workspace == workspaceGeneration, generation == momentFeedGeneration { isLoadingMoreMoments = false }
+        }
+        func isCurrent() -> Bool {
+            !Task.isCancelled && workspace == workspaceGeneration && store === activeStore && generation == momentFeedGeneration
+        }
 
-        let filter = currentMomentFilter
-        let filteredTotal = try await store.countMoments(matching: filter)
-        let page = try await store.listMomentPage(matching: filter, limit: momentPageSize)
-        guard generation == momentFeedGeneration else { return }
+        let filteredTotal: Int
+        let page: NativeMomentPage
+        if let moment {
+            filteredTotal = 1
+            page = NativeMomentPage(moments: [moment], nextCursor: nil)
+        } else {
+            let filter = currentMomentFilter
+            filteredTotal = try await activeStore.countMoments(matching: filter)
+            guard isCurrent() else { return }
+            page = try await activeStore.listMomentPage(matching: filter, limit: momentPageSize)
+        }
+        guard isCurrent() else { return }
 
         filteredMomentCount = filteredTotal
         moments = page.moments
         nextMomentCursor = page.nextCursor
         hasMoreMoments = page.nextCursor != nil
 
-        if refreshesFacets {
-            let facets = try await store.listMomentFacetRecords()
-            guard generation == momentFeedGeneration else { return }
-            totalMomentCount = facets.count
+        if refreshesFacets || !loadedAncillaryDomains.contains(.moments) {
+            let facets = try await activeStore.listMomentFacetRecords()
+            guard isCurrent() else { return }
             await replaceMomentFacetRecords(facets)
+            guard isCurrent() else { return }
+            totalMomentCount = facets.count
+            loadedAncillaryDomains.insert(.moments)
         }
     }
 
@@ -899,9 +946,11 @@ public final class NativeAppModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
             guard !Task.isCancelled, let self else { return }
+            let workspace = self.workspaceGeneration
             do {
                 try await self.reloadMomentFeed()
             } catch {
+                guard !Task.isCancelled, workspace == self.workspaceGeneration else { return }
                 self.errorMessage = error.localizedDescription
             }
         }
@@ -909,7 +958,12 @@ public final class NativeAppModel: ObservableObject {
 
 
     func refreshActivity() async throws {
-        activity = try await store.listActivity(since: activityWindowStart())
+        let activeStore = store
+        let workspace = workspaceGeneration
+        let items = try await activeStore.listActivity(since: activityWindowStart())
+        guard !Task.isCancelled, workspace == workspaceGeneration, store === activeStore else { return }
+        activity = items
+        loadedAncillaryDomains.insert(.activity)
     }
 
     public func newArticle() {
@@ -1306,7 +1360,10 @@ public final class NativeAppModel: ObservableObject {
             selectedSlug = nil
             let nextTabID = articleTabs.first?.id
             activeArticleTabID = nil
-            try await reload()
+            try await reloadAfterArticleLibraryMutation(
+                refreshesTrash: true,
+                refreshesActivity: true
+            )
             if let nextTabID {
                 activateArticleTab(nextTabID)
             } else {
@@ -1319,49 +1376,66 @@ public final class NativeAppModel: ObservableObject {
         }
     }
 
-    func restoreTrash(_ item: NativeTrashItem) {
-        guard !isBackingUp, !loadingOperations.contains(.trash) else { return }
-        let loadingID = loadingOperations.begin(.trash)
-        Task {
-            defer { loadingOperations.end(loadingID) }
-            do {
-                try await store.restoreTrash(item)
-                try await reload()
-                scheduleBackup()
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+    @discardableResult
+    func restoreTrash(_ item: NativeTrashItem) -> Task<Void, Never>? {
+        performTrashMutation(restoring: item.kind) { store in
+            try await store.restoreTrash(item)
         }
     }
 
     func permanentlyDeleteTrash(_ item: NativeTrashItem) {
-        guard !isBackingUp, !loadingOperations.contains(.trash) else { return }
-        let loadingID = loadingOperations.begin(.trash)
-        Task {
-            defer { loadingOperations.end(loadingID) }
-            do {
-                try await store.permanentlyDeleteTrash(item)
-                try await reload()
-                scheduleBackup()
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+        performTrashMutation { store in
+            try await store.permanentlyDeleteTrash(item)
         }
     }
 
     func emptyTrash() {
-        guard !isBackingUp, !loadingOperations.contains(.trash) else { return }
+        performTrashMutation { store in
+            try await store.emptyTrash()
+        }
+    }
+
+    @discardableResult
+    private func performTrashMutation(
+        restoring kind: NativeTrashKind? = nil,
+        _ mutation: @escaping (LocalBlogStore) async throws -> Void
+    ) -> Task<Void, Never>? {
+        guard !isBackingUp, !isSwitchingWorkspace, !loadingOperations.contains(.trash) else { return nil }
+        let activeStore = store
+        let workspace = workspaceGeneration
         let loadingID = loadingOperations.begin(.trash)
-        Task {
+        return Task {
             defer { loadingOperations.end(loadingID) }
+            @MainActor
+            func isCurrent() -> Bool {
+                !Task.isCancelled && workspace == workspaceGeneration && store === activeStore
+            }
             do {
-                try await store.emptyTrash()
-                try await reload()
+                try await mutation(activeStore)
+                guard isCurrent() else { return }
+                switch kind {
+                case .article:
+                    try await reloadArticleLibraryState()
+                case .moment:
+                    if loadedAncillaryDomains.contains(.moments) || ancillaryDomainTasks[.moments] != nil {
+                        try await reloadMomentFeed(refreshesFacets: true)
+                    } else {
+                        let count = try await activeStore.countMoments(matching: .all)
+                        guard isCurrent() else { return }
+                        if !loadedAncillaryDomains.contains(.moments) { totalMomentCount = count }
+                    }
+                case nil:
+                    break
+                }
+                guard isCurrent() else { return }
+                try await refreshTrash()
+                guard isCurrent() else { return }
+                if kind != nil { try await refreshActivity() }
+                guard isCurrent() else { return }
                 scheduleBackup()
                 errorMessage = nil
             } catch {
+                guard isCurrent() else { return }
                 errorMessage = error.localizedDescription
             }
         }
@@ -1927,6 +2001,11 @@ public final class NativeAppModel: ObservableObject {
     }
 
     private func refreshTrash() async throws {
-        trashItems = try await store.listTrash()
+        let activeStore = store
+        let workspace = workspaceGeneration
+        let items = try await activeStore.listTrash()
+        guard !Task.isCancelled, workspace == workspaceGeneration, store === activeStore else { return }
+        trashItems = items
+        loadedAncillaryDomains.insert(.trash)
     }
 }

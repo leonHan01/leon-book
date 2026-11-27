@@ -12,7 +12,7 @@ struct NativeWorkspaceResourceSection: View {
     @State private var dropTargetRowID: String?
 
     var body: some View {
-        let directory = NativeWorkspaceResourceTree.articleDirectory(model.workspaceResources)
+        let directory = model.workspaceArticleDirectory
         Section {
             if directory.isEmpty {
                 Text("还没有文章。请新建目录，或在“未分类”目录中开始写作。")

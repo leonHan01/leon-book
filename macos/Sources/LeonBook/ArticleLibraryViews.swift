@@ -125,13 +125,18 @@ struct ArticleLibraryView: View {
     }
 
     private func listLayout(groups: [ArticleLibraryDisplayGroup]) -> some View {
-        List {
+        let bookmarkedTargets = model.bookmarkedTargets
+        return List {
             ForEach(groups) { group in
                 Section {
                     ForEach(group.articles) { article in
-                        ArticleLibraryListRow(model: model, article: article)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 5, leading: 18, bottom: 5, trailing: 18))
+                        ArticleLibraryListRow(
+                            model: model,
+                            article: article,
+                            isBookmarked: bookmarkedTargets.contains(.article(slug: article.slug))
+                        )
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 18, bottom: 5, trailing: 18))
                     }
                 } header: {
                     if groups.count > 1 { ArticleLibraryGroupHeader(group: group) }
@@ -150,7 +155,8 @@ struct ArticleLibraryView: View {
     }
 
     private func cardLayout(groups: [ArticleLibraryDisplayGroup]) -> some View {
-        ScrollView {
+        let bookmarkedTargets = model.bookmarkedTargets
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
                 ForEach(groups) { group in
                     VStack(alignment: .leading, spacing: 10) {
@@ -161,7 +167,11 @@ struct ArticleLibraryView: View {
                             spacing: 14
                         ) {
                             ForEach(group.articles) { article in
-                                ArticleLibraryCard(model: model, article: article)
+                                ArticleLibraryCard(
+                                    model: model,
+                                    article: article,
+                                    isBookmarked: bookmarkedTargets.contains(.article(slug: article.slug))
+                                )
                             }
                         }
                     }
@@ -231,7 +241,9 @@ private struct ArticleLibraryTableGroup: View {
                             .lineLimit(1)
                             .frame(width: column.width, alignment: .leading)
                         }
-                        ArticleLibraryBookmarkButton(model: model, article: article)
+                        ArticleLibraryBookmarkButton(
+                            isBookmarked: model.isBookmarked(.article(slug: article.slug))
+                        ) { model.toggleArticleBookmark(article) }
                             .frame(width: 24)
                     }
                     .font(.callout)
@@ -292,8 +304,9 @@ private struct ArticleLibraryGroupHeader: View {
 private struct ArticleLibraryListRow: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
-    @ObservedObject var model: NativeAppModel
+    let model: NativeAppModel
     let article: NativeArticleSummary
+    let isBookmarked: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -326,11 +339,13 @@ private struct ArticleLibraryListRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            ArticleLibraryBookmarkButton(model: model, article: article)
+            ArticleLibraryBookmarkButton(isBookmarked: isBookmarked) {
+                model.toggleArticleBookmark(article)
+            }
         }
         .padding(12)
         .contextMenu {
-            Button(LocalizedStringKey(model.isBookmarked(.article(slug: article.slug)) ? "取消收藏" : "收藏文章")) {
+            Button(LocalizedStringKey(isBookmarked ? "取消收藏" : "收藏文章")) {
                 model.toggleArticleBookmark(article)
             }
             Button("移动或重命名 Markdown…") {
@@ -343,8 +358,9 @@ private struct ArticleLibraryListRow: View {
 private struct ArticleLibraryCard: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
-    @ObservedObject var model: NativeAppModel
+    let model: NativeAppModel
     let article: NativeArticleSummary
+    let isBookmarked: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
@@ -352,7 +368,9 @@ private struct ArticleLibraryCard: View {
                 NativeIcon.image(article.status == .published ? "doc.text.fill" : "doc.badge.ellipsis", size: 24)
                     .foregroundStyle(article.status == .published ? appPalette.accent : appPalette.textSecondary)
                 Spacer()
-                ArticleLibraryBookmarkButton(model: model, article: article)
+                ArticleLibraryBookmarkButton(isBookmarked: isBookmarked) {
+                    model.toggleArticleBookmark(article)
+                }
             }
             Button { model.selectSlug(article.slug) } label: {
                 VStack(alignment: .leading, spacing: 8) {
@@ -396,17 +414,16 @@ private struct ArticleLibraryCard: View {
 }
 
 private struct ArticleLibraryBookmarkButton: View {
-    @ObservedObject var model: NativeAppModel
-    let article: NativeArticleSummary
+    let isBookmarked: Bool
+    let action: () -> Void
 
     var body: some View {
-        let bookmarked = model.isBookmarked(.article(slug: article.slug))
-        Button { model.toggleArticleBookmark(article) } label: {
-            NativeIcon.image(bookmarked ? "bookmark.fill" : "bookmark")
+        Button(action: action) {
+            NativeIcon.image(isBookmarked ? "bookmark.fill" : "bookmark")
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(bookmarked ? Color.accentColor : .secondary)
-        .help(Text(LocalizedStringKey(bookmarked ? "取消收藏文章" : "收藏文章")))
+        .foregroundStyle(isBookmarked ? Color.accentColor : .secondary)
+        .help(Text(LocalizedStringKey(isBookmarked ? "取消收藏文章" : "收藏文章")))
     }
 }
 

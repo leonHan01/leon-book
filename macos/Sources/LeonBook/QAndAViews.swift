@@ -5,8 +5,14 @@ struct QAndAView: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var questionSession: NativeQuestionSessionStore
     @State private var isPresentingQuestionComposer = false
     @State private var detailQuestionID: String?
+
+    init(model: NativeAppModel) {
+        self.model = model
+        _questionSession = ObservedObject(wrappedValue: model.questionSessionStore)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -164,9 +170,9 @@ struct QAndAView: View {
     private var filters: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                TextField("搜索问题标题、正文或标签", text: $model.questionSearchText)
+                TextField("搜索问题标题、正文或标签", text: $questionSession.state.searchText)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: model.questionSearchText) { _ in
+                    .onChange(of: questionSession.state.searchText) { _ in
                         model.refreshQuestionList(after: 0.25)
                     }
 
@@ -410,10 +416,17 @@ private struct QuestionDetailView: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var questionSession: NativeQuestionSessionStore
     let onSelectTag: (String) -> Void
     @StateObject private var answerEditorController = MomentRichTextController()
     @State private var answerComposerMode = QuestionAnswerComposerMode.edit
     @State private var showsAIChat = true
+
+    init(model: NativeAppModel, onSelectTag: @escaping (String) -> Void) {
+        self.model = model
+        _questionSession = ObservedObject(wrappedValue: model.questionSessionStore)
+        self.onSelectTag = onSelectTag
+    }
 
     var body: some View {
         if let question = model.selectedQuestion {
@@ -629,8 +642,8 @@ private struct QuestionDetailView: View {
                             .allowsHitTesting(false)
                     }
                     MomentRichTextEditor(
-                        text: $model.questionAnswerDraft.body,
-                        textRuns: $model.questionAnswerDraft.textRuns,
+                        text: $questionSession.state.answerDraft.body,
+                        textRuns: $questionSession.state.answerDraft.textRuns,
                         controller: answerEditorController,
                         onPasteImages: model.uploadQuestionAnswerPastedImages,
                         maximumLength: 10_000
@@ -731,6 +744,12 @@ private struct QuestionComposerSheet: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var questionSession: NativeQuestionSessionStore
+
+    init(model: NativeAppModel) {
+        self.model = model
+        _questionSession = ObservedObject(wrappedValue: model.questionSessionStore)
+    }
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
     @State private var bodyText = ""

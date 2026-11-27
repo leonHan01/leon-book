@@ -70,7 +70,9 @@ struct DashboardView: View {
         .sheet(item: $selectedModule) { module in
             DashboardModuleEditor(model: model, module: module) { editing.update($0) }
         }
-        .task(id: model.storageReady) { await model.reloadDashboard() }
+        .task(id: model.storageReady) {
+            if !model.isDashboardLoaded { await model.reloadDashboard() }
+        }
         .onChange(of: activeDrag?.sessionID) { sessionID in
             if sessionID == nil { dragPreviews.clear() }
         }

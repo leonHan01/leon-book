@@ -360,33 +360,23 @@ extension NativeAppModel {
     private func openMomentSearchResult(_ id: String) {
         let workspace = workspaceGeneration
         let activeStore = store
-        Task {
+        momentSearchTask?.cancel()
+        momentSearchTask = Task {
             do {
                 let moment = try await activeStore.getMoment(id: id)
-                guard workspace == workspaceGeneration else { return }
-                selectedMomentTags = []
+                guard !Task.isCancelled, workspace == workspaceGeneration, store === activeStore else { return }
                 momentDateFilter = .all
                 showsOnlyFavoriteMoments = false
-
                 let text = moment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty {
-                    momentSearchText = text
-                    try await reloadMomentFeed()
-                } else if let tag = moment.tags.first {
-                    momentSearchText = ""
-                    selectedMomentTags = [tag]
-                    try await reloadMomentFeed()
-                } else {
-                    momentSearchText = ""
-                    moments = [moment]
-                    filteredMomentCount = 1
-                    nextMomentCursor = nil
-                    hasMoreMoments = false
-                }
+                let tag = text.isEmpty ? moment.tags.first : nil
+                momentSearchText = text
+                selectedMomentTags = tag.map { [$0] } ?? []
+                try await reloadMomentFeed(showing: text.isEmpty && tag == nil ? moment : nil)
+                guard !Task.isCancelled, workspace == workspaceGeneration, store === activeStore else { return }
                 section = .moments
                 errorMessage = nil
             } catch {
-                guard workspace == workspaceGeneration else { return }
+                guard !Task.isCancelled, workspace == workspaceGeneration, store === activeStore else { return }
                 errorMessage = error.localizedDescription
             }
         }

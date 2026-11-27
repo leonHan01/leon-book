@@ -91,6 +91,23 @@ enum NativeSection: Hashable {
     var hasNavigationSidebar: Bool {
         showsArticleDirectory || self == .mediaLibrary
     }
+
+    /// WebKit-backed and media-heavy destinations defer mounting for one frame
+    /// so the navigation rail highlight updates before heavy view construction.
+    var requiresDeferredMount: Bool {
+        switch self {
+        case .canvas, .chat, .reader, .editor, .photos, .mediaLibrary, .moments:
+            return true
+        case .dashboard, .articles, .graph, .qAndA, .todos, .trash, .settings:
+            return false
+        }
+    }
+
+    /// Dashboard mounts immediately, but its modules can contain live media
+    /// and WebKit views whose resources must be released on leave.
+    var retainsViewWhenInactive: Bool {
+        self != .dashboard && !requiresDeferredMount
+    }
 }
 
 enum NativeSearchPresentation: String, Identifiable {
@@ -99,4 +116,32 @@ enum NativeSearchPresentation: String, Identifiable {
     case commandPalette
 
     var id: String { rawValue }
+}
+
+/// High-frequency domain state isolated from `NativeAppModel` so typing or
+/// filtering in Q&A, Todos, or the Moment composer does not invalidate every
+/// retained view across the workspace.
+@MainActor
+final class NativeQuestionSessionStore: ObservableObject {
+    @Published var state = NativeQuestionSessionState()
+}
+
+@MainActor
+final class NativeTodoSessionStore: ObservableObject {
+    @Published var state = NativeTodoSession()
+}
+
+@MainActor
+final class NativeMomentComposerState: ObservableObject {
+    @Published var draft = NativeMomentDraft()
+    @Published var editingMomentID: String?
+}
+
+enum NativeAncillaryDomain: Hashable {
+    case dashboard
+    case moments
+    case questions
+    case todos
+    case trash
+    case activity
 }

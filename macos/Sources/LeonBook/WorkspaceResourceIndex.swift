@@ -4,6 +4,7 @@ import Foundation
 /// arrays with the tree; lookup tables and parent links store only offsets.
 @MainActor
 final class NativeWorkspaceResourceIndex {
+    private let roots: [NativeWorkspaceResourceNode]
     let items: [NativeWorkspaceResourceNode]
     private let indexByID: [String: Int]
     private let indexByArticleSlug: [String: Int]
@@ -12,8 +13,10 @@ final class NativeWorkspaceResourceIndex {
     // Folder destinations are only needed when moving or creating articles.
     // Avoid scanning the tree for directories during normal navigation.
     private(set) lazy var folderPaths = NativeWorkspaceResourceTree.folderPaths(for: items)
+    private(set) lazy var articleDirectory = NativeWorkspaceResourceTree.articleDirectory(roots)
 
     init(roots: [NativeWorkspaceResourceNode]) {
+        self.roots = roots
         var items: [NativeWorkspaceResourceNode] = []
         var indexByID: [String: Int] = [:]
         var indexByArticleSlug: [String: Int] = [:]

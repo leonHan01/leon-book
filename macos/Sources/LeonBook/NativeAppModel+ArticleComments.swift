@@ -63,19 +63,30 @@ extension NativeAppModel {
     func convertUnlinkedMention(_ mention: NativeArticleMention) {
         guard let target = selectedArticle,
               !isSaving, !isBackingUp, !isRestoringBackup else { return }
+        let generation = workspaceGeneration
+        let activeStore = store
         isSaving = true
         Task {
             defer { isSaving = false }
             do {
-                _ = try await store.convertUnlinkedMention(
+                let converted = try await activeStore.convertUnlinkedMention(
                     sourceSlug: mention.article.slug,
                     targetSlug: target.slug,
                     expectedUpdatedAt: mention.article.updatedAt
                 )
-                try await reload()
+                guard generation == workspaceGeneration, store === activeStore else { return }
                 scheduleBackup()
+                articleSelectionCache.insert(converted, workspaceGeneration: generation)
+                await mergeArticleSummaries([converted.summary], workspaceGeneration: generation)
+                guard generation == workspaceGeneration, store === activeStore else { return }
+                try await reloadKnowledgeGraph()
+                guard generation == workspaceGeneration, store === activeStore else { return }
                 errorMessage = nil
+                if let selectedArticle, selectedArticle.slug == target.slug {
+                    await loadArticleRelations(for: selectedArticle)
+                }
             } catch {
+                guard generation == workspaceGeneration, store === activeStore else { return }
                 errorMessage = NativeLocalization.text("转换双链失败：\(error.localizedDescription)")
             }
         }

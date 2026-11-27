@@ -177,12 +177,20 @@ private struct DashboardTodoContent: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var todoSession: NativeTodoSessionStore
     let module: NativeDashboardModule
     let isEditing: Bool
     @State private var title = ""
 
+    init(model: NativeAppModel, module: NativeDashboardModule, isEditing: Bool) {
+        self.model = model
+        _todoSession = ObservedObject(wrappedValue: model.todoSessionStore)
+        self.module = module
+        self.isEditing = isEditing
+    }
+
     private var projection: TodoListProjection {
-        TodoListProjection(items: model.todoSession.items, filter: module.showsCompletedTodos ? .all : .open)
+        TodoListProjection(items: todoSession.state.items, filter: module.showsCompletedTodos ? .all : .open)
     }
 
     var body: some View {
@@ -236,6 +244,7 @@ private struct DashboardTodoContent: View {
                 }.font(.caption)
             }
         }
+        .task(id: model.storageReady) { model.ensureDashboardTodosLoaded() }
     }
 
     private func addTodo() {

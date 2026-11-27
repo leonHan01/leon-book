@@ -169,7 +169,7 @@ extension NativeAppModel {
     }
 
     func isBookmarked(_ target: NativeBookmarkTarget) -> Bool {
-        bookmarks.contains(where: { $0.target == target })
+        bookmarkedTargets.contains(target)
     }
 
     func toggleArticleBookmark(_ article: NativeArticleSummary) {

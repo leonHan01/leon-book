@@ -5,7 +5,13 @@ struct TodoListView: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var todoSession: NativeTodoSessionStore
     @State private var composer: TodoComposerContext?
+
+    init(model: NativeAppModel) {
+        self.model = model
+        _todoSession = ObservedObject(wrappedValue: model.todoSessionStore)
+    }
     @State private var emailContent: EmailContent?
     @FocusState private var quickEntryFocused: Bool
 
@@ -113,12 +119,12 @@ struct TodoListView: View {
     private var quickEntry: some View {
         HStack(spacing: 12) {
             NativeIcon.image("plus.circle", size: 18).foregroundStyle(appPalette.blue)
-            TextField("添加待办，按回车保存", text: $model.todoSession.quickTitle)
+            TextField("添加待办，按回车保存", text: $todoSession.state.quickTitle)
                 .textFieldStyle(.plain).focused($quickEntryFocused)
                 .onSubmit { addQuickTodo() }
             Button("添加") { addQuickTodo() }
                 .nativePrimaryButton()
-                .disabled(!model.canWriteTodos || model.todoSession.quickTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!model.canWriteTodos || todoSession.state.quickTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(14).background(appPalette.surface, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(quickEntryFocused ? appPalette.blue.opacity(0.65) : appPalette.border, lineWidth: 1))
@@ -133,16 +139,16 @@ struct TodoListView: View {
 
     private var filters: some View {
         HStack(spacing: 18) {
-            Picker("待办筛选", selection: $model.todoSession.filter) {
+            Picker("待办筛选", selection: $todoSession.state.filter) {
                 ForEach(TodoFilter.allCases) { filter in Text(LocalizedStringKey(filter.label)).tag(filter) }
             }
             .pickerStyle(.segmented).frame(maxWidth: 440)
             Spacer(minLength: 10)
             HStack(spacing: 6) {
                 NativeIcon.image("magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索待办或备注", text: $model.todoSession.search).textFieldStyle(.plain)
-                if !model.todoSession.search.isEmpty {
-                    Button { model.todoSession.search = "" } label: { NativeIcon.image("xmark.circle.fill").foregroundStyle(.secondary) }
+                TextField("搜索待办或备注", text: $todoSession.state.search).textFieldStyle(.plain)
+                if !todoSession.state.search.isEmpty {
+                    Button { todoSession.state.search = "" } label: { NativeIcon.image("xmark.circle.fill").foregroundStyle(.secondary) }
                         .buttonStyle(.plain).help("清除搜索")
                 }
             }
@@ -257,6 +263,7 @@ private struct TodoEditorSheet: View {
     @Environment(\.nativeAppPalette) private var appPalette
 
     @ObservedObject var model: NativeAppModel
+    @ObservedObject var todoSession: NativeTodoSessionStore
     let context: TodoComposerContext
     @Environment(\.dismiss) private var dismiss
     @State private var draft: TodoDraft
@@ -264,7 +271,10 @@ private struct TodoEditorSheet: View {
     @FocusState private var titleFocused: Bool
 
     init(model: NativeAppModel, context: TodoComposerContext) {
-        self.model = model; self.context = context; _draft = State(initialValue: context.draft)
+        self.model = model
+        _todoSession = ObservedObject(wrappedValue: model.todoSessionStore)
+        self.context = context
+        _draft = State(initialValue: context.draft)
     }
 
     var body: some View {
