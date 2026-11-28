@@ -2,60 +2,65 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-The Android and iOS companion can edit articles, local posts, and tasks offline, then sync with a selected Mac workspace. See the [mobile setup guide](mobile/README.md).
+A native macOS workspace for writing, collecting ideas, and organizing personal content. Keep articles, local posts, Q&A, tasks, photos, audio, video, whiteboards, and chat together, with a customizable homepage built around your workflow.
 
-A native macOS workspace for writing, collecting ideas, and organizing personal content. Keep articles, local posts, Q&A, tasks, photos, audio, and video together, with a homepage you can arrange around your work.
+Built with **SwiftUI, AppKit, WebKit, and SQLite**. Core writing and library features run fully offline with no Node.js service, external browser, or local HTTP server required. All articles, structured records, and media stay in your chosen local data directory.
 
-Built with **SwiftUI, AppKit, WebKit, and SQLite**. Core writing and library features work offline; the app runs without a Node.js service, an external browser, or a local HTTP server. Articles and media stay in your chosen data directory.
+[Quick start](#quick-start) · [Features](#features) · [Mobile sync](#mobile-sync) · [Chat](#chat) · [Data and backups](#data-and-backups) · [Automation](#automation) · [App commands](#app-commands) · [Development](#development)
 
-The new **Chat** destination integrates LeonApp for Mac: agents and groups, messages and attachments, search and favorites, branches, context, notifications, usage, and conversation archives. Configure the chat server and token on first use. Archives become drafts in the current LeonBook library and user. See the [integration and feature mapping](docs/LEON_CHAT_INTEGRATION.md).
+![LeonBook workspace overview](docs/screenshots/leonbook-dashboard-en.jpg)
 
-[Quick start](#quick-start) · [Features](#features) · [Mobile sync](#mobile-sync) · [Chat](#chat) · [Data and backups](#data-and-backups) · [Automation](#automation) · [Development](#development)
+<details>
+<summary>More screenshots: article reader, knowledge graph, posts, and Q&A (demo workspace)</summary>
+
+![Article reader with outline and links](docs/screenshots/leonbook-article-en.jpg)
+
+![Knowledge graph connecting articles](docs/screenshots/leonbook-graph-en.jpg)
+
+![Local posts timeline](docs/screenshots/leonbook-posts-en.jpg)
+
+![Question and answer detail](docs/screenshots/leonbook-qna-en.jpg)
+
+</details>
 
 ## Quick start
 
 Build requirements: **macOS 13+** and **Swift 5.10+** with a macOS SDK. Command Line Tools with a compatible toolchain are sufficient; full Xcode is optional.
 
-From the repository root:
-
-```bash
-./scripts/leonblog open
-```
-
-The script builds the app if it is missing or out of date, then opens it. The first build uses Debug; subsequent launches reuse the installed build configuration. The app bundle is written to `macos/dist/leon-book.app` and is ad-hoc signed for local use.
-
-To choose a data directory explicitly:
+From the repository root, launch with an explicit data directory:
 
 ```bash
 LEON_BOOK_WORKDIR="$HOME/Documents/LeonBookData" ./scripts/leonblog open
 ```
 
-Without this override, the app uses your remembered directory, then the repository's default of `/Volumes/T7Shield/myblog`. If that directory does not exist, the app asks you to choose one. Each local user has an independent workspace.
+Or launch directly using your remembered workspace directory:
+
+```bash
+./scripts/leonblog open
+```
+
+The script builds the app if it is missing or out of date, then opens `macos/dist/leon-book.app` (ad-hoc signed for local use). The first build uses Debug; subsequent launches reuse the installed build configuration.
+
+If `LEON_BOOK_WORKDIR` is not set, the app uses your previously selected directory, falling back to `/Volumes/T7Shield/myblog`. If that path does not exist, the app prompts you to choose one. Each local user has an independent workspace.
 
 ## Features
 
 | Area | What you can do |
 | --- | --- |
-| Custom homepage | Combine text, images, audio, video, articles, tasks, statistics, recent edits, and activity. Drag modules to reorder or resize them, then save your layout. |
+| Custom homepage | Combine text, images, audio, video, articles, tasks, statistics, recent edits, and 365-day activity heatmaps. Drag modules to reorder or resize them, then save your layout. |
 | Writing | Edit HTML rich text with headings, lists, tables, code blocks, callouts, and attachments. Use `/` commands, save drafts, compare versions, and restore recovery snapshots. |
-| Article library | Organize articles in directories up to five levels deep. Switch between list, table, card, board, and calendar views; use categories, tags, and typed properties. |
-| Search and links | Search articles and posts with SQLite FTS5. Navigate outlines, backlinks, outgoing links, and knowledge graphs; keep articles, headings, and searches in bookmarks. |
+| Article library | Organize articles in directories up to five levels deep. Switch between list, table, card, board, and calendar views; organize with categories, tags, and typed properties. |
+| Search and links | Search articles and posts with SQLite FTS5. Navigate outlines, backlinks, outgoing links, and knowledge graphs; bookmark articles, headings, and searches. |
 | Whiteboards and canvas | Insert offline Excalidraw drawings into articles, or arrange articles, posts, notes, webpages, and files on an infinite canvas with groups and connections. Import and export `.canvas` files. |
-| Posts and Q&A | Keep a local timeline with images, comments, and replies, and collect questions with their answers. |
-| Photos | Create albums, import or drag in images from Finder, select multiple items, search and sort, and browse full-size images with zoom and keyboard navigation. |
-| Media Library | Organize video and audio into independent groups, add introductions, search, and play files with native controls and saved progress. |
-| Tasks | Track priorities, due dates, and notes. Filter open, today, overdue, and completed tasks, and include a task list on the homepage. |
-| Workspaces | Switch between local users, keep navigation independent across windows, and save named reading or writing layouts. |
-| Mobile companion | Edit articles, posts, and tasks offline on Android or iOS, then sync with a paired Mac workspace. |
-| Chat | Connect to a LeonApp server to work with agents and groups, and archive conversations as article drafts. |
+| Posts and Q&A | Keep a local timeline with images, MP4 videos, MP3 audio, 1–4 column waterfall layouts, immersive slide browsing, comments, and replies; collect questions and long-form Markdown answers. |
+| Photos | Create albums, import or drag in images from Finder, multi-select, search and sort, and browse full-size images with zoom and keyboard navigation. |
+| Media Library | Organize video and audio into independent groups, add descriptions, search, and play files with native controls and saved resume positions. |
+| Tasks | Track priorities, due dates, and notes. Filter open, today, overdue, and completed tasks, and pin a task list on the homepage. |
+| Workspaces & privacy | Switch between local users, keep navigation independent across windows, save named reading/writing layouts, mark items private, and toggle global privacy lock from the navigation rail. |
+| Mobile companion | Edit articles, local posts, and tasks offline on Android or iOS, then sync bidirectionally with a paired Mac workspace. |
+| Chat | Integrate LeonApp for Mac: agents and groups, messages and attachments, search, favorites, branches, context, notifications, usage, and archiving conversations as article drafts. |
 
-Article **Publish** and posting to the timeline update your local library. They do not publish content to an internet service. Embedded remote webpages require a network connection.
-
-### AI-assisted reading
-
-Open the sparkles button or **AI Chat** in the article reader, or use the assistant beside a question. Choose DeepSeek `deepseek-flash` or OpenAI. Configure each provider's API key in **Settings → AI Reading Settings**; OpenAI automatically loads available text models into a dropdown, with a refresh button to update the list. Keys are scoped to the workspace and stored in the local macOS Keychain.
-
-Sending a message includes the current article text or question title and body, together with that content's conversation history. Replies stream into the panel and can be stopped or copied. Histories persist separately for each article, question, and workspace. Save a reply or the entire conversation as a local article comment or question answer with one click; content exceeding the 2,000-character comment or 10,000-character answer limit opens an editor first. Existing manual answer drafts are preserved.
+> **Offline & network boundaries**: Article **Publish** and timeline posts update your local library only and never upload to a public service. Network access is used only when you explicitly opt in to **AI-assisted reading**, **Send email (SMTP)**, **Chat**, **Mobile sync (LAN)**, or embedded remote webpages / remote media during export.
 
 ### Writing and navigation
 
@@ -70,6 +75,12 @@ Editing pauses trigger a recovery snapshot after 3 seconds. Version history supp
 | `⇧⌘F` | Open full-text search |
 
 Commands support recent items, pins, and configurable shortcuts in **Settings → Commands and Shortcuts**. Search supports filters such as `tag:writing`, `status:draft`, `type:article`, and `[property:value]`.
+
+### AI-assisted reading
+
+Open the sparkles button or **AI Chat** in the article reader, or use the assistant beside a question. Choose DeepSeek `deepseek-flash` or OpenAI. Configure each provider's API key in **Settings → AI Reading Settings**; OpenAI automatically loads available text models into a dropdown, with a refresh button to update the list. Keys are scoped to the workspace and stored in the local macOS Keychain.
+
+Sending a message includes the current article text or question title and body, together with that content's conversation history. Replies stream into the panel and can be stopped or copied. Histories persist separately for each article, question, and workspace. Save a reply or the entire conversation as a local article comment or question answer with one click; content exceeding the 2,000-character comment or 10,000-character answer limit opens an editor first. Existing manual answer drafts are preserved.
 
 ### Article export and sharing
 
@@ -89,59 +100,25 @@ Use the moment card menu, a to-do item's menu, **Email List** for the currently 
 
 Sending uses your configured SMTP service directly and requires a network connection. Success means the server accepted the message; the provider handles final delivery. If delivery is unconfirmed, check the recipient inbox before retrying to avoid duplicates.
 
+### Privacy mode and appearance
+
+Articles, local posts, and Q&A items can be marked as private. Use the lock button at the bottom of the main navigation rail to toggle privacy mode across open windows, hiding or revealing private content without restarting.
+
+The app supports light and dark themes, customizable reading typography, and switching between English and Simplified Chinese in **Settings**.
+
 ## Mobile sync
 
-The Android and iOS companion keeps articles, local posts, tasks, drafts, and downloaded attachments available on the device. It syncs changes in both directions with one paired Mac workspace and provides options to resolve conflicting edits. Article directories, reading position, inline images, and attachment uploads are supported; whiteboard editing remains on the Mac.
+The Android and iOS companion keeps articles, local posts, tasks, drafts, and downloaded attachments available offline on the device. It syncs changes in both directions with one paired Mac workspace and provides options to resolve conflicting edits. Article directories, reading position, inline images, and attachment uploads are supported; whiteboard editing remains on the Mac.
 
 To pair, install the mobile app, then open **Settings → Mobile Sync** on the Mac, start the service using an address on the same local network, and scan the generated pairing code in the mobile app. The Mac sync service requires Node.js 22.13 or later and the mobile dependencies installed with `npm ci` in `mobile/`. The local connection uses unencrypted HTTP, so use a trusted Wi-Fi network. The service stops when the Mac app exits.
 
-See the [mobile guide](mobile/README.md) for platform requirements, build commands, attachment limits, reconnection, and conflict handling.
+See the [mobile setup guide](mobile/README.md) for platform requirements, build commands, attachment limits, reconnection, and conflict handling.
 
 ## Chat
 
 Open **Chat** in the main navigation and enter your LeonApp server address and access token under **Settings → Connection**. The client connects when the Chat page is first opened. Server conversations, messages, favorites, and agents sync through the same account; LeonBook uses its own device identity and does not automatically import unsent drafts from the standalone LeonApp.
 
 Chat supports agent and group conversations, attachments, Markdown and diagrams, search, branches, context, notifications, and usage details. Use **New Conversation** or `/export` to archive a conversation as an article draft in the current LeonBook library and user. See the [chat integration guide](docs/LEON_CHAT_INTEGRATION.md) for the full feature mapping and data boundaries.
-
-## Screenshots
-
-These repository screenshots use a separate demo workspace with sample content. They illustrate the writing, linking, and timeline views; layouts may differ from the current version.
-
-![LeonBook workspace overview](docs/screenshots/leonbook-dashboard-en.jpg)
-
-<details>
-<summary>Article reading, knowledge graph, posts, and Q&A</summary>
-
-![Article reader with outline and links](docs/screenshots/leonbook-article-en.jpg)
-
-![Knowledge graph connecting articles](docs/screenshots/leonbook-graph-en.jpg)
-
-![Local posts timeline](docs/screenshots/leonbook-posts-en.jpg)
-
-![Question and answer detail](docs/screenshots/leonbook-qna-en.jpg)
-
-</details>
-
-## App commands
-
-Run these commands from the repository root:
-
-| Command | Behavior |
-| --- | --- |
-| `./scripts/leonblog open` | Build if needed and open the app; `start` is an alias |
-| `./scripts/leonblog restart` | Quit gracefully, build if needed, and relaunch with Debug by default |
-| `./scripts/leonblog restart --release` | Restart with an optimized Release build |
-| `./scripts/leonblog build` | Build and package Release without launching |
-| `./scripts/leonblog test` | Run the native test and check suites |
-| `./scripts/leonblog coverage` | Run unit tests and generate a coverage report |
-| `./scripts/leonblog mobile-sync --help` | Show options for running the mobile sync service from a terminal |
-| `./scripts/leonblog help` | Show command help |
-
-`open`, `start`, `restart`, and `build` accept `--debug` or `--release`. Debug uses the native build engine when available, with a separate cache from normal Release builds; automatic selection falls back to the toolchain default when needed. Set `LEON_BOOK_BUILD_SYSTEM=default` to select the toolchain default explicitly. The first build for a configuration populates its cache.
-
-When only the article editor's `RichArticle*.js`, `RichArticle*.css`, or `RichArticleEditor.html` changes, `open` / `restart` reuse the executables, update resources, and re-sign without compiling Swift. Content manifests detect additions, deletions, and edits with unchanged timestamps. Swift, configuration, and other resource changes still use a normal build; `build` always forces the Swift build path. Existing apps need one baseline build to create the manifest.
-
-Build caches live in `~/Library/Caches/leon-book/<project-id>/`, separated by engine, tests, coverage, and performance checks. Set `LEON_BOOK_BUILD_CACHE_DIR` to override the parent directory. The first build in the new location warms the cache; old Swift caches containing absolute paths are not relocated.
 
 ## Data and backups
 
@@ -197,6 +174,30 @@ The app also supports `leonbook://new`, `leonbook://open?slug=example`, `leonboo
 
 See the [AI automation guide](docs/AI_AUTOMATION.md) for method discovery, input formats, concurrency rules, and Python examples.
 
+## App commands
+
+Run these commands from the repository root:
+
+| Command | Behavior |
+| --- | --- |
+| `./scripts/leonblog open` | Build if needed and open the app; `start` is an alias |
+| `./scripts/leonblog restart` | Quit gracefully, build if needed, and relaunch with Debug by default |
+| `./scripts/leonblog restart --release` | Restart with an optimized Release build |
+| `./scripts/leonblog build` | Build and package Release without launching |
+| `./scripts/leonblog test` | Run the native test and check suites |
+| `./scripts/leonblog coverage` | Run unit tests and generate a coverage report |
+| `./scripts/leonblog mobile-sync --help` | Show options for running the mobile sync service from a terminal |
+| `./scripts/leonblog help` | Show command help |
+
+<details>
+<summary>Build engine, fast resource updates, and cache configuration</summary>
+
+- `open`, `start`, `restart`, and `build` accept `--debug` or `--release`. Debug uses the native build engine when available, with a separate cache from normal Release builds; automatic selection falls back to the toolchain default when needed. Set `LEON_BOOK_BUILD_SYSTEM=default` to select the toolchain default explicitly.
+- When only the article editor's `RichArticle*.js`, `RichArticle*.css`, or `RichArticleEditor.html` changes, `open` / `restart` reuse the executables, update resources, and re-sign without compiling Swift. Content manifests detect additions, deletions, and edits with unchanged timestamps. Swift, configuration, and other resource changes still use a normal build; `build` always forces the Swift build path. Existing apps need one baseline build to create the manifest.
+- Build caches live in `~/Library/Caches/leon-book/<project-id>/`, separated by engine, tests, coverage, and performance checks. Set `LEON_BOOK_BUILD_CACHE_DIR` to override the parent directory. The first build in the new location warms the cache; old Swift caches containing absolute paths are not relocated.
+
+</details>
+
 ## Development
 
 ```text
@@ -220,4 +221,4 @@ First-party modules can be enabled independently in Settings. Declarative extens
 
 Normal Swift builds use bundled assets and do not require Node.js. Node.js/npm are needed for the mobile app and sync service, or when rebuilding whiteboard assets; follow the [mobile guide](mobile/README.md) or [whiteboard guide](macos/Whiteboard/README.md).
 
-Further documentation: [macOS guide](macos/README.md) · [Performance notes](macos/PERFORMANCE.md) · [AI automation](docs/AI_AUTOMATION.md).
+Further documentation: [macOS guide](macos/README.md) · [Performance notes](macos/PERFORMANCE.md) · [AI automation](docs/AI_AUTOMATION.md) · [Chat integration](docs/LEON_CHAT_INTEGRATION.md).

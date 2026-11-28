@@ -2499,7 +2499,11 @@
 "显示消息预览" = "Show Message Previews";
 "查看当前会话时不弹出提醒。应用退出后，只有后台推送可用时才能收到通知。" = "No alerts appear while viewing the conversation. After the app quits, notifications require configured background push.";
 "聊天" = "Chat";
+"聊天设置" = "Chat Settings";
 "聊天设置…" = "Chat Settings…";
+"消息正文字号" = "Message Font Size";
+"聊天消息预览" = "Chat Message Preview";
+"恢复默认字号" = "Reset to Default Font Size";
 
 "私密" = "Private";
 "设为私密" = "Make Private";
